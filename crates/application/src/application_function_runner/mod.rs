@@ -248,6 +248,7 @@ use crate::{
 
 mod http_routing;
 mod metrics;
+mod rust_analyze;
 
 static BUILD_DEPS_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| Duration::from_secs(600));
 
@@ -364,16 +365,31 @@ impl<RT: Runtime> FunctionRouter<RT> {
     #[fastrace::trace]
     pub(crate) async fn execute_action(
         &self,
-        tx: Transaction<RT>,
+        mut tx: Transaction<RT>,
         path_and_args: ValidatedPathAndArgs,
         log_line_sender: mpsc::UnboundedSender<LogLine>,
         context: ExecutionContext,
         permit_timeout: PermitTimeout,
     ) -> anyhow::Result<ActionOutcome> {
-        let permit = self
-            .action_limiter
-            .acquire_permit(&self.rt, permit_timeout)
-            .await?;
+        // "use rust" actions (always pushed as `rust/<module>.js`) are bounded by
+        // RUST_MAX_CONCURRENT_ACTIONS, not the V8 action limit. Other paths skip the lookup.
+        let rust = path_and_args
+            .path()
+            .udf_path
+            .module()
+            .as_str()
+            .starts_with("rust/")
+            && ModuleModel::new(&mut tx)
+                .get_metadata_for_function_by_id(path_and_args.path())
+                .await?
+                .is_some_and(|m| m.environment == ModuleEnvironment::Rust);
+        let permit = if rust {
+            self.action_limiter.start()
+        } else {
+            self.action_limiter
+                .acquire_permit(&self.rt, permit_timeout)
+                .await?
+        };
         let (_, outcome) = self
             .function_runner_execute(
                 tx,
@@ -1526,7 +1542,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         let inert_identity = tx.inert_identity();
         let timer = function_total_timer(module.environment, UdfType::Action);
         let completion_result = match module.environment {
-            ModuleEnvironment::Isolate => {
+            // `"use rust"` actions go through the same function-runner path as
+            // V8 actions; the function runner dispatches on the module
+            // environment to the wasm runtime.
+            environment @ (ModuleEnvironment::Isolate | ModuleEnvironment::Rust) => {
                 let outcome_future = self
                     .isolate_functions
                     .execute_action(
@@ -1564,7 +1583,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 validated_outcome_result.map(|outcome| ActionCompletion {
                     outcome,
                     execution_time: start.elapsed(),
-                    environment: ModuleEnvironment::Isolate,
+                    environment,
                     memory_in_mb,
                     context: context.clone(),
                     unix_timestamp,
@@ -1736,9 +1755,11 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     execution_time: start.elapsed(),
                     environment: module.environment,
                     memory_in_mb: match module.environment {
-                        ModuleEnvironment::Isolate => (*ISOLATE_MAX_USER_HEAP_SIZE / (1 << 20))
-                            .try_into()
-                            .unwrap(),
+                        ModuleEnvironment::Isolate | ModuleEnvironment::Rust => {
+                            (*ISOLATE_MAX_USER_HEAP_SIZE / (1 << 20))
+                                .try_into()
+                                .unwrap()
+                        },
                         // This isn't correct but we don't have a value to use here.
                         ModuleEnvironment::Node => 0,
                         ModuleEnvironment::Invalid => 0,
@@ -1830,10 +1851,8 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         environment_variables.extend(system_env_var_overrides);
         environment_variables.extend(user_environment_variables);
 
-        let (node_modules, isolate_modules) = new_modules
-            .into_iter()
-            .map(|module| (module.path.clone().canonicalize(), module))
-            .partition(|(_, config)| config.environment == ModuleEnvironment::Node);
+        let (node_modules, isolate_modules, rust_modules) =
+            rust_analyze::split_by_environment(new_modules);
 
         let mut result = BTreeMap::new();
 
@@ -1907,6 +1926,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         };
 
         let (isolate_result, node_result) = tokio::try_join!(isolate_future, node_future)?;
+        // `"use rust"` modules are analyzed by reading the wasm manifest.
+        if let Err(e) = rust_analyze::analyze_into(&rust_modules, &mut result)? {
+            return Ok(Err(e));
+        }
         match isolate_result {
             Ok(modules) => result.extend(modules),
             Err(e) => return Ok(Err(e)),

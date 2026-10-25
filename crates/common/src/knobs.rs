@@ -460,6 +460,40 @@ pub static FUNCTION_MAX_RESULT_SIZE: LazyLock<usize> = LazyLock::new(|| {
     env_config("FUNCTION_MAX_RESULT_SIZE", 1 << 24) // 16 MiB
 });
 
+/// Maximum size in bytes of a task request (`task_submit`) a `"use rust"` guest
+/// may hand to the host. Larger requests are rejected (the import returns -1)
+/// before any guest memory is read.
+pub static RUST_MAX_TASK_REQUEST_BYTES: LazyLock<usize> =
+    LazyLock::new(|| env_config("RUST_MAX_TASK_REQUEST_BYTES", 64 << 20)); // 64 MiB
+
+/// Maximum number of unfinished tasks (`ctx.runQuery`, `fetch`, ...) one
+/// `"use rust"` action may have at a time. Further `task_submit` calls return
+/// -1 until some task completes.
+pub static RUST_MAX_OUTSTANDING_TASKS: LazyLock<usize> =
+    LazyLock::new(|| env_config("RUST_MAX_OUTSTANDING_TASKS", 1000));
+
+/// Maximum number of `"use rust"` actions executing at the same time in this
+/// process. Mirrors MAX_ISOLATE_WORKERS, the bound on concurrent V8 actions.
+pub static RUST_MAX_CONCURRENT_ACTIONS: LazyLock<usize> = LazyLock::new(|| {
+    env_config(
+        "RUST_MAX_CONCURRENT_ACTIONS",
+        *MAX_ISOLATE_WORKERS,
+    )
+});
+
+/// Persist compiled `"use rust"` modules (`Module::serialize`) so a backend
+/// restart does not recompile them.
+pub static RUST_WASM_DISK_CACHE: LazyLock<bool> =
+    LazyLock::new(|| env_config("RUST_WASM_DISK_CACHE", true));
+
+/// Directory of the on-disk compiled-module cache.
+pub static RUST_WASM_CACHE_DIR: LazyLock<String> = LazyLock::new(|| {
+    env_config(
+        "RUST_WASM_CACHE_DIR",
+        "convex_local_storage/rust-wasm-cache".to_string(),
+    )
+});
+
 /// Maximum size in bytes of the result of a system function.
 /// Larger than FUNCTION_MAX_RESULT_SIZE but smaller than
 /// MAX_BACKEND_RPC_RESPONSE_SIZE

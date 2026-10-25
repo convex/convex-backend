@@ -22,6 +22,7 @@ import {
   entryPointsByEnvironment,
 } from "../../bundler/index.js";
 import { version } from "../version.js";
+import { bundleRust } from "./rust.js";
 import { deploymentDashboardUrlPage } from "./dashboard.js";
 import {
   functionsDir,
@@ -674,6 +675,7 @@ export async function configFromProjectConfig(
   const modules = convexResult.modules;
   modules.push(...nodeResult.modules);
   modules.push(...(await bundleAuthConfig(ctx, baseDir)).modules);
+  modules.push(...(await bundleRust(ctx, baseDir)));
 
   const nodeDependencies: NodeDependency[] = [];
   for (const [moduleName, moduleVersion] of nodeResult.externalDependencies) {

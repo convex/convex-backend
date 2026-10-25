@@ -2205,7 +2205,7 @@ impl<RT: Runtime> Application<RT> {
                 )
             );
             anyhow::ensure!(
-                auth_config_module.environment != ModuleEnvironment::Node,
+                auth_config_module.environment == ModuleEnvironment::Isolate,
                 "auth config file can't be analyzed in Node.js!"
             );
             let auth_config = Self::evaluate_auth_config(

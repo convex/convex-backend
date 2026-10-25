@@ -420,7 +420,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                     log_line_sender.context("Missing log line sender for action")?;
                 let outcome = self
                     .isolate_client
-                    .execute_action(
+                    .execute_action_or_rust(
                         path_and_args,
                         transaction,
                         action_callbacks,

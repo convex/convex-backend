@@ -50,6 +50,7 @@ async_lru = { workspace = true }
 authentication = { workspace = true }
 aws_s3 = { workspace = true }
 aws_utils = { workspace = true }
+base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cmd_util = { workspace = true }
@@ -98,6 +99,7 @@ semver = { workspace = true }
 sentry = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+wasmparser = { workspace = true }
 shape_inference = { workspace = true }
 short_future = { workspace = true }
 slugify = { workspace = true }

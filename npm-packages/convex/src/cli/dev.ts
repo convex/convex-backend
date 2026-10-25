@@ -15,6 +15,7 @@ import {
   getDeploymentSelection,
   type DeploymentSelection,
 } from "./lib/deploymentSelection.js";
+import { setRustBuildMode } from "./lib/rust.js";
 import { checkVersionAndAiFilesStaleness } from "./lib/updates.js";
 
 export const dev = new Command("dev")
@@ -179,6 +180,8 @@ Same format as .env.local or .env files, and overrides them.`,
   .action(async (cmdOptions) => {
     const ctx = await oneoffContext(cmdOptions);
     installSigintHandler(ctx);
+    // Rust: use the fast incremental profile (deploy uses full release).
+    setRustBuildMode("dev");
 
     if (cmdOptions.deployment !== undefined) {
       return await ctx.crash({
