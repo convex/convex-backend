@@ -156,9 +156,39 @@ pub trait HostBackend: Send + 'static {
     fn outstanding_tasks(&self) -> usize;
 }
 
+/// First byte of a binary chunk event (`0x01 | u8 id_len | stream id | raw
+/// bytes`, ABI.md "Binary chunk events"). JSON events start with `{`.
+pub const BIN_CHUNK: u8 = 1;
+/// Guest export whose presence says the module parses binary chunk events.
+pub const BINARY_EVENTS_EXPORT: &str = "convex_binary_events";
+
+/// Builds a binary chunk event; `reserve` extra capacity is for coalescing.
+pub fn new_chunk_event(stream_id: &str, data: &[u8], reserve: usize) -> Vec<u8> {
+    let id = stream_id.as_bytes();
+    debug_assert!(id.len() <= u8::MAX as usize);
+    let mut ev = Vec::with_capacity(2 + id.len() + data.len() + reserve);
+    ev.push(BIN_CHUNK);
+    ev.push(id.len() as u8);
+    ev.extend_from_slice(id);
+    ev.extend_from_slice(data);
+    ev
+}
+
+/// The JSON form (base64) of a binary chunk event, for guests that predate
+/// binary events.
+pub fn chunk_event_to_json(ev: &[u8]) -> String {
+    let id_len = ev.get(1).copied().unwrap_or(0) as usize;
+    let id = String::from_utf8_lossy(ev.get(2..2 + id_len).unwrap_or_default());
+    let data = ev.get(2 + id_len..).unwrap_or_default();
+    serde_json::json!({"type": "chunk", "streamId": id, "data": base64::encode(data)}).to_string()
+}
+
 pub enum PollOutcome {
     /// A serialized event (see ABI.md "Events").
     Event(String),
+    /// A binary chunk event (see [`new_chunk_event`]). Hosts that cannot
+    /// deliver it as is use [`chunk_event_to_json`].
+    Chunk(Vec<u8>),
     /// `block = 0` and nothing is ready.
     Empty,
     /// `block = 1` and no tasks are outstanding.
@@ -358,6 +388,10 @@ pub struct CallOutput<B> {
 pub enum GuestResult {
     /// The raw JSON of the `ok` field (already validated as JSON).
     Ok(Box<RawValue>),
+    /// The text of the `ok` field, NOT yet validated as JSON: the native
+    /// runtime hands it over unscanned, and the consumer
+    /// (`deserialize_udf_result`) parses it and reports invalid JSON.
+    OkText(String),
     Error {
         message: String,
         data: Option<JsonValue>,
@@ -385,6 +419,15 @@ pub enum CallFailure {
     Protocol(String),
     /// The result envelope is larger than the function result size limit.
     ResultTooLarge { len: usize, max: usize },
+    /// Native only: the worker ran out of memory (`limit` bytes).
+    OutOfMemory { limit: u64 },
+    /// Native only: the call thread overflowed its `stack` bytes.
+    StackOverflow { stack: u64 },
+    /// Native only: signal, sandbox kill or exit without a result. The
+    /// message is the user-visible text without the `Uncaught Error: ` prefix.
+    Crashed(String),
+    /// Native only: spawn, dlopen or `Ready` failure.
+    StartFailed(String),
 }
 
 pub struct WasmCore<B: HostBackend> {
@@ -922,6 +965,17 @@ fn add_convex_imports<B: HostBackend>(linker: &mut Linker<Host<B>>) -> wasmtime:
             Box::new(async move {
                 match c.data_mut().backend.poll(block != 0).await {
                     PollOutcome::Event(ev) => write_guest(&mut c, ev.as_bytes()).await,
+                    PollOutcome::Chunk(ev) => {
+                        let binary = matches!(
+                            c.get_export(BINARY_EVENTS_EXPORT),
+                            Some(Extern::Func(_))
+                        );
+                        if binary {
+                            write_guest(&mut c, &ev).await
+                        } else {
+                            write_guest(&mut c, chunk_event_to_json(&ev).as_bytes()).await
+                        }
+                    },
                     PollOutcome::Empty => Ok(0),
                     PollOutcome::NoTasks => Ok(-1),
                 }

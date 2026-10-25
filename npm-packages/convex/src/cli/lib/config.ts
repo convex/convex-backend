@@ -101,6 +101,9 @@ export interface ProjectConfig {
 
   typescriptCompiler?: TypescriptCompiler;
 
+  // "use rust" settings: which runtime to build for (default wasm).
+  rust?: { runtime?: "wasm" | "native" | "auto" | undefined } | undefined;
+
   // WorkOS AuthKit integration configuration
   authKit?: AuthKitConfig | undefined;
 
@@ -348,6 +351,10 @@ const createProjectConfigSchema = (strict: boolean) => {
     $schema: z.string().optional(),
     // WorkOS AuthKit integration configuration
     authKit: AuthKitConfigSchema.optional(),
+    rust: z
+      .object({ runtime: z.enum(["wasm", "native", "auto"]).optional() })
+      .optional()
+      .describe('Settings for "use rust" actions'),
     aiFiles: AiFilesSchema.optional(),
 
     // Deprecated fields that have been deprecated for years, only here so we

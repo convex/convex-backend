@@ -1,3 +1,4 @@
+/* eslint-disable no-restricted-syntax -- helpers throw plain Errors; bundleRust converts them with ctx.crash */
 import path from "path";
 import { spawn, spawnSync } from "child_process";
 import { createHash } from "crypto";
@@ -19,6 +20,19 @@ import { logMessage, logVerbose, logWarning } from "../../bundler/log.js";
 import { promptYesNo } from "./utils/prompts.js";
 import { RUST_TARGET, syncManagedPatch } from "./rust/scaffold.js";
 import { checkRustToolchain, defaultExec, Exec } from "./rust/toolchain.js";
+import {
+  checkNativeSize,
+  elfGlibcMax,
+  hostNativeTarget,
+  nativeArtifactPath,
+  nativeCargoCommand,
+  nativeModuleConfigs,
+  parseNativeManifest,
+  selectNativeBuild,
+  type BackendTargetInfo,
+  type NativeBuildPlan,
+} from "./rust/native.js";
+import { readProjectConfig } from "./config.js";
 import { prepareRustApiForBuild } from "../codegen_templates/rust_api.js";
 import { describeWasmSize } from "./rust/size.js";
 import { validatorToType } from "../codegen_templates/validator_helpers.js";
@@ -122,26 +136,16 @@ export function convexModuleName(modulePath: string): string {
   return segments.slice(1).join("/");
 }
 
-/** Parse the `convex:manifest` custom section(s) out of wasm bytes. */
-export function parseManifest(wasm: Uint8Array): RustManifestEntry[] {
-  let module: WebAssembly.Module;
-  try {
-    module = new WebAssembly.Module(wasm as BufferSource);
-  } catch (e: any) {
-    throw new Error(`Invalid WebAssembly module: ${e?.message ?? e}`);
-  }
-  const decoder = new TextDecoder("utf-8");
+/**
+ * Parse manifest text (one JSON entry per line) and validate it. Shared by the
+ * wasm section reader and the native symbol reader (rust/native.ts).
+ */
+export function parseManifestText(text: string): RustManifestEntry[] {
   const entries: RustManifestEntry[] = [];
-  for (const section of WebAssembly.Module.customSections(
-    module,
-    MANIFEST_SECTION,
-  )) {
-    const text = decoder.decode(section);
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed === "") continue;
-      entries.push(JSON.parse(trimmed) as RustManifestEntry);
-    }
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    entries.push(JSON.parse(trimmed) as RustManifestEntry);
   }
   const seen = new Set<string>();
   for (const e of entries) {
@@ -158,6 +162,25 @@ export function parseManifest(wasm: Uint8Array): RustManifestEntry[] {
     convexModuleName(e.modulePath); // validates
   }
   return entries;
+}
+
+/** Parse the `convex:manifest` custom section(s) out of wasm bytes. */
+export function parseManifest(wasm: Uint8Array): RustManifestEntry[] {
+  let module: WebAssembly.Module;
+  try {
+    module = new WebAssembly.Module(wasm as BufferSource);
+  } catch (e: any) {
+    throw new Error(`Invalid WebAssembly module: ${e?.message ?? e}`);
+  }
+  const decoder = new TextDecoder("utf-8");
+  const texts: string[] = [];
+  for (const section of WebAssembly.Module.customSections(
+    module,
+    MANIFEST_SECTION,
+  )) {
+    texts.push(decoder.decode(section));
+  }
+  return parseManifestText(texts.join("\n"));
 }
 
 /** Group manifest entries by Convex module name (e.g. `cpu`, `a/b`). */
@@ -379,11 +402,11 @@ export async function buildFailureHints(
   }
 }
 
-/** Locate the release wasm for the crate via `cargo metadata`. */
-export async function findRustWasm(
+/** Cargo target directory and library name of the crate, via `cargo metadata`. */
+export async function findCrateLayout(
   ctx: Context,
   manifestPath: string,
-): Promise<string> {
+): Promise<{ targetDir: string; libName: string }> {
   const r = await runCargo(
     manifestPath,
     [
@@ -412,9 +435,20 @@ export async function findRustWasm(
     pkg.targets.find((t: any) => t.kind.includes("cdylib")) ??
     pkg.targets.find((t: any) => t.kind.includes("lib")) ??
     pkg.targets[0];
-  const libName = String(lib?.name ?? pkg.name).replace(/-/g, "_");
+  return {
+    targetDir: meta.target_directory,
+    libName: String(lib?.name ?? pkg.name).replace(/-/g, "_"),
+  };
+}
+
+/** Locate the release wasm for the crate via `cargo metadata`. */
+export async function findRustWasm(
+  ctx: Context,
+  manifestPath: string,
+): Promise<string> {
+  const { targetDir, libName } = await findCrateLayout(ctx, manifestPath);
   return path.join(
-    meta.target_directory,
+    targetDir,
     RUST_TARGET,
     cargoProfileDir(buildMode),
     `${libName}.wasm`,
@@ -427,14 +461,22 @@ let toolchainOk = new Set<string>();
 export async function ensureRustToolchain(
   ctx: Context,
   rustDir: string,
-  deps: { exec?: Exec; isTTY?: boolean; prompt?: typeof promptYesNo } = {},
+  deps: {
+    exec?: Exec;
+    isTTY?: boolean;
+    prompt?: typeof promptYesNo;
+    /** Rust target to verify (default: the wasm target). */
+    target?: string;
+  } = {},
 ): Promise<void> {
-  if (toolchainOk.has(rustDir)) return;
+  const target = deps.target ?? RUST_TARGET;
+  const cacheKey = `${rustDir}\0${target}`;
+  if (toolchainOk.has(cacheKey)) return;
   const exec = deps.exec ?? defaultExec;
   const isTTY = deps.isTTY ?? !!process.stdin.isTTY;
-  let status = checkRustToolchain(rustDir, exec);
+  let status = checkRustToolchain(rustDir, exec, target);
   if (status.ok) {
-    toolchainOk.add(rustDir);
+    toolchainOk.add(cacheKey);
     return;
   }
   if (status.fix && isTTY) {
@@ -447,9 +489,9 @@ export async function ensureRustToolchain(
       const [cmd, ...args] = status.fix;
       const r = exec(cmd, args, { cwd: rustDir, inherit: true });
       if (r.status === 0) {
-        status = checkRustToolchain(rustDir, exec);
+        status = checkRustToolchain(rustDir, exec, target);
         if (status.ok) {
-          toolchainOk.add(rustDir);
+          toolchainOk.add(cacheKey);
           return;
         }
       }
@@ -478,6 +520,74 @@ const WASM_OPT_FEATURES = [
 const WASM_OPT_FLAGS = ["-Oz", "-g", ...WASM_OPT_FEATURES];
 const WASM_OPT_PERF_FLAGS = ["-O3", ...WASM_OPT_FEATURES];
 
+/** Rust flag value that turns on wasm SIMD (the backend's wasmtime accepts it by default). */
+export const SIMD_RUSTFLAG = "target-feature=+simd128";
+
+let noSimdFlag = false;
+/** `--no-simd` from the command line. */
+export function setRustNoSimdFlag(v: boolean | undefined) {
+  noSimdFlag = v === true;
+}
+
+/**
+ * Wasm SIMD is on by default. Opt out with `--no-simd`, `CONVEX_RUST_NO_SIMD=1`
+ * or (as in the convex-rust package) `CONVEX_RUST_SIMD=0`.
+ */
+export function wasmSimdEnabled(
+  env: Record<string, string | undefined> = process.env,
+  flag: boolean = noSimdFlag,
+): boolean {
+  if (flag) return false;
+  if (env.CONVEX_RUST_NO_SIMD === "1" || env.CONVEX_RUST_SIMD === "0")
+    return false;
+  return true;
+}
+
+/**
+ * Extra cargo args / env that add `-C target-feature=+simd128`, appended to
+ * any rustflags the user already set (CARGO_ENCODED_RUSTFLAGS, RUSTFLAGS or
+ * CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS, whichever cargo would use). Without
+ * any of them it goes in as `--config target.<triple>.rustflags`, which cargo
+ * joins with `.cargo/config.toml` target rustflags.
+ */
+export function simdCargoConfig(
+  simd: boolean,
+  env: Record<string, string | undefined> = process.env,
+): { args: string[]; env: Record<string, string> } {
+  if (!simd) return { args: [], env: {} };
+  if (env.CARGO_ENCODED_RUSTFLAGS) {
+    return {
+      args: [],
+      env: {
+        CARGO_ENCODED_RUSTFLAGS: `${env.CARGO_ENCODED_RUSTFLAGS}\x1f-C\x1f${SIMD_RUSTFLAG}`,
+      },
+    };
+  }
+  const targetVar = `CARGO_TARGET_${RUST_TARGET.toUpperCase().replace(/-/g, "_")}_RUSTFLAGS`;
+  if (env[targetVar]) {
+    return {
+      args: [],
+      env: { [targetVar]: `${env[targetVar]} -C ${SIMD_RUSTFLAG}` },
+    };
+  }
+  if (env.RUSTFLAGS) {
+    return { args: [], env: { RUSTFLAGS: `${env.RUSTFLAGS} -C ${SIMD_RUSTFLAG}` } };
+  }
+  return {
+    args: [
+      "--config",
+      `target.${RUST_TARGET}.rustflags=["-C","${SIMD_RUSTFLAG}"]`,
+    ],
+    env: {},
+  };
+}
+
+/** wasm-opt flags for a flavour; `--enable-simd` only for SIMD builds. */
+export function wasmOptFlags(perf: boolean, simd: boolean): string[] {
+  const base = perf ? WASM_OPT_PERF_FLAGS : WASM_OPT_FLAGS;
+  return simd ? [...base, "--enable-simd"] : base;
+}
+
 function wasmOptVersion(): string | null {
   const r = spawnSync("wasm-opt", ["--version"], { encoding: "utf8" });
   return r.status === 0 ? r.stdout.trim() : null;
@@ -496,8 +606,9 @@ export function optimizeWasm(
   run?: (wasmPath: string) => boolean,
   version: () => string | null = wasmOptVersion,
   perf: boolean = false,
+  simd: boolean = wasmSimdEnabled(),
 ): boolean {
-  const flags = perf ? WASM_OPT_PERF_FLAGS : WASM_OPT_FLAGS;
+  const flags = wasmOptFlags(perf, simd);
   run ??= (p) => runWasmOpt(p, flags);
   const v = version();
   if (v === null) return run(wasmPath); // wasm-opt missing: logs and skips
@@ -559,7 +670,7 @@ function runWasmOpt(wasmPath: string, flags: string[]): boolean {
     const after = new Uint8Array(readFileSync(out));
     // The size flavour must shrink; the performance flavour (-O3) may not.
     if (
-      (flags !== WASM_OPT_PERF_FLAGS && after.length >= before.length) ||
+      (!flags.includes("-O3") && after.length >= before.length) ||
       parseManifest(after).length !== parseManifest(before).length
     ) {
       logVerbose("wasm-opt output not smaller or lost manifest; ignoring");
@@ -648,7 +759,8 @@ function writeBuildInfo(wasmPath: string, sizeBefore: number, perf: boolean) {
       JSON.stringify({
         profile: "release",
         wasmOpt: wasmOptVersion(),
-        wasmOptFlags: (perf ? WASM_OPT_PERF_FLAGS : WASM_OPT_FLAGS).join(" "),
+        wasmOptFlags: wasmOptFlags(perf, wasmSimdEnabled()).join(" "),
+        simd: wasmSimdEnabled(),
         bytesBeforeOpt,
         bytes,
       }),
@@ -658,14 +770,10 @@ function writeBuildInfo(wasmPath: string, sizeBefore: number, perf: boolean) {
   }
 }
 
-/** Run `cargo build` for the Rust crate; returns the .wasm path. */
-export async function buildRustCrate(
-  ctx: Context,
-  functionsDir: string,
-): Promise<string> {
+/** Resolve Cargo.lock, sync the managed patch and the api stub before a build. */
+async function prepareCrate(ctx: Context, functionsDir: string) {
   const rustDir = path.join(functionsDir, "rust");
   const manifestPath = path.join(rustDir, "Cargo.toml");
-  await ensureRustToolchain(ctx, rustDir);
   if (!existsSync(path.join(rustDir, "Cargo.lock"))) {
     // Resolve (not build) first, so a transitive reqwest is seen by the sync.
     await runCargo(
@@ -676,7 +784,19 @@ export async function buildRustCrate(
   }
   syncManagedPatch(rustDir);
   await prepareRustApiForBuild(ctx, functionsDir);
+}
+
+/** Run `cargo build` for the Rust crate; returns the .wasm path. */
+export async function buildRustCrate(
+  ctx: Context,
+  functionsDir: string,
+): Promise<string> {
+  const rustDir = path.join(functionsDir, "rust");
+  const manifestPath = path.join(rustDir, "Cargo.toml");
+  await ensureRustToolchain(ctx, rustDir);
+  await prepareCrate(ctx, functionsDir);
   const cfg = cargoBuildConfig(buildMode);
+  const simd = simdCargoConfig(wasmSimdEnabled());
   logMessage(
     chalkStderr.gray(
       `Building Rust functions (${manifestPath}, ${buildMode === "dev" ? "dev profile" : "release"})...`,
@@ -687,13 +807,14 @@ export async function buildRustCrate(
     [
       "build",
       ...cfg.args,
+      ...simd.args,
       "--target",
       RUST_TARGET,
       "--manifest-path",
       manifestPath,
     ],
     true,
-    cfg.env,
+    { ...cfg.env, ...simd.env },
   );
   if ((r.error as any)?.code === "ENOENT") {
     return await rustCrash(
@@ -726,12 +847,233 @@ export async function buildRustCrate(
   return wasmPath;
 }
 
+// ---------------------------------------------------------------------------
+// Runtime selection (wasm | native | auto) and the native build
+// ---------------------------------------------------------------------------
+
+export type RustRuntime = "wasm" | "native" | "auto";
+export const RUST_RUNTIMES: readonly RustRuntime[] = ["wasm", "native", "auto"];
+
+let runtimeFlag: RustRuntime | undefined;
+let backendAccess: { url: string; adminKey: string } | null = null;
+
+/** `--rust-runtime` value from the command line (undefined = not given). */
+export function setRustRuntimeFlag(v: string | undefined) {
+  runtimeFlag = RUST_RUNTIMES.find((r) => r === v);
+}
+/** Deployment the CLI is about to push to (for the native info query). */
+export function setRustBackend(b: { url: string; adminKey: string } | null) {
+  backendAccess = b;
+}
+
+/** Flag beats convex.json beats the `wasm` default. */
+export function pickRustRuntime(
+  flag: RustRuntime | undefined,
+  configured: unknown,
+): RustRuntime {
+  if (flag !== undefined) return flag;
+  return RUST_RUNTIMES.find((r) => r === configured) ?? "wasm";
+}
+
+export interface NativeBackendInfo {
+  enabled: boolean;
+  target?: BackendTargetInfo;
+  nativeAbi?: number[];
+}
+
+/** `GET /api/rust_native/info`; null when the backend lacks the endpoint (404). */
+export async function fetchNativeInfo(
+  backend: { url: string; adminKey: string },
+  fetchFn: typeof fetch = fetch,
+): Promise<NativeBackendInfo | null> {
+  const res = await fetchFn(new URL("/api/rust_native/info", backend.url), {
+    headers: { Authorization: `Convex ${backend.adminKey}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`/api/rust_native/info returned HTTP ${res.status}`);
+  }
+  return (await res.json()) as NativeBackendInfo;
+}
+
+/** Version of the `convex_fn` crate from Cargo.lock, or "unknown". */
+export function convexFnVersion(lockText: string): string {
+  const m = /name = "convex_fn"\r?\nversion = "([^"]+)"/.exec(lockText);
+  return m ? m[1] : "unknown";
+}
+
+function toolAvailable(cmd: string, args: string[], cwd: string): boolean {
+  const r = defaultExec(cmd, args, { cwd });
+  return r.status === 0;
+}
+
+const ZIGBUILD_HINT =
+  "Cross-compiling native Rust functions needs cargo-zigbuild and zig. Install them with " +
+  "`cargo install cargo-zigbuild` and `brew install zig` (or `pip install ziglang`), " +
+  "or push with `--rust-runtime wasm`.";
+
+/**
+ * Native build; returns module configs, or null when `auto` falls back to
+ * wasm. With `native`, every problem is a crash.
+ */
+async function bundleRustNative(
+  ctx: Context,
+  functionsDir: string,
+  runtime: "native" | "auto",
+): Promise<Bundle[] | null> {
+  const rustDir = path.join(functionsDir, "rust");
+  const manifestPath = path.join(rustDir, "Cargo.toml");
+  const fallback = async (reason: string): Promise<null> => {
+    if (runtime === "native") {
+      return await rustCrash(
+        ctx,
+        `Cannot use --rust-runtime native: ${reason}`,
+      );
+    }
+    logMessage(
+      chalkStderr.gray(`Rust: using wasm (native unavailable: ${reason})`),
+    );
+    return null;
+  };
+
+  if (backendAccess === null) {
+    return await fallback("no deployment to query for native support.");
+  }
+  let info: NativeBackendInfo | null;
+  try {
+    info = await fetchNativeInfo(backendAccess);
+  } catch (e: any) {
+    return await fallback(`could not query the backend (${e?.message ?? e}).`);
+  }
+  if (info === null) {
+    return await fallback(
+      "this backend does not support native Rust actions (no /api/rust_native/info).",
+    );
+  }
+  if (!info.enabled || !info.target) {
+    return await fallback(
+      "this backend does not run native Rust actions (RUST_NATIVE_MODE is off).",
+    );
+  }
+  const plan: NativeBuildPlan = selectNativeBuild(
+    hostNativeTarget(process.platform, process.arch),
+    info.target,
+  );
+  if (plan.kind === "unsupported") return await fallback(plan.reason);
+  if (
+    plan.kind === "zigbuild" &&
+    !(
+      toolAvailable("cargo", ["zigbuild", "--help"], rustDir) &&
+      toolAvailable("zig", ["version"], rustDir)
+    )
+  ) {
+    return await fallback(ZIGBUILD_HINT);
+  }
+
+  await ensureRustToolchain(ctx, rustDir, { target: plan.triple });
+  await prepareCrate(ctx, functionsDir);
+  const lockPath = path.join(rustDir, "Cargo.lock");
+  const sdk = convexFnVersion(
+    existsSync(lockPath) ? readFileSync(lockPath, "utf8") : "",
+  );
+  const envFlags =
+    process.env[
+      `CARGO_TARGET_${plan.triple.toUpperCase().replace(/-/g, "_")}_RUSTFLAGS`
+    ];
+  const cmd = nativeCargoCommand({
+    manifestPath,
+    plan,
+    mode: buildMode,
+    existingRustflags: envFlags ?? process.env.RUSTFLAGS,
+  });
+  logMessage(
+    chalkStderr.gray(
+      `Building native Rust functions (${manifestPath}, ${plan.triple}, ${buildMode === "dev" ? "dev profile" : "release"})...`,
+    ),
+  );
+  const r = await runCargo(manifestPath, cmd.args, true, cmd.env);
+  if ((r.error as any)?.code === "ENOENT") {
+    return await rustCrash(
+      ctx,
+      "Rust build failed: `cargo` was not found. Install Rust from https://rustup.rs.",
+    );
+  }
+  if (r.status !== 0) {
+    const zig =
+      plan.kind === "zigbuild" && /zigbuild|zig\b/.test(r.stderr)
+        ? `\n${ZIGBUILD_HINT}`
+        : "";
+    const hints = await buildFailureHints(manifestPath, r.stderr);
+    return await rustCrash(
+      ctx,
+      `Native Rust build failed (cargo exited with ${r.status}).${zig}${hints}`,
+    );
+  }
+
+  const { targetDir, libName } = await findCrateLayout(ctx, manifestPath);
+  const libPath = nativeArtifactPath(
+    targetDir,
+    plan.triple,
+    buildMode,
+    libName,
+  );
+  if (!existsSync(libPath)) {
+    return await rustCrash(
+      ctx,
+      `Native Rust build succeeded but ${libPath} was not found. Make sure Cargo.toml has crate-type = ["cdylib"] in [lib].`,
+    );
+  }
+  const binary = new Uint8Array(readFileSync(libPath));
+  let entries: RustManifestEntry[];
+  let glibcMax: string | null = null;
+  try {
+    entries = parseNativeManifest(binary);
+    if (binary[0] === 0x7f) glibcMax = elfGlibcMax(binary);
+  } catch (e: any) {
+    return await rustCrash(ctx, `Rust build failed: ${e?.message ?? e}`);
+  }
+  const modules = nativeModuleConfigs(binary, entries, {
+    triple: plan.triple,
+    glibcMax,
+    sdk,
+  });
+  const encoded = modules.reduce((n, m) => Math.max(n, m.source.length), 0);
+  const mb = (encoded / (1024 * 1024)).toFixed(1);
+  logMessage(
+    chalkStderr.gray(
+      `Native Rust library: ${binary.length} bytes (${mb} MB pushed), ${entries.length} function(s)`,
+    ),
+  );
+  const size = checkNativeSize(encoded);
+  if (size.level === "error") return await rustCrash(ctx, size.message);
+  if (size.level === "warn") logWarning(chalkStderr.yellow(size.message));
+  recordRustInputs(ctx, rustDir);
+  logVerbose(`Rust native modules: ${modules.map((m) => m.path).join(", ")}`);
+  return modules;
+}
+
+async function resolveRustRuntime(ctx: Context): Promise<RustRuntime> {
+  if (runtimeFlag !== undefined) return runtimeFlag;
+  try {
+    const { projectConfig } = await readProjectConfig(ctx);
+    return pickRustRuntime(undefined, projectConfig.rust?.runtime);
+  } catch {
+    return "wasm";
+  }
+}
+
 /** Build the crate and produce its ModuleConfigs (empty if no Rust crate). */
 export async function bundleRust(
   ctx: Context,
   functionsDir: string,
 ): Promise<Bundle[]> {
   if (!hasRustFunctions(ctx, functionsDir)) return [];
+  const runtime = await resolveRustRuntime(ctx);
+  if (runtime !== "wasm") {
+    const native = await bundleRustNative(ctx, functionsDir, runtime);
+    if (native !== null) return native;
+  }
   const wasmPath = await buildRustCrate(ctx, functionsDir);
   const wasm = new Uint8Array(readFileSync(wasmPath));
   let entries: RustManifestEntry[];

@@ -348,6 +348,7 @@ pub fn router(st: LocalAppState) -> Router {
                 .layer(RequestDecompressionLayer::new())
                 .layer(DefaultBodyLimit::max(*MAX_PUSH_BYTES)),
         )
+        .route("/rust_native/info", get(crate::rust_native::rust_native_info))
         .route("/get_config", post(get_config))
         .route("/get_config_hashes", post(get_config_hashes))
         .route("/schema_state/{schema_id}", get(schema_state))

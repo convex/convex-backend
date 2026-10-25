@@ -61,6 +61,7 @@ const RUSTUP_URL = "https://rustup.rs";
 export function checkRustToolchain(
   rustDir: string,
   exec: Exec = defaultExec,
+  target: string = RUST_TARGET,
 ): ToolchainStatus {
   const notFound = (r: ExecResult) => (r.error as any)?.code === "ENOENT";
   const cargo = exec("cargo", ["--version"], { cwd: rustDir });
@@ -70,13 +71,13 @@ export function checkRustToolchain(
       return {
         ok: false,
         kind: "no-cargo",
-        message: `Neither \`cargo\` nor \`rustup\` was found. Install Rust with rustup: ${RUSTUP_URL}\nThen re-run this command (the ${RUST_TARGET} target will be set up for you).`,
+        message: `Neither \`cargo\` nor \`rustup\` was found. Install Rust with rustup: ${RUSTUP_URL}\nThen re-run this command (the ${target} target will be set up for you).`,
       };
     }
     return {
       ok: false,
       kind: "no-rustup",
-      message: `\`rustup\` was not found, so the ${RUST_TARGET} target can't be verified. Install rustup: ${RUSTUP_URL}\n(If you manage Rust another way, make sure the ${RUST_TARGET} target is installed.)`,
+      message: `\`rustup\` was not found, so the ${target} target can't be verified. Install rustup: ${RUSTUP_URL}\n(If you manage Rust another way, make sure the ${target} target is installed.)`,
     };
   }
   if (notFound(cargo)) {
@@ -102,7 +103,7 @@ export function checkRustToolchain(
       "--profile",
       "minimal",
       "--target",
-      RUST_TARGET,
+      target,
     ];
     if (/not installed|no such toolchain|is not installed/i.test(list.stderr)) {
       return {
@@ -116,12 +117,12 @@ export function checkRustToolchain(
     return { ok: true };
   }
   const installed = list.stdout.split("\n").map((l) => l.trim());
-  if (installed.includes(RUST_TARGET)) return { ok: true };
-  const fix = ["rustup", "target", "add", RUST_TARGET, ...toolchainArgs];
+  if (installed.includes(target)) return { ok: true };
+  const fix = ["rustup", "target", "add", target, ...toolchainArgs];
   return {
     ok: false,
     kind: "no-target",
-    message: `The ${RUST_TARGET} Rust target is not installed${channel ? ` for toolchain ${channel}` : ""}. Run:\n  ${fix.join(" ")}`,
+    message: `The ${target} Rust target is not installed${channel ? ` for toolchain ${channel}` : ""}. Run:\n  ${fix.join(" ")}`,
     fix,
   };
 }

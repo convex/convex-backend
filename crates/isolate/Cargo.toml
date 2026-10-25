@@ -110,6 +110,8 @@ webcrypto = { workspace = true }
 
 [target."cfg(not(windows))".dependencies]
 libc = { workspace = true }
+# rust-native worker: dlopen of user cdylibs (WN-04). 0.7.4 is already in Cargo.lock.
+libloading = "0.7"
 
 [build-dependencies]
 anyhow = { workspace = true }

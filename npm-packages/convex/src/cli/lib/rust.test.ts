@@ -3,7 +3,6 @@ import {
   MANAGED_BEGIN,
   MANAGED_END,
   managedConfigToml,
-  patchBlockBody,
   displayShimPath,
   usesReqwest,
   scaffoldFiles,
@@ -21,6 +20,10 @@ import {
   filterPatchWarning,
   PatchWarningFilter,
   rustSourcesNewerThan,
+  parseManifestText,
+  pickRustRuntime,
+  fetchNativeInfo,
+  convexFnVersion,
 } from "./rust.js";
 import { apiCodegen } from "../codegen_templates/api.js";
 import { withRustApi } from "../codegen_templates/rust_api.js";
@@ -131,6 +134,10 @@ import { checkRustToolchain, Exec } from "./rust/toolchain.js";
 import { describeWasmSize, wasmSectionSizes } from "./rust/size.js";
 import {
   cargoBuildConfig,
+  simdCargoConfig,
+  wasmSimdEnabled,
+  wasmOptFlags,
+  SIMD_RUSTFLAG,
   cargoProfileDir,
   ensureRustToolchain,
   resetToolchainCache,
@@ -656,60 +663,6 @@ describe("resolveReqwestShimPath", () => {
   });
 });
 
-// ---- F-03: #[http_action] on the backend-hosted runtimes ----
-import { rustHttpCodegen } from "../codegen_templates/rust_api.js";
-
-test("http entries are internal in the api type (never callable by clients)", () => {
-  const wasm = tinyWasm([
-    frag("app::web", "hook", "public"),
-    { ...frag("app::web", "act", "public") },
-  ]);
-  const entries = parseManifest(wasm).map((e) =>
-    e.name === "hook" ? { ...e, kind: "http" } : e,
-  );
-  const type = rustApiType(entries)!;
-  expect(type).toContain(`"hook": FunctionReference<"action", "internal"`);
-  expect(type).toContain(`"act": FunctionReference<"action", "public"`);
-});
-
-test("rustHttp codegen: JS + d.ts, or TS", async () => {
-  const js = rustHttpCodegen(false);
-  expect(js.TS).toBeUndefined();
-  expect(js.JS).toContain("export function rustHttpAction(name)");
-  expect(js.JS).toContain('makeFunctionReference("rust/" + name)');
-  expect(js.JS).toContain("buffered: true");
-  expect(js.DTS).toContain("export declare function rustHttpAction(name: string): PublicHttpAction;");
-  const ts = rustHttpCodegen(true);
-  expect(ts.JS).toBeUndefined();
-  expect(ts.TS).toContain("export function rustHttpAction(name: string)");
-  // The generated JS is valid (module syntax) and the helpers round-trip bytes.
-  const src = js.JS!.replace(/^import .*$/m, "const httpActionGeneric = (f) => f, makeFunctionReference = (n) => n;").replace("export function", "function");
-  const mod = new Function(`${src}; return { rustHttpAction };`)();
-  const calls: any[] = [];
-  const handler = mod.rustHttpAction("web:echo");
-  const ctx = {
-    runAction: async (ref: string, args: any) => {
-      calls.push([ref, args]);
-      return { status: 201, headers: [["x-a", "1"], ["x-a", "2"]], body: args.body };
-    },
-  };
-  const res: Response = await handler(
-    ctx,
-    new Request("https://x.convex.site/e?q=1", { method: "POST", headers: { "X-T": "v" }, body: "héllo" }),
-  );
-  expect(calls[0][0]).toBe("rust/web:echo");
-  expect(calls[0][1]).toMatchObject({ method: "POST", url: "https://x.convex.site/e?q=1", buffered: true });
-  expect(calls[0][1].headers).toContainEqual(["x-t", "v"]);
-  expect(res.status).toBe(201);
-  expect(res.headers.get("x-a")).toBe("1, 2");
-  expect(await res.text()).toBe("héllo");
-  const empty = await handler(
-    { runAction: async (_r: string, a: any) => { expect(a.body).toBeNull(); return { status: 204, headers: [], body: null }; } },
-    new Request("https://x.convex.site/e"),
-  );
-  expect(empty.status).toBe(204);
-});
-
 describe("cargoSpawnConfig", () => {
   test("runs cargo in the crate directory with an absolute manifest path", () => {
     const rel = path.join("convex", "rust", "Cargo.toml");
@@ -879,4 +832,160 @@ describe("resolveRustProfile (CONVEX_RUST_PROFILE)", () => {
       perf: false,
     });
   });
+});
+
+test("toolchain check: native target", () => {
+  const exec: Exec = (cmd, args) =>
+    cmd === "rustup" && args[0] === "target" ? ok("wasm32-wasip1\n") : ok("v");
+  const r = checkRustToolchain(toolchainDir(), exec, "aarch64-apple-darwin");
+  expect(r).toMatchObject({ ok: false, kind: "no-target" });
+  expect((r as any).fix).toContain("aarch64-apple-darwin");
+});
+
+describe("rust runtime selection", () => {
+  test("flag beats config beats default", () => {
+    expect(pickRustRuntime(undefined, undefined)).toBe("wasm");
+    expect(pickRustRuntime(undefined, "native")).toBe("native");
+    expect(pickRustRuntime("wasm", "native")).toBe("wasm");
+    expect(pickRustRuntime(undefined, "bogus")).toBe("wasm");
+  });
+
+  test("fetchNativeInfo: 404 means unsupported", async () => {
+    const f = (async () => new Response("", { status: 404 })) as any;
+    expect(await fetchNativeInfo({ url: "http://x", adminKey: "k" }, f)).toBe(
+      null,
+    );
+  });
+
+  test("fetchNativeInfo: sends admin key and parses", async () => {
+    let seen = "";
+    const f = (async (u: URL, init: any) => {
+      seen = `${u.pathname} ${init.headers.Authorization}`;
+      return new Response(JSON.stringify({ enabled: false }), { status: 200 });
+    }) as any;
+    const r = await fetchNativeInfo({ url: "http://x", adminKey: "k" }, f);
+    expect(r).toEqual({ enabled: false });
+    expect(seen).toBe("/api/rust_native/info Convex k");
+  });
+
+  test("convexFnVersion reads Cargo.lock", () => {
+    const lock = 'name = "convex_fn"\nversion = "0.3.1"\n';
+    expect(convexFnVersion(lock)).toBe("0.3.1");
+    expect(convexFnVersion("")).toBe("unknown");
+  });
+
+  test("parseManifestText validates duplicates", () => {
+    const l = JSON.stringify({ abiVersion: 1, modulePath: "a::b", name: "f" });
+    expect(parseManifestText(l)).toHaveLength(1);
+    expect(() => parseManifestText(l + "\n" + l)).toThrow(/duplicate/);
+  });
+});
+
+describe("wasm SIMD build options", () => {
+  const cfg = `target.wasm32-wasip1.rustflags=["-C","${SIMD_RUSTFLAG}"]`;
+  test("enabled by default, opt-outs", () => {
+    expect(wasmSimdEnabled({}, false)).toBe(true);
+    expect(wasmSimdEnabled({ CONVEX_RUST_NO_SIMD: "1" }, false)).toBe(false);
+    expect(wasmSimdEnabled({ CONVEX_RUST_SIMD: "0" }, false)).toBe(false);
+    expect(wasmSimdEnabled({}, true)).toBe(false);
+    expect(wasmSimdEnabled({ CONVEX_RUST_NO_SIMD: "0" }, false)).toBe(true);
+  });
+  test("no existing rustflags: --config arg", () => {
+    expect(simdCargoConfig(true, {})).toEqual({
+      args: ["--config", cfg],
+      env: {},
+    });
+  });
+  test("appends to RUSTFLAGS", () => {
+    expect(simdCargoConfig(true, { RUSTFLAGS: "-C opt-level=3" })).toEqual({
+      args: [],
+      env: { RUSTFLAGS: `-C opt-level=3 -C ${SIMD_RUSTFLAG}` },
+    });
+  });
+  test("appends to the target-specific variable and encoded flags", () => {
+    expect(
+      simdCargoConfig(true, {
+        CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS: "-C lto",
+        RUSTFLAGS: "-C x",
+      }).env,
+    ).toEqual({
+      CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS: `-C lto -C ${SIMD_RUSTFLAG}`,
+    });
+    expect(
+      simdCargoConfig(true, { CARGO_ENCODED_RUSTFLAGS: "-Ca\x1f-Cb" }).env
+        .CARGO_ENCODED_RUSTFLAGS,
+    ).toBe(`-Ca\x1f-Cb\x1f-C\x1f${SIMD_RUSTFLAG}`);
+  });
+  test("opt-out adds nothing", () => {
+    expect(simdCargoConfig(false, { RUSTFLAGS: "-C x" })).toEqual({
+      args: [],
+      env: {},
+    });
+  });
+  test("wasm-opt gets --enable-simd only with SIMD", () => {
+    expect(wasmOptFlags(true, true)).toContain("--enable-simd");
+    expect(wasmOptFlags(false, true)).toContain("--enable-simd");
+    expect(wasmOptFlags(true, false)).not.toContain("--enable-simd");
+    expect(wasmOptFlags(true, true)).toContain("-O3");
+  });
+  test("optimizeWasm cache key differs by SIMD", () => {
+    // flags feed the cache salt, so a SIMD and non-SIMD build never share an entry
+    expect(wasmOptFlags(true, true).join(" ")).not.toBe(
+      wasmOptFlags(true, false).join(" "),
+    );
+  });
+});
+
+// ---- F-03: #[http_action] on the backend-hosted runtimes ----
+import { rustHttpCodegen } from "../codegen_templates/rust_api.js";
+
+test("http entries are internal in the api type (never callable by clients)", () => {
+  const wasm = tinyWasm([
+    frag("app::web", "hook", "public"),
+    { ...frag("app::web", "act", "public") },
+  ]);
+  const entries = parseManifest(wasm).map((e) =>
+    e.name === "hook" ? { ...e, kind: "http" } : e,
+  );
+  const type = rustApiType(entries)!;
+  expect(type).toContain(`"hook": FunctionReference<"action", "internal"`);
+  expect(type).toContain(`"act": FunctionReference<"action", "public"`);
+});
+
+test("rustHttp codegen: JS + d.ts, or TS", async () => {
+  const js = rustHttpCodegen(false);
+  expect(js.TS).toBeUndefined();
+  expect(js.JS).toContain("export function rustHttpAction(name)");
+  expect(js.JS).toContain('makeFunctionReference("rust/" + name)');
+  expect(js.JS).toContain("buffered: true");
+  expect(js.DTS).toContain("export declare function rustHttpAction(name: string): PublicHttpAction;");
+  const ts = rustHttpCodegen(true);
+  expect(ts.JS).toBeUndefined();
+  expect(ts.TS).toContain("export function rustHttpAction(name: string)");
+  // The generated JS is valid (module syntax) and the helpers round-trip bytes.
+  const src = js.JS!.replace(/^import .*$/m, "const httpActionGeneric = (f) => f, makeFunctionReference = (n) => n;").replace("export function", "function");
+  const mod = new Function(`${src}; return { rustHttpAction };`)();
+  const calls: any[] = [];
+  const handler = mod.rustHttpAction("web:echo");
+  const ctx = {
+    runAction: async (ref: string, args: any) => {
+      calls.push([ref, args]);
+      return { status: 201, headers: [["x-a", "1"], ["x-a", "2"]], body: args.body };
+    },
+  };
+  const res: Response = await handler(
+    ctx,
+    new Request("https://x.convex.site/e?q=1", { method: "POST", headers: { "X-T": "v" }, body: "héllo" }),
+  );
+  expect(calls[0][0]).toBe("rust/web:echo");
+  expect(calls[0][1]).toMatchObject({ method: "POST", url: "https://x.convex.site/e?q=1", buffered: true });
+  expect(calls[0][1].headers).toContainEqual(["x-t", "v"]);
+  expect(res.status).toBe(201);
+  expect(res.headers.get("x-a")).toBe("1, 2");
+  expect(await res.text()).toBe("héllo");
+  const empty = await handler(
+    { runAction: async (_r: string, a: any) => { expect(a.body).toBeNull(); return { status: 204, headers: [], body: null }; } },
+    new Request("https://x.convex.site/e"),
+  );
+  expect(empty.status).toBe(204);
 });

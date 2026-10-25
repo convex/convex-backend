@@ -6,6 +6,7 @@
 use std::{
     collections::{
         BTreeMap,
+        BTreeSet,
         HashMap,
         HashSet,
         VecDeque,
@@ -31,6 +32,7 @@ use common::{
     runtime::{
         Runtime,
         SpawnHandle,
+        UnixTimestamp,
     },
     sync::spsc,
 };
@@ -53,6 +55,7 @@ use value::{
 };
 
 use super::core::{
+    new_chunk_event,
     HostBackend,
     PollOutcome,
 };
@@ -67,6 +70,18 @@ use crate::environment::{
     helpers::log_overflow_log_line,
     AsyncOpRequest,
 };
+
+static CHUNK_TRACE: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("CONVEX_RUST_TRACE_CHUNKS").is_some());
+
+/// Largest binary chunk event built by coalescing adjacent chunks.
+const MAX_COALESCED_CHUNK: usize = 1 << 20;
+
+/// An event ready for the guest.
+enum Ready {
+    Json(String),
+    Chunk(Vec<u8>),
+}
 
 enum TaskKind {
     Syscall,
@@ -88,7 +103,12 @@ pub struct ActionBackend<RT: Runtime> {
     pub total_log_lines: usize,
     kinds: HashMap<usize, TaskKind>,
     open_streams: HashSet<uuid::Uuid>,
-    ready: VecDeque<String>,
+    ready: VecDeque<Ready>,
+    /// A response read while coalescing that did not belong to the chunk
+    /// being built; always consumed before the channel is read again.
+    stash: Option<TaskResponse>,
+    /// Guest sleeps, timed here instead of on the shared executor (see `submit`).
+    sleeps: BTreeSet<(UnixTimestamp, usize)>,
 }
 
 impl<RT: Runtime> ActionBackend<RT> {
@@ -112,6 +132,8 @@ impl<RT: Runtime> ActionBackend<RT> {
             kinds: HashMap::new(),
             open_streams: HashSet::new(),
             ready: VecDeque::new(),
+            stash: None,
+            sleeps: BTreeSet::new(),
         }
     }
 
@@ -260,7 +282,7 @@ impl<RT: Runtime> ActionBackend<RT> {
 
     /// Translates an executor response into an ABI event (None if the response
     /// is for a task the guest did not start).
-    fn translate(&mut self, response: TaskResponse) -> Option<String> {
+    fn translate(&mut self, response: TaskResponse) -> Option<Ready> {
         match response {
             TaskResponse::TaskDone { task_id, variant } => {
                 let kind = self.kinds.remove(&task_id.0)?;
@@ -285,15 +307,11 @@ impl<RT: Runtime> ActionBackend<RT> {
                         json!({"type": "done", "taskId": id, "error": error_json(e)})
                     },
                 };
-                Some(event.to_string())
+                Some(Ready::Json(event.to_string()))
             },
             TaskResponse::StreamExtend { stream_id, chunk } => {
                 let event = match chunk {
-                    Ok(Some(bytes)) => json!({
-                        "type": "chunk",
-                        "streamId": stream_id,
-                        "data": base64::encode(&bytes),
-                    }),
+                    Ok(Some(bytes)) => return Some(Ready::Chunk(self.coalesce(stream_id, bytes))),
                     Ok(None) => {
                         self.open_streams.remove(&stream_id);
                         json!({"type": "chunk", "streamId": stream_id, "end": true})
@@ -307,9 +325,43 @@ impl<RT: Runtime> ActionBackend<RT> {
                         })
                     },
                 };
-                Some(event.to_string())
+                Some(Ready::Json(event.to_string()))
             },
         }
+    }
+
+    /// Next executor response: the stashed one, else whatever is queued.
+    fn try_next(&mut self) -> Option<TaskResponse> {
+        self.stash.take().or_else(|| self.task_responses.try_recv().ok())
+    }
+
+    /// Builds one binary chunk event from `first` and the chunks of the same
+    /// stream queued right behind it, up to [`MAX_COALESCED_CHUNK`].
+    fn coalesce(&mut self, stream_id: uuid::Uuid, first: bytes::Bytes) -> Vec<u8> {
+        let id = stream_id.to_string();
+        let mut ev = new_chunk_event(&id, &first, 0);
+        let header = ev.len() - first.len();
+        let mut parts = 1;
+        while ev.len() - header < MAX_COALESCED_CHUNK {
+            match self.try_next() {
+                Some(TaskResponse::StreamExtend {
+                    stream_id: next,
+                    chunk: Ok(Some(more)),
+                }) if next == stream_id => {
+                    ev.extend_from_slice(&more);
+                    parts += 1;
+                },
+                Some(other) => {
+                    self.stash = Some(other);
+                    break;
+                },
+                None => break,
+            }
+        }
+        if *CHUNK_TRACE {
+            eprintln!("rust chunk event: {} bytes from {parts} chunk(s)", ev.len() - header);
+        }
+        ev
     }
 
     fn close_stream_of(&mut self, kind: &TaskKind) {
@@ -371,8 +423,24 @@ fn error_json(mut e: anyhow::Error) -> JsonValue {
 #[async_trait]
 impl<RT: Runtime> HostBackend for ActionBackend<RT> {
     fn submit(&mut self, request: JsonValue) -> Result<i64, String> {
-        let (variant, kind) = self.parse_request(&request)?;
+        // A rejected submit still consumes an id (NATIVE.md §2.3), so the guest and host counters agree.
         let task_id = self.next_task_id.increment();
+        // Sleeps never reach the shared executor: its `run_sleep` keeps
+        // setTimeout ordering by re-polling every 5 ms while an earlier sleep
+        // is unresolved, which chains into ~25 ms stalls for a fan-out of
+        // sleeps. A guest has no setTimeout ordering contract, so `poll`
+        // times them itself.
+        if request.get("type").and_then(JsonValue::as_str) == Some("sleep") {
+            let ms = request
+                .get("ms")
+                .and_then(JsonValue::as_u64)
+                .ok_or("sleep: missing integer field `ms`")?;
+            let until = self.rt.unix_timestamp() + Duration::from_millis(ms);
+            self.sleeps.insert((until, task_id.0));
+            self.kinds.insert(task_id.0, TaskKind::Sleep);
+            return i64::try_from(task_id.0).map_err(|e| e.to_string());
+        }
+        let (variant, kind) = self.parse_request(&request)?;
         self.pending_task_sender
             .send(TaskRequest {
                 task_id,
@@ -390,16 +458,46 @@ impl<RT: Runtime> HostBackend for ActionBackend<RT> {
     async fn poll(&mut self, block: bool) -> PollOutcome {
         loop {
             if let Some(ev) = self.ready.pop_front() {
-                return PollOutcome::Event(ev);
+                return match ev {
+                    Ready::Json(ev) => PollOutcome::Event(ev),
+                    Ready::Chunk(ev) => PollOutcome::Chunk(ev),
+                };
             }
-            match self.task_responses.try_recv() {
-                Ok(response) => {
-                    if let Some(ev) = self.translate(response) {
-                        self.ready.push_back(ev);
+            if let Some(response) = self.try_next() {
+                if let Some(ev) = self.translate(response) {
+                    self.ready.push_back(ev);
+                }
+                continue;
+            }
+            if let Some(&(until, _)) = self.sleeps.first() {
+                let now = self.rt.unix_timestamp();
+                if until <= now {
+                    let (_, id) = self.sleeps.pop_first().expect("checked non-empty");
+                    if self.kinds.remove(&id).is_some() {
+                        self.ready
+                            .push_back(Ready::Json(
+                                json!({"type": "done", "taskId": id, "ok": null}).to_string(),
+                            ));
                     }
                     continue;
-                },
-                Err(_) => (),
+                }
+                if !block {
+                    return PollOutcome::Empty;
+                }
+                let wait = self.rt.wait(until - now);
+                tokio::select! {
+                    response = self.task_responses.recv() => match response {
+                        Some(response) => {
+                            if let Some(ev) = self.translate(response) {
+                                self.ready.push_back(ev);
+                            }
+                        },
+                        // Executor gone; only sleeps remain.
+                        None => self.rt.wait(until - now).await,
+                    },
+                    _ = wait => (),
+                }
+                continue;
             }
             if !block {
                 return PollOutcome::Empty;

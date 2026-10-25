@@ -46,6 +46,8 @@ use wasmparser::{
     Validator,
 };
 
+mod native;
+
 const MANIFEST_SECTION: &str = "convex:manifest";
 const SUPPORTED_ABI_VERSION: u32 = 1;
 /// Imports a guest may declare: module `convex` (ABI.md "Imports") and WASI
@@ -166,23 +168,46 @@ fn bad_module(message: String) -> JsError {
 
 /// Builds the analyzed module for one `"use rust"` module config
 /// (`rust/<module>.js`, source = base64 wasm). Returns `Err(JsError)` for user
-/// errors (bad wasm, missing manifest/exports).
+/// errors (bad wasm, missing manifest/exports). Production goes through
+/// `analyze_rust_modules_with`; this single-module form is for tests.
+#[cfg(test)]
 pub fn analyze_rust_module(
+    config: &ModuleConfig,
+) -> anyhow::Result<Result<(CanonicalizedModulePath, AnalyzedModule), JsError>> {
+    match native::kind(&*config.source) {
+        native::SourceKind::Wasm => analyze_wasm_module(config),
+        // A lone native module: refs have no carrier in this call.
+        _ => native::analyze_native_module(
+            &native::NativeConfig::from_env(),
+            config,
+            &BTreeMap::new(),
+            &mut BTreeMap::new(),
+        ),
+    }
+}
+
+/// Convex module name (`rust/<module>.js` -> `<module>`) or a user error.
+fn rust_module_name(path_str: &str) -> Result<String, JsError> {
+    match path_str
+        .strip_prefix(&format!("{RUST_MODULE_DIR}/"))
+        .and_then(|p| p.strip_suffix(".js"))
+    {
+        Some(name) if !name.is_empty() => Ok(name.to_string()),
+        _ => Err(bad_module(format!(
+            "\"use rust\" module paths must look like `{RUST_MODULE_DIR}/<module>.js`, got \
+             `{path_str}`"
+        ))),
+    }
+}
+
+fn analyze_wasm_module(
     config: &ModuleConfig,
 ) -> anyhow::Result<Result<(CanonicalizedModulePath, AnalyzedModule), JsError>> {
     let path = config.path.clone().canonicalize();
     let path_str = config.path.as_str();
-    let module_name = match path_str
-        .strip_prefix(&format!("{RUST_MODULE_DIR}/"))
-        .and_then(|p| p.strip_suffix(".js"))
-    {
-        Some(name) if !name.is_empty() => name.to_string(),
-        _ => {
-            return Ok(Err(bad_module(format!(
-                "\"use rust\" module paths must look like `{RUST_MODULE_DIR}/<module>.js`, got \
-                 `{path_str}`"
-            ))))
-        },
+    let module_name = match rust_module_name(path_str) {
+        Ok(n) => n,
+        Err(e) => return Ok(Err(e)),
     };
     let bytes = match base64::decode(config.source.as_bytes()) {
         Ok(b) => b,
@@ -208,7 +233,42 @@ pub fn analyze_rust_module(
             ))))
         },
     };
+    let analysis =
+        match analyze_manifest_text(path_str, "wasm", manifest_text, &parsed.exports, Some(&module_name))? {
+            Ok(a) => a,
+            Err(e) => return Ok(Err(e)),
+        };
+    let functions = analysis.functions.into_values().next().unwrap_or_default();
+    Ok(Ok((
+        path,
+        AnalyzedModule {
+            functions: WithHeapSize::from(functions),
+            ..Default::default()
+        },
+    )))
+}
 
+/// Result of [`analyze_manifest_text`].
+pub(super) struct ManifestAnalysis {
+    /// Analyzed functions by Convex module name (sorted by function name).
+    pub functions: BTreeMap<String, Vec<AnalyzedFunction>>,
+    /// `"<convex module>:<function>"` -> `convex_run:<modulePath>:<name>` for
+    /// every manifest entry (whichever module it belongs to).
+    pub export_map: BTreeMap<String, String>,
+}
+
+/// Parses manifest text (one JSON entry per line) shared by the wasm and the
+/// native path. `exports` are the exported function names of the artifact and
+/// `what` names it in errors ("wasm", "native library"). With
+/// `only_module = Some(m)` only the functions of Convex module `m` are
+/// analyzed (but every entry is cross-checked against `exports`).
+pub(super) fn analyze_manifest_text(
+    path_str: &str,
+    what: &str,
+    manifest_text: &str,
+    exports: &BTreeSet<String>,
+    only_module: Option<&str>,
+) -> anyhow::Result<Result<ManifestAnalysis, JsError>> {
     let mut entries = Vec::new();
     for line in manifest_text.lines().filter(|l| !l.trim().is_empty()) {
         match serde_json::from_str::<ManifestEntry>(line) {
@@ -232,7 +292,8 @@ pub fn analyze_rust_module(
     }
 
     let mut seen = BTreeSet::new();
-    let mut functions = Vec::new();
+    let mut functions: BTreeMap<String, Vec<AnalyzedFunction>> = BTreeMap::new();
+    let mut export_map = BTreeMap::new();
     for entry in &entries {
         let key = format!("{}:{}", entry.module_path, entry.name);
         // `#[http_action]` entries are registered as *internal* actions: V8 `httpAction`
@@ -262,12 +323,13 @@ pub fn analyze_rust_module(
         // Every manifest entry needs its export, whichever Convex module it
         // belongs to.
         let export = format!("convex_run:{key}");
-        if !parsed.exports.contains(&export) {
+        export_map.insert(format!("{entry_module}:{}", entry.name), export.clone());
+        if !exports.contains(&export) {
             return Ok(Err(bad_module(format!(
-                "`{path_str}`: manifest lists `{key}` but the wasm has no `{export}` export"
+                "`{path_str}`: manifest lists `{key}` but the {what} has no `{export}` export"
             ))));
         }
-        if entry_module != module_name {
+        if only_module.is_some_and(|m| m != entry_module) {
             continue;
         }
         let visibility = match entry.visibility.as_str() {
@@ -331,7 +393,7 @@ pub fn analyze_rust_module(
                 }
             },
         };
-        functions.push(AnalyzedFunction::new(
+        functions.entry(entry_module).or_default().push(AnalyzedFunction::new(
             name,
             None,
             UdfType::Action,
@@ -340,14 +402,13 @@ pub fn analyze_rust_module(
             returns,
         )?);
     }
-    functions.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(Ok((
-        path,
-        AnalyzedModule {
-            functions: WithHeapSize::from(functions),
-            ..Default::default()
-        },
-    )))
+    for fns in functions.values_mut() {
+        fns.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+    Ok(Ok(ManifestAnalysis {
+        functions,
+        export_map,
+    }))
 }
 
 type ModulesByPath = BTreeMap<CanonicalizedModulePath, ModuleConfig>;
@@ -385,13 +446,26 @@ pub fn analyze_into(
     }
 }
 
-/// Analyzes every `"use rust"` module. Never executes guest code.
+/// Analyzes every `"use rust"` module. Never executes guest code. Native
+/// refs are resolved against the carriers of the same push.
 pub fn analyze_rust_modules(
     modules: &BTreeMap<CanonicalizedModulePath, ModuleConfig>,
 ) -> anyhow::Result<Result<BTreeMap<CanonicalizedModulePath, AnalyzedModule>, JsError>> {
+    analyze_rust_modules_with(modules, &native::NativeConfig::from_env())
+}
+
+fn analyze_rust_modules_with(
+    modules: &BTreeMap<CanonicalizedModulePath, ModuleConfig>,
+    native_config: &native::NativeConfig,
+) -> anyhow::Result<Result<BTreeMap<CanonicalizedModulePath, AnalyzedModule>, JsError>> {
     let mut result = BTreeMap::new();
+    let mut carriers = BTreeMap::new();
     for config in modules.values() {
-        match analyze_rust_module(config)? {
+        let analyzed = match native::kind(&*config.source) {
+            native::SourceKind::Wasm => analyze_wasm_module(config)?,
+            _ => native::analyze_native_module(native_config, config, modules, &mut carriers)?,
+        };
+        match analyzed {
             Ok((path, module)) => {
                 result.insert(path, module);
             },
