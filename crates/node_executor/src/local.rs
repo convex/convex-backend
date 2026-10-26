@@ -43,6 +43,8 @@ use crate::{
     NodeExecutorStreamPart,
 };
 
+use std::sync::atomic::AtomicU32;
+
 const NVMRC_VERSION: &str = include_str!("../../../.nvmrc");
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_HEALTH_CHECK_ATTEMPTS: u32 = 50;
@@ -50,6 +52,7 @@ const MAX_HEALTH_CHECK_ATTEMPTS: u32 = 50;
 pub struct LocalNodeExecutor {
     inner: Arc<Mutex<Option<InnerLocalNodeExecutor>>>,
     config: LocalNodeExecutorConfig,
+    consecutive_timeouts: Arc<Mutex<u32>>,
 }
 
 struct LocalNodeExecutorConfig {
@@ -65,6 +68,7 @@ struct InnerLocalNodeExecutor {
     _source_dir: TempDir,
     client: reqwest::Client,
     _server_handle: Child,
+    consecutive_timeouts: u32,
 }
 
 impl InnerLocalNodeExecutor {
@@ -119,6 +123,7 @@ impl InnerLocalNodeExecutor {
                     _source_dir: source_dir,
                     client,
                     _server_handle: server_handle,
+                    consecutive_timeouts: 0,
                 });
             }
             tokio::time::sleep(HEALTH_CHECK_INTERVAL).await;
@@ -201,6 +206,7 @@ impl LocalNodeExecutor {
     pub async fn new(node_process_timeout: Duration) -> anyhow::Result<Self> {
         let executor = Self {
             inner: Arc::new(Mutex::new(None)),
+            consecutive_timeouts: Arc::new(Mutex::new(0)),
             config: LocalNodeExecutorConfig {
                 node_process_timeout,
                 callback_initial_backoff: None,
@@ -285,7 +291,16 @@ impl NodeExecutor for LocalNodeExecutor {
         let response = match response_result {
             Ok(response) => response,
             Err(e) => {
-                if e.is_timeout() {
+                if e.is_timeout() { 
+                    let mut timeouts = self.consecutive_timeouts.lock().await;
+                        *timeouts +=1;
+                        if *timeouts >=3 {
+                            self.timeouts.lock().await.take();
+                            *timeouts = 0;
+
+                            tracing::warn!("Node executor timed out 3 consecutive times, reccycling");
+                        }
+
                     return Ok(InvokeResponse {
                         response: EXECUTE_TIMEOUT_RESPONSE_JSON.clone(),
                         aws_request_id: None,
@@ -319,6 +334,8 @@ impl NodeExecutor for LocalNodeExecutor {
         let result = handle_node_executor_stream(log_line_sender, stream).await?;
         match result {
             Ok(payload) => {
+                let mut timeouts = self.consecutive_timeouts.lock().await;
+                *timeouts = 0;
                 if payload
                     .get("exitingProcess")
                     .and_then(|v| v.as_bool())
