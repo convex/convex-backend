@@ -25,10 +25,22 @@ function isCollectCall(
   return node.callee.property.name === "collect";
 }
 
-function findOrderedQueryType(
+/**
+ * Find the declaration of the `collect()` method that Convex's `OrderedQuery`
+ * interface declares.
+ *
+ * Convex query types are recognized by the *identity* of that declaration
+ * rather than by assignability to the `OrderedQuery` type. `OrderedQuery` is a
+ * generic interface, so an assignability check against its uninstantiated
+ * declaration is both unsound (`getTypeOfSymbolAtLocation` on a type-only
+ * symbol returns the error type `any`, which accepts every receiver) and
+ * incomplete (`OrderedQuery<T>` is invariant in `T`, so a concrete
+ * `OrderedQuery<MyTable>` is not assignable to the bare declaration).
+ */
+function findOrderedQueryCollectDeclaration(
   program: ts.Program,
   checker: ts.TypeChecker,
-): ts.Type | null {
+): ts.Declaration | null {
   try {
     for (const sf of program.getSourceFiles()) {
       // Prefer the source file from the convex package.
@@ -47,12 +59,34 @@ function findOrderedQueryType(
       const exports = checker.getExportsOfModule(sourceFileSymbol);
       const orderedQuerySymbol = exports.find((e) => e.name === "OrderedQuery");
       if (!orderedQuerySymbol) continue;
-      return checker.getTypeOfSymbolAtLocation(orderedQuerySymbol, sf);
+      // `getTypeOfSymbolAtLocation` would return the error type `any` here
+      // because `OrderedQuery` is an interface and has no value meaning.
+      const collectDeclaration = checker
+        .getDeclaredTypeOfSymbol(orderedQuerySymbol)
+        .getProperty("collect")?.declarations?.[0];
+      if (!collectDeclaration) continue;
+      return collectDeclaration;
     }
   } catch {
     // ignore and fall back
   }
   return null;
+}
+
+/**
+ * Whether `.collect()` called on `type` is the `collect()` declared by Convex's
+ * `OrderedQuery`, i.e. whether `type` is a Convex query.
+ */
+function isConvexQueryType(
+  type: ts.Type,
+  orderedQueryCollect: ts.Declaration,
+): boolean {
+  // A union receiver only qualifies when every constituent is a Convex query,
+  // mirroring how assignability would have treated it.
+  if (type.isUnion()) {
+    return type.types.every((t) => isConvexQueryType(t, orderedQueryCollect));
+  }
+  return type.getProperty("collect")?.declarations?.[0] === orderedQueryCollect;
 }
 
 /**
@@ -95,19 +129,19 @@ export const noCollectInQuery = createRule<Options, MessageIds>({
       typeof tsNodeMap.get === "function"
     );
 
-    // Resolve the `OrderedQuery` type from the convex package once (only
-    // possible when type info is available).
-    const orderedQueryType =
+    // Resolve Convex's `OrderedQuery.collect()` declaration once (only possible
+    // when type info is available).
+    const orderedQueryCollectDeclaration =
       hasTypeInfo && services?.program
-        ? findOrderedQueryType(services.program, checker)
+        ? findOrderedQueryCollectDeclaration(services.program, checker)
         : null;
 
     return {
       CallExpression(node) {
         if (!isCollectCall(node)) return;
 
-        // Type-aware path: trust the type checker. Use the `OrderedQuery`
-        // subtype check and offer autofix suggestions. When type info is
+        // Type-aware path: trust the type checker. Recognize the receiver as a
+        // Convex query and offer autofix suggestions. When type info is
         // available we intentionally do NOT fall back to the AST heuristic:
         // the heuristic matches `db.query(...)` chains by name and would
         // produce false positives on non-Convex types the checker can see are
@@ -115,7 +149,7 @@ export const noCollectInQuery = createRule<Options, MessageIds>({
         if (hasTypeInfo) {
           // If we couldn't resolve `OrderedQuery`, skip to avoid false
           // positives (the file likely doesn't use Convex at all).
-          if (!orderedQueryType) {
+          if (!orderedQueryCollectDeclaration) {
             return;
           }
 
@@ -126,7 +160,7 @@ export const noCollectInQuery = createRule<Options, MessageIds>({
             return;
           }
 
-          if (!checker.isTypeAssignableTo(objectType, orderedQueryType)) {
+          if (!isConvexQueryType(objectType, orderedQueryCollectDeclaration)) {
             return;
           }
 
