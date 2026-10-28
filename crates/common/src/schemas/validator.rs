@@ -1064,7 +1064,19 @@ fn write_validation_error_bullet(
     }
     write!(f, "- ")?;
     write_validation_error_reason(f, error)?;
-    let path = error.context_ref().to_string();
+    // A missing or extra field's context points at its parent object, so add
+    // the field itself to keep nested bullets from naming only the parent.
+    let mut context = error.context_ref().clone();
+    match error {
+        ValidationError::MissingRequiredField { field_name, .. } => {
+            context.reversed_path.insert(0, format!(".{field_name}"));
+        },
+        ValidationError::ExtraField { field_name, .. } => {
+            context.reversed_path.insert(0, format!(".{field_name}"));
+        },
+        _ => {},
+    }
+    let path = context.to_string();
     if !path.is_empty() {
         write!(f, " {path}")?;
     }
@@ -1313,6 +1325,25 @@ mod tests {
         let extra_at = message.find("extra field `extra`").expect("extra bullet");
         assert!(a_at < b_at);
         assert!(b_at < extra_at);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_missing_and_extra_fields_name_the_field() -> anyhow::Result<()> {
+        let payload = object_validator(vec![
+            ("a", FieldValidator::required_field_type(Validator::String)),
+            ("b", FieldValidator::required_field_type(Validator::Float64)),
+        ])?;
+        let validator = object_validator(vec![(
+            "payload",
+            FieldValidator::required_field_type(payload),
+        )])?;
+        let value = val!({"payload" => {"a" => "ok", "z" => true}});
+        let error = check(&validator, &value).expect_err("nested missing and extra");
+        assert!(matches!(error, ValidationError::Multiple { .. }));
+        let message = error.to_string();
+        assert!(message.contains("missing required field `b` Path: .payload.b"));
+        assert!(message.contains("extra field `z` that is not in the validator Path: .payload.z"));
         Ok(())
     }
 
