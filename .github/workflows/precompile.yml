@@ -120,6 +120,11 @@ jobs:
         with:
           cache: true
           github_token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          # Lint-only tools. cargo-sort has no aarch64 prebuilt, and its
+          # cargo-install fallback fails in the job container, where rustup
+          # has no default toolchain outside the repo.
+          MISE_DISABLE_TOOLS: cargo-binstall,cargo:cargo-machete,cargo:cargo-sort
 
       - name: NPM install globals
         run: npm ci --prefix scripts
