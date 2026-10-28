@@ -97,7 +97,6 @@ export function generateFileTree(
   searchTerm: string = "",
 ): Map<string, File | Folder | ModuleFunction> {
   const nodes: Map<string, File | Folder | ModuleFunction> = new Map();
-  // eslint-disable-next-line no-restricted-syntax
   for (const [filePath, module] of modules.entries()) {
     let { functions } = module;
     // If we have a search query, skip modules that don't match.
@@ -220,7 +219,6 @@ export function processAnalyzedModuleFunction(
     type: "function",
     udfType: moduleFunction.udfType,
     identifier,
-    args: moduleFunction.argsValidator,
     visibility: moduleFunction.visibility,
     lineno: moduleFunction.lineno,
     componentId,

@@ -6,10 +6,9 @@ description: "Store user information in your Convex database"
 ---
 
 import Schema from "!!raw-loader!@site/../demos/users-and-clerk/convex/schema.ts";
-import useStoreUserEffectTS from "!!raw-loader!@site/../demos/users-and-clerk/src/useStoreUserEffect.ts";
-import useStoreUserEffectJS from "!!raw-loader!@site/../private-demos/snippets/users-and-clerk/useStoreUserEffect.js";
-import MessagesTS from "!!raw-loader!@site/../demos/users-and-clerk/convex/messages.ts";
-import UsersTS from "!!raw-loader!@site/../demos/users-and-clerk/convex/users.ts";
+import useStoreUserEffect from "!!raw-loader!@site/../demos/users-and-clerk/src/useStoreUserEffect.ts";
+import Messages from "!!raw-loader!@site/../demos/users-and-clerk/convex/messages.ts";
+import Users from "!!raw-loader!@site/../demos/users-and-clerk/convex/users.ts";
 import App from "!!raw-loader!@site/../private-demos/snippets/src/clerkStoreUserApp.tsx";
 import WebhooksSchema from "!!raw-loader!@site/../demos/users-and-clerk-webhooks/convex/schema.ts";
 import WebhookMutations from "!!raw-loader!@site/../demos/users-and-clerk-webhooks/convex/users.ts";
@@ -42,12 +41,12 @@ the JWT):
 ## Call a mutation from the client
 
 **Example:**
-[Convex Authentication with Clerk](https://github.com/get-convex/convex-demos/tree/main/users-and-clerk)
+[Convex Authentication with Clerk](https://github.com/convex/convex-demos/tree/main/users-and-clerk)
 
 ### (optional) Users table schema
 
 You can define a `"users"` table, optionally with an
-[index](/database/reading-data/indexes/indexes.md) for efficient looking up the
+[index](/database/reading-data/indexes/indexes.mdx) for efficient looking up the
 users in the database.
 
 In the examples below we will use the `tokenIdentifier` from the
@@ -66,7 +65,7 @@ it will be to migrate to a different provider.
 This is an example of a mutation that stores the user's `name` and
 `tokenIdentifier`:
 
-<TSAndJSSnippet sourceTS={UsersTS} sourceJS={UsersTS} title="convex/users.js" />
+<Snippet source={Users} title="convex/users.tsx" />
 
 ### Calling the store user mutation from React
 
@@ -76,17 +75,13 @@ been stored.
 
 This helper hook that does the job:
 
-<TSAndJSSnippet
-  sourceTS={useStoreUserEffectTS}
-  sourceJS={useStoreUserEffectJS}
-  title="src/useStoreUserEffect.ts"
-/>
+<Snippet source={useStoreUserEffect} title="src/useStoreUserEffect.ts" />
 
 You can use this hook in your top-level component. If your queries need the user
 document to be present, make sure that you only render the components that call
 them after the user has been stored:
 
-<TSAndJSSnippet sourceTS={App} sourceJS={App} title="src/App.tsx" />
+<Snippet source={App} title="src/App.tsx" />
 
 In this way the `useStoreUserEffect` hook replaces the `useConvexAuth` hook.
 
@@ -98,9 +93,8 @@ throw an error if the user hasn't been stored.
 Now that you have users stored as documents in your Convex database, you can use
 their IDs as foreign keys in other documents:
 
-<TSAndJSSnippet
-  sourceTS={MessagesTS}
-  sourceJS={MessagesTS}
+<Snippet
+  source={Messages}
   snippet="load-user"
   title="convex/messages.ts"
   suffix={`    // do something with \`user\`...
@@ -112,9 +106,8 @@ their IDs as foreign keys in other documents:
 
 The information about other users can be retrieved via their IDs:
 
-<TSAndJSSnippet
-  sourceTS={MessagesTS}
-  sourceJS={MessagesTS}
+<Snippet
+  source={Messages}
   snippet="use-users"
   title="convex/messages.ts"
   prefix={`import { query } from "./_generated/server";
@@ -130,7 +123,7 @@ With this implementation Clerk will call your Convex backend via an HTTP
 endpoint any time a user signs up, updates or deletes their account.
 
 **Example:**
-[Convex Authentication with Clerk and Webhooks](https://github.com/get-convex/convex-demos/tree/main/users-and-clerk-webhooks)
+[Convex Authentication with Clerk and Webhooks](https://github.com/convex/convex-demos/tree/main/users-and-clerk-webhooks)
 
 ### Configure the webhook endpoint in Clerk
 
@@ -140,7 +133,7 @@ Set _Endpoint URL_ to
 `https://<your deployment name>.convex.site/clerk-users-webhook` (note the
 domain ends in **`.site`**, not `.cloud`). You can see your deployment name in
 the `.env.local` file in your project directory, or on your Convex dashboard as
-part of the [Deployment URL](/dashboard/deployments/settings.md). For example,
+part of the [Deployment URL](/dashboard/deployments/settings.mdx). For example,
 the endpoint URL could be:
 `https://happy-horse-123.convex.site/clerk-users-webhook`.
 
@@ -157,7 +150,7 @@ UI), it should start with `whsec_`. Set it as the value of the
 ### (optional) Users table schema
 
 You can define a `"users"` table, optionally with an
-[index](/database/reading-data/indexes/indexes.md) for efficient looking up the
+[index](/database/reading-data/indexes/indexes.mdx) for efficient looking up the
 users in the database.
 
 In the examples below we will use the `subject` from the
@@ -171,11 +164,7 @@ Clerk user ID.
 This is an example of mutations that handle the updates received via the
 webhook:
 
-<TSAndJSSnippet
-  sourceTS={WebhookMutations}
-  sourceJS={WebhookMutations}
-  title="convex/users.ts"
-/>
+<Snippet source={WebhookMutations} title="convex/users.ts" />
 
 There are also a few helpers in this file:
 
@@ -195,11 +184,7 @@ There are also a few helpers in this file:
 
 This how the actual HTTP endpoint can be implemented:
 
-<TSAndJSSnippet
-  sourceTS={WebhookEndpoint}
-  sourceJS={WebhookEndpoint}
-  title="convex/http.ts"
-/>
+<Snippet source={WebhookEndpoint} title="convex/http.ts" />
 
 If you deploy your code now and sign in, you should see the user being created
 in your Convex database.
@@ -211,9 +196,8 @@ You can use the helpers defined before to retrieve the current user's document.
 Now that you have users stored as documents in your Convex database, you can use
 their IDs as foreign keys in other documents:
 
-<TSAndJSSnippet
-  sourceTS={WebhookMessages}
-  sourceJS={WebhookMessages}
+<Snippet
+  source={WebhookMessages}
   snippet="current-user"
   title="convex/messages.ts"
 />
@@ -222,12 +206,7 @@ their IDs as foreign keys in other documents:
 
 The information about other users can be retrieved via their IDs:
 
-<TSAndJSSnippet
-  sourceTS={MessagesTS}
-  sourceJS={MessagesTS}
-  snippet="use-users"
-  title="convex/messages.ts"
-/>
+<Snippet source={Messages} snippet="use-users" title="convex/messages.ts" />
 
 ### Waiting for current user to be stored
 
@@ -240,17 +219,8 @@ For example you can define a hook that determines the current authentication
 state of the client, taking into account whether the current user has been
 stored:
 
-<TSAndJSSnippet
-  sourceTS={WebhookHook}
-  sourceJS={WebhookHook}
-  title="src/useCurrentUser.ts"
-/>
+<Snippet source={WebhookHook} title="src/useCurrentUser.ts" />
 
 And then you can use it to render the appropriate components:
 
-<TSAndJSSnippet
-  sourceTS={WebhookClient}
-  sourceJS={WebhookClient}
-  snippet="client-blocking"
-  title="src/App.tsx"
-/>
+<Snippet source={WebhookClient} snippet="client-blocking" title="src/App.tsx" />

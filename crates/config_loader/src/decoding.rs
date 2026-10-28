@@ -31,11 +31,24 @@ impl ConfigDecoder for TextDecoder {
 }
 
 #[derive(Copy, Clone)]
-pub struct FromStrDecoder<T>(PhantomData<fn() -> T>);
+pub struct FromStrDecoder<T> {
+    trim: bool,
+    _marker: PhantomData<fn() -> T>,
+}
 
 impl<T> FromStrDecoder<T> {
     pub fn new() -> Self {
-        Self(PhantomData)
+        Self {
+            trim: false,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Trim leading/trailing whitespace from the file contents before parsing.
+    /// Useful for files with a trailing newline.
+    pub fn trimmed(mut self) -> Self {
+        self.trim = true;
+        self
     }
 }
 
@@ -46,7 +59,9 @@ where
     type Output = T;
 
     fn decode(&self, contents: Vec<u8>) -> anyhow::Result<T> {
-        Ok(String::from_utf8(contents)?.parse()?)
+        let s = String::from_utf8(contents)?;
+        let slice = if self.trim { s.trim() } else { s.as_str() };
+        Ok(slice.parse()?)
     }
 }
 
@@ -134,5 +149,34 @@ impl<T: ProstMessage> ConfigDecoder for TextProtoDecoder<T> {
         let contents = std::str::from_utf8(&contents)?;
         let message = DynamicMessage::parse_text_format(self.descriptor.clone(), contents)?;
         Ok(message.transcode_to()?)
+    }
+}
+
+/// Decodes a base64-encoded binary Prost message: standard-alphabet base64 of
+/// the message's wire-format bytes, with any surrounding whitespace trimmed.
+/// Empty or all-whitespace input decodes to the message's default value.
+#[derive(Clone)]
+pub struct Base64ProtoDecoder<T> {
+    _type: PhantomData<fn() -> T>,
+}
+
+impl<T> Base64ProtoDecoder<T> {
+    pub const fn new() -> Self {
+        Self { _type: PhantomData }
+    }
+}
+
+impl<T> Default for Base64ProtoDecoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: ProstMessage> ConfigDecoder for Base64ProtoDecoder<T> {
+    type Output = T;
+
+    fn decode(&self, contents: Vec<u8>) -> anyhow::Result<T> {
+        let bytes = base64::decode(contents.trim_ascii())?;
+        Ok(T::decode(&bytes[..])?)
     }
 }

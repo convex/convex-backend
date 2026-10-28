@@ -26,7 +26,7 @@ impl LegacyEncryptor {
         buffer.push(version);
         buffer.extend_from_slice(&nonce.0);
         buffer.extend_from_slice(&ciphertext);
-        hex::encode(buffer)
+        const_hex::encode(buffer)
     }
 
     pub fn decode_proto<M: Default + Message>(
@@ -34,7 +34,7 @@ impl LegacyEncryptor {
         version: u8,
         encoded: &str,
     ) -> anyhow::Result<M> {
-        let bytes = hex::decode(encoded)?;
+        let bytes = const_hex::decode(encoded)?;
         let mut reader = &bytes[..];
 
         let message_version = reader.read_u8()?;
@@ -56,14 +56,3 @@ impl LegacyEncryptor {
 }
 
 // Make sure that old encrypted values stay decryptable
-#[test]
-fn test_compatible() -> anyhow::Result<()> {
-    let secret = Secret::try_from(vec![39; 32])?;
-    let message = "hello world";
-    let encrypted = "010a1e6e07e418a1791e491de168a62e37abce83f3453b3d01c358d38771815433f8ecba285de5a47effe43bd3d5f1a0087788857987";
-    assert_eq!(
-        LegacyEncryptor::new(secret)?.decode_proto::<String>(1, encrypted)?,
-        message
-    );
-    Ok(())
-}

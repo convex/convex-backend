@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use common::identity::IDENTITY_LABEL;
 use metrics::{
     log_counter,
     log_counter_with_labels,
@@ -205,4 +206,13 @@ register_convex_gauge!(
 pub fn query_cache_log_eviction(age: Duration) {
     log_counter(&QUERY_CACHE_EVICTED_TOTAL, 1);
     log_gauge(&QUERY_CACHE_EVICTED_AGE_SECONDS, age.as_secs_f64())
+}
+
+register_convex_counter!(
+    QUERY_CACHE_VISIBILITY_REJECTED_TOTAL,
+    "Number of cache hits refused because the caller may not run the function",
+    &[IDENTITY_LABEL],
+);
+pub fn log_cache_hit_visibility_rejected(identity: StaticMetricLabel) {
+    log_counter_with_labels(&QUERY_CACHE_VISIBILITY_REJECTED_TOTAL, 1, vec![identity]);
 }

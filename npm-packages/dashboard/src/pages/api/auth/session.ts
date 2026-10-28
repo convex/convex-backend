@@ -1,5 +1,9 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { getSession, createSessionCookie } from "server/workos";
+import {
+  getSession,
+  createSessionCookie,
+  WorkOSUnavailableError,
+} from "server/workos";
 
 export default async function handler(
   req: NextApiRequest,
@@ -26,6 +30,15 @@ export default async function handler(
 
     res.status(200).json(sessionData);
   } catch (error) {
+    if (error instanceof WorkOSUnavailableError) {
+      // 503 (not 401) so the client shows the "try again" page instead of
+      // treating the user as logged out.
+      console.error("WorkOS unavailable while getting session:", error);
+      return res.status(503).json({
+        error: "Authentication service unavailable",
+        code: "AuthServiceUnavailable",
+      });
+    }
     console.error("Error getting session:", error);
     res.status(500).json({ error: "Internal server error" });
   }

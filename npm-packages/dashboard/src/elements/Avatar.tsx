@@ -66,10 +66,11 @@ export function Avatar({
   colorSchemeIdx,
   rotation,
 }: AvatarProps) {
-  const initial =
+  const initial = (
     name.split(" ").length > 1
       ? name.split(" ")[0][0] + name.split(" ")[1][0]
-      : name.slice(0, 2);
+      : name.slice(0, 2)
+  ).replace(/[^a-zA-Z0-9]/g, "");
 
   // Simple hash function for deterministic color selection
   function hashString(str: string) {
@@ -145,7 +146,7 @@ export function Avatar({
       {!isSystem && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-10 h-full w-full rounded-full bg-black/30 dark:bg-black/15"
+          className="pointer-events-none absolute inset-0 z-10 size-full rounded-full bg-black/30 dark:bg-black/15"
         />
       )}
       {isSystem ? (

@@ -20,8 +20,7 @@ use crate::{
 /// function by our V8 layer before it has had its returns validator run. It
 /// slightly differs from `UdfExecution`, which is what we store in memory for
 /// logs.
-#[derive(Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(Debug))]
+#[derive(Clone, Debug)]
 pub enum FunctionOutcome {
     Query(UdfOutcome),
     Mutation(UdfOutcome),
@@ -69,6 +68,17 @@ impl FunctionOutcome {
                 )?))
             },
         }
+    }
+
+    pub fn user_execution_time_micros(&self) -> u64 {
+        let duration = match self {
+            FunctionOutcome::Query(outcome) => outcome.user_execution_time,
+            FunctionOutcome::Mutation(outcome) => outcome.user_execution_time,
+            FunctionOutcome::Action(outcome) => outcome.user_execution_time,
+            FunctionOutcome::HttpAction(outcome) => outcome.user_execution_time,
+        };
+
+        duration.map(|d| d.as_micros()).unwrap_or(0) as u64
     }
 }
 

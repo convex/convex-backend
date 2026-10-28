@@ -10,11 +10,47 @@ import { ensureBackendBinaryDownloaded } from "./download.js";
 import path from "path";
 import child_process from "child_process";
 import detect from "detect-port";
-import { SENTRY_DSN } from "../utils/sentry.js";
+import { LOCAL_BACKEND_SENTRY_DSN } from "../utils/sentry.js";
 import { createHash } from "crypto";
 import { LocalDeploymentError } from "./errors.js";
-import { LOCAL_BACKEND_INSTANCE_SECRET } from "./utils.js";
+import { LOCAL_BACKEND_INSTANCE_SECRET, releaseDate } from "./utils.js";
 import { DeploymentType, DetailedDeploymentCredentials } from "../api.js";
+import { productionProvisionHost, provisionHost } from "../config.js";
+
+const DEFAULT_STARTUP_TIMEOUT_SECS = 30;
+const FIRST_CONTROL_PLANE_AUTH_BACKEND_VERSION =
+  "precompiled-2026-09-15-4e9b83a";
+
+export function _backendSupportsControlPlaneAuth(version: string): boolean {
+  if (version === FIRST_CONTROL_PLANE_AUTH_BACKEND_VERSION) {
+    return true;
+  }
+  const backendDate = releaseDate(version);
+  const firstSupportedDate = releaseDate(
+    FIRST_CONTROL_PLANE_AUTH_BACKEND_VERSION,
+  );
+  return (
+    backendDate !== null &&
+    firstSupportedDate !== null &&
+    backendDate > firstSupportedDate
+  );
+}
+
+async function parseStartupTimeoutSecs(ctx: Context): Promise<number> {
+  const raw = process.env.CONVEX_LOCAL_BACKEND_STARTUP_TIMEOUT_SECS;
+  if (raw === undefined) {
+    return DEFAULT_STARTUP_TIMEOUT_SECS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return await ctx.crash({
+      exitCode: 1,
+      errorType: "fatal",
+      printedMessage: `Invalid CONVEX_LOCAL_BACKEND_STARTUP_TIMEOUT_SECS=${JSON.stringify(raw)}: expected a positive number.`,
+    });
+  }
+  return parsed;
+}
 
 export async function runLocalBackend(
   ctx: Context,
@@ -26,6 +62,7 @@ export async function runLocalBackend(
     deploymentKind: LocalDeploymentKind;
     deploymentName: string;
     binaryPath: string;
+    backendVersion: string;
     instanceSecret: string;
     isLatestVersion: boolean;
   },
@@ -110,14 +147,36 @@ export async function runLocalBackend(
       errForSentry: new LocalDeploymentError(message),
     });
   }
-  const commandStr = `${args.binaryPath} ${commandArgs.join(" ")}`;
+  const supportsControlPlane = _backendSupportsControlPlaneAuth(
+    args.backendVersion,
+  );
+  if (supportsControlPlane && provisionHost !== productionProvisionHost) {
+    commandArgs.push("--control-plane-url", provisionHost);
+  }
+  const auth = ctx.bigBrainAuth();
+  if (
+    supportsControlPlane &&
+    args.deploymentKind === "local" &&
+    auth?.kind === "accessToken"
+  ) {
+    commandArgs.push("--control-plane-access-token", auth.accessToken);
+  }
+  const displayArgs = commandArgs.map((arg, index) =>
+    index > 0 &&
+    ["--instance-secret", "--control-plane-access-token"].includes(
+      commandArgs[index - 1],
+    )
+      ? "[REDACTED]"
+      : arg,
+  );
+  const commandStr = `${args.binaryPath} ${displayArgs.join(" ")}`;
   logVerbose(`Starting local backend: \`${commandStr}\``);
   const p = child_process
     .spawn(args.binaryPath, commandArgs, {
       stdio: "ignore",
       env: {
         ...process.env,
-        SENTRY_DSN: SENTRY_DSN,
+        SENTRY_DSN: LOCAL_BACKEND_SENTRY_DSN,
       },
     })
     .on("exit", (code) => {
@@ -132,7 +191,7 @@ export async function runLocalBackend(
   await ensureBackendRunning(ctx, {
     cloudPort: ports.cloud,
     deploymentName: args.deploymentName,
-    maxTimeSecs: 30,
+    maxTimeSecs: await parseStartupTimeoutSecs(ctx),
   });
 
   return {
@@ -215,7 +274,11 @@ export async function ensureBackendRunning(
       timeElapsedSecs += 0.5;
     }
   }
-  const message = `Local backend did not start on port ${args.cloudPort} within ${args.maxTimeSecs} seconds.`;
+  const base = `Local backend did not start on port ${args.cloudPort} within ${args.maxTimeSecs} seconds.`;
+  const message =
+    args.maxTimeSecs >= DEFAULT_STARTUP_TIMEOUT_SECS
+      ? `${base} If your local database is large, increase the timeout by setting CONVEX_LOCAL_BACKEND_STARTUP_TIMEOUT_SECS (e.g. CONVEX_LOCAL_BACKEND_STARTUP_TIMEOUT_SECS=120).`
+      : base;
   return await ctx.crash({
     exitCode: 1,
     errorType: "fatal",
@@ -295,7 +358,7 @@ type LocalBackendStatus =
   | { kind: "different"; name: string }
   | { kind: "not-running" };
 
-async function fetchLocalBackendStatus(args: {
+export async function fetchLocalBackendStatus(args: {
   url: string;
   deploymentName: string;
 }): Promise<LocalBackendStatus> {
@@ -406,6 +469,7 @@ async function startEphemeralLocalBackend(
 
   const { cleanupHandle } = await runLocalBackend(ctx, {
     binaryPath,
+    backendVersion: config.backendVersion,
     ports: config.ports,
     deploymentKind,
     deploymentName: args.deploymentName,

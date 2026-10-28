@@ -1,0 +1,162 @@
+---
+title: "Using Codex with Convex"
+sidebar_position: 175
+sidebar_label: Using Codex
+description:
+  "Build and scale apps with OpenAI Codex and Convex, and get the full power of
+  Convex out of the official Codex plugin: subagents, MCP tools, and skills."
+slug: "using-codex"
+---
+
+[Codex](https://openai.com/codex), OpenAI's coding agent, makes it easy to write
+and maintain apps built with Convex. Let's walk through how to set up Codex for
+the best possible results with Convex.
+
+## Codex and Convex
+
+Codex works great with Convex out of the box. One all-in-one TypeScript backend
+(database, functions, workflows, real-time sync) means no glue code to get
+wrong, type safety catches guesses at compile time, and transactions keep data
+consistent under load, which covers everything from a live polling tool to an AI
+research agent. Adding the plugin lets you leverage the full power of Convex:
+Codex gets the `convex-expert` and `convex-reviewer` subagents, the Convex MCP
+server for reading your real deployment, and durable Components (Workpool,
+Workflow, Agent) for agentic workloads.
+
+## Install the Convex plugin
+
+The official Convex plugin makes Codex work better with your Convex project. It
+includes:
+
+- **Tools** that let your agent securely interact with your dev deployment (e.g.
+  read the data/logs/insights or run functions), plus an error watcher that
+  surfaces runtime errors as you work.
+- **Rules and skills** that teach your agent how to use Convex the most
+  effectively.
+- **Specialized subagents** (`convex-expert` and `convex-reviewer`) for deep
+  Convex work and code review.
+
+See the [Agent Plugins overview](/ai/convex-plugins.mdx) for everything the
+plugin bundles.
+
+Convex is listed in Codex's built-in plugin directory, so a single command
+installs the reviewed release:
+
+```sh
+codex plugin add convex@openai-curated
+```
+
+:::caution
+
+The directory entry is currently the lighter Convex ChatGPT-app connector. For
+the full plugin, with skills, subagents, and the runtime error watcher, install
+the marketplace build below.
+
+:::
+
+**Want the newest build?** The directory release is reviewed by OpenAI and can
+lag the latest plugin. To pull the newest build straight from Convex, add the
+Convex marketplace and install from it:
+
+```sh
+codex plugin marketplace add convex/convex-codex-plugin
+codex plugin add convex@convex-codex-plugin
+```
+
+To update the marketplace build later, run `codex plugin marketplace upgrade`
+and then re-run `codex plugin add convex@convex-codex-plugin`.
+
+## Starting a new project
+
+From an empty directory, launch Codex with what you want to build:
+
+```sh
+codex "build me a todo app with Convex"
+```
+
+Codex handles the rest. It runs `npm create convex@latest`,
+`npx convex ai-files install` (which writes a managed Convex section into
+`AGENTS.md` and installs Convex [Agent Skills](/ai/agent-skills.mdx) into
+`.agents/skills/`), and `npx convex dev --once`, which
+[auto-provisions a local backend](/cli/agent-mode#local-backend) without
+prompting for login because the agent's shell is non-interactive.
+
+If you'd rather scaffold the project yourself first and then bring in Codex, the
+manual sequence is:
+
+```sh
+npm create convex@latest my-app
+cd my-app
+npx convex ai-files install
+codex
+```
+
+## Adding to an existing project
+
+If your project already has Convex set up, run these two steps from the project
+root to make Codex Convex-aware.
+
+### Add Convex Rules
+
+The Convex CLI can install and maintain a managed section in your project's
+`AGENTS.md` file that teaches Codex about Convex conventions and best practices.
+
+```sh
+npx convex ai-files install
+```
+
+This will create or update `AGENTS.md` and install Convex
+[Agent Skills](/ai/agent-skills.mdx) into `.agents/skills/` so Codex can use
+specialized workflows like setting up auth, designing a schema, and running
+migrations.
+
+See [Convex AI files](/ai/overview.mdx#convex-ai-files) for more on managing
+these files.
+
+We're constantly working on improving the quality of these rules for Convex by
+using rigorous evals. You can help by
+[contributing to our evals repo](https://github.com/convex/convex-evals).
+
+### Setup the Convex MCP Server
+
+The Convex CLI comes with a
+[Convex Model Context Protocol](/ai/convex-mcp-server.mdx) (MCP) server built
+in. The Convex MCP server gives Codex access to your Convex deployment to query
+and optimize your project.
+
+Add the following to your Codex MCP configuration (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.convex]
+command = "npx"
+args = ["-y", "convex@latest", "mcp", "start"]
+```
+
+Now start asking Codex questions like:
+
+- Evaluate my convex schema and suggest improvements
+- What are this app's public endpoints?
+- Run the `my_convex_function` query
+
+## Running Codex with Convex in the cloud
+
+When running Codex in a remote environment (like ChatGPT's Codex cloud), use
+Convex's [Agent Mode](/cli/agent-mode) so the agent can iterate on code, run
+tests, and call one-off functions without needing full deployment permissions.
+
+A good setup script for ChatGPT Codex looks like:
+
+```sh
+npm i
+npx convex dev --once
+```
+
+In non-interactive shells (the typical case for an agent's setup script),
+`npx convex` won't prompt the agent to log in. It provisions a local deployment
+automatically. See [Agent Mode → Local backend](/cli/agent-mode#local-backend)
+for details.
+
+This command requires "full" internet access to download the Convex binary.
+
+For per-agent cloud dev deployments scoped to a single throwaway deploy key, see
+[Cloud dev deployments per agent](/ai/overview.mdx#cloud-dev-deployments-per-agent).

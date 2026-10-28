@@ -152,16 +152,3 @@ impl TryFrom<ConvexValue> for Vec<FieldPath> {
         anyhow::bail!("Invalid field list: {:?}", value)
     }
 }
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for FieldPath {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = FieldPath>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        prop::collection::vec(any::<IdentifierFieldName>(), 1..8)
-            .prop_filter_map("Field path was not valid", |v| FieldPath::new(v).ok())
-    }
-}

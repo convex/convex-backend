@@ -3,6 +3,7 @@ import { ConvexTool } from "./index.js";
 import { loadSelectedDeploymentCredentials } from "../../api.js";
 import { runSystemQuery } from "../../run.js";
 import { getMcpDeploymentSelection } from "../requestContext.js";
+import { convexToJson } from "../../../../values/index.js";
 
 const inputSchema = z.object({
   deploymentSelector: z
@@ -54,6 +55,6 @@ export const FunctionSpecTool: ConvexTool<
       componentPath: undefined,
       args: {},
     });
-    return functions;
+    return convexToJson(functions);
   },
 };

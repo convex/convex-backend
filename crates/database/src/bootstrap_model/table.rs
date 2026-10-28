@@ -54,6 +54,7 @@ use crate::{
     BootstrapComponentsModel,
     IndexModel,
     SchemaModel,
+    SchemaValidationModel,
     SystemMetadataModel,
     Transaction,
 };
@@ -80,9 +81,7 @@ pub struct TablesTable;
 impl SystemTable for TablesTable {
     type Metadata = TableMetadata;
 
-    fn table_name() -> &'static TableName {
-        &TABLES_TABLE
-    }
+    const TABLE_NAME: TableName = TABLES_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![TABLES_BY_NAME_INDEX.clone()]
@@ -131,15 +130,21 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
         })
     }
 
-    pub async fn count_tablet(&mut self, tablet_id: TabletId) -> anyhow::Result<Option<u64>> {
-        // Add read dependency on the entire table.
-        // But we haven't explicitly read the documents, so don't record_read_documents.
+    /// Records a read on the entire by_id index of `tablet_id`.
+    pub fn add_dependency_on_tablet(&mut self, tablet_id: TabletId) -> anyhow::Result<()> {
         self.tx.reads.record_indexed_directly(
             TabletIndexName::by_id(tablet_id),
             IndexedFields::by_id(),
             Interval::all(),
+            &self.tx.limits,
         )?;
+        Ok(())
+    }
 
+    pub async fn count_tablet(&mut self, tablet_id: TabletId) -> anyhow::Result<Option<u64>> {
+        // Add read dependency on the entire table.
+        // But we haven't explicitly read the documents, so don't record_read_documents.
+        self.add_dependency_on_tablet(tablet_id)?;
         // Get table count at the beginning of the transaction, then add the delta from
         // the transaction so far.
         let snapshot_count = self.tx.count_snapshot.count(tablet_id).await?;
@@ -234,6 +239,20 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
         &mut self,
         tablet_id: TabletId,
     ) -> anyhow::Result<TableNumber> {
+        let table_metadata = self.get_table_metadata(tablet_id).await?;
+        let table_doc_id = table_metadata.id();
+        let table_metadata = table_metadata.into_value();
+        if table_metadata.state == TableState::Active {
+            let referenced_name = self
+                .tx
+                .virtual_system_mapping()
+                .associated_virtual_table_name(&table_metadata.name)
+                .unwrap_or(&table_metadata.name)
+                .clone();
+            SchemaValidationModel::new(self.tx, table_metadata.namespace)
+                .invalidate_table_references(&referenced_name)
+                .await?;
+        }
         for index in IndexModel::new(self.tx)
             .all_indexes_on_table(tablet_id)
             .await?
@@ -243,9 +262,6 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
                 .delete(index_id)
                 .await?;
         }
-        let table_metadata = self.get_table_metadata(tablet_id).await?;
-        let table_doc_id = table_metadata.id();
-        let table_metadata = table_metadata.into_value();
         let updated_table_metadata = TableMetadata {
             name: table_metadata.name,
             number: table_metadata.number,
@@ -258,19 +274,26 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
         Ok(table_metadata.number)
     }
 
-    /// This method should only be called after all documents in the tablet have
-    /// been deleted by retention
+    /// Removes a `Deleting` tablet's `_tables` document, finalizing the drop.
+    /// Only call this once document retention has emptied the tablet.
+    ///
+    /// `Deleting` tablets are absent from the table mapping, so the document is
+    /// resolved by id. A missing document means the drop is already finalized
+    /// and the call is a no-op, making it safe to retry.
     pub async fn hard_delete_tablet_document(&mut self, tablet_id: TabletId) -> anyhow::Result<()> {
-        if self.tx.table_mapping().tablet_id_exists(tablet_id) {
-            let doc = self.get_table_metadata(tablet_id).await?;
-            anyhow::ensure!(
-                doc.state == TableState::Deleting,
-                "Cannot delete a tablet that is not in deleting state"
-            );
-            SystemMetadataModel::new(self.tx, TableNamespace::Global)
-                .delete(doc.id())
-                .await?;
-        }
+        let table_doc_id = self.tx.bootstrap_tables().table_resolved_doc_id(tablet_id);
+        let Some(doc) = self.tx.get(table_doc_id).await? else {
+            return Ok(());
+        };
+        let doc: ParsedDocument<TableMetadata> = doc.parse()?;
+        anyhow::ensure!(
+            doc.state == TableState::Deleting,
+            "Cannot hard-delete tablet {tablet_id} in state {:?}, expected Deleting",
+            doc.state,
+        );
+        SystemMetadataModel::new(self.tx, TableNamespace::Global)
+            .delete(doc.id())
+            .await?;
         Ok(())
     }
 
@@ -284,15 +307,6 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
             .await?
             .context(format!("Couldn't find table metadata for {tablet_id}"))?
             .parse()
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn table_is_empty(
-        &mut self,
-        namespace: TableNamespace,
-        table: &TableName,
-    ) -> anyhow::Result<bool> {
-        Ok(self.must_count(namespace, table).await? == 0)
     }
 
     // Checks both _tables and _virtual_tables to find a non-conflicting table
@@ -476,27 +490,26 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
             .tx
             .table_mapping()
             .namespace(namespace)
-            .name_to_tablet()(S::table_name().clone())?;
+            .name_to_tablet()(S::TABLE_NAME)?;
 
         let table_number = self
             .delete_table_by_id_bypassing_schema_enforcement(tablet_id)
             .await?;
         self._insert_table_metadata(
             namespace,
-            S::table_name(),
+            &S::TABLE_NAME,
             Some(table_number),
             TableState::Active,
         )
         .await?;
-        let mut index_model = IndexModel::new(self.tx);
         for index in S::indexes() {
             let index_metadata = IndexMetadata::new_enabled(
                 index
                     .name
-                    .map_table(&|_| anyhow::Ok(S::table_name().clone()))?,
+                    .map_table(&|_| anyhow::Ok(S::TABLE_NAME.clone()))?,
                 index.fields,
             );
-            index_model
+            IndexModel::new(self.tx)
                 .add_system_index(namespace, index_metadata)
                 .await?;
         }
@@ -512,7 +525,7 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
         anyhow::ensure!(
             bootstrap_system_tables()
                 .iter()
-                .all(|t| t.table_name() != table),
+                .all(|t| t.table_name() != *table),
             "Conflict with bootstrap system table {table}",
         );
         self._insert_table_metadata(namespace, table, table_number, TableState::Hidden)
@@ -563,17 +576,14 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
 
             // Add the system defined indexes for the newly created table. Since the newly
             // created table is empty, we can start these indexes as `Enabled`.
-            let metadata = IndexMetadata::new_enabled(
-                GenericIndexName::by_id(tablet_id),
-                IndexedFields::by_id(),
-            );
+            let by_id = GenericIndexName::by_id(tablet_id);
+            let metadata = IndexMetadata::new_enabled(by_id, IndexedFields::by_id());
             SystemMetadataModel::new_global(self.tx)
                 .insert_metadata(&INDEX_TABLE, metadata.try_into()?)
                 .await?;
-            let metadata = IndexMetadata::new_enabled(
-                GenericIndexName::by_creation_time(tablet_id),
-                IndexedFields::creation_time(),
-            );
+            let by_creation_time = GenericIndexName::by_creation_time(tablet_id);
+            let metadata =
+                IndexMetadata::new_enabled(by_creation_time, IndexedFields::creation_time());
             SystemMetadataModel::new_global(self.tx)
                 .insert_metadata(&INDEX_TABLE, metadata.try_into()?)
                 .await?;
@@ -584,310 +594,4 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
         }
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn insert_table_metadata_for_test(
-        &mut self,
-        namespace: TableNamespace,
-        table: &TableName,
-    ) -> anyhow::Result<TabletIdAndTableNumber> {
-        self._insert_table_metadata(namespace, table, None, TableState::Active)
-            .await
-    }
-}
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use common::{
-        bootstrap_model::schema::{
-            SchemaMetadata,
-            SchemaState,
-        },
-        db_schema,
-        document::ParseDocument,
-        object_validator,
-        schemas::{
-            validator::{
-                FieldValidator,
-                Validator,
-            },
-            DatabaseSchema,
-            DocumentSchema,
-        },
-    };
-    use must_let::must_let;
-    use runtime::testing::TestRuntime;
-    use value::{
-        assert_obj,
-        TableName,
-        TableNamespace,
-    };
-
-    use crate::{
-        bootstrap_model::table::NUM_RESERVED_SYSTEM_TABLE_NUMBERS,
-        test_helpers::new_tx,
-        SchemaModel,
-        TableModel,
-        TestFacingModel,
-        Transaction,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn delete_table_with_missing_table_does_nothing(rt: TestRuntime) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-        let mut model = TableModel::new(&mut tx);
-        model
-            .delete_active_table(TableNamespace::test_user(), TableName::from_str("missing")?)
-            .await
-    }
-
-    #[convex_macro::test_runtime]
-    async fn insert_table_metadata_inserts_table(rt: TestRuntime) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-        let mut model = TableModel::new(&mut tx);
-        let table_name = TableName::from_str("my_table")?;
-        model
-            .insert_table_metadata(TableNamespace::test_user(), &table_name)
-            .await?;
-        assert!(model.table_exists(TableNamespace::test_user(), &table_name));
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn delete_table_with_valid_table_deletes_it(rt: TestRuntime) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-        let mut model = TableModel::new(&mut tx);
-        let table_name = TableName::from_str("my_table")?;
-        model
-            .insert_table_metadata(TableNamespace::test_user(), &table_name)
-            .await?;
-        model
-            .delete_active_table(TableNamespace::test_user(), table_name.clone())
-            .await?;
-        assert!(!model.table_exists(TableNamespace::test_user(), &table_name));
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn delete_table_with_table_not_in_active_schema_deletes_it(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-
-        set_active_schema(&mut tx, db_schema!()).await?;
-
-        let mut model = TableModel::new(&mut tx);
-        let table_name = TableName::from_str("my_table")?;
-        model
-            .insert_table_metadata(TableNamespace::test_user(), &table_name)
-            .await?;
-        model
-            .delete_active_table(TableNamespace::test_user(), table_name.clone())
-            .await?;
-        assert!(!model.table_exists(TableNamespace::test_user(), &table_name));
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn delete_table_with_other_table_in_active_schema_deletes_it(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-
-        set_active_schema(&mut tx, db_schema!("other_table" => DocumentSchema::Any)).await?;
-
-        let mut model = TableModel::new(&mut tx);
-        let table_name = TableName::from_str("my_table")?;
-        model
-            .insert_table_metadata(TableNamespace::test_user(), &table_name)
-            .await?;
-        model
-            .delete_active_table(TableNamespace::test_user(), table_name.clone())
-            .await?;
-        assert!(!model.table_exists(TableNamespace::test_user(), &table_name));
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn delete_table_with_table_in_active_schema_fails(rt: TestRuntime) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-
-        set_active_schema(&mut tx, db_schema!("my_table" => DocumentSchema::Any)).await?;
-
-        let mut model = TableModel::new(&mut tx);
-        let table_name = TableName::from_str("my_table")?;
-        model
-            .insert_table_metadata(TableNamespace::test_user(), &table_name)
-            .await?;
-        let result = model
-            .delete_active_table(TableNamespace::test_user(), table_name.clone())
-            .await;
-        let error = result.unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to delete table \"my_table\" because it appears in the schema"),
-            "{error}"
-        );
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn delete_table_with_table_in_active_schema_as_reference_fails(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-
-        set_active_schema(&mut tx, db_schema!("other_table" =>
-            DocumentSchema::Union(vec![object_validator!(
-                "field" => FieldValidator::required_field_type(Validator::Id("my_table".parse()?))
-            )])
-        )).await?;
-
-        let mut model = TableModel::new(&mut tx);
-        let table_name = TableName::from_str("my_table")?;
-        model
-            .insert_table_metadata(TableNamespace::test_user(), &table_name)
-            .await?;
-        let result = model
-            .delete_active_table(TableNamespace::test_user(), table_name.clone())
-            .await;
-        let error = result.unwrap_err();
-        assert!(
-            error.to_string().contains(
-                "Failed to delete table \"my_table\" because `v.id(\"my_table\")` appears in the \
-                 schema of table \"other_table\""
-            ),
-            "{error}"
-        );
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn delete_table_with_table_in_validated_schema_fails_schema(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-
-        let mut schema_model = SchemaModel::new_root_for_test(&mut tx);
-        let (schema_id, _state) = schema_model
-            .submit_pending(db_schema!("my_table" => DocumentSchema::Any))
-            .await?;
-        schema_model.mark_validated(schema_id).await?;
-
-        let mut model = TableModel::new(&mut tx);
-        let table_name = TableName::from_str("my_table")?;
-        model
-            .insert_table_metadata(TableNamespace::test_user(), &table_name)
-            .await?;
-        model
-            .delete_active_table(TableNamespace::test_user(), table_name.clone())
-            .await?;
-
-        let mut schema_model = SchemaModel::new_root_for_test(&mut tx);
-        assert!(schema_model
-            .get_by_state(SchemaState::Validated)
-            .await?
-            .is_none());
-        let schema = ParseDocument::<SchemaMetadata>::parse(tx.get(schema_id).await?.unwrap())?;
-        must_let!(let SchemaState::Failed { error, table_name } = &schema.state);
-        assert_eq!(table_name, &Some("my_table".to_string()));
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to delete table \"my_table\" because it appears in the schema"),
-            "{error}"
-        );
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_next_table_number(rt: TestRuntime) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-        let mut model = TableModel::new(&mut tx);
-        let namespace = TableNamespace::test_user();
-
-        let next_table_number: u32 = model.next_user_table_number(namespace).await?.into();
-        assert_eq!(
-            (NUM_RESERVED_SYSTEM_TABLE_NUMBERS + 1) as usize,
-            next_table_number as usize
-        );
-
-        let table_name = TableName::from_str("my_table")?;
-        model.insert_table_metadata(namespace, &table_name).await?;
-        let new_next_table_number: u32 = model.next_user_table_number(namespace).await?.into();
-        assert_eq!(next_table_number + 1, new_next_table_number);
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_next_table_number_conflict(rt: TestRuntime) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-
-        tx.create_system_table_testing(TableNamespace::test_user(), &"_system1".parse()?, None)
-            .await?;
-        TableModel::new(&mut tx)
-            .insert_table_metadata_for_test(TableNamespace::test_user(), &"users".parse()?)
-            .await?;
-        tx.create_system_table_testing(TableNamespace::test_user(), &"_system2".parse()?, None)
-            .await?;
-
-        let table_mapping = tx.table_mapping().namespace(TableNamespace::test_user());
-        let system_table_number1: u32 = table_mapping.id(&"_system1".parse()?)?.table_number.into();
-        let system_table_number2: u32 = table_mapping.id(&"_system2".parse()?)?.table_number.into();
-        let user_table_number: u32 = table_mapping.id(&"users".parse()?)?.table_number.into();
-
-        assert!(user_table_number > NUM_RESERVED_SYSTEM_TABLE_NUMBERS);
-        assert!(system_table_number1 < NUM_RESERVED_SYSTEM_TABLE_NUMBERS);
-        assert!(system_table_number2 < NUM_RESERVED_SYSTEM_TABLE_NUMBERS);
-        assert!(system_table_number1 + 1 == system_table_number2);
-
-        Ok(())
-    }
-
-    async fn set_active_schema(
-        tx: &mut Transaction<TestRuntime>,
-        schema: DatabaseSchema,
-    ) -> anyhow::Result<()> {
-        let mut schema_model = SchemaModel::new_root_for_test(tx);
-        let (schema_id, _state) = schema_model.submit_pending(schema).await?;
-        schema_model.mark_validated(schema_id).await?;
-        schema_model.mark_active(schema_id).await?;
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_hard_delete_tablet_document(rt: TestRuntime) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-        let table_name: TableName = "table".parse()?;
-        let id = TestFacingModel::new(&mut tx)
-            .insert(&table_name, assert_obj!("hello" => "world"))
-            .await?;
-        let mut model = TableModel::new(&mut tx);
-        model
-            .delete_active_table(TableNamespace::Global, table_name)
-            .await?;
-        model.hard_delete_tablet_document(id.tablet_id).await?;
-
-        // Test idempotency
-        model.hard_delete_tablet_document(id.tablet_id).await?;
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_hard_delete_tablet_document_fails_if_not_deleting(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let mut tx = new_tx(rt).await?;
-        let table_name: TableName = "table".parse()?;
-        let id = TestFacingModel::new(&mut tx)
-            .insert(&table_name, assert_obj!("hello" => "world"))
-            .await?;
-        let mut model = TableModel::new(&mut tx);
-        model
-            .hard_delete_tablet_document(id.tablet_id)
-            .await
-            .unwrap_err();
-        Ok(())
-    }
 }

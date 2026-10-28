@@ -1,4 +1,3 @@
-/* eslint-disable no-restricted-globals */
 import { jsonToConvex, JSONValue } from "convex/values";
 import { stringifyValue } from "../lib/stringifyValue";
 

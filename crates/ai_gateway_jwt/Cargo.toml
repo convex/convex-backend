@@ -1,0 +1,26 @@
+[package]
+name = "ai_gateway_jwt"
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+biscuit = { workspace = true }
+chrono = { workspace = true }
+common = { workspace = true }
+rsa = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true, features = ["oid"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+common = { workspace = true, features = ["testing"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -143,7 +143,7 @@ for a CJS build we can add "cjs" to the "dialects" section of "tshy" config in
 the package.json.
 
 To publish an alpha release, update the version in package.json to something
-like `0.0.0-alpha.1` and run `just rush-pnpm publish --tag alpha`.
+like `0.0.0-alpha.1` and run `just pnpm publish --tag alpha`.
 
 To publish a regular release, update the version in package.json to something
-like `0.1.2` and run `just rush-pnpm publish`.
+like `0.1.2` and run `just pnpm publish`.

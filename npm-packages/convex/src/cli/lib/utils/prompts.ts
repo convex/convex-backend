@@ -30,12 +30,14 @@ export const promptString = async (
   options: {
     message: string;
     default?: string;
+    validate?: (value: string) => boolean | string | Promise<string | boolean>;
   },
 ): Promise<string> => {
   if (process.stdin.isTTY) {
     return input({
       message: options.message,
       ...(options.default !== undefined ? { default: options.default } : {}),
+      ...(options.validate !== undefined ? { validate: options.validate } : {}),
     }).catch(handlePromptError(ctx));
   } else {
     return ctx.crash({

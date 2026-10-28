@@ -5,8 +5,7 @@ description: "Handle expected failures in Convex functions"
 ---
 
 import Server from "!!raw-loader!@site/../private-demos/snippets/convex/applicationErrors.ts";
-import ClientTS from "!!raw-loader!@site/../private-demos/snippets/src/applicationErrors.tsx";
-import ClientJS from "!!raw-loader!@site/../private-demos/snippets/src/applicationErrorsJS.jsx";
+import Client from "!!raw-loader!@site/../private-demos/snippets/src/applicationErrors.tsx";
 
 If you have expected ways your functions might fail, you can either return
 different values or throw `ConvexError`s.
@@ -44,17 +43,16 @@ Convex provides an error subclass,
 [`ConvexError`](/api/classes/values.ConvexError), which can be used to carry
 information from the backend to the client:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/myFunctions.ts"
-  sourceTS={Server}
-  sourceJS={Server}
+  source={Server}
   snippet="example"
   highlightPatterns={["ConvexError"]}
 />
 
 ### Application error `data` payload
 
-You can pass the same [data types](/database/types.md) supported by function
+You can pass the same [data types](/database/types.mdx) supported by function
 arguments, return types and the database, to the `ConvexError` constructor. This
 data will be stored on the `data` property of the error:
 
@@ -85,9 +83,8 @@ client.
 On the client, application errors also use the `ConvexError` class, and the data
 they carry can be accessed via the `data` property:
 
-<TSAndJSSnippet
+<Snippet
   title="src/App.tsx"
-  sourceTS={ClientTS}
-  sourceJS={ClientJS}
+  source={Client}
   highlightPatterns={["ConvexError", ".data"]}
 />

@@ -110,35 +110,3 @@ impl TryFrom<TabletIdAndTableNumberProto> for TabletIdAndTableNumber {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use value::testing::assert_roundtrips;
-
-    use super::{
-        DeveloperDocumentId,
-        ResolvedDocumentId,
-    };
-    use crate::common::{
-        DeveloperDocumentId as DeveloperDocumentIdProto,
-        ResolvedDocumentId as ResolvedDocumentIdProto,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_resolved_document_id_roundtrips(left in any::<ResolvedDocumentId>()) {
-            assert_roundtrips::<ResolvedDocumentId, ResolvedDocumentIdProto>(left);
-        }
-
-        #[test]
-        fn test_developer_document_id_roundtrips(left in any::<DeveloperDocumentId>()) {
-            assert_roundtrips::<DeveloperDocumentId, DeveloperDocumentIdProto>(left);
-        }
-    }
-}

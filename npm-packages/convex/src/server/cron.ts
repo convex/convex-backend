@@ -1,7 +1,18 @@
-import { getFunctionName, OptionalRestArgs } from "../server/api.js";
+import {
+  FunctionReference_future,
+  getFunctionName,
+  OptionalRestArgs,
+} from "../server/api.js";
 import { parseArgs } from "../common/index.js";
 import { convexToJson, JSONValue, Value } from "../values/index.js";
+import { getFunctionAddress } from "./components/paths.js";
 import { SchedulableFunctionReference } from "./scheduler.js";
+
+// Mirrors the constraint on `Scheduler.runAfter` and `Scheduler.runAt`, which
+// is module-local to `scheduler.ts`.
+type SchedulableFunctionReferenceCompat =
+  | SchedulableFunctionReference
+  | FunctionReference_future<"mutation" | "action", "public" | "internal">;
 
 type CronSchedule = {
   type: "cron";
@@ -15,13 +26,13 @@ export type IntervalSchedule =
 /** @public */
 export type HourlySchedule = {
   type: "hourly";
-  minuteUTC: number;
+  minuteUTC?: number;
 };
 /** @public */
 export type DailySchedule = {
   type: "daily";
   hourUTC: number;
-  minuteUTC: number;
+  minuteUTC?: number;
 };
 const DAYS_OF_WEEK = [
   "sunday",
@@ -38,14 +49,14 @@ export type WeeklySchedule = {
   type: "weekly";
   dayOfWeek: DayOfWeek;
   hourUTC: number;
-  minuteUTC: number;
+  minuteUTC?: number;
 };
 /** @public */
 export type MonthlySchedule = {
   type: "monthly";
   day: number;
   hourUTC: number;
-  minuteUTC: number;
+  minuteUTC?: number;
 };
 
 // Duplicating types so docstrings are visible in signatures:
@@ -85,9 +96,11 @@ export type Interval =
 /** @public */
 export type Hourly = {
   /**
-   * Minutes past the hour, 0-59.
+   * Minutes past the hour, 0-59. If omitted, Convex picks a minute for you
+   * and spreads runs across the hour so your job isn't tied to the busy top
+   * of the hour.
    */
-  minuteUTC: number;
+  minuteUTC?: number;
 };
 
 /** @public */
@@ -97,9 +110,10 @@ export type Daily = {
    */
   hourUTC: number;
   /**
-   * 0-59, minute of hour. Remember, this is UTC.
+   * 0-59, minute of hour. Remember, this is UTC. If omitted, Convex picks a
+   * minute for you and spreads runs across the hour.
    */
-  minuteUTC: number;
+  minuteUTC?: number;
 };
 
 /** @public */
@@ -114,8 +128,10 @@ export type Monthly = {
   hourUTC: number;
   /**
    * 0-59, minute of hour. Remember to convert from your own time zone to UTC.
+   * If omitted, Convex picks a minute for you and spreads runs across the
+   * hour.
    */
-  minuteUTC: number;
+  minuteUTC?: number;
 };
 /** @public */
 export type Weekly = {
@@ -129,8 +145,10 @@ export type Weekly = {
   hourUTC: number;
   /**
    * 0-59, minute of hour. Remember to convert from your own time zone to UTC.
+   * If omitted, Convex picks a minute for you and spreads runs across the
+   * hour.
    */
-  minuteUTC: number;
+  minuteUTC?: number;
 };
 
 /** @public */
@@ -220,6 +238,26 @@ function validatedMinuteOfHour(n: number) {
   return n;
 }
 
+// `minuteUTC` is optional: when omitted the backend picks a minute per job and
+// spreads runs across the hour. Only validate when a minute was provided.
+function validatedOptionalMinuteOfHour(n: number | undefined) {
+  return n === undefined ? undefined : validatedMinuteOfHour(n);
+}
+
+// `crons.hourly()` lets the schedule object be omitted entirely. Tell the two
+// call shapes apart by whether the second argument resolves to a function
+// reference (the way the scheduler syscalls do) rather than a schedule object.
+function isSchedulableFunctionReference(
+  arg: Hourly | SchedulableFunctionReferenceCompat,
+): arg is SchedulableFunctionReferenceCompat {
+  try {
+    getFunctionAddress(arg);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function validatedCronString(s: string) {
   return s;
 }
@@ -252,7 +290,7 @@ export class Crons {
   schedule(
     cronIdentifier: string,
     schedule: Schedule,
-    functionReference: SchedulableFunctionReference,
+    functionReference: SchedulableFunctionReferenceCompat,
     args?: Record<string, Value>,
   ) {
     const cronArgs = parseArgs(args);
@@ -276,11 +314,11 @@ export class Crons {
    *
    * @param identifier - A unique name for this scheduled job.
    * @param schedule - The time between runs for this scheduled job.
-   * @param functionReference - A {@link FunctionReference} for the function
-   * to schedule.
+   * @param functionReference - A {@link FunctionReference} or
+   * {@link FunctionReference_future} for the function to schedule.
    * @param args - The arguments to the function.
    */
-  interval<FuncRef extends SchedulableFunctionReference>(
+  interval<FuncRef extends SchedulableFunctionReferenceCompat>(
     cronIdentifier: string,
     schedule: Interval,
     functionReference: FuncRef,
@@ -323,22 +361,49 @@ export class Crons {
    * ```
    *
    * @param cronIdentifier - A unique name for this scheduled job.
-   * @param schedule - What time (UTC) each day to run this function.
-   * @param functionReference - A {@link FunctionReference} for the function
-   * to schedule.
+   * @param schedule - What minute (UTC) of each hour to run this function. May
+   * be omitted to let Convex pick a minute and spread runs across the hour.
+   * @param functionReference - A {@link FunctionReference} or
+   * {@link FunctionReference_future} for the function to schedule.
    * @param args - The arguments to the function.
    */
-  hourly<FuncRef extends SchedulableFunctionReference>(
+  hourly<FuncRef extends SchedulableFunctionReferenceCompat>(
+    cronIdentifier: string,
+    functionReference: FuncRef,
+    ...args: OptionalRestArgs<FuncRef>
+  ): void;
+  hourly<FuncRef extends SchedulableFunctionReferenceCompat>(
     cronIdentifier: string,
     schedule: Hourly,
     functionReference: FuncRef,
     ...args: OptionalRestArgs<FuncRef>
-  ) {
-    const minuteUTC = validatedMinuteOfHour(schedule.minuteUTC);
+  ): void;
+  hourly<FuncRef extends SchedulableFunctionReferenceCompat>(
+    cronIdentifier: string,
+    scheduleOrFunctionReference: Hourly | FuncRef,
+    functionReferenceOrArg?: FuncRef | Record<string, Value>,
+    ...args: any[]
+  ): void {
+    // The schedule object may be omitted, so the second argument is either the
+    // function reference (no schedule) or the schedule.
+    if (isSchedulableFunctionReference(scheduleOrFunctionReference)) {
+      this.schedule(
+        cronIdentifier,
+        { type: "hourly" },
+        scheduleOrFunctionReference,
+        functionReferenceOrArg as Record<string, Value> | undefined,
+      );
+      return;
+    }
+    const minuteUTC = validatedOptionalMinuteOfHour(
+      scheduleOrFunctionReference.minuteUTC,
+    );
     this.schedule(
       cronIdentifier,
-      { minuteUTC, type: "hourly" },
-      functionReference,
+      minuteUTC === undefined
+        ? { type: "hourly" }
+        : { minuteUTC, type: "hourly" },
+      functionReferenceOrArg as FuncRef,
       ...args,
     );
   }
@@ -359,21 +424,23 @@ export class Crons {
    *
    * @param cronIdentifier - A unique name for this scheduled job.
    * @param schedule - What time (UTC) each day to run this function.
-   * @param functionReference - A {@link FunctionReference} for the function
-   * to schedule.
+   * @param functionReference - A {@link FunctionReference} or
+   * {@link FunctionReference_future} for the function to schedule.
    * @param args - The arguments to the function.
    */
-  daily<FuncRef extends SchedulableFunctionReference>(
+  daily<FuncRef extends SchedulableFunctionReferenceCompat>(
     cronIdentifier: string,
     schedule: Daily,
     functionReference: FuncRef,
     ...args: OptionalRestArgs<FuncRef>
   ) {
     const hourUTC = validatedHourOfDay(schedule.hourUTC);
-    const minuteUTC = validatedMinuteOfHour(schedule.minuteUTC);
+    const minuteUTC = validatedOptionalMinuteOfHour(schedule.minuteUTC);
     this.schedule(
       cronIdentifier,
-      { hourUTC, minuteUTC, type: "daily" },
+      minuteUTC === undefined
+        ? { hourUTC, type: "daily" }
+        : { hourUTC, minuteUTC, type: "daily" },
       functionReference,
       ...args,
     );
@@ -396,10 +463,10 @@ export class Crons {
    *
    * @param cronIdentifier - A unique name for this scheduled job.
    * @param schedule - What day and time (UTC) each week to run this function.
-   * @param functionReference - A {@link FunctionReference} for the function
-   * to schedule.
+   * @param functionReference - A {@link FunctionReference} or
+   * {@link FunctionReference_future} for the function to schedule.
    */
-  weekly<FuncRef extends SchedulableFunctionReference>(
+  weekly<FuncRef extends SchedulableFunctionReferenceCompat>(
     cronIdentifier: string,
     schedule: Weekly,
     functionReference: FuncRef,
@@ -407,10 +474,12 @@ export class Crons {
   ) {
     const dayOfWeek = validatedDayOfWeek(schedule.dayOfWeek);
     const hourUTC = validatedHourOfDay(schedule.hourUTC);
-    const minuteUTC = validatedMinuteOfHour(schedule.minuteUTC);
+    const minuteUTC = validatedOptionalMinuteOfHour(schedule.minuteUTC);
     this.schedule(
       cronIdentifier,
-      { dayOfWeek, hourUTC, minuteUTC, type: "weekly" },
+      minuteUTC === undefined
+        ? { dayOfWeek, hourUTC, type: "weekly" }
+        : { dayOfWeek, hourUTC, minuteUTC, type: "weekly" },
       functionReference,
       ...args,
     );
@@ -436,11 +505,11 @@ export class Crons {
    *
    * @param cronIdentifier - A unique name for this scheduled job.
    * @param schedule - What day and time (UTC) each month to run this function.
-   * @param functionReference - A {@link FunctionReference} for the function
-   * to schedule.
+   * @param functionReference - A {@link FunctionReference} or
+   * {@link FunctionReference_future} for the function to schedule.
    * @param args - The arguments to the function.
    */
-  monthly<FuncRef extends SchedulableFunctionReference>(
+  monthly<FuncRef extends SchedulableFunctionReferenceCompat>(
     cronIdentifier: string,
     schedule: Monthly,
     functionReference: FuncRef,
@@ -448,10 +517,12 @@ export class Crons {
   ) {
     const day = validatedDayOfMonth(schedule.day);
     const hourUTC = validatedHourOfDay(schedule.hourUTC);
-    const minuteUTC = validatedMinuteOfHour(schedule.minuteUTC);
+    const minuteUTC = validatedOptionalMinuteOfHour(schedule.minuteUTC);
     this.schedule(
       cronIdentifier,
-      { day, hourUTC, minuteUTC, type: "monthly" },
+      minuteUTC === undefined
+        ? { day, hourUTC, type: "monthly" }
+        : { day, hourUTC, minuteUTC, type: "monthly" },
       functionReference,
       ...args,
     );
@@ -473,11 +544,11 @@ export class Crons {
    *
    * @param cronIdentifier - A unique name for this scheduled job.
    * @param cron - Cron string like `"15 7 * * *"` (Every day at 7:15 UTC)
-   * @param functionReference - A {@link FunctionReference} for the function
-   * to schedule.
+   * @param functionReference - A {@link FunctionReference} or
+   * {@link FunctionReference_future} for the function to schedule.
    * @param args - The arguments to the function.
    */
-  cron<FuncRef extends SchedulableFunctionReference>(
+  cron<FuncRef extends SchedulableFunctionReferenceCompat>(
     cronIdentifier: string,
     cron: CronString,
     functionReference: FuncRef,

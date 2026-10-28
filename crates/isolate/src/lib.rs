@@ -7,15 +7,18 @@
 #![feature(type_alias_impl_trait)]
 #![feature(never_type)]
 #![feature(impl_trait_in_assoc_type)]
+#![feature(impl_trait_in_fn_trait_return)]
 #![feature(ptr_metadata)]
 #![feature(exit_status_error)]
+#![feature(vec_deque_extract_if)]
 
 mod array_buffer_allocator;
 pub mod bundled_js;
 pub mod client;
 mod concurrency_limiter;
+pub mod context_cache;
 mod context_local_state;
-mod convert_v8;
+pub mod convert_v8;
 pub mod environment;
 pub mod error;
 mod execution_scope;
@@ -23,30 +26,23 @@ pub mod helpers;
 mod http;
 mod is_instance_of_error;
 pub mod isolate;
-pub mod isolate2;
 pub mod isolate_worker;
 pub mod metrics;
 pub mod module_cache;
 pub mod module_map;
-mod ops;
+pub mod ops;
 mod request_scope;
 pub mod strings;
 mod termination;
-#[cfg(test)]
-mod tests;
-mod timeout;
+pub mod timeout;
 mod udf_runtime;
 
-#[cfg(any(test, feature = "testing"))]
-pub mod test_helpers;
 pub use self::{
     client::{
-        ActionCallbacks,
         ActionRequest,
         ActionRequestParams,
         IsolateClient,
         IsolateConfig,
-        UdfCallback,
     },
     concurrency_limiter::{
         ConcurrencyLimiter,
@@ -57,7 +53,6 @@ pub use self::{
         deserialize_udf_custom_error,
         deserialize_udf_result,
         format_uncaught_error,
-        UdfArgsJson,
     },
     isolate::IsolateHeapStats,
     metrics::{
@@ -65,5 +60,13 @@ pub use self::{
         log_source_map_token_lookup_failed,
     },
     request_scope::RequestScope,
-    timeout::Timeout,
+    termination::{
+        ContextId,
+        ExecutionHandle,
+        OutOfMemoryError,
+    },
+    timeout::{
+        start_cooperative_request,
+        Timeout,
+    },
 };

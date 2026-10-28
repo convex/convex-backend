@@ -4,32 +4,26 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "npm-run-all --parallel dev:frontend dev:backend",
-    "dev:frontend": "vite --open",
-    "dev:backend": "convex dev",
-    "predev": "convex dev --until-success && convex dev --once --run-sh \"node setup.mjs --once\" && convex dashboard",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "dev": "convex dev --start 'node setup.mjs --once && vite'",
+    "build": "tsc -b && vite build"
   },
   "dependencies": {
-    "@convex-dev/auth": "^0.0.90",
+    "@convex-dev/auth": "^0.0.94",
     "@convex-dev/workflow": "^0.3.3",
     "convex": "workspace:*",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "sharp": "~0.34.0"
+    "sharp": "~0.35.5"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.1.13",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.5.4",
     "@types/react": "^19.2.4",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.2.1",
     "dotenv": "^16.4.7",
-    "globals": "~17.0.0",
-    "npm-run-all2": "^8.0.0",
-    "prettier": "^3.8.0",
+    "globals": "~17.4.0",
     "typescript": "^5.9.2",
-    "vite": "^7.1.11"
+    "vite": "^7.3.7"
   }
 }

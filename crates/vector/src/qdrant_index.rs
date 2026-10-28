@@ -116,7 +116,7 @@ use crate::{
     MAX_VECTOR_RESULTS,
 };
 
-const TIMESTAMP_FIELD: &str = "_ts";
+pub(crate) const TIMESTAMP_FIELD: &str = "_ts";
 
 #[derive(Clone, Debug)]
 pub struct QdrantSchema {
@@ -522,13 +522,6 @@ impl QdrantDocument {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-pub fn cosine_similarity(v1: &[f32], v2: &[f32]) -> f32 {
-    let v1 = CosineMetric::preprocess(v1.to_vec());
-    let v2 = CosineMetric::preprocess(v2.to_vec());
-    CosineMetric::similarity(&v1, &v2)
-}
-
 // NB: For cosine similarity, we need to normalize vectors before indexing them.
 #[derive(Clone, Debug)]
 pub struct NormalizedQdrantDocument {
@@ -671,68 +664,5 @@ fn json_path_from_str(s: &str) -> anyhow::Result<JsonPath> {
         Err(()) => {
             anyhow::bail!("Unable to parse to JsonPath: {s}");
         },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use common::types::Timestamp;
-    use maplit::btreemap;
-    use rand::Rng;
-    use serde_json::json;
-    use value::InternalId;
-
-    use crate::QdrantDocument;
-
-    #[test]
-    fn test_encode_payload() -> anyhow::Result<()> {
-        let mut rng = rand::rng();
-        let d = 1536;
-
-        let document = QdrantDocument {
-            internal_id: InternalId(1u128.to_le_bytes()),
-            vector: (0..d)
-                .map(|_| rng.random())
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-            filter_fields: btreemap!(),
-        };
-        let payload = document.encode_payload(Timestamp::MIN)?;
-        assert_eq!(payload, json!({ "_ts": "AAAAAAAAAAA"}));
-
-        let document = QdrantDocument {
-            internal_id: InternalId(1u128.to_le_bytes()),
-            vector: (0..d)
-                .map(|_| rng.random())
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-            filter_fields: btreemap!(
-                "abc".parse()? => vec![97],
-                "def.ghi".parse()? => vec![98],
-                "def.xyz".parse()? => vec![99],
-            ),
-        };
-        let payload = document.encode_payload(Timestamp::MIN)?;
-        assert_eq!(
-            payload,
-            json!({ "abc": "YQ", "def": { "ghi": "Yg", "xyz": "Yw"}, "_ts": "AAAAAAAAAAA"})
-        );
-
-        let document = QdrantDocument {
-            internal_id: InternalId(1u128.to_le_bytes()),
-            vector: (0..d)
-                .map(|_| rng.random())
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-            filter_fields: btreemap!(
-                "zzz".parse()? => vec![97],
-            ),
-        };
-        let payload = document.encode_payload(Timestamp::MIN)?;
-        assert_eq!(payload, json!({ "zzz": "YQ", "_ts": "AAAAAAAAAAA"}));
-        Ok(())
     }
 }

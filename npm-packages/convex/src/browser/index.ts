@@ -24,6 +24,8 @@ export type {
   ConnectionState,
   AuthTokenFetcher,
 } from "./sync/client.js";
+/** @internal */
+export type { BaseConvexClientInterface } from "./sync/client.js";
 export type { PaginationStatus } from "./sync/pagination.js";
 export type { ConvexClientOptions } from "./simple_client.js";
 export { ConvexClient } from "./simple_client.js";
@@ -40,3 +42,6 @@ export type { QueryJournal } from "./sync/protocol.js";
 /** @internal */
 export type { UserIdentityAttributes } from "./sync/protocol.js";
 export type { FunctionResult } from "./sync/function_result.js";
+/** @internal */
+export { convexQueryOptions } from "./query_options.js";
+export type { QueryOptions } from "./query_options.js";

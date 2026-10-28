@@ -2,6 +2,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use common::{
+    audit_log_lines::{
+        AuditLogLine,
+        AuditLogLines,
+    },
     components::CanonicalizedComponentFunctionPath,
     errors::JsError,
     identity::InertIdentity,
@@ -22,13 +26,12 @@ use pb::{
     },
     outcome::UdfOutcome as UdfOutcomeProto,
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use rand::Rng;
 use sync_types::types::SerializedArgs;
 use value::{
     heap_size::HeapSize,
     JsonPackedValue,
+    PendingValue,
 };
 
 use crate::{
@@ -37,10 +40,6 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct UdfOutcome {
     pub path: CanonicalizedComponentFunctionPath,
     pub arguments: SerializedArgs,
@@ -55,23 +54,19 @@ pub struct UdfOutcome {
 
     pub log_lines: LogLines,
     pub journal: QueryJournal,
+    pub audit_log_lines: AuditLogLines,
 
     // QueryUdfOutcomes are stored in the Udf level cache, which is why we would like
     // them to have more compact representation.
-    pub result: Result<JsonPackedValue, JsError>,
+    //
+    // Mutations and subqueries called by mutations can have unresolved commit_ts, but top-level
+    // queries should be concrete.
+    pub result: Result<JsonPackedValue<PendingValue>, JsError>,
 
     pub syscall_trace: SyscallTrace,
 
-    #[cfg_attr(any(test, feature = "testing"), proptest(value = "None"))]
     pub udf_server_version: Option<semver::Version>,
     pub memory_in_mb: u64,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "(0..=i64::MAX as u64, any::<u32>()).prop_map(|(secs, nanos)| \
-                        Some(Duration::new(secs, nanos)))"
-        )
-    )]
     // TODO(ENG-10204): Make required
     pub user_execution_time: Option<Duration>,
 }
@@ -88,6 +83,18 @@ impl HeapSize for UdfOutcome {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct NestedUdfOutcome {
+    pub observed_identity: bool,
+    pub observed_rng: bool,
+    pub observed_time: bool,
+    pub log_lines: LogLines,
+    pub audit_log_lines: AuditLogLines,
+    pub journal: QueryJournal,
+    pub result: Result<PendingValue, JsError>,
+    pub syscall_trace: SyscallTrace,
+}
+
 impl TryFrom<UdfOutcome> for UdfOutcomeProto {
     type Error = anyhow::Error;
 
@@ -102,6 +109,7 @@ impl TryFrom<UdfOutcome> for UdfOutcomeProto {
             unix_timestamp,
             observed_time,
             log_lines,
+            audit_log_lines,
             journal,
             result,
             syscall_trace,
@@ -120,6 +128,7 @@ impl TryFrom<UdfOutcome> for UdfOutcomeProto {
             unix_timestamp: Some(unix_timestamp.into()),
             observed_time: Some(observed_time),
             log_lines: log_lines.into_iter().map(|l| l.into()).collect(),
+            audit_log_lines: audit_log_lines.into_iter().map(|l| l.into()).collect(),
             journal: Some(journal.into()),
             result: Some(FunctionResultProto {
                 result: Some(result),
@@ -152,6 +161,7 @@ impl UdfOutcome {
             unix_timestamp: rt.unix_timestamp(),
             observed_time: false,
             log_lines: vec![].into(),
+            audit_log_lines: vec![].into(),
             journal: QueryJournal::new(),
             result: Err(js_error),
             syscall_trace: SyscallTrace::new(),
@@ -169,6 +179,7 @@ impl UdfOutcome {
             unix_timestamp,
             observed_time,
             log_lines,
+            audit_log_lines,
             journal,
             result,
             syscall_trace,
@@ -194,6 +205,10 @@ impl UdfOutcome {
         };
         let (path, arguments, udf_server_version) = path_and_args.consume();
         let log_lines = log_lines.into_iter().map(LogLine::try_from).try_collect()?;
+        let audit_log_lines = audit_log_lines
+            .into_iter()
+            .map(AuditLogLine::try_from)
+            .try_collect()?;
         Ok(Self {
             path: path.for_logging(),
             arguments,
@@ -205,53 +220,14 @@ impl UdfOutcome {
                 .try_into()?,
             observed_time: observed_time.unwrap_or_default(),
             log_lines,
+            audit_log_lines,
             journal: journal.context("Missing journal")?.try_into()?,
             result,
             syscall_trace: syscall_trace.context("Missing syscall_trace")?.try_into()?,
             udf_server_version,
-            // TODO(lee): Remove the default once we've pushed all services.
-            observed_identity: observed_identity.unwrap_or(true),
+            observed_identity: observed_identity.context("Missing identity")?,
             memory_in_mb,
             user_execution_time: user_execution_time.map(|d| d.try_into()).transpose()?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::{
-        UdfOutcome,
-        UdfOutcomeProto,
-        ValidatedPathAndArgs,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_udf_outcome_roundtrips(udf_outcome in any::<UdfOutcome>()) {
-            let udf_outcome_clone = udf_outcome.clone();
-            let path = udf_outcome.path.clone();
-            let arguments = udf_outcome.arguments.clone();
-            let version = udf_outcome.udf_server_version.clone();
-            let identity = udf_outcome_clone.identity.clone();
-            let path_and_args = ValidatedPathAndArgs::new_for_tests_in_component(
-                path,
-                arguments,
-                version
-            );
-            let proto = UdfOutcomeProto::try_from(udf_outcome_clone).unwrap();
-            let udf_outcome_from_proto = UdfOutcome::from_proto(
-                proto,
-                path_and_args,
-                identity
-            ).unwrap();
-            assert_eq!(udf_outcome, udf_outcome_from_proto);
-        }
     }
 }

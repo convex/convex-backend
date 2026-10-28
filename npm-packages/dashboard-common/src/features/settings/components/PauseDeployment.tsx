@@ -6,8 +6,13 @@ import { Button } from "@ui/Button";
 import { Callout } from "@ui/Callout";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import udfs from "@common/udfs";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
-import { useChangeDeploymentState } from "../lib/api";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
+import { deploymentIdentityLabel } from "@common/lib/deploymentTypeColorClasses";
+import { usePauseDeployment, useUnpauseDeployment } from "../lib/api";
 
 // TODO insert link to docs here
 const RESUME_EXPLANATION: string[] = [
@@ -28,32 +33,32 @@ export function PauseDeployment({
   onPausedDeployment?: () => void;
 }) {
   const deploymentState = useQuery(udfs.deploymentState.deploymentState);
-  const { useCurrentDeployment, useHasProjectAdminPermissions } = useContext(
-    DeploymentInfoContext,
-  );
+  const { useCurrentDeployment } = useContext(DeploymentInfoContext);
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
   const deployment = useCurrentDeployment();
   const deploymentType = deployment?.deploymentType ?? "prod";
+  const deploymentIdentity = deployment
+    ? deploymentIdentityLabel(deployment)
+    : null;
   const [paused, setPaused] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
 
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const canPauseOrResume =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
+  const canPauseOp = useIsOperationAllowed("PauseDeployment");
+  const canUnpauseOp = useIsOperationAllowed("UnpauseDeployment");
+  const canPauseOrResume = paused ? canUnpauseOp : canPauseOp;
 
-  const changeDeploymentState = useChangeDeploymentState();
+  const pauseDeployment = usePauseDeployment();
+  const unpauseDeployment = useUnpauseDeployment();
   useEffect(() => {
     if (deploymentState) {
       setPaused(deploymentState.state === "paused");
     }
   }, [deploymentState]);
   async function toggle() {
-    const nextState = paused ? "running" : "paused";
-    await changeDeploymentState(nextState);
-
-    // Only fire the callback when we pause a running deployment.
-    if (!paused && nextState === "paused") {
+    if (paused) {
+      await unpauseDeployment();
+    } else {
+      await pauseDeployment();
       onPausedDeployment?.();
     }
   }
@@ -90,7 +95,6 @@ export function PauseDeployment({
               onClose={() => setShowConfirmation(false)}
               onConfirm={() => Promise.resolve(toggle())}
               confirmText={
-                // TODO(ENG-10340) Include the deployment ref here
                 changeVerb(paused) +
                 (deploymentType === "prod" ? " Production" : "")
               }
@@ -98,12 +102,16 @@ export function PauseDeployment({
               dialogBody={
                 <>
                   Are you sure you want to {changeVerb(paused).toLowerCase()}{" "}
-                  {/* TODO(ENG-10340) Include the deployment ref here */}
-                  this{" "}
-                  {deploymentType === "prod" ? (
-                    <span className="font-semibold">Production</span>
-                  ) : null}{" "}
-                  deployment?
+                  {deploymentIdentity === null ? (
+                    "this deployment?"
+                  ) : (
+                    <>
+                      <span className="font-semibold">
+                        {deploymentIdentity}
+                      </span>
+                      ?
+                    </>
+                  )}
                 </>
               }
               variant={paused ? undefined : "danger"}
@@ -117,9 +125,14 @@ export function PauseDeployment({
               onClick={() => setShowConfirmation(true)}
               disabled={!canPauseOrResume}
               tip={
-                !canPauseOrResume
-                  ? "You do not have permission to pause or resume production."
-                  : ""
+                !canPauseOrResume ? (
+                  <PermissionDeniedTip
+                    message={`You do not have permission to ${changeVerb(paused).toLowerCase()} this deployment.`}
+                    action={paused ? "deployment:unpause" : "deployment:pause"}
+                  />
+                ) : (
+                  ""
+                )
               }
             >
               {paused ? "Resume Deployment" : "Pause Deployment"}

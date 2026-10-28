@@ -11,6 +11,7 @@ import { GenericDataModel } from "../data_model.js";
 import {
   ActionBuilder,
   DefaultFunctionArgs,
+  FunctionVisibility,
   GenericActionCtx,
   GenericMutationCtx,
   GenericQueryCtx,
@@ -23,7 +24,7 @@ import {
 } from "../registration.js";
 import { setupActionCalls } from "./actions_impl.js";
 import { setupActionVectorSearch } from "./vector_search_impl.js";
-import { setupAuth } from "./authentication_impl.js";
+import { setupAuth, setupMutationAuth } from "./authentication_impl.js";
 import { setupReader, setupWriter } from "./database_impl.js";
 import { QueryImpl, QueryInitializerImpl } from "./query_impl.js";
 import {
@@ -39,23 +40,32 @@ import { parseArgs } from "../../common/index.js";
 import { performAsyncSyscall } from "./syscall.js";
 import { asObjectValidator } from "../../values/validator.js";
 import { getFunctionAddress } from "../components/paths.js";
+import {
+  setupQueryMeta,
+  setupMutationMeta,
+  setupActionMeta,
+} from "./meta_impl.js";
 
 async function invokeMutation<
   F extends (ctx: GenericMutationCtx<GenericDataModel>, ...args: any) => any,
->(func: F, argsStr: string) {
+>(func: F, argsStr: string, visibility: FunctionVisibility) {
   // TODO(presley): Change the function signature and propagate the requestId from Rust.
   // Ok, to mock it out for now, since queries are only running in V8.
   const requestId = "";
   const args = jsonToConvex(JSON.parse(argsStr));
   const mutationCtx = {
     db: setupWriter(),
-    auth: setupAuth(requestId),
+    auth: setupMutationAuth(requestId),
     storage: setupStorageWriter(requestId),
     scheduler: setupMutationScheduler(),
+    meta: setupMutationMeta(visibility),
 
-    runQuery: (reference: any, args?: any) => runUdf("query", reference, args),
-    runMutation: (reference: any, args?: any) =>
-      runUdf("mutation", reference, args),
+    runQuery: (reference: any, args?: any, options?: any) =>
+      options?.useStaleSnapshot
+        ? runUdf("snapshotQuery", reference, args, options?.transactionLimits)
+        : runUdf("query", reference, args, options?.transactionLimits),
+    runMutation: (reference: any, args?: any, options?: any) =>
+      runUdf("mutation", reference, args, options?.transactionLimits),
   };
   const result = await invokeFunction(func, mutationCtx, args as any);
   validateReturnValue(result);
@@ -247,7 +257,7 @@ export const mutationGeneric: MutationBuilder<any, "public"> = ((
   assertNotBrowser();
   func.isMutation = true;
   func.isPublic = true;
-  func.invokeMutation = (argsStr) => invokeMutation(handler, argsStr);
+  func.invokeMutation = (argsStr) => invokeMutation(handler, argsStr, "public");
   func.exportArgs = exportArgs(functionDefinition);
   func.exportReturns = exportReturns(functionDefinition);
   func._handler = handler;
@@ -308,7 +318,8 @@ export const internalMutationGeneric: MutationBuilder<any, "internal"> = ((
   assertNotBrowser();
   func.isMutation = true;
   func.isInternal = true;
-  func.invokeMutation = (argsStr) => invokeMutation(handler, argsStr);
+  func.invokeMutation = (argsStr) =>
+    invokeMutation(handler, argsStr, "internal");
   func.exportArgs = exportArgs(functionDefinition);
   func.exportReturns = exportReturns(functionDefinition);
   func._handler = handler;
@@ -317,7 +328,7 @@ export const internalMutationGeneric: MutationBuilder<any, "internal"> = ((
 
 async function invokeQuery<
   F extends (ctx: GenericQueryCtx<GenericDataModel>, ...args: any) => any,
->(func: F, argsStr: string) {
+>(func: F, argsStr: string, visibility: FunctionVisibility) {
   // TODO(presley): Change the function signature and propagate the requestId from Rust.
   // Ok, to mock it out for now, since queries are only running in V8.
   const requestId = "";
@@ -326,7 +337,15 @@ async function invokeQuery<
     db: setupReader(),
     auth: setupAuth(requestId),
     storage: setupStorageReader(requestId),
-    runQuery: (reference: any, args?: any) => runUdf("query", reference, args),
+    meta: setupQueryMeta(visibility),
+    runQuery: (reference: any, args?: any, options?: any) => {
+      if (options?.useStaleSnapshot) {
+        throw new Error(
+          "`useStaleSnapshot` is only supported in mutations, not queries.",
+        );
+      }
+      return runUdf("query", reference, args, options?.transactionLimits);
+    },
   };
   const result = await invokeFunction(func, queryCtx, args as any);
   validateReturnValue(result);
@@ -403,7 +422,7 @@ export const queryGeneric: QueryBuilder<any, "public"> = ((
   assertNotBrowser();
   func.isQuery = true;
   func.isPublic = true;
-  func.invokeQuery = (argsStr) => invokeQuery(handler, argsStr);
+  func.invokeQuery = (argsStr) => invokeQuery(handler, argsStr, "public");
   func.exportArgs = exportArgs(functionDefinition);
   func.exportReturns = exportReturns(functionDefinition);
   func._handler = handler;
@@ -470,7 +489,8 @@ export const internalQueryGeneric: QueryBuilder<any, "internal"> = ((
   assertNotBrowser();
   func.isQuery = true;
   func.isInternal = true;
-  func.invokeQuery = (argsStr) => invokeQuery(handler as any, argsStr);
+  func.invokeQuery = (argsStr) =>
+    invokeQuery(handler as any, argsStr, "internal");
   func.exportArgs = exportArgs(functionDefinition);
   func.exportReturns = exportReturns(functionDefinition);
   func._handler = handler;
@@ -479,7 +499,7 @@ export const internalQueryGeneric: QueryBuilder<any, "internal"> = ((
 
 async function invokeAction<
   F extends (ctx: GenericActionCtx<GenericDataModel>, ...args: any) => any,
->(func: F, requestId: string, argsStr: string) {
+>(func: F, requestId: string, argsStr: string, visibility: FunctionVisibility) {
   const args = jsonToConvex(JSON.parse(argsStr));
   const calls = setupActionCalls(requestId);
   const ctx = {
@@ -488,6 +508,7 @@ async function invokeAction<
     scheduler: setupActionScheduler(requestId),
     storage: setupStorageActionWriter(requestId),
     vectorSearch: setupActionVectorSearch(requestId) as any,
+    meta: setupActionMeta(visibility),
   };
   const result = await invokeFunction(func, ctx, args as any);
   return JSON.stringify(convexToJson(result === undefined ? null : result));
@@ -577,7 +598,7 @@ export const actionGeneric: ActionBuilder<any, "public"> = ((
   func.isAction = true;
   func.isPublic = true;
   func.invokeAction = (requestId, argsStr) =>
-    invokeAction(handler, requestId, argsStr);
+    invokeAction(handler, requestId, argsStr, "public");
   func.exportArgs = exportArgs(functionDefinition);
   func.exportReturns = exportReturns(functionDefinition);
   func._handler = handler;
@@ -650,7 +671,7 @@ export const internalActionGeneric: ActionBuilder<any, "internal"> = ((
   func.isAction = true;
   func.isInternal = true;
   func.invokeAction = (requestId, argsStr) =>
-    invokeAction(handler, requestId, argsStr);
+    invokeAction(handler, requestId, argsStr, "internal");
   func.exportArgs = exportArgs(functionDefinition);
   func.exportReturns = exportReturns(functionDefinition);
   func._handler = handler;
@@ -670,6 +691,7 @@ async function invokeHttpAction<
     storage: setupStorageActionWriter(requestId),
     scheduler: setupActionScheduler(requestId),
     vectorSearch: setupActionVectorSearch(requestId) as any,
+    meta: setupActionMeta("public"),
   };
   return await invokeFunction(func, ctx, [request]);
 }
@@ -731,16 +753,20 @@ export const httpActionGeneric = (
 };
 
 async function runUdf(
-  udfType: "query" | "mutation",
+  udfType: "query" | "mutation" | "snapshotQuery",
   f: any,
   args?: Record<string, Value>,
+  transactionLimits?: Record<string, number>,
 ): Promise<any> {
   const queryArgs = parseArgs(args);
-  const syscallArgs = {
+  const syscallArgs: Record<string, any> = {
     udfType,
     args: convexToJson(queryArgs),
     ...getFunctionAddress(f),
   };
+  if (transactionLimits) {
+    syscallArgs.transactionLimits = transactionLimits;
+  }
   const result = await performAsyncSyscall("1.0/runUdf", syscallArgs);
   return jsonToConvex(result);
 }

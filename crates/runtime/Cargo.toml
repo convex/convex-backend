@@ -9,15 +9,13 @@ license = "LicenseRef-FSL-1.1-Apache-2.0"
 doctest = false
 
 [features]
-testing = ["common/testing", "metrics/testing"]
+testing = ["common/testing"]
 
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 common = { workspace = true }
 futures = { workspace = true }
-metrics = { workspace = true }
-parking_lot = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
 tokio-metrics-collector = { workspace = true }
@@ -25,7 +23,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-metrics = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

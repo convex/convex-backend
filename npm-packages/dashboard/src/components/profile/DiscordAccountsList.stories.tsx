@@ -1,9 +1,16 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { DiscordAccountsList } from "./DiscordAccounts";
+import { Sheet } from "@ui/Sheet";
 
 const meta = {
   component: DiscordAccountsList,
-  parameters: { a11y: { test: "todo" } },
+  decorators: [
+    (Story) => (
+      <Sheet>
+        <Story />
+      </Sheet>
+    ),
+  ],
 } satisfies Meta<typeof DiscordAccountsList>;
 
 export default meta;

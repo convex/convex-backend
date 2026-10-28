@@ -1,0 +1,22 @@
+---
+slug: /deployment-api/overview
+title: Deployment API
+hide_table_of_contents: true
+description: "Deployment API"
+sidebar_label: Overview
+sidebar_position: 0
+pagination_next: http-api/index
+---
+
+The public interface of a Convex deployment is defined by the functions defined
+in files in a convex folder.
+
+The public HTTP endpoints of every Convex deployment consist of custom HTTP
+endpoints defined by [HTTP Actions](/functions/http-actions.mdx) and a static
+[public HTTP API](/http-api/index.mdx).
+
+Deployments also provide private endpoints only for the administrators of that
+deployment (see [Platform APIs](/deployment-platform-api.mdx)).
+
+A client wrapping the Platform APIs for deployments is available in the
+[`@convex-dev/platform` package](https://www.npmjs.com/package/@convex-dev/platform).

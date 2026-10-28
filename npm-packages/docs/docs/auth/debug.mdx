@@ -108,9 +108,9 @@ backend, is to inspect the traffic between them.
      </p>
 
    - For HTTP based clients (`ConvexHTTPClient` and the
-     [HTTP API](/http-api/index.md)), select `Fetch/XHR` as the type of traffic.
-     You should see an individual network request for each function call, with
-     an `Authorization` header with value `Bearer ` followed by the
+     [HTTP API](/http-api/index.mdx)), select `Fetch/XHR` as the type of
+     traffic. You should see an individual network request for each function
+     call, with an `Authorization` header with value `Bearer ` followed by the
      authentication token.
 
      <p style={{ textAlign: "center" }}>
@@ -139,7 +139,7 @@ backend, is to inspect the traffic between them.
 
        ```tsx
        // import { useAuth } from "@clerk/nextjs"; // for Next.js
-       import { useAuth } from "@clerk/clerk-react";
+       import { useAuth } from "@clerk/react";
 
        const { getToken } = useAuth();
        console.log(getToken());
@@ -196,11 +196,11 @@ to the backend, but the backend is not validating it.
    **Answer: I see
    `This deployment has no configured authentication providers`**:
 
-   - Cause: You do not have an `auth.config.ts` (or `auth.config.js`) file in
-     your `convex` directory, or you haven't pushed your code. Follow the
-     authentication guide to create a valid auth config file. For dev
-     deployments make sure you have `npx convex dev` running. For prod
-     deployments make sure you successfully pushed via `npx convex deploy`.
+   - Cause: You do not have an `auth.config.ts` file in your `convex` directory,
+     or you haven't pushed your code. Follow the authentication guide to create
+     a valid auth config file. For dev deployments make sure you have
+     `npx convex dev` running. For prod deployments make sure you successfully
+     pushed via `npx convex deploy`.
 
    \*\*Answer: I see one or more _Domain_ and _Application ID_ pairs.
 
@@ -211,26 +211,25 @@ Great, let's check they match the JWT token.
 
    **Answer: No, I don't see the `iss` URL on the Convex dashboard**:
 
-   - Potential cause: You copied the wrong value into your
-     <JSDialectFileName name="auth.config.ts" />
-     's `domain`, or into the environment variable that is used there. Go back
-     to the authentication guide and make sure you have the right URL from your
+   - Potential cause: You copied the wrong value into your `auth.config.ts` 's
+     `domain`, or into the environment variable that is used there. Go back to
+     the authentication guide and make sure you have the right URL from your
      auth provider.
    - Potential cause: Your client is misconfigured:
 
      - Clerk: You have the wrong `publishableKey` configured. The key must
        belong to the Clerk instance that you used to configure your
 
-       <JSDialectFileName name="auth.config.ts" />.
+       `auth.config.ts`.
 
        - Also make sure that the JWT token in Clerk is called `convex`, as
          that's the name `ConvexProviderWithClerk` uses to fetch the token!
 
      - Auth0: You have the wrong `domain` configured (on the client!). The
        domain must belong to the Auth0 instance that you used to configure your
-       <JSDialectFileName name="auth.config.ts" />.
+       `auth.config.ts`.
      - Custom: Make sure that your client is correctly configured to match your
-       <JSDialectFileName name="auth.config.ts" />.
+       `auth.config.ts`.
 
    **Answer: Yes, I do see the `iss` URL**:
 
@@ -242,20 +241,18 @@ Great, let's check they match the JWT token.
 
    **Answer: No, I don't see the `aud` value in the _Application ID_ field**:
 
-   - Potential cause: You copied the wrong value into your
-     <JSDialectFileName name="auth.config.ts" />
-     's `applicationID`, or into the environment variable that is used there. Go
+   - Potential cause: You copied the wrong value into your `auth.config.ts` 's
+     `applicationID`, or into the environment variable that is used there. Go
      back to the authentication guide and make sure you have the right value
      from your auth provider.
    - Potential cause: Your client is misconfigured:
      - Clerk: You have the wrong `publishableKey` configured.The key must belong
-       to the Clerk instance that you used to configure your
-       <JSDialectFileName name="auth.config.ts" />.
+       to the Clerk instance that you used to configure your `auth.config.ts`.
      - Auth0: You have the wrong `clientId` configured. Make sure you're using
        the right `clientId` for the Auth0 instance that you used to configure
-       your <JSDialectFileName name="auth.config.ts" />.
+       your `auth.config.ts`.
      - Custom: Make sure that your client is correctly configured to match your
-       <JSDialectFileName name="auth.config.ts" />.
+       `auth.config.ts`.
 
    **Answer: Yes, I do see the `aud` value in the _Application ID_ field**:
 

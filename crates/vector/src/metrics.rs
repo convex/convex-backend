@@ -41,17 +41,19 @@ register_convex_histogram!(
     &[STATUS_LABEL[0], "index_update_type"],
 );
 pub fn index_manager_update_timer() -> StatusTimer {
-    StatusTimer::new(&VECTOR_INDEX_MANAGER_UPDATE_SECONDS)
+    let mut timer = StatusTimer::new(&VECTOR_INDEX_MANAGER_UPDATE_SECONDS);
+    timer.add_label(StaticMetricLabel::new("index_update_type", "unknown"));
+    timer
 }
 
 pub fn finish_index_manager_update_timer(
     mut timer: StatusTimer,
     index_update_type: IndexUpdateType,
 ) {
-    timer.add_label(StaticMetricLabel::new(
-        "index_update_type",
-        index_update_type.tag(),
-    ));
+    timer.replace_label(
+        StaticMetricLabel::new("index_update_type", "unknown"),
+        StaticMetricLabel::new("index_update_type", index_update_type.tag()),
+    );
     timer.finish();
 }
 
@@ -208,6 +210,16 @@ register_convex_counter!(
 );
 pub fn log_index_backfilled() {
     log_counter(&VECTOR_UPDATE_INDEX_BACKFILLED_TOTAL, 1);
+}
+
+register_convex_counter!(
+    VECTOR_COMPACTION_DEDUPED_DOCUMENTS_TOTAL,
+    "Number of duplicate vector documents resolved during compaction by deleting the older copy. \
+     A non-zero value indicates segments that were poisoned by a past flusher bug are being \
+     healed; a sustained non-zero rate indicates a regression that is re-introducing duplicates."
+);
+pub fn log_compaction_deduped_documents(count: usize) {
+    log_counter(&VECTOR_COMPACTION_DEDUPED_DOCUMENTS_TOTAL, count as u64);
 }
 
 register_convex_counter!(

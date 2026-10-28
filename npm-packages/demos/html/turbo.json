@@ -1,0 +1,9 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      // The build script is a no-op; it emits no files.
+      "outputs": []
+    }
+  }
+}

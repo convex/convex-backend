@@ -42,7 +42,7 @@ export function CopyTextButton({
         onClick={copyText}
       >
         <span>{textHidden ? "•".repeat(text.length) : text}</span>
-        <span className="absolute right-1 bottom-1.5 hidden items-center justify-center rounded bg-background-primary/20 backdrop-blur-[2px] group-hover:flex">
+        <span className="absolute right-1 bottom-1.5 hidden items-center justify-center rounded-sm bg-background-primary/20 backdrop-blur-[2px] group-hover:flex">
           {!copied ? <CopyIcon /> : "Copied!"}
         </span>
       </Button>

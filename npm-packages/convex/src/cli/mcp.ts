@@ -1,14 +1,10 @@
 import { Command, Option } from "@commander-js/extra-typings";
 import { oneoffContext } from "../bundler/context.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { logError } from "../bundler/log.js";
+import { CallToolRequest, Server } from "@modelcontextprotocol/server";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { actionDescription } from "./lib/command.js";
 import { checkAuthorization } from "./lib/login.js";
-import {
-  CallToolRequest,
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
 import {
   McpOptions,
   RequestContext,
@@ -62,11 +58,10 @@ mcp
   .action(async (options) => {
     const ctx = await oneoffContext(options);
     try {
-      const server = makeServer(options);
-      const transport = new StdioServerTransport();
-      await server.connect(transport);
-      // Keep the process running
-      await new Promise(() => {});
+      // `serveStdio` only calls the factory once a client connects, and answers
+      // a factory throw with an opaque `-32603`, so reject a bad
+      // `--disable-tools` here instead.
+      enabledTools(options);
     } catch (error: any) {
       await ctx.crash({
         exitCode: 1,
@@ -75,9 +70,27 @@ mcp
         printedMessage: `Failed to start MCP server: ${error}`,
       });
     }
+    // The SDK picks the era from the client's opening message: a request
+    // carrying the 2026-07-28 `_meta` envelope pins a stateless connection,
+    // while an `initialize` is still served by the same factory over the legacy
+    // protocol.
+    // The returned handle's `close()` is intentionally never called: the
+    // server lives until the client kills the process, and process exit tears
+    // the transport down.
+    serveStdio(() => makeServer(options), {
+      legacy: "serve",
+      // The only channel for out-of-band failures (transport errors, dropped
+      // malformed notifications). stdout carries the protocol, so they go to
+      // stderr.
+      onerror: (error) => logError(`MCP server error: ${error.message}`),
+    });
+    // Keep the process running
+    await new Promise(() => {});
   });
 
-function makeServer(options: McpOptions) {
+function enabledTools(
+  options: McpOptions,
+): Record<string, ConvexTool<any, any>> {
   const disabledToolNames = new Set<string>();
   for (const toolName of options.disableTools?.split(",") ?? []) {
     const name = toolName.trim();
@@ -96,7 +109,11 @@ function makeServer(options: McpOptions) {
       enabledToolsByName[tool.name] = tool;
     }
   }
+  return enabledToolsByName;
+}
 
+export function makeServer(options: McpOptions) {
+  const enabledToolsByName = enabledTools(options);
   const mutex = new Mutex();
   const server = new Server(
     {
@@ -109,72 +126,69 @@ function makeServer(options: McpOptions) {
       },
     },
   );
-  server.setRequestHandler(
-    CallToolRequestSchema,
-    async (request: CallToolRequest) => {
-      const ctx = new RequestContext(options);
-      await initializeBigBrainAuth(ctx, options);
-      try {
-        const authorized = await checkAuthorization(ctx, false);
-        if (!authorized) {
-          await ctx.crash({
-            exitCode: 1,
-            errorType: "fatal",
-            printedMessage:
-              "Not Authorized: Run `npx convex dev` to login to your Convex project.",
-          });
-        }
-        if (!request.params.arguments) {
-          await ctx.crash({
-            exitCode: 1,
-            errorType: "fatal",
-            printedMessage: "No arguments provided",
-          });
-        }
-        const convexTool = enabledToolsByName[request.params.name];
-        if (!convexTool) {
-          await ctx.crash({
-            exitCode: 1,
-            errorType: "fatal",
-            printedMessage: `Tool ${request.params.name} not found`,
-          });
-        }
-        const input = convexTool.inputSchema.parse(request.params.arguments);
-
-        // Serialize tool handlers since they're mutating the current working directory.
-        const result = await mutex.runExclusive(async () => {
-          return await convexTool.handler(ctx, input);
+  server.setRequestHandler("tools/call", async (request: CallToolRequest) => {
+    const ctx = new RequestContext(options);
+    await initializeBigBrainAuth(ctx, options);
+    try {
+      const authorized = await checkAuthorization(ctx, false);
+      if (!authorized) {
+        await ctx.crash({
+          exitCode: 1,
+          errorType: "fatal",
+          printedMessage:
+            "Not Authorized: Run `npx convex dev` to login to your Convex project.",
         });
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(result),
-            },
-          ],
-        };
-      } catch (error: any) {
-        let message: string;
-        if (error instanceof RequestCrash) {
-          message = error.printedMessage;
-        } else if (error instanceof Error) {
-          message = error.message;
-        } else {
-          message = String(error);
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ error: message }),
-            },
-          ],
-          isError: true,
-        };
       }
-    },
-  );
-  server.setRequestHandler(ListToolsRequestSchema, async () => {
+      if (!request.params.arguments) {
+        await ctx.crash({
+          exitCode: 1,
+          errorType: "fatal",
+          printedMessage: "No arguments provided",
+        });
+      }
+      const convexTool = enabledToolsByName[request.params.name];
+      if (!convexTool) {
+        await ctx.crash({
+          exitCode: 1,
+          errorType: "fatal",
+          printedMessage: `Tool ${request.params.name} not found`,
+        });
+      }
+      const input = convexTool.inputSchema.parse(request.params.arguments);
+
+      // Serialize tool handlers since they're mutating the current working directory.
+      const result = await mutex.runExclusive(async () => {
+        return await convexTool.handler(ctx, input);
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result),
+          },
+        ],
+      };
+    } catch (error: any) {
+      let message: string;
+      if (error instanceof RequestCrash) {
+        message = error.printedMessage;
+      } else if (error instanceof Error) {
+        message = error.message;
+      } else {
+        message = String(error);
+      }
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ error: message }),
+          },
+        ],
+        isError: true,
+      };
+    }
+  });
+  server.setRequestHandler("tools/list", async () => {
     return {
       tools: Object.values(enabledToolsByName).map(mcpTool),
     };

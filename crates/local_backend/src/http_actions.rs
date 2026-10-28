@@ -29,13 +29,14 @@ use axum_extra::extract::Host;
 use common::{
     http::{
         ExtractRequestId,
+        ExtractRequestMetadata,
         ExtractResolvedHostname,
         HttpResponseError,
         OriginalHttpUri,
         ResolvedHostname,
     },
     types::FunctionCaller,
-    RequestId,
+    RequestContext,
 };
 use futures::{
     stream::{
@@ -157,6 +158,7 @@ pub async fn http_any_method(
     State(st): State<RouterState>,
     TryExtractIdentity(identity_result): TryExtractIdentity,
     ExtractRequestId(request_id): ExtractRequestId,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     ExtractResolvedHostname(host): ExtractResolvedHostname,
     ExtractHttpRequestMetadata(http_request_metadata): ExtractHttpRequestMetadata,
 ) -> Result<impl IntoResponse, HttpResponseError> {
@@ -168,7 +170,7 @@ pub async fn http_any_method(
 
     let mut http_response_stream = stream_http_response(
         host,
-        request_id,
+        RequestContext::new(request_id, request_metadata),
         http_request_metadata,
         identity,
         st.api.clone(),
@@ -208,7 +210,7 @@ pub async fn http_any_method(
 #[try_stream(ok=HttpActionResponsePart, error=anyhow::Error, boxed)]
 async fn stream_http_response(
     host: ResolvedHostname,
-    request_id: RequestId,
+    request_context: RequestContext,
     http_request_metadata: HttpActionRequest,
     identity: Identity,
     application: Arc<dyn ApplicationApi>,
@@ -219,7 +221,7 @@ async fn stream_http_response(
         let run_action_fut = application
             .execute_http_action(
                 &host,
-                request_id,
+                request_context,
                 http_request_metadata,
                 identity,
                 FunctionCaller::HttpEndpoint,

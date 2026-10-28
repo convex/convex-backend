@@ -2,35 +2,47 @@
 title: "Environment Variables"
 sidebar_label: "Environment Variables"
 sidebar_position: 2
-description: "Store and access environment variables in Convex"
+description: "Declare, store, and access environment variables in Convex"
 ---
 
 Environment variables are key-value pairs that are useful for storing values you
 wouldn't want to put in code or in a table, such as an API key. You can set
-environment variables in Convex through the dashboard, and you can access them
-in [functions](/functions.mdx) using `process.env`.
+environment variables in Convex through the dashboard and access them in
+[functions](/functions/overview.mdx).
+
+For the best experience, [declare your environment variables](#declaring) in
+`convex/convex.config.ts` to get type-safe access via the generated `env`
+object. You can also access any environment variable via `process.env`.
 
 ## Setting environment variables
 
-Under [Deployment Settings](/dashboard/deployments/settings.md) in the
+Under [Deployment Settings](/dashboard/deployments/settings.mdx) in the
 Dashboard, you can see a list of environment variables in the current
 deployment.
-![Environment Variables Table](/screenshots/environment_variables_table.png)
 
-You can add up to 100 environment variables. Environment variable names cannot
-be more than 40 characters long, and they must start with a letter and only
-contain letters numbers, and underscores. Environment variable values cannot be
-larger than 8KB.
+<Screenshot
+  story="docs/components/DeploymentEnvironmentVariables"
+  alt="Environment variables table"
+/>
+
+You can add up to 512 environment variables, and the total size of all
+environment variables (names + values) cannot exceed 512KiB. Environment
+variable names cannot be more than 256 characters long, and they must start with
+a letter and only contain letters, numbers, and underscores. Environment
+variable values cannot be larger than 8KiB.
 
 You can modify environment variables using the pencil icon button:
 
-![Edit Environment Variable](/screenshots/edit_environment_variable.png)
+<Screenshot
+  story="docs/components/DeploymentEnvironmentVariables#Edit Inline"
+  alt="Edit environment variable"
+/>
 
 Environment variables can also be viewed and modified from the
-[command line](/cli.md#read-and-write-environment-variables).
+[command line](/cli/reference/env.mdx).
 
 ```sh
-npx convex env list
+npx convex env list --names-only
 npx convex env get NAME
 npx convex env set NAME 'value'
 npx convex env set --from-file .env.convex
@@ -51,7 +63,116 @@ must add it to **all** your deployments. In this example, you would add an
 environment variable with the name `SENDGRID_API_KEY` to your dev and prod
 deployments, with a different value for dev and prod.
 
-## Accessing environment variables
+## Declaring environment variables \{#declaring}
+
+You can declare the environment variables your app expects in
+`convex/convex.config.ts`. Declared environment variables give you type-safe
+access, validation at deploy time, and clear documentation of what your app
+needs to run. This also helps prevent removing required environment variables or
+setting them to invalid values from the dashboard or
+`npx convex env [remove|set] ...`.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+
+const app = defineApp({
+  env: {
+    GIPHY_KEY: v.string(),
+    LOG_LEVEL: v.optional(
+      v.union(v.literal("debug"), v.literal("info"), v.literal("error")),
+    ),
+  },
+});
+
+export default app;
+```
+
+The `env` option maps variable names to validators from `convex/values`. The
+supported validators are:
+
+- `v.string()` — any string value
+- `v.literal("value")` — an exact string value
+- `v.union(v.literal("a"), v.literal("b"))` — one of several exact values
+- `v.optional(...)` — wraps any of the above to mark a variable as optional
+
+After running `npx convex dev`, Convex generates a typed `env` object that you
+import from `_generated/server`:
+
+```ts title="convex/myFunction.ts"
+import { query, env } from "./_generated/server";
+
+export const gifUrl = query({
+  args: {},
+  handler: async () => {
+    // env.GIPHY_KEY is typed as `string`
+    // env.LOG_LEVEL is typed as `"debug" | "info" | "error" | undefined`
+    return (
+      "https://api.giphy.com/v1/gifs/translate?api_key=" +
+      env.GIPHY_KEY +
+      "&s=cats"
+    );
+  },
+});
+```
+
+The `env` import works in queries, mutations, actions, and HTTP actions.
+TypeScript will catch typos and type mismatches at build time rather than at
+runtime.
+
+You still need to [set the actual values](#setting-environment-variables) in the
+dashboard or CLI — declaring them in `convex.config.ts` defines what's expected,
+not what the values are.
+
+:::note
+
+Declaring environment variables is optional. If you don't declare them, you can
+still access all environment variables via `process.env` as described
+[below](#accessing-via-process-env), just without any guarantees about what
+value they contain.
+
+:::
+
+### Passing environment variables to components \{#component-env-vars}
+
+[Components](/components/overview.mdx) are isolated from the app's environment
+variables. When a component declares environment variables in its
+`convex.config.ts`, you can provide environment variables when installing it:
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+import myComponent from "@example/my-component/convex.config";
+
+const app = defineApp({
+  env: {
+    LOG_LEVEL: v.union(
+      v.literal("debug"),
+      v.literal("info"),
+      v.literal("error"),
+    ),
+  },
+});
+
+// Pass by reference — the component's LOG_SEVERITY will always
+// match this app's LOG_LEVEL - even when it changes between deploys.
+app.use(myComponent, { env: { LOG_SEVERITY: app.env.LOG_LEVEL } });
+
+export default app;
+```
+
+You can also populate component environment variables via literal values:
+
+```ts title="convex/convex.config.ts"
+// Pass a literal value
+app.use(myComponent, { env: { LOG_SEVERITY: "debug" } });
+```
+
+See
+[Authoring Components: Environment Variables](/components/authoring.mdx#environment-variables)
+for how to declare environment variables in a component.
+
+## Accessing environment variables via `process.env` \{#accessing-via-process-env}
 
 You can access environment variables in Convex functions using
 `process.env.KEY`. If the variable is set it is a `string`, otherwise it is
@@ -68,6 +189,16 @@ function giphyUrl(query) {
   );
 }
 ```
+
+:::tip
+
+If you've [declared your environment variables](#declaring) in
+`convex.config.ts`, prefer using the typed `env` import from `_generated/server`
+instead of `process.env` for better type safety. You can use the
+[`@convex-dev/no-process-env`](/linting/overview#no-process-env) lint rule to
+automatically flag `process.env` reads, and suggest using `env.*` instead.
+
+:::
 
 Note that you should not condition your Convex function exports on environment
 variables. The set of Convex functions that can be called is determined during
@@ -95,15 +226,26 @@ The following environment variables are always available in Convex functions:
 
 ## Project environment variable defaults
 
-You can set up default environment variable values for a project for development
-and preview deployments in Project Settings.
+You can set up default environment variable values for a project in Project
+Settings.
 
-![Project Default Environment Variables](/screenshots/project_default_environment_variables.png)
+<Screenshot
+  story="docs/components/ProjectDefaultEnvironmentVariables"
+  alt="Project default environment variables"
+/>
 
-These default values will be used when creating a new development or preview
-deployment, and will have no effect on existing deployments (they are not kept
-in sync).
+These default values will be used when creating a new deployment, and will have
+no effect on existing deployments (they are not kept in sync). You can set a
+different default value for each
+[deployment type](/production/multiple-deployments.mdx#deployment-types).
 
 The Deployment Settings will indicate when a deployment has environment
 variables that do not match the project defaults.
-![Environment Variable Default Mismatch](/screenshots/environment_variable_default_diff.png)
+
+<Screenshot
+  story="docs/components/DeploymentEnvironmentVariables#With Default Diff"
+  alt="Environment variable default mismatch"
+/>
+
+You can also change the default environment variables from the CLI using
+`npx convex env default`.

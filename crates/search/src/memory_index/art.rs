@@ -12,13 +12,6 @@ use imbl_slab::{
     SlabKey,
 };
 use itertools::Itertools;
-use levenshtein_automata::{
-    Distance,
-    DFA,
-    SINK_STATE,
-};
-
-use crate::EditDistance;
 
 /// Radix trees must store values associated with keys in the tree. There are
 /// two simple ways to do this: store values within internal tree nodes or have
@@ -31,8 +24,8 @@ use crate::EditDistance;
 /// choose not to do this. To use ARTs strategy here, just need to change the
 /// Leaf variant.
 ///
-/// We also do not store keys in sorted order because we do not require range
-/// queries or sorted iterations just yet.
+/// Node4 and Node16 do not keep their children sorted, so `iter_prefix` sorts
+/// each node's children as it visits them.
 #[derive(Debug, Clone)]
 enum ARTNode<V: Clone> {
     Leaf(NodeRef<V, 0, 0>),
@@ -899,486 +892,71 @@ impl<K: AsRef<[u8]>, V: Clone> ART<K, V> {
         )
     }
 
-    fn iter_rec<'a>(
-        &'a self,
-        curr: SlabKey,
-        trail: &mut Vec<u8>,
-        output: &mut Vec<(Vec<u8>, &'a V)>,
-    ) {
-        let curr_node = self.get_validated_node(curr);
-
-        let prefix = curr_node.get_meta().prefix.as_ref();
-        trail.extend_from_slice(prefix);
-
-        if let Some(value) = curr_node.get_value() {
-            output.push((trail.clone(), value));
-        }
-
-        for (transition_byte, child_key) in curr_node.iter_children() {
-            trail.push(transition_byte);
-            self.iter_rec(child_key, trail, output);
-            trail.pop();
-        }
-        trail.truncate(trail.len().saturating_sub(prefix.len()));
-    }
-
-    #[allow(unused)]
-    pub fn iter(&self) -> Vec<(Vec<u8>, &V)> {
-        let Some(curr) = self.root else {
-            return vec![];
-        };
-        let mut res = vec![];
-        self.iter_rec(curr, &mut vec![], &mut res);
-        res
-    }
-
-    #[allow(unused)]
-    pub fn node_count(&self) -> usize {
-        self.nodes.len()
-    }
-
     pub fn len(&self) -> usize {
         self.iter_values().count()
     }
 
-    #[cfg(test)]
-    pub fn check_invariants(&self) {
-        for (_, node) in self.nodes.iter() {
-            let node = node.as_ref().expect("Node not found.");
-
-            // Only value-bearing Node4's can have 1 child, otherwise we should have
-            // collapsed this into its child during addition/deletion
-            let num_children = node.get_meta().num_children;
-            if num_children == 1 {
-                assert!(node.get_value().is_some());
-            }
-
-            // Check sizes
-            match node {
-                ARTNode::Leaf(_) => assert_eq!(num_children, 0),
-                ARTNode::Node4(_) => assert!(num_children <= 4),
-                ARTNode::Node16(_) => assert!(num_children <= 16),
-                ARTNode::Node48(_) => assert!(num_children <= 48),
-                ARTNode::Node256(_) => assert!(num_children <= 255),
-            };
-        }
-    }
-
-    /// DFA-intersection implementation for fuzzy search
-    pub fn intersect<'a>(
+    /// Iterates over the entries whose keys start with `prefix` in
+    /// lexicographic key order, yielding each value with its full key.
+    pub fn iter_prefix<'a>(
         &'a self,
-        dfa: DFA,
-        skip_prefix: Option<&'a [u8]>,
-    ) -> impl Iterator<Item = (&'a V, EditDistance, Vec<u8>)> + 'a {
+        prefix: &'a [u8],
+    ) -> impl Iterator<Item = (&'a V, Vec<u8>)> + 'a {
         std::iter::from_coroutine(
             #[coroutine]
             move || {
-                if dfa.initial_state() == SINK_STATE {
-                    return;
-                }
-                let Some(mut root) = self.root else {
+                let Some(mut node_key) = self.root else {
                     return;
                 };
 
-                // If a skip_prefix was specified, seek to node + prefix offset of that node
-                // which matches skip_prefix. Start search from there.
-                let prefix_offset = if let Some(skip_prefix) = skip_prefix {
-                    let mut skip_prefix_offset = 0;
-                    self.seek(skip_prefix, |last_state, _, depth| {
-                        root = last_state;
-                        skip_prefix_offset = depth;
-                    });
-                    let art_node = self.get_validated_node(root);
-                    let last_prefix = &art_node.get_meta().prefix;
-                    max_shared_prefix(last_prefix, &skip_prefix[skip_prefix_offset..])
-                } else {
-                    0
-                };
-
-                let mut stack = vec![(root, dfa.initial_state(), None::<u8>, false, prefix_offset)];
-                let mut path = skip_prefix
-                    .map(|prefix| prefix.to_vec())
-                    .unwrap_or_default();
-                'outer: while let Some((
-                    art_key,
-                    mut dfa_state,
-                    transition,
-                    visited,
-                    prefix_offset,
-                )) = stack.pop()
-                {
-                    let art_node = self.get_validated_node(art_key);
-                    let prefix = &art_node.get_meta().prefix[prefix_offset..];
-
-                    if visited {
-                        assert!(path.len() >= prefix.len());
-                        // truncate the prefix + transition byte if it exists
-                        path.truncate(path.len() - prefix.len());
-                        if transition.is_some() {
-                            path.pop();
-                        }
-                    } else {
-                        for byte in prefix.iter() {
-                            dfa_state = dfa.transition(dfa_state, *byte);
-                            if dfa_state == SINK_STATE {
-                                continue 'outer;
-                            }
-                        }
-                        if let Some(transition) = transition {
-                            path.push(transition);
-                        }
-                        path.extend_from_slice(prefix);
-
-                        if let Some(value) = art_node.get_value()
-                            && let Distance::Exact(dist) = dfa.distance(dfa_state)
-                        {
-                            yield (value, dist, path.clone())
-                        }
-
-                        // Repush node with visited set to true so we can reset the elements pushed
-                        // to path
-                        stack.push((art_key, dfa_state, transition, true, prefix_offset));
-
-                        // Recurse on children for which a DFA transition exists
-                        for (transition_byte, child_key) in art_node.iter_children() {
-                            let new_state = dfa.transition(dfa_state, transition_byte);
-                            if new_state != SINK_STATE {
-                                stack.push((child_key, new_state, Some(transition_byte), false, 0));
-                            }
-                        }
+                // Descend to the shallowest node whose key extends `prefix`. `path` holds the
+                // key bytes above `node_key`.
+                let mut path = Vec::with_capacity(prefix.len());
+                loop {
+                    let node = self.get_validated_node(node_key);
+                    let node_prefix = node.get_meta().prefix.as_ref();
+                    let remaining = &prefix[path.len()..];
+                    let shared = max_shared_prefix(node_prefix, remaining);
+                    if shared == remaining.len() {
+                        break;
                     }
+                    if shared < node_prefix.len() {
+                        return;
+                    }
+                    path.extend_from_slice(node_prefix);
+                    let transition = prefix[path.len()];
+                    let Some(child_key) = node.find_child(transition) else {
+                        return;
+                    };
+                    path.push(transition);
+                    node_key = child_key;
+                }
+
+                // A preorder traversal that visits children in byte order yields keys in
+                // lexicographic order. Each stack entry carries the length of `path` at its
+                // parent so siblings can truncate back to it.
+                let mut stack = vec![(node_key, None::<u8>, path.len())];
+                while let Some((node_key, transition, parent_path_len)) = stack.pop() {
+                    path.truncate(parent_path_len);
+                    path.extend(transition);
+                    let node = self.get_validated_node(node_key);
+                    path.extend_from_slice(&node.get_meta().prefix);
+                    if let Some(value) = node.get_value() {
+                        yield (value, path.clone());
+                    }
+
+                    // Node4 and Node16 keep children in insertion order.
+                    let mut children = node.iter_children().collect_vec();
+                    children.sort_unstable_by_key(|(byte, _)| *byte);
+                    let path_len = path.len();
+                    stack.extend(
+                        children
+                            .into_iter()
+                            .rev()
+                            .map(|(byte, child_key)| (child_key, Some(byte), path_len)),
+                    );
                 }
             },
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use cmd_util::env::env_config;
-    use itertools::Itertools;
-    use levenshtein_automata::LevenshteinAutomatonBuilder;
-    use proptest::{
-        prelude::{
-            any,
-            prop,
-            ProptestConfig,
-        },
-        proptest,
-    };
-    use proptest_derive::Arbitrary;
-
-    use crate::memory_index::art::ART;
-
-    #[test]
-    fn test_art_insert() {
-        let mut art = ART::<String, u32>::new();
-        assert!(art.insert("test".to_string(), 123).is_none());
-        assert_eq!(art.get("test"), Some(&123));
-        assert_eq!(art.node_count(), 1);
-
-        assert!(art.insert("prefix".to_string(), 123).is_none());
-        assert_eq!(art.get("prefix"), Some(&123));
-        assert_eq!(art.node_count(), 3);
-
-        assert_eq!(art.insert("prefix".to_string(), 1), Some(123));
-        assert_eq!(art.get("prefix"), Some(&1));
-
-        // Force lazy evaluation but with a strict prefix
-        assert!(art.insert("tes".to_string(), 9).is_none());
-        assert_eq!(art.get("tes"), Some(&9));
-        assert_eq!(art.node_count(), 4);
-
-        // Branch a non-strict prefix
-        assert!(art.insert("tin".to_string(), 0).is_none());
-        assert_eq!(art.get("tin"), Some(&0));
-        assert_eq!(art.node_count(), 6);
-
-        // We store "" -> "t" -> "es" -> "t". Branch this strict prefix
-        assert!(art.insert("tester".to_string(), 9).is_none());
-        assert_eq!(art.get("tester"), Some(&9));
-        assert_eq!(art.node_count(), 7);
-    }
-
-    #[test]
-    fn test_art_delete() {
-        let mut art = ART::<String, u32>::new();
-        assert!(art.insert("test".to_string(), 123).is_none());
-        assert_eq!(art.node_count(), 1);
-
-        // Delete root
-        assert_eq!(art.remove("test"), Some(123));
-        assert_eq!(art.node_count(), 0);
-
-        // Create a prefix chain and try to delete from bottom-up
-        assert!(art.insert("t".to_string(), 1).is_none());
-        assert!(art.insert("te".to_string(), 2).is_none());
-        assert!(art.insert("tes".to_string(), 3).is_none());
-        assert!(art.insert("test".to_string(), 4).is_none());
-        assert_eq!(art.node_count(), 4);
-
-        assert_eq!(art.remove("t"), Some(1));
-        assert_eq!(art.node_count(), 3);
-        assert_eq!(art.get("t"), None);
-        assert_eq!(art.get("test"), Some(&4));
-
-        assert_eq!(art.remove("te"), Some(2));
-        assert_eq!(art.node_count(), 2);
-        assert_eq!(art.get("te"), None);
-        assert_eq!(art.get("test"), Some(&4));
-
-        assert_eq!(art.remove("tes"), Some(3));
-        assert_eq!(art.node_count(), 1);
-        assert_eq!(art.get("tes"), None);
-        assert_eq!(art.get("test"), Some(&4));
-
-        assert_eq!(art.remove("test"), Some(4));
-        assert_eq!(art.node_count(), 0);
-        assert_eq!(art.get("test"), None);
-    }
-
-    #[test]
-    fn test_art_empty_key() {
-        let mut art = ART::<String, u32>::new();
-        art.insert("".to_string(), 12);
-        assert_eq!(art.node_count(), 1);
-        assert_eq!(art.get(""), Some(&12));
-    }
-
-    #[test]
-    fn test_art_grow_and_shrink() {
-        let mut art = ART::<Vec<u8>, u32>::new();
-        art.insert(vec![], 12);
-
-        // Grow art with 256 diff keys with no shared prefix
-        for c in 0..=255_u8 {
-            assert!(art.insert(vec![c], c as u32).is_none());
-            assert_eq!(art.node_count(), c as usize + 2);
-        }
-
-        // Now shrink it
-        for c in 0..=254_u8 {
-            assert_eq!(art.remove(&vec![c]), Some(c as u32));
-            assert_eq!(art.node_count(), 257 - c as usize - 1);
-        }
-
-        // The last deletion is special since it collapses prefixes
-        {
-            let mut art = art.clone();
-            assert_eq!(art.remove(&vec![]), Some(12));
-            assert_eq!(art.node_count(), 1);
-        }
-        {
-            let mut art = art.clone();
-            assert_eq!(art.remove(&vec![255]), Some(255));
-            assert_eq!(art.node_count(), 1);
-        }
-    }
-
-    #[test]
-    fn test_art_dfa_intersection() {
-        let mut art = ART::<String, u32>::new();
-        art.insert("abcd".to_string(), 1);
-        art.insert("abcdef".to_string(), 2);
-        art.insert("fox".to_string(), 3);
-        art.insert("convex".to_string(), 4);
-        art.insert("rakeeb was here".to_string(), 5);
-        art.insert("ahhhhhhhhhhhhh".to_string(), 6);
-
-        // Prefix DFA: should only match ahhhhhhh
-        {
-            let dfa = LevenshteinAutomatonBuilder::new(0, false);
-            let dfa = dfa.build_prefix_dfa("ah");
-            let results = art.intersect(dfa, None).collect_vec();
-            assert_eq!(results.len(), 1);
-            assert_eq!(*results[0].0, 6);
-        }
-
-        // Prefix + fuzzy DFA: should match ahhhh, abcd, abcdef
-        {
-            let dfa = LevenshteinAutomatonBuilder::new(1, false);
-            let dfa = dfa.build_prefix_dfa("ah");
-            let mut results = art.intersect(dfa, None).collect_vec();
-            assert_eq!(results.len(), 3);
-            results.sort_by(|a, b| a.0.cmp(b.0));
-            assert_eq!(*results[0].0, 1);
-            assert_eq!(results[0].1, 1);
-
-            assert_eq!(*results[1].0, 2);
-            assert_eq!(results[1].1, 1);
-
-            assert_eq!(*results[2].0, 6);
-            assert_eq!(results[2].1, 0);
-        }
-
-        // Fuzzy DFA: should match fox
-        {
-            let dfa = LevenshteinAutomatonBuilder::new(2, false);
-            let dfa = dfa.build_dfa("f");
-            let results = art.intersect(dfa, None).collect_vec();
-            assert_eq!(results.len(), 1);
-            assert_eq!(*results[0].0, 3);
-            assert_eq!(results[0].1, 2);
-        }
-    }
-
-    #[derive(Clone, Debug, Arbitrary)]
-    enum TestAction {
-        Insert(String, u32),
-        Delete(String),
-        Query {
-            #[proptest(
-                strategy = "proptest::collection::vec(proptest::prelude::any::<u32>(), 1..8)"
-            )]
-            seeds: Vec<u32>,
-        },
-        CheckInvariants,
-    }
-
-    fn test_trie_actions(actions: Vec<TestAction>) {
-        let mut art: ART<String, u32> = ART::new();
-        let mut map: BTreeMap<String, u32> = BTreeMap::new();
-        let mut all_keys: Vec<String> = Vec::new();
-
-        for action in actions {
-            match action {
-                TestAction::Insert(k, v) => {
-                    art.insert(k.clone(), v);
-                    map.insert(k.clone(), v);
-                    all_keys.push(k.clone());
-                    assert_eq!(art.get(&k), Some(&v));
-                },
-                TestAction::Delete(k) => {
-                    art.remove(&k);
-                    map.remove(&k);
-                    assert_eq!(art.get(&k), None);
-                },
-                TestAction::Query { seeds } => {
-                    if all_keys.is_empty() {
-                        continue;
-                    }
-                    for seed in seeds {
-                        let key = &all_keys[seed as usize % all_keys.len()];
-                        assert_eq!(art.get(key), map.get(key));
-                    }
-                },
-                TestAction::CheckInvariants => {
-                    art.check_invariants();
-                },
-            };
-        }
-    }
-
-    proptest! {
-        // If you make a change to ART, run proptests with higher case count using PROPTEST_CASES=100000
-        #![proptest_config(
-            ProptestConfig {
-                failure_persistence: None,
-                cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1),
-                ..ProptestConfig::default()
-            }
-        )]
-
-        #[test]
-        fn proptest_art_actions(
-            actions in prop::collection::vec(any::<TestAction>(), 1..1024),
-        ) {
-            test_trie_actions(actions)
-        }
-
-        #[test]
-        fn proptest_art_iter(uuids in prop::collection::vec(any::<String>(), 1..1024)) {
-            let mut art: ART<String, u32> = ART::new();
-            let mut uuid_map = BTreeMap::new();
-
-            for (v, uuid) in uuids.into_iter().enumerate() {
-                uuid_map.insert(uuid.clone(), v as u32);
-                art.insert(uuid, v as u32);
-            }
-
-            for (key, value) in art.iter() {
-                let s = std::str::from_utf8(key.as_slice()).unwrap();
-                assert_eq!(uuid_map.get(s), Some(value));
-            }
-        }
-    }
-
-    // Previous regression
-    #[test]
-    fn test_node48_growth() {
-        let mut art: ART<Vec<u8>, u32> = ART::new();
-        art.insert(vec![35], 1);
-        art.insert(vec![97], 2);
-        art.insert(vec![194, 161], 3);
-        art.insert(vec![65], 4);
-        art.insert(vec![48], 5);
-        art.insert(vec![38], 6);
-        art.insert(vec![240, 158, 184, 187], 7);
-        art.insert(vec![98], 8);
-        art.insert(vec![66], 9);
-        art.insert(vec![49], 10);
-        art.insert(vec![225, 143, 184], 11);
-        art.insert(vec![50], 12);
-        art.insert(vec![206, 163], 13);
-        art.insert(vec![], 14);
-        art.insert(vec![216, 157], 15);
-        art.insert(vec![67], 16);
-        art.insert(vec![234, 173, 176], 17);
-        // This insert forces the root to grow to Node48
-        art.insert(vec![32], 18);
-        assert_eq!(art.get(&vec![97]), Some(&2));
-    }
-
-    #[test]
-    fn test_art_intersect_skip_prefix() {
-        // Case 1: two nodes that share a common parent prefix which we want to
-        // partially skip
-        {
-            let mut art = ART::<String, u32>::new();
-            art.insert("PREFIXtest".to_string(), 1);
-            art.insert("PREFIXtesla".to_string(), 2);
-
-            let dfa = LevenshteinAutomatonBuilder::new(2, false);
-            let dfa = dfa.build_dfa("tesm");
-            let mut results = art.intersect(dfa, Some("PREFIX".as_bytes())).collect_vec();
-            results.sort_by(|a, b| a.0.cmp(b.0));
-
-            assert_eq!(results.len(), 2);
-            assert_eq!(results[0].0, &1);
-            assert_eq!(results[1].0, &2);
-        }
-
-        // Case 2: two nodes that share a common parent prefix which we want to fully
-        // skip
-        {
-            let mut art = ART::<String, u32>::new();
-            art.insert("PREFIXzz".to_string(), 1);
-            art.insert("PREFIXyy".to_string(), 2);
-
-            let dfa = LevenshteinAutomatonBuilder::new(1, false);
-            let dfa = dfa.build_dfa("zy");
-            let mut results = art.intersect(dfa, Some("PREFIX".as_bytes())).collect_vec();
-            results.sort_by(|a, b| a.0.cmp(b.0));
-
-            assert_eq!(results.len(), 2);
-            assert_eq!(results[0].0, &1);
-            assert_eq!(results[1].0, &2);
-        }
-
-        // Case 3: one node whose prefix we want to partially skip
-        {
-            let mut art = ART::<String, u32>::new();
-            art.insert("rigmarole".to_string(), 1);
-
-            let dfa = LevenshteinAutomatonBuilder::new(0, false);
-            let dfa = dfa.build_dfa("marole");
-            let mut results = art.intersect(dfa, Some("rig".as_bytes())).collect_vec();
-            results.sort_by(|a, b| a.0.cmp(b.0));
-
-            assert_eq!(results.len(), 1);
-            assert_eq!(results[0].0, &1);
-        }
     }
 }

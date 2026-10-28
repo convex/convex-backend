@@ -1,6 +1,11 @@
 use std::{
     collections::BTreeMap,
+    ops::{
+        Deref,
+        DerefMut,
+    },
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::Context;
@@ -9,6 +14,7 @@ use common::{
         CanonicalizedComponentModulePath,
         ComponentId,
     },
+    document::ParsedDocument,
     runtime::{
         Runtime,
         UnixTimestamp,
@@ -19,23 +25,21 @@ use database::{
     BiggestDocumentWrites,
     BootstrapComponentsModel,
     FunctionExecutionSize,
+    SnoopedTransaction,
     Transaction,
+    TransactionReadSet,
 };
 use errors::ErrorMetadata;
 use model::{
-    environment_variables::{
-        types::{
-            EnvVarName,
-            EnvVarValue,
-        },
-        EnvironmentVariablesModel,
-        PreloadedEnvironmentVariables,
+    environment_variables::types::{
+        EnvVarName,
+        EnvVarValue,
     },
-    modules::{
-        module_versions::FullModuleSource,
-        ModuleModel,
+    modules::ModuleModel,
+    source_packages::{
+        types::SourcePackage,
+        SourcePackageModel,
     },
-    source_packages::SourcePackageModel,
     udf_config::UdfConfigModel,
 };
 use rand::{
@@ -44,7 +48,7 @@ use rand::{
 };
 use rand_chacha::ChaCha12Rng;
 use sync_types::ModulePath;
-use udf::environment::system_env_vars;
+use udf::environment::PreloadedEnvVars;
 use value::{
     identifier::Identifier,
     ConvexValue,
@@ -52,10 +56,17 @@ use value::{
 
 use crate::{
     environment::{
-        helpers::Phase,
+        helpers::{
+            performance_unsupported,
+            PerformanceApi,
+            Phase,
+        },
         ModuleCodeCacheResult,
     },
-    module_cache::ModuleCache,
+    module_cache::{
+        ModuleCache,
+        V8ModuleSource,
+    },
     timeout::{
         PauseReason,
         Timeout,
@@ -78,7 +89,7 @@ pub struct UdfPhase<RT: Runtime> {
     // We "check out" the transaction when executing a cross-component
     // call. Until we implement subtransactions, we cannot run any
     // user code concurrently with a component call.
-    tx: Option<Transaction<RT>>,
+    tx: Option<MaybeSnooped<RT>>,
 
     pub rt: RT,
     module_loader: Arc<dyn ModuleCache<RT>>,
@@ -95,12 +106,38 @@ enum UdfPreloaded {
         observed_rng_during_execution: bool,
         unix_timestamp: Option<UnixTimestamp>,
         observed_time_during_execution: bool,
+        performance_api: Option<PerformanceApi>,
         observed_identity_during_execution: bool,
-        env_vars: Option<PreloadedEnvironmentVariables>,
-        system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
+        default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
+        env_vars: PreloadedEnvVars,
         component: ComponentId,
         component_arguments: Option<BTreeMap<Identifier, ConvexValue>>,
+        source_package: Option<Arc<ParsedDocument<SourcePackage>>>,
     },
+}
+
+enum MaybeSnooped<RT: Runtime> {
+    Tx(Transaction<RT>),
+    SnoopedTx(SnoopedTransaction<RT>),
+}
+
+impl<RT: Runtime> Deref for MaybeSnooped<RT> {
+    type Target = Transaction<RT>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            MaybeSnooped::Tx(tx) => tx,
+            MaybeSnooped::SnoopedTx(tx) => tx,
+        }
+    }
+}
+impl<RT: Runtime> DerefMut for MaybeSnooped<RT> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            MaybeSnooped::Tx(tx) => tx,
+            MaybeSnooped::SnoopedTx(tx) => tx,
+        }
+    }
 }
 
 impl<RT: Runtime> UdfPhase<RT> {
@@ -113,7 +150,7 @@ impl<RT: Runtime> UdfPhase<RT> {
     ) -> Self {
         Self {
             phase: Phase::Importing,
-            tx: Some(tx),
+            tx: Some(MaybeSnooped::Tx(tx)),
             rt,
             module_loader,
             preloaded: UdfPreloaded::Created {
@@ -133,67 +170,84 @@ impl<RT: Runtime> UdfPhase<RT> {
             anyhow::bail!("UdfPhase initialized twice");
         };
         let default_system_env_vars = default_system_env_vars.clone();
-
         let component = self.component;
-
-        let component_args = if !component.is_root() {
-            Some(
-                timeout
-                    .with_release_permit(
-                        PauseReason::LoadComponentArgs,
+        self.preloaded = timeout
+            .with_release_permit(PauseReason::UdfInitialize, async {
+                let component_args = if !component.is_root() {
+                    Some(
                         BootstrapComponentsModel::new(self.tx_mut()?)
-                            .load_component_args(component),
+                            .load_component_args(component)
+                            .await?,
                     )
-                    .await?,
-            )
-        } else {
-            None
-        };
+                } else {
+                    None
+                };
 
-        // UdfConfig might not be defined for super old modules or system modules.
-        let udf_config = timeout
-            .with_release_permit(
-                PauseReason::LoadUdfConfig,
-                UdfConfigModel::new(self.tx_mut()?, component.into()).get(),
-            )
+                // UdfConfig might not be defined for super old modules or system modules.
+                let udf_config = UdfConfigModel::new(self.tx_mut()?, component.into())
+                    .get()
+                    .await?;
+                let rng = udf_config
+                    .as_ref()
+                    .map(|c| ChaCha12Rng::from_seed(c.import_phase_rng_seed));
+                let unix_timestamp = udf_config.as_ref().map(|c| c.import_phase_unix_timestamp);
+
+                let env_vars = PreloadedEnvVars::load(
+                    self.tx_mut()?,
+                    component,
+                    default_system_env_vars.clone(),
+                )
+                .await?;
+
+                let source_package =
+                    if ModuleModel::new(self.tx_mut()?).has_pending_module(component) {
+                        // If there is a pending write in ModulesTable, this may be an
+                        // ad-hoc test query (`execute_standalone_module`).
+                        // Reading the source package from a snapshot query doesn't
+                        // work in that case since it doesn't see pending writes.
+                        // TODO: even if it did, the test query codepath breaks the
+                        // get_latest() invariant since it leaves behind modules
+                        // with mixed source packages.
+                        None
+                    } else {
+                        let mut snapshot_tx = self.tx_mut()?.clone_for_snapshot_query();
+                        // Load all modules from the latest source package, but don't
+                        // record a read dependency on all the modules and their source
+                        // packages.
+                        SourcePackageModel::new(&mut snapshot_tx, component.into())
+                            .get_latest()
+                            .await?
+                    };
+
+                Ok(UdfPreloaded::Ready {
+                    rng,
+                    observed_rng_during_execution: false,
+                    unix_timestamp,
+                    observed_time_during_execution: false,
+                    performance_api: unix_timestamp.map(PerformanceApi::new),
+                    observed_identity_during_execution: false,
+                    default_system_env_vars,
+                    env_vars,
+                    component,
+                    component_arguments: component_args,
+                    source_package,
+                })
+            })
             .await?;
-        let rng = udf_config
-            .as_ref()
-            .map(|c| ChaCha12Rng::from_seed(c.import_phase_rng_seed));
-        let unix_timestamp = udf_config.as_ref().map(|c| c.import_phase_unix_timestamp);
 
-        let env_vars = if component.is_root() {
-            Some(
-                timeout
-                    .with_release_permit(
-                        PauseReason::LoadEnvironmentVariables,
-                        EnvironmentVariablesModel::new(self.tx_mut()?).preload(),
-                    )
-                    .await?,
-            )
-        } else {
-            None
-        };
-
-        let system_env_vars = timeout
-            .with_release_permit(
-                PauseReason::LoadSystemEnvironmentVariables,
-                system_env_vars(self.tx_mut()?, default_system_env_vars.clone()),
-            )
-            .await?;
-
-        self.preloaded = UdfPreloaded::Ready {
-            rng,
-            observed_rng_during_execution: false,
-            unix_timestamp,
-            observed_time_during_execution: false,
-            observed_identity_during_execution: false,
-            env_vars,
-            system_env_vars,
-            component,
-            component_arguments: component_args,
-        };
         Ok(())
+    }
+
+    pub fn default_system_env_vars(&self) -> &BTreeMap<EnvVarName, EnvVarValue> {
+        match &self.preloaded {
+            UdfPreloaded::Created {
+                default_system_env_vars,
+            } => default_system_env_vars,
+            UdfPreloaded::Ready {
+                default_system_env_vars,
+                ..
+            } => default_system_env_vars,
+        }
     }
 
     pub fn component(&self) -> anyhow::Result<ComponentId> {
@@ -231,14 +285,19 @@ impl<RT: Runtime> UdfPhase<RT> {
         &mut self,
         module_path: &ModulePath,
         timeout: &mut Timeout<RT>,
-    ) -> anyhow::Result<Option<(Arc<FullModuleSource>, ModuleCodeCacheResult)>> {
+    ) -> anyhow::Result<Option<(Arc<V8ModuleSource>, ModuleCodeCacheResult)>> {
         if self.phase != Phase::Importing {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "NoDynamicImport",
                 format!("Can't dynamically import {module_path:?} in a query or mutation")
             ));
         }
-        let UdfPreloaded::Ready { component, .. } = &self.preloaded else {
+        let UdfPreloaded::Ready {
+            component,
+            source_package,
+            ..
+        } = &self.preloaded
+        else {
             anyhow::bail!("Phase not initialized");
         };
         let component = *component;
@@ -246,42 +305,42 @@ impl<RT: Runtime> UdfPhase<RT> {
             component,
             module_path: module_path.clone().canonicalize(),
         };
-        let Some((module_metadata, source_package)) = timeout
-            .with_release_permit(PauseReason::LoadModuleMetadata, async {
-                match ModuleModel::new(self.tx_mut()?)
+        let source_package = source_package.clone();
+        let Some((module_metadata, module_source)) = timeout
+            .with_release_permit(PauseReason::LoadModule, async {
+                let Some(module_metadata) = ModuleModel::new(self.tx_mut()?)
                     .get_metadata(path.clone())
                     .await?
-                {
-                    None => anyhow::Ok(None),
-                    Some(module_metadata) => {
-                        let source_package =
-                            SourcePackageModel::new(self.tx_mut()?, component.into())
-                                .get(module_metadata.source_package_id)
-                                .await?;
-                        anyhow::Ok(Some((module_metadata, source_package)))
-                    },
-                }
+                else {
+                    return Ok(None);
+                };
+                anyhow::ensure!(
+                    module_metadata.environment == ModuleEnvironment::Isolate,
+                    "Trying to execute {:?} in isolate, but it is bundled for {:?}.",
+                    path.module_path,
+                    module_metadata.environment
+                );
+                let source_package = if let Some(pkg) = source_package {
+                    pkg
+                } else {
+                    SourcePackageModel::new(self.tx_mut()?, component.into())
+                        .get(module_metadata.source_package_id)
+                        .await?
+                };
+                let module_source = self
+                    .module_loader
+                    .get_module_with_metadata(&module_metadata, &source_package)
+                    .await?;
+                Ok(Some((module_metadata, module_source)))
             })
             .await?
         else {
             return Ok(None);
         };
-
-        anyhow::ensure!(
-            module_metadata.environment == ModuleEnvironment::Isolate,
-            "Trying to execute {:?} in isolate, but it is bundled for {:?}.",
-            module_path,
-            module_metadata.environment
-        );
-
-        let module_loader = self.module_loader.clone();
-        let module_source = timeout
-            .with_release_permit(
-                PauseReason::LoadModuleSource,
-                module_loader.get_module_with_metadata(module_metadata.clone(), source_package),
-            )
-            .await?;
-        let code_cache_result = module_loader.code_cache_result(module_metadata.into_value());
+        let code_cache_result = self
+            .module_loader
+            .clone()
+            .code_cache_result(&module_metadata);
         Ok(Some((module_source, code_cache_result)))
     }
 
@@ -302,6 +361,10 @@ impl<RT: Runtime> UdfPhase<RT> {
             .tx
             .take()
             .context("Transaction missing due to concurrent component call")?;
+        let MaybeSnooped::Tx(tx) = tx else {
+            // snooping is only used during initialization
+            anyhow::bail!("Transaction is still snooped during start_nested_udf?");
+        };
         let UdfPreloaded::Ready {
             ref mut rng,
             unix_timestamp,
@@ -323,25 +386,56 @@ impl<RT: Runtime> UdfPhase<RT> {
 
     pub fn put_tx(&mut self, tx: Transaction<RT>) -> anyhow::Result<()> {
         anyhow::ensure!(self.tx.is_none());
-        self.tx = Some(tx);
+        self.tx = Some(MaybeSnooped::Tx(tx));
         Ok(())
     }
 
-    fn tx_mut(&mut self) -> anyhow::Result<&mut Transaction<RT>> {
+    pub fn tx_mut(&mut self) -> anyhow::Result<&mut Transaction<RT>> {
         self.tx
-            .as_mut()
+            .as_deref_mut()
             .context("Transaction missing due to concurrent component call")
+    }
+
+    pub fn snoop_reads(&mut self) -> anyhow::Result<()> {
+        match self.tx.take() {
+            Some(MaybeSnooped::Tx(tx)) => {
+                self.tx = Some(MaybeSnooped::SnoopedTx(tx.snoop_reads()));
+                Ok(())
+            },
+            Some(MaybeSnooped::SnoopedTx(_)) => {
+                anyhow::bail!("Called snoop_reads while already snooping")
+            },
+            None => anyhow::bail!("Transaction missing due to concurrent component call"),
+        }
+    }
+
+    pub fn finish_snoop(&mut self) -> anyhow::Result<TransactionReadSet> {
+        match self.tx.take() {
+            Some(MaybeSnooped::SnoopedTx(tx)) => {
+                let (tx, reads) = tx.finish_snoop();
+                self.tx = Some(MaybeSnooped::Tx(tx));
+                Ok(reads)
+            },
+            Some(MaybeSnooped::Tx(_)) => {
+                anyhow::bail!("Called finish_snoop while not snooping")
+            },
+            None => anyhow::bail!("Transaction missing due to concurrent component call"),
+        }
     }
 
     fn tx_ref(&self) -> anyhow::Result<&Transaction<RT>> {
         self.tx
-            .as_ref()
+            .as_deref()
             .context("Transaction missing due to concurrent component call")
     }
 
     pub fn into_transaction(self) -> anyhow::Result<Transaction<RT>> {
         self.tx
             .context("Transaction missing due to concurrent component call")
+            .map(|tx| match tx {
+                MaybeSnooped::Tx(tx) => tx,
+                MaybeSnooped::SnoopedTx(tx) => tx.finish_snoop().0,
+            })
     }
 
     pub fn biggest_document_writes(&self) -> anyhow::Result<Option<BiggestDocumentWrites>> {
@@ -363,6 +457,7 @@ impl<RT: Runtime> UdfPhase<RT> {
         let UdfPreloaded::Ready {
             ref mut rng,
             ref mut unix_timestamp,
+            ref mut performance_api,
             ..
         } = self.preloaded
         else {
@@ -371,6 +466,9 @@ impl<RT: Runtime> UdfPhase<RT> {
         self.phase = Phase::Executing;
         *rng = Some(ChaCha12Rng::from_seed(rng_seed));
         *unix_timestamp = Some(execution_unix_timestamp);
+        if let Some(performance_api) = performance_api {
+            performance_api.begin_execution(&self.rt, execution_unix_timestamp)?;
+        }
         Ok(())
     }
 
@@ -378,25 +476,14 @@ impl<RT: Runtime> UdfPhase<RT> {
         &mut self,
         name: EnvVarName,
     ) -> anyhow::Result<Option<EnvVarValue>> {
-        let UdfPreloaded::Ready {
-            ref env_vars,
-            ref system_env_vars,
-            ..
-        } = self.preloaded
-        else {
+        let UdfPreloaded::Ready { ref env_vars, .. } = self.preloaded else {
             anyhow::bail!("Phase not initialized");
         };
         let tx = self
             .tx
             .as_mut()
             .context("Transaction missing due to concurrent component call")?;
-        let Some(env_vars) = env_vars else {
-            return Ok(None);
-        };
-        if let Some(var) = env_vars.get(tx, &name)? {
-            return Ok(Some(var));
-        }
-        Ok(system_env_vars.get(&name).cloned())
+        env_vars.get(tx, &name)
     }
 
     pub fn rng(&mut self) -> anyhow::Result<&mut ChaCha12Rng> {
@@ -441,6 +528,69 @@ impl<RT: Runtime> UdfPhase<RT> {
             ));
         };
         Ok(unix_timestamp)
+    }
+
+    pub fn performance_now_incrementing(&mut self) -> anyhow::Result<Duration> {
+        let UdfPreloaded::Ready {
+            performance_api,
+            observed_time_during_execution,
+            ..
+        } = &mut self.preloaded
+        else {
+            anyhow::bail!("Phase not initialized");
+        };
+        match (&self.phase, &*performance_api) {
+            (Phase::Importing, Some(PerformanceApi::Importing(api))) => Ok(api.now()),
+            (Phase::Executing, Some(PerformanceApi::Executing(api))) => {
+                *observed_time_during_execution = true;
+                Ok(api.now_incrementing(&self.rt))
+            },
+            (_, None) => anyhow::bail!(performance_unsupported()),
+            _ => anyhow::bail!("performance API state does not match phase"),
+        }
+    }
+
+    pub fn performance_now_fixed(&mut self) -> anyhow::Result<Duration> {
+        let UdfPreloaded::Ready {
+            performance_api,
+            observed_time_during_execution,
+            ..
+        } = &mut self.preloaded
+        else {
+            anyhow::bail!("Phase not initialized");
+        };
+        match (&self.phase, &*performance_api) {
+            (Phase::Importing, Some(PerformanceApi::Importing(api))) => Ok(api.now()),
+            (Phase::Executing, Some(PerformanceApi::Executing(api))) => {
+                *observed_time_during_execution = true;
+                Ok(api.now_fixed())
+            },
+            (_, None) => anyhow::bail!(performance_unsupported()),
+            _ => anyhow::bail!("performance API state does not match phase"),
+        }
+    }
+
+    pub fn performance_time_origin(&self) -> anyhow::Result<UnixTimestamp> {
+        let UdfPreloaded::Ready {
+            performance_api, ..
+        } = &self.preloaded
+        else {
+            anyhow::bail!("Phase not initialized");
+        };
+        let Some(performance_api) = performance_api else {
+            anyhow::bail!(performance_unsupported());
+        };
+        Ok(performance_api.time_origin())
+    }
+
+    pub fn observe_time(&mut self) {
+        if let UdfPreloaded::Ready {
+            observed_time_during_execution,
+            ..
+        } = &mut self.preloaded
+        {
+            *observed_time_during_execution = true;
+        }
     }
 
     pub fn observe_rng(&mut self) {

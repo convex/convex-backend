@@ -1,5 +1,473 @@
 # Changelog
 
+## 1.49.0 (unreleased)
+
+- New `npx convex plugins install` command, which installs the Convex plugin for
+  Claude Code and Codex on macOS and Linux. It works with the terminal CLIs, the
+  desktop apps and the VS Code extensions. Running it again upgrades the plugin
+  to the latest version.
+
+## 1.48.0
+
+- Convex deployments can now sign their own JWTs with an internally managed
+  key-pair. The `ctx.auth.signJwt` API is available in mutations. The JWTs
+  can be verified with the public key in the JWKS hosted at
+  `${CONVEX_CLOUD_URL}/.well-known/jwks.json`.
+- `npx convex dev --verbose` and `npx convex deploy --verbose` no longer print
+  environment variable values. The logged list of environment variables shows
+  every value as `<redacted>`, and values of 8 or more characters are also
+  redacted wherever else they appear in the logged push response and diff, such
+  as auth providers that `auth.config.ts` builds from `process.env`.
+- When an AI agent runs `npx convex env list` or `npx convex env default list`,
+  they now list only names by default, so secrets stay out of the agent's
+  context. Agents are detected from the environment variables they set. Pass
+  `--include-values` to print the values.
+
+- Fixed `npx convex ai-files install` and `npx convex ai-files update` reporting
+  success and exiting 0 when the guidelines download or the agent skills
+  install failed. They now exit with code 1.
+
+- `ctx.storage.store()` and `ctx.storage.get()` are now available in mutations,
+  not just actions. Files stored and read in a mutation count toward its
+  transaction limits.
+
+## 1.47.0
+
+- Fixed the next step printed by `npx convex project create`. It suggested
+  `npx convex deployment create <team>:<project>:dev --type dev`, which always
+  failed because `dev` is reserved for your default dev deployment. It now
+  suggests a `dev/my-feature` reference and passes `--select`.
+- `npx convex deploy` now asks for confirmation before creating or changing an
+  index on a large table, since the deploy blocks until the index is backfilled.
+  Stage the index (`staged: true`) to backfill it in the background instead, or
+  pass the new `--skip-large-indexes-check` flag to proceed without
+  confirmation. That flag also covers deleting large indexes, replacing the
+  hidden `--allow-deleting-large-indexes` flag, which keeps working.
+- The `envList` MCP tool now returns only environment variable names by default,
+  so secrets stay out of the agent's context. Pass `includeValues: true` to get
+  the values too, or use `envGet` to read a single variable.
+- `npx convex env list` and `npx convex env default list` have a new
+  `--include-values` flag for printing values explicitly. Values are still
+  printed by default. The docs and help text now use `--include-values` wherever
+  the values are needed, like
+  `npx convex env list --include-values > .env.convex`, and `--names-only` for
+  just listing variables.
+- Added `.staged()` to `defineTable` for validating a schema change in the
+  background instead of blocking the deploy on a scan of the table. Pass the
+  fields to add or change, set a field to `undefined` to remove it, or pass a
+  full validator. The current validator stays enforced while Convex checks
+  existing documents and new writes against the staged one. `npx convex deploy`
+  and `npx convex deploy --dry-run` report each staged table as validating,
+  validated, or failed, and the dry-run warning about scanning large tables now
+  suggests staging the validator. Once a staged validator is validated, moving
+  it into `defineTable` deploys without scanning the table. A deploy that would
+  discard pending or completed staged validation asks for confirmation; pass
+  `--allow-unstaging-schema` to skip the prompt in CI. See
+  https://docs.convex.dev/database/schemas#staged-validators.
+- `ctx.meta.getSnapshotTs()` is now public API. It returns the database
+  timestamp of the snapshot the current function reads from, in nanoseconds, on
+  the same clock as `db.vars.commitTs`. See
+  https://docs.convex.dev/database/advanced/commit-timestamp.
+- `convex/server` exports `getServiceUrl`, which returns the base URL of a
+  Convex-managed service such as the AI gateway, to pair with `getServiceToken`,
+  along with a `ServiceName` type. The client no longer rejects service names it
+  doesn't know about, so libraries can adopt new services without requiring a
+  newer `convex` version.
+- Fixed the Convex MCP server stalling permanently after overlapping tool calls.
+- Fixed the error reported when a function or symbol is passed where a Convex
+  value is expected. It now names the unsupported type and its path, like
+  `Function "[Function]" is not a supported Convex type` at `.cb`, instead of
+  throwing `Cannot read properties of undefined (reading 'length')`.
+- When a push fails because an environment variable used by `auth.config.ts` is
+  not set on the deployment, the CLI now prints the `npx convex env set`
+  commands to run and a link to the deployment's environment variable settings.
+- Region prompts in the CLI list regions in the same order as the dashboard, and
+  `npx convex deployment create --region` accepts the Canada
+  (`aws-ca-central-1`) and Asia Pacific (`aws-ap-southeast-2`) regions. See
+  https://docs.convex.dev/production/regions.
+- `npx convex deployment usage-limits set --metric aiGatewayCostDollars` sets
+  the AI gateway spending limit.
+
+## 1.46.0
+
+- Added `.optional()` to all validators. For example, `v.string().optional()` is
+  equivalent to `v.optional(v.string())`. This changes TypeScript compatibility
+  between validators from different Convex versions; projects sharing validators
+  across packages may need to align their `convex` dependency versions.
+- `npx convex deploy --dry-run` now warns when a schema change requires checking
+  every document in large tables against the new schema, since these deploys can
+  take a long time. The warning lists the affected tables along with their
+  document counts and sizes.
+- Fixed a bug where `npx convex deploy` could fail with a `deployment:data:view`
+  permission error when deleting indexes with a deploy key that only has
+  `deployment:deploy`. The CLI now reuses the schema evaluation response to size
+  the affected tables instead of reading them directly, so
+  `deployment:data:view` is no longer required.
+- `convex/server` exports `FunctionReference_future`, a reference type whose
+  arguments are checked similar to the way Convex checks them at runtime. Use it
+  instead of `FunctionReference` when you accept someone else's Convex function
+  as a callback and know which arguments you will pass it. Behavior summary: it
+  rejects a function requiring arguments you never pass, rejects a function that
+  does not declare a top-level argument you do pass, and accepts a function
+  taking broader values than you pass. A plain `FunctionReference` gets the
+  first and third backwards. The surplus-key check stops at the top level: a
+  surplus key inside a nested object, array element, or union arm is not
+  detected. A value of the type is usable with `ctx.runMutation`,
+  `ctx.scheduler.runAfter`, `createFunctionHandle`, and every other API in this
+  package that takes a reference, all of which now accept
+  `FunctionReference | FunctionReference_future`. It is deliberately not
+  assignable to a plain `FunctionReference`, so forwarding one into code typed
+  that way is a compile error rather than a silent loss of argument checking.
+  Library code that wants to accept either kind of reference should take that
+  same union and read arguments and return types through `FunctionArgs` and
+  `FunctionReturnType`, which accept either kind.
+- As a part of the `FunctionReference_future` work, the `_args` and
+  `_returnType` slots on `FunctionReference` are deprecated. They'll be removed
+  in a future version. `FunctionReference` gains an optional `_fn` slot that
+  enables the checked comparison of args.
+
+## 1.45.0
+
+- Local deployments now upgrade to a new backend version in place, instead of
+  going through a snapshot export and import. Upgrades no longer depend on the
+  size of your local data, and no longer prompt about transferring it.
+- The Convex MCP server (`npx convex mcp`) now supports the stateless MCP
+  protocol (`2026-07-28` MCP specification).
+- Added a new `getServiceToken` function that generates service tokens for
+  first-party Convex services. This will be used by the upcoming Convex AI
+  gateway.
+- Improved the error message when `npx convex export` fails because a snapshot
+  export is already in progress.
+
+## 1.44.0
+
+- `schema.doc(tableName)` returns the validator for whole documents of a table:
+  the table's own validator with the `_id` and `_creationTime` system fields
+  added (to each member, for tables defined with a union).
+  `schema.id(tableName)` is `v.id(tableName)` restricted to the table names in
+  the schema. `docValidator(tableName, tableDefinition)` from `convex/server`
+  does the same as `schema.doc` when you only have a table definition.
+- The server-provided environment variables `CONVEX_SITE_URL` and
+  `CONVEX_CLOUD_URL` are now available on `env` by default in
+  `_generated/server.d.ts`, along with other environment variables specified in
+  `convex/convex.config.ts`.
+- Fixed a bug where the context value provided by `ConvexProviderWithAuth` was
+  not referentially stable.
+- Fixed a bug where `npx convex login status` would report misleading results
+  when the user is logged in but does not have access to the current project.
+
+## 1.43.0
+
+- Added new `npx convex deployment usage` and
+  `npx convex deployment usage-limits` CLI commands to view a deployment’s
+  current resource usage, and view or edit deployment usage limits.
+- When defining hourly cron jobs, you can now omit the `minuteUTC` parameter.
+  When omitted, Convex will automatically choose a stable start time within the
+  scheduled hour, avoiding concentrating jobs at the top of the hour.
+- Mutations can now reference their upcoming
+  [commit timestamp](https://docs.convex.dev/database/advanced/commit-timestamp)
+  with `ctx.db.vars.commitTs`. While the mutation is running,
+  `ctx.db.vars.commitTs` is a placeholder symbol that is replaced with a Int64
+  value at commit time that is guaranteed to strictly follow commit order,
+  unlike the `_creationTime` system field. This low-level primitive is helpful
+  for advanced use cases such as implementing efficient FIFO queues.
+- Added a new `v.commitTs()` validator that accepts either the upcoming commit
+  timestamp placeholder, or a Int64 commit timestamp.
+- The Convex CLI is now able to find the right TypeScript compiler when using
+  side-by-side TypeScript 6 and 7 installation. (This setup is used in codebases
+  that want to use the native TypeScript 7 compiler but still need access to the
+  TypeScript compiler JavaScript API.)
+- Deprecated the `typescriptCompiler` parameter in `convex.json`. This parameter
+  was only necessary when using the TypeScript Native Preview
+  (@typescript/native-preview). With TypeScript 7, Convex automatically picks
+  the right binary.
+- When a component only uses environment variables that are all optional, it’s
+  now possible to omit the `env` argument from `app.use(component, { … })`.
+- Fixed a bug where `app.use()` failed to require a second argument when a
+  component has required environment variables (e.g.
+  `app.use(component, { env: { REQUIRED_VAR: "value" } })`).
+- Fixed a bug in `usePaginatedQuery_experimental` where page splits were handled
+  incorrectly.
+
+## 1.42.3
+
+- Fixed a bug where the codegen would not sort module paths in an order
+  consistent with other platforms when running on Windows. This completes a fix
+  that was only partially applied in 1.42.2.
+
+## 1.42.2
+
+- Mutations and actions can now read the raw authentication token used in the
+  request by accessing `authToken` in `ctx.meta.getRequestMetadata()`.
+- Fixed a circular import in `convex/browser` that caused issues when using the
+  `ConvexHttpClient` in some JavaScript environments.
+- Fixed a bug in `ConvexProviderWithClerk` that caused the Convex client to
+  ignore session changes in some situations.
+- Fixed a bug where the codegen would not sort module paths in an order
+  consistent with other platforms when running on Windows.
+- When running `npx convex dev` outside a Convex project, the CLI now returns an
+  error message immediately instead of first asking the user to select a project
+  and then failing later.
+
+## 1.42.1
+
+- Fixed an issue where the CLI would be unable to find the `tsgo` binary in
+  newer versions of `@typescript/native-preview`.
+- Added a new `initialAuthTokenReuse` option to `ConvexReactClient` that
+  prevents extra function calls when users re-authenticate.
+
+## 1.42.0
+
+- Added a new `npx convex project create` command that can be used to create new
+  projects programmatically.
+- Added a new `--names-only` flag to `npx convex env list` (and
+  `npx convex env default list`). This flag shows the names of the env vars that
+  are set, without the values. It can be useful to let AI coding agents know the
+  variables that are set on a deployment, without giving them the actual values.
+- Added a new `useStaleSnapshot` option to the arguments for `runQuery`. This is
+  an advanced feature that can be used to allow mutations to avoid optimistic
+  concurrency control (OCC) conflicts in some cases where they can commit even
+  though they depend on conflicting reads. This change allows us to improve the
+  performance of some of the official Convex components, including Workpool.
+- Improved the documentation of `db.*` methods to more clearly explain the
+  difference between the old APIs without table names (e.g. `db.get(userId)`)
+  and the new APIs with table names (e.g. `db.get("users", userId)`).
+- Fixed an issue where the CLI would not surface permission errors correctly
+  when the user or token doesn’t have permission to do something.
+- Exposes the current scheduled function's ID as `scheduledFunctionId` in
+  `ctx.meta.getRequestMetadata()`.
+- `npx convex insights` has a new `--json` flag that makes the command output
+  easier to parse programmatically.
+- File storage: marked a few TypeScript types in `convex/server` as
+  `@deprecated` (`FileMetadata`, `FileStorageId`, `StorageId`). These types are
+  used only by file storage APIs that were deprecated in `convex@1.6.0`, so we
+  also marked them as `@deprecated` for clarity.
+- Bumps the `ws` peer dependency to avoid a vulnerable range.
+
+## 1.41.0
+
+- It is now possible to set limits on nested queries and mutations with the new
+  `transactionLimits` option in `runQuery`/`runMutation`.
+- `npx convex ai-files` now installs skills with separate copies of each skill
+  for each coding agent instead of using symlinks. We made this change to avoid
+  known issues with symlinks on Windows.
+- When using Convex in anonymous mode (without a Convex account),
+  `npx convex dev` now starts a different dashboard server for each deployment.
+  This ensures the dashboard always connects to the right deployment when
+  multiple deployments are running at the same time.
+
+## 1.40.0
+
+- You can now create a local deployment in a specific Convex cloud project with
+  `npx convex deployment create team-slug:project-slug:local`.
+- You can now move a local deployment to another cloud project using
+  `npx convex deployment select team-slug:project-slug:local`. This command
+  warns when it moves the deployment to another project.
+- The CLI now shows more clearly which deployment is targeted when running
+  commands such as `npx convex dev` and `npx convex deploy`.
+- Added a new `<AuthRefreshing />` helper component, used to show indicators
+  when function calls are paused because the authentication token is refreshing.
+- Removed `--local` and `--cloud` flags from `npx convex dev`. The behavior of
+  these flags was misleading when a deployment was already selected. Instead,
+  use `npx convex deployment select local` to use a local deployment, and
+  `npx convex deployment select dev` to use your personal cloud dev deployment.
+- The CLI now provides guidance when TypeScript type checking is taking too
+  long.
+- Improved the CLI command documentation to include more details and examples.
+- `npx convex logs`: `--tail` is now accepted as an alias for the `--history`
+  flag.
+- When creating a local deployment, the CLI now skips importing the default
+  environment variables from the Convex cloud project if you don’t have
+  permission to view the default environment variables instead of crashing.
+
+## 1.39.1
+
+- Fixes package.json `bin` entrypoint bug in 1.39.0.
+
+## 1.39.0
+
+- Apps and components may now declare typesafe env vars that they require. Both
+  `defineApp` and `defineComponent` now accept an `env` object with string keys
+  and validator values. Declared environment variables must be present and match
+  the validators before deployment.
+- Allow `--local-cloud-port`, `--local-site-port`, `--local-backend-version` and
+  `--local-force-upgrade` options to `npx convex dev` to be used whenever using
+  a local deployment.
+- The `AsyncLocalStorage` and `AsyncResource` APIs from `node:async_hooks` are
+  now available in the standard Convex runtime. Note that stored values will not
+  be threaded through calls to `ctx.runQuery`/`ctx.runMutation`/`ctx.runAction`.
+
+## 1.38.0
+
+- Adds `ctx.meta.getRequestMetadata()` to access request metadata in mutations
+  and actions: request ID, client IP, and client User-Agent.
+- Default env vars are now imported when creating a new local deployment.
+- Allows creating new local deployments using
+  `npx convex deployment select local`.
+- Adds support for `--expiry` and `--expires` aliases for `--expiration` in
+  `npx convex deployment create`.
+- Supports using `import "server-only"` to mark files as server-only.
+- Removes the `npx convex disable-local-deployments` command.
+- Fixes an issue where stdout/stderr would be truncated after exit in the CLI.
+- Updated `usePaginatedQuery_experimental` overload that has an object-based API
+  similar to `useQuery_experimental`.
+
+## 1.37.0
+
+- Adds `useQuery_experimental`, which accepts object-based args and returns an
+  object with status, data, and error that doesn't throw errors by default.
+- Adds `npx convex deployment token create my-token --save-env`, enabling
+  scripts to configure agent environments with access only to develop and deploy
+  against their own cloud deployment. e.g.
+
+  ```sh
+  npx convex deployment create dev/foo --select --expiration "in 7 days" --type dev
+  # npx convex env set ... (optional - typically default env vars suffice)
+  npx convex deployment token create foo --save-env
+  # npx convex dev --once (optional)
+  ```
+
+- Re-exports ValidatorTypeToReturnType from convex/server
+- AI Files will no longer prompt when connecting to an existing project.
+- Updates the `VisibilityProperties` type to allow types like `RegisteredQuery`
+  to be more easily extended without losing covariance.
+- New `ctx.meta.getDeploymentMetadata()` function.
+  - Includes the name, region and class of the deployment.
+
+## 1.36.1
+
+- Updated `npx convex login --vercel` to ask before joining a Convex team
+  through the Vercel Marketplace.
+- Allows targeting a project or specific deployment type rather than just a
+  deployment for `npx convex env default *`.
+
+## 1.36.0
+
+- `npx convex run` now supports `--inline-query` for evaluating readonly queries
+  without creating a named function first, for example:
+  `npx convex run --inline-query 'await ctx.db.query("messages").take(5)'`.
+- Added `ctx.meta` to access extra metadata at runtime:
+  - `ctx.meta.getFunctionMetadata()`: the current function's name, component,
+    visibility, and whether it's a query, mutation, or action.
+  - `ctx.meta.getTransactionMetrics()`: how much capacity remains in the current
+    transaction. Only available in queries and mutations.
+- Added a `npx convex env default` command for getting and setting default
+  environment variables for a project.
+- `npx convex deploy` now supports a `--message` option that allows you to write
+  details in the deployment’s audit log. When running `npx convex deploy` on CI
+  runners on popular platforms (including GitHub Actions, Vercel, and Netlify),
+  a default message will be provided if you don’t provide one (e.g. “Deployed
+  from GitHub Actions • e83c516”).
+- When deploying to a preview deployment, you can now reuse the existing
+  deployment instead of creating a new one by using `--preview-name` instead of
+  `--preview-create`. This behavior is also used when deploying to preview
+  deployments from the CI without specifying `--preview-create` explictly, but
+  you can specify `--preview-create` explicitly to restore the old behavior.
+  When using the `--preview-run` flag, the function only runs when a new
+  deployment is created.
+- `npx convex codegen` can now automatically start a local backend when
+  necessary.
+- You can now increase the timeout used by the CLI when starting a local backend
+  with `CONVEX_LOCAL_BACKEND_STARTUP_TIMEOUT_SECS`; this can be useful when
+  using large local databases.
+- Fixed a bug where `npx convex ai-files remove` would also remove skill files
+  that were not installed by `npx convex ai-files`
+- Fixed a bug where the automatically-generated files would sometimes sort
+  imports in inconsistent order across platforms.
+- Fixed a bug in `npx convex dev --start` where, in some cases, the `--start`
+  command would continue to run after closing the Convex dev server with
+  <kbd>Ctrl+C</kbd>.
+- Generating APIs via function-spec now supports validators with int64 literals.
+
+## 1.35.1
+
+- Adds support for automatic preview deployments on Cloudflare Pages
+- Removes a new API in `useQuery` that was accidentally included as part of the
+  `1.35.0` release.
+
+## 1.35.0
+
+- You can now create and select local deployments explicitly with the CLI:
+  - `npx convex deployment create local --select`: initialize local development.
+  - `npx convex deployment select dev`: switch to your cloud dev deployment.
+  - `npx convex deployment select local`: switch back to your local deployment.
+  - To run a single command on your local deployment, use `--deployment local`.
+- `npx convex deployment create` now has a `--expiration` flag allowing you to
+  create temporary dpeloyments.
+- Components can now define HTTP routes in their own `http.ts` file. The routes
+  exposed by a component are accessible through a URL prefix that isolates them
+  from the other HTTP routes (e.g.
+  `app.use(component, { httpPrefix: "/foo" })`).
+- `npx convex dev` now supports a new `--start` flag that runs a command in
+  parallel with the Convex dev server (e.g. `npx convex dev --start 'vite'`).
+  This new option can be used to simplify the `dev` command of most projects.
+  This flag was previously called `--run-sh`, and used to not allow long-running
+  commands; now, `--run-sh` is an alias of `--start`.
+- Defaults non-interactive commands to target an anonymous deployment if one is
+  not configured or specified by the deploy key. This enables coding agents to
+  more easily develop without needing the CONVEX_AGENT_MODE env variable. By
+  default, the CLI will avoid prompting in non-interactive terminals when
+  possible.
+- You can now develop against your anonymous local deployments even when logged
+  in. You will be prompted to link the deployment to a project if the terminal
+  is interactive.
+- Enables `npx convex deployment create` when you don't yet have a project.
+- Improved formatting of sizes in error messages.
+- Changes the default codegen to use the component's `ComponentApi` type instead
+  of static code generation for components in `_generated/api.d.ts`. To get the
+  old behavior, set `{ "codegen": { "legacyComponentApi": true } }` in
+  `convex.json`.
+- Fixed a bug where `npx convex dev` would not use the correct deployment after
+  running `npx convex deployment select`.
+- Improved the definition of the `AnyDataModel` type to support using default
+  indexes (`by_id`, `by_creation_time`) in a typesafe way.
+
+## 1.34.1
+
+- Hides the `--yes` flag on `npx convex deploy` to discourage YOLO agents being
+  run in privileged environments from pushing to production.
+- Improves client backoff strategy to reconnect more quickly. The changes in
+  1.34.0 did not correctly reset backoff sufficiently after reconnect.
+- AI files will not be installed by default in non-interactive environments.
+- Disabling AI files is now tracked with an "enabled" flag in convex.json that
+  hides nags for initial setup and updates when set to false.
+- Fix ai-files re-prompting to install files on setup when they already exist.
+- Fix local deployments returning stale credentials when ports change.
+
+## 1.34.0
+
+- The CLI can now
+  [automatically provide Convex AI context files](https://docs.convex.dev/ai#convex-ai-files)
+  (`AGENTS.md`, `CLAUDE.md`, guidelines/state files) to your project when using
+  `npx convex dev`. You can manage Convex AI files using the new
+  `npx convex ai-files` command:
+  - `npx convex ai-files install` - Install or refresh AI files
+  - `npx convex ai-files update` - Update to latest available AI files
+  - `npx convex ai-files status` - Show what is installed and what is stale
+  - `npx convex ai-files disable` - Suppress install and staleness messages in
+    `npx convex dev`
+  - `npx convex ai-files enable` - Re-enable install and staleness messages
+  - `npx convex ai-files remove` - Remove Convex-managed AI files
+- Adds new `npx convex deployment` commands:
+  - `npx convex deployment create` allows you to create new cloud deployments
+    for a project
+  - `npx convex deployment select` allows you to select the deployment to use in
+    your project directory when running commands
+- CLI commands now support the `--deployment` flag to select a deployment to
+  target. It accepts a deployment name (e.g. `joyful-capybara-123`), ref (e.g.
+  `dev/james`), `dev` (for your personal dev deployment), or `prod` (for your
+  project’s default production deployment). You can also select deployments in
+  other projects with `project-slug:ref` or `team-slug:project-slug:ref`.
+- Improves websocket client backoff behavior.
+- No longer recreates `convex/README.md` when `convex/` already exists.
+
+## 1.33.1
+
+- Fixes the ConvexProviderWithClerk to fetch the JWT template if the (new)
+  Convex integration is not enabled. It is safe to both set the JWT template and
+  enable the integration. In 1.33.0 it broke if you only had the JWT template
+  specified.
+
 ## 1.33.0
 
 - `npx convex env set` can now:
@@ -14,26 +482,28 @@
 - `npx convex env list` now emits a more robust format for multi-line and other
   complex environment variables, so you can do:
   `npx convex env list > .env.convex` from one deployment, then
-  `npx convex env set < .env.convex` on another.
-  This format is also now available on the Dashboard.
+  `npx convex env set < .env.convex` on another. This format is also now
+  available on the Dashboard.
 - `npx convex run` will auto-start a local backend if necessary, for the
   duration of the call.
 - `getConvexSize` will now return 0 for `undefined`, even though it isn't
   stictly a `Value` (it is not serialized for documents, arguments, or results).
 - Passing `--env-file` to the CLI works more reliably for specifying the target
   deployment.
-- Improves the types of _generated/api to avoid infinite recursion when you have
-  a file and folder with the same name in your convex/ folder.
+- Improves the types of \_generated/api to avoid infinite recursion when you
+  have a file and folder with the same name in your convex/ folder.
 - Adds `npx convex init` as a command that will go through the interactive
   deployment selection process, if a deployment isn't already configured, but
   not push code. This is useful for `predev` package.json scripts that want to
   do interactive selection steps before running the frontend and backend in
   parallel. It also enables agents to initialize and set environment variables:
+
   ```
   export CONVEX_AGENT_MODE=anonymous
   npx convex init
   convex env set < .env.defaults
   ```
+
 - No longer overwrites the `tsconfig.json` and `README.md` files in the
   `convex/` folder when configuring a new deployment, only when first creating
   the `convex/` folder.
@@ -42,38 +512,36 @@
 
 - Improved the API documentation with more examples to help AI agents.
 
-- Added a new `npx convex insights` CLI command to show the insights
-  for a deployment.
-- Added `insights` MCP tool for diagnosing OCC conflicts and resource limit issues
-  on cloud deployments.
+- Added a new `npx convex insights` CLI command to show the insights for a
+  deployment.
+- Added `insights` MCP tool for diagnosing OCC conflicts and resource limit
+  issues on cloud deployments.
 - The `insights` MCP tool works on production deployments without requiring
   `--dangerously-enable-production-deployments`.
 - When using a local Convex backend (local dev deployment, agent mode or
-  anonymous mode), the deployment’s data is now stored in a `.convex`
-  directory in the project root (instead of `~/.convex`). This change
-  is helpful when using multiple worktrees, since each worktree can get
-  its own isolated storage. Existing local deployments are not affected.
-- Added new options `maximumRowsRead` and `maximumBytesRead`
-  to `PaginationOptions` to get more fine-grained control over
-  the number of rows read when using pagination.
+  anonymous mode), the deployment’s data is now stored in a `.convex` directory
+  in the project root (instead of `~/.convex`). This change is helpful when
+  using multiple worktrees, since each worktree can get its own isolated
+  storage. Existing local deployments are not affected.
+- Added new options `maximumRowsRead` and `maximumBytesRead` to
+  `PaginationOptions` to get more fine-grained control over the number of rows
+  read when using pagination.
 - When creating a new dev deployment, the Convex CLI now asks you which
   deployment region you want to use if you haven’t set a team default.
-- Increased the default value for `authRefreshTokenLeewaySeconds`
-  to 10 seconds.
+- Increased the default value for `authRefreshTokenLeewaySeconds` to 10 seconds.
 - The CLI now uses `VITE_CONVEX_*` environment variables when using Remix
   alongside Vite, instead of `CONVEX_*`.
-- Fixed an issue where the CLI would sometimes be affected by GitHub API
-  rate limits when downloading the local deployment binary.
+- Fixed an issue where the CLI would sometimes be affected by GitHub API rate
+  limits when downloading the local deployment binary.
 - Fixed an issue where websockets would disconnect when using Bun.
-- Fixed an issue with the WorkOS integration that caused crashes
-  when running `npx convex deploy` with a deployment that has
-  its own WorkOS credentials.
-- Fixed an issue with the WorkOS integration where the
-  `WORKOS_API_KEY` environment variable from the shell
-  would incorrectly be used.
-- Fixed an issue where some modifications to `auth.config.ts`
-  would cause the push process to fail.
-- Fixed an issue on Windows that caused arrow key presses to be ignored when the “cloud or local deployment” prompt is shown.
+- Fixed an issue with the WorkOS integration that caused crashes when running
+  `npx convex deploy` with a deployment that has its own WorkOS credentials.
+- Fixed an issue with the WorkOS integration where the `WORKOS_API_KEY`
+  environment variable from the shell would incorrectly be used.
+- Fixed an issue where some modifications to `auth.config.ts` would cause the
+  push process to fail.
+- Fixed an issue on Windows that caused arrow key presses to be ignored when the
+  “cloud or local deployment” prompt is shown.
 
 ## 1.31.7
 
@@ -104,7 +572,7 @@
 ## 1.31.4
 
 - Fix
-  [`window.addEventListener is not a function`](https://github.com/get-convex/convex-backend/issues/304)
+  [`window.addEventListener is not a function`](https://github.com/convex/convex-backend/issues/304)
   bug in React Native.
 
 ## 1.31.3
@@ -170,6 +638,8 @@
   confirmation before deleting large indexes. This change is helpful for
   avoiding situations where an index is accidentally deleted and backfilling it
   takes a long time.
+- You can use `v.nullable` as a convenient alias for `v.union(v.null(), ...)`
+  when defining validators.
 
 ## 1.29.1
 
@@ -185,7 +655,7 @@
 
 - Add .pick(), .omit(), .partial(), and .extend() methods to v.objects()
   validators. This makes reusing validator with small changes simpler. See
-  https://docs.convex.dev/functions/validation#reusing-and-extending-validators
+  <https://docs.convex.dev/functions/validation#reusing-and-extending-validators>
   for more.
 
 - Add a pagination result validation helper
@@ -385,7 +855,7 @@
 
 - Increase a network timeout that was causing Node.js v20+ issues on slow
   connections, good old Happy Eyeballs
-  https://github.com/nodejs/node/issues/54359.
+  <https://github.com/nodejs/node/issues/54359>.
 
 ## 1.25.1
 
@@ -550,10 +1020,10 @@ To upgrade to this release you'll need to upgrade any Convex components you use.
 - `npx convex dev` tails logs by default. See the `--tail-logs` option for more.
 
 - Improvement to the `.unique()` error message to print `_id`s
-  [PR](https://github.com/get-convex/convex-backend/pull/59)
+  [PR](https://github.com/convex/convex-backend/pull/59)
 
 - Fixes to avoid race conditions in auth
-  [PR](https://github.com/get-convex/convex-js/pull/29)
+  [PR](https://github.com/convex/convex-js/pull/29)
 
 ## 1.20.0
 
@@ -573,7 +1043,7 @@ To upgrade to this release you'll need to upgrade any Convex components you use.
 ## 1.19.3
 
 - Upgrade esbuild from 0.23 to 0.25 to address security warnings about
-  https://github.com/evanw/esbuild/security/advisories/GHSA-67mh-4wv8-2f99
+  <https://github.com/evanw/esbuild/security/advisories/GHSA-67mh-4wv8-2f99>
 
   Convex does not use the development server functionality of esbuild which
   contains the vulnerability.
@@ -586,7 +1056,7 @@ To upgrade to this release you'll need to upgrade any Convex components you use.
   The environment variables `CONVEX_SELF_HOSTED_URL` and
   `CONVEX_SELF_HOSTED_ADMIN_KEY` are now used to identity self-hosted
   deployments.
-  https://github.com/get-convex/convex-backend/tree/main/self-hosted#self-hosting-convex
+  <https://github.com/convex/convex-backend/tree/main/self-hosted#self-hosting-convex>
   for more.
 
 - export the `ValidatorJSON` record types.
@@ -594,7 +1064,7 @@ To upgrade to this release you'll need to upgrade any Convex components you use.
 ## 1.19.0
 
 - Support for Local Deployments, now in beta. See
-  https://docs.convex.dev/cli/local-deployments for more.
+  <https://docs.convex.dev/cli/local-deployments> for more.
 
   Local deployments run your Convex dev deployment for your project on your
   local machine, which should make syncing your code faster. It also makes
@@ -637,7 +1107,7 @@ To upgrade to this release you'll need to upgrade any Convex components you use.
      gain isolation and atomicity because it runs as a subtransaction.
 
   See
-  https://docs.convex.dev/understanding/best-practices/#use-helper-functions-to-write-shared-code
+  <https://docs.convex.dev/understanding/best-practices/#use-helper-functions-to-write-shared-code>
   for more.
 
   Filter to warnings in the convex dashboard logs to see if you're using this

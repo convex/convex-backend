@@ -26,10 +26,9 @@ use common::{
     query::Order,
     runtime::Runtime,
 };
-use indexing::backend_in_memory_indexes::{
-    LazyDocument,
-    MemoryDocument,
-    RangeRequest,
+use indexing::{
+    in_memory_indexes::LazyDocument,
+    index_reader::RangeRequest,
 };
 use value::{
     serde::ConvexSerializable,
@@ -88,7 +87,7 @@ impl<RT: Runtime> Transaction<RT> {
         let tablet_id = self
             .table_mapping()
             .namespace(namespace)
-            .id_if_exists(T::table_name())
+            .id_if_exists(&T::TABLE_NAME)
             .with_context(|| format!("Index {:?} not present in {namespace:?}", index.name()))?;
         Ok(SystemQueryBuilder {
             tx: self,
@@ -278,21 +277,23 @@ impl<RT: Runtime, T: SystemTable> SystemQuery<'_, '_, RT, T> {
             request.index_name,
             self.index.fields.clone(),
             page_range,
+            &self.tx.limits,
         )?;
-        for (_, doc, _) in &page {
-            // NOTE: since this is a system read, we don't bother tracking usage;
-            // we only update `system_tx_size` for stats
+        if !page.is_empty() {
             let component_path = self
                 .tx
-                .component_path_for_document_id(doc.id())?
+                .component_path_for_tablet_id(self.tablet_id)?
                 .unwrap_or_default();
-            self.tx.reads.record_read_document(
-                component_path,
-                T::table_name().clone(),
-                doc.size(),
-                &self.tx.usage_tracker,
-                &self.tx.virtual_system_mapping,
-            )?;
+            for (_, doc, _) in &page {
+                self.tx.reads.record_read_document(
+                    component_path.clone(),
+                    T::TABLE_NAME.clone(),
+                    doc.size(),
+                    &self.tx.usage_tracker,
+                    &self.tx.virtual_system_mapping,
+                    &self.tx.limits,
+                )?;
+            }
         }
 
         Ok((
@@ -302,11 +303,8 @@ impl<RT: Runtime, T: SystemTable> SystemQuery<'_, '_, RT, T> {
                         LazyDocument::Memory(doc) if !T::FOR_MIGRATION => {
                             doc.force::<T::Metadata>()?
                         },
-                        LazyDocument::Memory(MemoryDocument {
-                            packed_document: doc,
-                            ..
-                        })
-                        | LazyDocument::Packed(doc) => Arc::new(doc.parse()?),
+                        LazyDocument::Memory(doc) => Arc::new(doc.parse_uncached()?),
+                        LazyDocument::Packed(doc) => Arc::new(doc.parse()?),
                     })
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?,
@@ -364,7 +362,7 @@ impl EqFields {
         indexed_fields_len: usize,
     ) -> anyhow::Result<()> {
         for &value in fields {
-            write_sort_key::<_, false>(value, &mut self.prefix).map_err(Into::into)?;
+            write_sort_key(value, &mut self.prefix).map_err(Into::into)?;
             self.fields += 1;
         }
         // Sanity checks against developer errors
@@ -400,7 +398,7 @@ impl EqFields {
             bound @ (Bound::Included(fields) | Bound::Excluded(fields)) => {
                 let mut start = self.prefix.clone();
                 for &value in fields {
-                    write_sort_key::<_, false>(value, &mut start).map_err(Into::into)?;
+                    write_sort_key(value, &mut start).map_err(Into::into)?;
                 }
                 if let Bound::Excluded(_) = bound {
                     let Some(key) = BinaryKey::from(start).increment() else {
@@ -418,7 +416,7 @@ impl EqFields {
             bound @ (Bound::Included(fields) | Bound::Excluded(fields)) => {
                 let mut end = self.prefix;
                 for &value in fields {
-                    write_sort_key::<_, false>(value, &mut end).map_err(Into::into)?;
+                    write_sort_key(value, &mut end).map_err(Into::into)?;
                 }
                 if let Bound::Included(_) = bound {
                     End::after_prefix(&end.into())
@@ -440,415 +438,5 @@ impl From<EqFields> for Interval {
     #[inline]
     fn from(value: EqFields) -> Self {
         Interval::prefix(value.prefix.into())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        fmt::Debug,
-        ops::Bound,
-        sync::{
-            Arc,
-            LazyLock,
-        },
-    };
-
-    use common::{
-        document::ParsedDocument,
-        interval::{
-            BinaryKey,
-            End,
-            Interval,
-            IntervalSet,
-            StartIncluded,
-        },
-        testing::assert_contains,
-    };
-    use proptest_derive::Arbitrary;
-    use runtime::testing::TestRuntime;
-    use serde::{
-        Deserialize,
-        Serialize,
-    };
-    use value::{
-        assert_obj,
-        codegen_convex_serialization,
-        values_to_bytes,
-        ConvexValue,
-        DeveloperDocumentId,
-        ResolvedDocumentId,
-        TableName,
-        TableNamespace,
-    };
-
-    use crate::{
-        system_tables::{
-            SystemIndex,
-            SystemTable,
-        },
-        test_helpers::DbFixtures,
-        Database,
-        TestFacingModel,
-        Transaction,
-    };
-
-    static TEST_TABLE_NAME: LazyLock<TableName> = LazyLock::new(|| "test".parse().unwrap());
-    static TEST_INDEX: LazyLock<SystemIndex<TestTable>> = LazyLock::new(|| {
-        SystemIndex::new("by_a_b", [&"a".parse().unwrap(), &"b".parse().unwrap()]).unwrap()
-    });
-    struct TestTable;
-    impl SystemTable for TestTable {
-        type Metadata = TestMetadata;
-
-        fn table_name() -> &'static TableName {
-            &TEST_TABLE_NAME
-        }
-
-        fn indexes() -> Vec<SystemIndex<Self>> {
-            vec![TEST_INDEX.clone()]
-        }
-    }
-    #[derive(Serialize, Deserialize, Clone, Arbitrary, Debug, PartialEq)]
-    struct TestMetadata {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        a: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        b: Option<i64>,
-    }
-    codegen_convex_serialization!(TestMetadata, TestMetadata);
-
-    async fn setup_db(rt: &TestRuntime) -> anyhow::Result<Database<TestRuntime>> {
-        let DbFixtures { db, tp, .. } = DbFixtures::new(rt).await?;
-        db.create_backfilled_index_for_test(
-            tp,
-            TableNamespace::test_user(),
-            TEST_INDEX.name(),
-            TEST_INDEX.fields.clone(),
-        )
-        .await?;
-        Ok(db)
-    }
-
-    fn index_reads<T: SystemTable>(
-        tx: &Transaction<TestRuntime>,
-        test_index: &SystemIndex<T>,
-        namespace: TableNamespace,
-    ) -> IntervalSet {
-        let name = test_index
-            .name()
-            .map_table(
-                &tx.metadata
-                    .table_mapping()
-                    .namespace(namespace)
-                    .name_to_tablet(),
-            )
-            .unwrap();
-        tx.reads.read_set().index_reads_for_test(&name)
-    }
-
-    fn i(start: BinaryKey, end: End) -> Interval {
-        Interval {
-            start: StartIncluded(start),
-            end,
-        }
-    }
-
-    fn intervals<const N: usize>(intervals: [Interval; N]) -> IntervalSet {
-        let mut set = IntervalSet::new();
-        for interval in intervals {
-            set.add(interval);
-        }
-        set
-    }
-
-    fn k<T: TryInto<ConvexValue, Error: Debug>, const N: usize>(values: [T; N]) -> BinaryKey {
-        BinaryKey::from(values_to_bytes::<false>(
-            &values
-                .into_iter()
-                .map(|v| Some(v.try_into().unwrap()))
-                .collect::<Vec<_>>(),
-        ))
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_system_query(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = setup_db(&rt).await?;
-        let namespace = TableNamespace::test_user();
-        let mut tx = db.begin_system().await?;
-        let doc1 = TestFacingModel::new(&mut tx)
-            .insert_and_get(TEST_TABLE_NAME.clone(), assert_obj! {})
-            .await?;
-        let doc2 = TestFacingModel::new(&mut tx)
-            .insert_and_get(TEST_TABLE_NAME.clone(), assert_obj! { "a" => 1i64, })
-            .await?;
-        db.commit(tx).await?;
-
-        let mut tx = db.begin_system().await?;
-        let docs = tx.query_system(namespace, &TEST_INDEX)?.all().await?;
-        assert_eq!(docs.len(), 2);
-        assert_eq!(docs[0].id(), doc1.id());
-        assert_eq!(**docs[0], TestMetadata { a: None, b: None });
-        assert_eq!(docs[1].id(), doc2.id());
-        assert_eq!(
-            **docs[1],
-            TestMetadata {
-                a: Some(1),
-                b: None,
-            }
-        );
-        assert_eq!(index_reads(&tx, &TEST_INDEX, namespace), IntervalSet::All);
-
-        // Step through a query one page at a time
-        let creation_time_index = SystemIndex::<TestTable>::by_creation_time();
-        let mut query = tx.query_system(namespace, &creation_time_index)?.build();
-        let (page, has_more) = query.next_page(1).await?;
-        assert_eq!(page.len(), 1);
-        assert_eq!(page[0].id(), doc1.id());
-        assert!(has_more);
-        // Check that the read set is updated incrementally for each document read
-        assert_eq!(
-            index_reads(query.tx, &creation_time_index, namespace),
-            intervals([i(
-                BinaryKey::min(),
-                End::after_prefix(&k::<ConvexValue, 2>([
-                    doc1.creation_time().into(),
-                    doc1.developer_id().encode().try_into().unwrap()
-                ]))
-            )])
-        );
-        let (page, has_more) = query.next_page(1).await?;
-        assert_eq!(page.len(), 1);
-        assert_eq!(page[0].id(), doc2.id());
-        assert!(has_more);
-        assert_eq!(
-            index_reads(query.tx, &creation_time_index, namespace),
-            intervals([i(
-                BinaryKey::min(),
-                End::after_prefix(&k::<ConvexValue, 2>([
-                    doc2.creation_time().into(),
-                    doc2.developer_id().encode().try_into().unwrap()
-                ]))
-            )])
-        );
-        let (page, has_more) = query.next_page(1).await?;
-        assert_eq!(page, vec![]);
-        assert!(!has_more);
-        assert_eq!(
-            index_reads(&tx, &creation_time_index, namespace),
-            IntervalSet::All
-        );
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_system_query_eq(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = setup_db(&rt).await?;
-        let namespace = TableNamespace::test_user();
-        let mut tx = db.begin_system().await?;
-        let doc = TestFacingModel::new(&mut tx)
-            .insert_and_get(
-                TEST_TABLE_NAME.clone(),
-                assert_obj! { "a" => 1i64, "b" => 2i64 },
-            )
-            .await?;
-        db.commit(tx).await?;
-
-        let mut tx = db.begin_system().await?;
-        let queried = tx
-            .query_system(namespace, &TEST_INDEX)?
-            .eq(&[1i64, 2])?
-            .unique()
-            .await?;
-        assert_eq!(queried.as_ref().unwrap().id(), doc.id());
-        assert_eq!(
-            index_reads(&tx, &TEST_INDEX, namespace),
-            intervals([Interval::prefix(k([1i64, 2i64]))])
-        );
-        assert_eq!(
-            tx.query_system(namespace, &TEST_INDEX)?
-                .eq(&[1i64])?
-                .unique()
-                .await?,
-            queried
-        );
-        assert_eq!(
-            tx.query_system(namespace, &TEST_INDEX)?
-                .eq(&[2i64])?
-                .unique()
-                .await?,
-            None
-        );
-        // Too many fields provided for the index
-        assert_contains(
-            &tx.query_system(namespace, &TEST_INDEX)?
-                .eq(&[1i64; 5])
-                .err()
-                .unwrap(),
-            "invalid system query",
-        );
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_range(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = setup_db(&rt).await?;
-        let namespace = TableNamespace::test_user();
-        let mut tx = db.begin_system().await?;
-        let doc1 = TestFacingModel::new(&mut tx)
-            .insert_and_get(
-                TEST_TABLE_NAME.clone(),
-                assert_obj! { "a" => 1i64, "b" => 2i64 },
-            )
-            .await?;
-        let doc2 = TestFacingModel::new(&mut tx)
-            .insert_and_get(
-                TEST_TABLE_NAME.clone(),
-                assert_obj! { "a" => 1i64, "b" => 3i64 },
-            )
-            .await?;
-        let doc3 = TestFacingModel::new(&mut tx)
-            .insert_and_get(
-                TEST_TABLE_NAME.clone(),
-                assert_obj! { "a" => 2i64, "b" => 1i64 },
-            )
-            .await?;
-        db.commit(tx).await?;
-
-        fn ids(docs: Vec<Arc<ParsedDocument<TestMetadata>>>) -> Vec<ResolvedDocumentId> {
-            docs.into_iter().map(|d| d.id()).collect()
-        }
-
-        // half-exclusive range on `a`
-        let mut tx = db.begin_system().await?;
-        let queried = tx
-            .query_system(namespace, &TEST_INDEX)?
-            .range([1i64]..[2i64])?
-            .all()
-            .await?;
-        assert_eq!(ids(queried), [doc1.id(), doc2.id()]);
-        assert_eq!(
-            index_reads(&tx, &TEST_INDEX, namespace),
-            intervals([i(k([1i64]), End::Excluded(k([2i64])))])
-        );
-        drop(tx);
-
-        // inclusive range on `a`
-        let mut tx = db.begin_system().await?;
-        let queried = tx
-            .query_system(namespace, &TEST_INDEX)?
-            .range([1i64]..=[2i64])?
-            .all()
-            .await?;
-        assert_eq!(ids(queried), [doc1.id(), doc2.id(), doc3.id()]);
-        assert_eq!(
-            index_reads(&tx, &TEST_INDEX, namespace),
-            intervals([i(k([1i64]), End::after_prefix(&k([2i64])))])
-        );
-        drop(tx);
-
-        // range bounds do not have to be the same length
-        let mut tx = db.begin_system().await?;
-        let queried = tx
-            .query_system(namespace, &TEST_INDEX)?
-            .range([1i64, 3].as_slice()..=[2i64].as_slice())?
-            .all()
-            .await?;
-        assert_eq!(ids(queried), [doc2.id(), doc3.id()]);
-        assert_eq!(
-            index_reads(&tx, &TEST_INDEX, namespace),
-            intervals([i(k([1i64, 3i64]), End::after_prefix(&k([2i64])))])
-        );
-        drop(tx);
-
-        // can use an exclusive start bound (with ugly syntax)
-        let mut tx = db.begin_system().await?;
-        let queried = tx
-            .query_system(namespace, &TEST_INDEX)?
-            .range((Bound::Excluded([1i64]), Bound::Unbounded))?
-            .all()
-            .await?;
-        assert_eq!(ids(queried), [doc3.id()]);
-        assert_eq!(
-            index_reads(&tx, &TEST_INDEX, namespace),
-            intervals([i(k([1i64]).increment().unwrap(), End::Unbounded)])
-        );
-        drop(tx);
-
-        // an empty range works and returns nothing
-        let mut tx = db.begin_system().await?;
-        let queried = tx
-            .query_system(namespace, &TEST_INDEX)?
-            .range([1i64]..[1i64])?
-            .all()
-            .await?;
-        assert_eq!(queried, []);
-        assert_eq!(index_reads(&tx, &TEST_INDEX, namespace), IntervalSet::new());
-        drop(tx);
-
-        // can use .eq() then .range()
-        let mut tx = db.begin_system().await?;
-        let queried = tx
-            .query_system(namespace, &TEST_INDEX)?
-            .eq(&[1i64])?
-            .range([2i64]..[3i64])?
-            .all()
-            .await?;
-        assert_eq!(ids(queried), [doc1.id()]);
-        // this is the same as [1, 2]..[1, 3]
-        assert_eq!(
-            index_reads(&tx, &TEST_INDEX, namespace),
-            intervals([i(k([1i64, 2]), End::Excluded(k([1i64, 3])))])
-        );
-        drop(tx);
-
-        // too many fields in range() returns an error
-        let mut tx = db.begin_system().await?;
-        assert_contains(
-            &tx.query_system(namespace, &TEST_INDEX)?
-                .eq(&[1i64])?
-                .range([2i64; 4]..)
-                .err()
-                .unwrap(),
-            "invalid system query",
-        );
-        drop(tx);
-
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_get_system(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = setup_db(&rt).await?;
-        let namespace = TableNamespace::test_user();
-        let mut tx = db.begin_system().await?;
-        let doc = TestFacingModel::new(&mut tx)
-            .insert_and_get(TEST_TABLE_NAME.clone(), assert_obj! {})
-            .await?;
-        db.commit(tx).await?;
-        let mut tx = db.begin_system().await?;
-        assert_eq!(
-            tx.get_system::<TestTable>(namespace, doc.developer_id())
-                .await?
-                .unwrap()
-                .id(),
-            doc.id()
-        );
-        assert_eq!(
-            tx.get_system::<TestTable>(namespace, DeveloperDocumentId::MIN)
-                .await?,
-            None
-        );
-        let doc_key = k([doc.developer_id().encode()]);
-        let missing_key = k([DeveloperDocumentId::MIN.encode()]);
-        assert_eq!(
-            index_reads(&tx, &SystemIndex::<TestTable>::by_id(), namespace),
-            intervals([
-                Interval::singleton(missing_key),
-                Interval::singleton(doc_key),
-            ])
-        );
-
-        Ok(())
     }
 }

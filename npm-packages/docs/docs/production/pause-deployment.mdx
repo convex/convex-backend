@@ -9,6 +9,10 @@ Pausing a deployment is a way to "turn off" a deployment without deleting any
 data. This can be useful if you have an action that is blowing through a
 third-party API quota and you just need a big red stop button.
 
+You can pause a deployment from the
+[deployment settings page](https://dashboard.convex.dev/deployment/settings/pause-deployment)
+in the dashboard.
+
 When a deployment is paused:
 
 - New function calls will return an error.
@@ -22,8 +26,14 @@ consider alternatives like pushing code that disables a feature you are trying
 to "turn off". We recommend testing this feature in a dev deployment first
 before pausing a production deployment.
 
-![Pause Deployment Button](/screenshots/pause_deployment.png)
+<Screenshot
+  story="docs/components/PauseDeployment#Running"
+  alt="Pause Deployment Button"
+/>
 
 A deployment can be resumed with this button on the same page:
 
-![Resume Deployment](/screenshots/resume_deployment.png)
+<Screenshot
+  story="docs/components/PauseDeployment#Paused"
+  alt="Resume Deployment Button"
+/>

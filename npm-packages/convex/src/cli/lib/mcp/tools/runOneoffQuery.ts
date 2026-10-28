@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { ConvexTool } from "./index.js";
 import { loadSelectedDeploymentCredentials } from "../../api.js";
+import {
+  RUN_ONEOFF_QUERY_SOURCE_DESCRIPTION,
+  runTestFunctionQuery,
+} from "../../runTestFunction.js";
+import { ThrowingFetchError } from "../../utils/utils.js";
 import { getMcpDeploymentSelection } from "../requestContext.js";
 
 const inputSchema = z.object({
@@ -9,11 +14,7 @@ const inputSchema = z.object({
     .describe(
       "Deployment selector (from the status tool) to run the query on.",
     ),
-  query: z
-    .string()
-    .describe(
-      "The query to run. This should be valid JavaScript code that returns a value.",
-    ),
+  query: z.string().describe(RUN_ONEOFF_QUERY_SOURCE_DESCRIPTION),
 });
 
 const outputSchema = z.object({
@@ -70,41 +71,26 @@ export const RunOneoffQueryTool: ConvexTool<
       deploymentSelection,
     );
     try {
-      const response = await fetch(`${credentials.url}/api/run_test_function`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          adminKey: credentials.adminKey,
-          args: {},
-          bundle: {
-            path: "testQuery.js",
-            source: args.query,
-          },
-          format: "convex_encoded_json",
-        }),
+      const outcome = await runTestFunctionQuery(ctx, {
+        deploymentUrl: credentials.url,
+        adminKey: credentials.adminKey,
+        querySource: args.query,
       });
-      if (!response.ok) {
+      if (outcome.kind === "applicationFailure") {
         return await ctx.crash({
           exitCode: 1,
           errorType: "fatal",
-          printedMessage: `HTTP error ${response.status}: ${await response.text()}`,
-        });
-      }
-      const result = await response.json();
-      if (result.status !== "success") {
-        return await ctx.crash({
-          exitCode: 1,
-          errorType: "fatal",
-          printedMessage: `Query failed: ${JSON.stringify(result)}`,
+          printedMessage: `Query failed: ${JSON.stringify(outcome.payload, null, 2)}`,
         });
       }
       return {
-        result: result.value,
-        logLines: result.logLines,
+        result: outcome.value,
+        logLines: outcome.logLines,
       };
     } catch (err) {
+      if (err instanceof ThrowingFetchError) {
+        return await err.handle(ctx);
+      }
       return await ctx.crash({
         exitCode: 1,
         errorType: "fatal",

@@ -20,11 +20,11 @@ powered applications, recommendations for similar content and more.
 
 Vector search is consistent and fully up-to-date. You can write a vector and
 immediately read it from a vector search. Unlike
-[full text search](/search.mdx), however, vector search is only available in
-[Convex actions](/functions/actions.mdx).
+[full text search](/search/overview.mdx), however, vector search is only
+available in [Convex actions](/functions/actions.mdx).
 
 **Example:**
-[Vector Search App](https://github.com/get-convex/convex-demos/tree/main/vector-search)
+[Vector Search App](https://github.com/convex/convex-demos/tree/main/vector-search)
 
 To use vector search you need to:
 
@@ -33,7 +33,7 @@ To use vector search you need to:
 
 ## Defining vector indexes
 
-Like [database indexes](/database/reading-data/indexes/indexes.md), vector
+Like [database indexes](/database/reading-data/indexes/indexes.mdx), vector
 indexes are a data structure that is built in advance to enable efficient
 querying. Vector indexes are defined as part of your Convex
 [schema](/database/schemas.mdx).
@@ -87,16 +87,15 @@ They generally involve three steps:
 Here's an example of the first two steps for searching for similar French foods
 based on a description:
 
-<TSAndJSSnippet
-  sourceTS={VectorSearchSnippets}
-  sourceJS={VectorSearchSnippets}
+<Snippet
+  source={VectorSearchSnippets}
   title="convex/foods.ts"
   snippet="vectorSearchQuery"
   highlightPatterns={["vectorSearch"]}
 />
 
 An example of the first step can be found
-[here](https://github.com/get-convex/convex-demos/blob/main/vector-search/convex/foods.ts#L18)
+[here](https://github.com/convex/convex-demos/blob/main/vector-search/convex/foods.ts#L18)
 in the vector search demo app.
 
 Focusing on the second step, the `vectorSearch` API takes in the table name, the
@@ -137,16 +136,10 @@ For now, let's load the documents and return them from the action. To do so,
 we'll pass the list of results to a Convex query and run it inside of our
 action, returning the result:
 
-<TSAndJSSnippet
-  sourceTS={Foods}
-  sourceJS={Foods}
-  title="convex/foods.ts"
-  snippet="fetchResults"
-/>
+<Snippet source={Foods} title="convex/foods.ts" snippet="fetchResults" />
 
-<TSAndJSSnippet
-  sourceTS={VectorSearchSnippets2}
-  sourceJS={VectorSearchSnippets2}
+<Snippet
+  source={VectorSearchSnippets2}
   title="convex/foods.ts"
   snippet="fetchResults"
 />
@@ -236,9 +229,8 @@ different since we have an ID for `movieEmbeddings` but want to load a `movies`
 document. We can do this using the `by_embedding` database index on the `movies`
 table:
 
-<TSAndJSSnippet
-  sourceTS={VectorSearchSnippets}
-  sourceJS={VectorSearchSnippets}
+<Snippet
+  source={VectorSearchSnippets}
   title="convex/movies.ts"
   snippet="fetchMovies"
   highlightPatterns={["withIndex"]}
@@ -256,7 +248,7 @@ that reactively loads the data. The search results will not update reactively,
 but the data about each result would be reactive.
 
 The
-[Vector Search Demo App](https://github.com/get-convex/convex-demos/tree/main/vector-search)
+[Vector Search Demo App](https://github.com/convex/convex-demos/tree/main/vector-search)
 uses this strategy to show similar movies with a reactive "Votes" count.
 
 ## Limits
@@ -273,7 +265,7 @@ Vector indexes must have:
 - Up to 16 filter fields.
 
 Vector indexes count towards the
-[limit of 32 indexes per table](/database/reading-data/indexes/indexes.md#limits).
+[limit of 32 indexes per table](/database/reading-data/indexes/indexes.mdx#limits).
 In addition you can have up to 4 vector indexes per table.
 
 Vector searches can have:
@@ -293,6 +285,13 @@ Only documents that contain a vector of the size and in the field specified by a
 vector index will be included in the index and returned by the vector search.
 
 For information on limits, see [here](/production/state/limits.mdx).
+
+## Costs
+
+Vector searches are billed in
+[query-GBs](/production/state/limits.mdx#search-pricing): each search counts the
+full size of the vector index it runs against, regardless of how many results it
+returns and regardless of which `filterFields` it uses.
 
 ## Future development
 

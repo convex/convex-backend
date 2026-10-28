@@ -7,7 +7,7 @@ sidebar_position: 450
 ---
 
 import sampleData from "!!raw-loader!@site/../private-demos/quickstarts/bun/sampleData.jsonl";
-import tasks from "!!raw-loader!@site/../private-demos/quickstarts/bun/convex/tasks.js";
+import tasks from "!!raw-loader!@site/../private-demos/quickstarts/bun/convex/tasks.ts";
 import script from "!!raw-loader!@site/../private-demos/quickstarts/bun/index.ts";
 
 Learn how to query data from Convex in a Bun project.
@@ -67,14 +67,14 @@ For instructions for subscriptions instead of point-in-time queries see
     with the sample data into your Convex database with
     the `import` command.
 
-    ```
+    ```sh
     bunx convex import --table tasks sampleData.jsonl
     ```
 
   </Step>
 
   <Step title="Expose a database query">
-    Add a new file `tasks.js` in the `convex/` folder
+    Add a new file `tasks.ts` in the `convex/` folder
     with a query function that loads the data.
 
     Exporting a query function from this file
@@ -83,7 +83,7 @@ For instructions for subscriptions instead of point-in-time queries see
 
     <Snippet
       source={tasks}
-      title="convex/tasks.js"
+      title="convex/tasks.ts"
     />
 
   </Step>

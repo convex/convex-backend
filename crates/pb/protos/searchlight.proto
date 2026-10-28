@@ -12,9 +12,10 @@ service Searchlight {
 
   rpc FetchTermOrdinals(FetchTermOrdinalsRequest) returns (FetchTermOrdinalsResponse);
 
-  // Query a set of tokens against the term dictionary, optionally allowing
-  // for fuzzy matching and prefix matching. Take the top `K` results with
-  // respect to to `(edit distance, term)` lexicographical order.
+  // Query a set of tokens against the term dictionary with exact matching
+  // and, for tokens that request it, prefix matching. Take the top `K`
+  // results, ordering exact matches before prefix matches and breaking ties
+  // by term.
   rpc QueryTokens(QueryTokensRequest) returns (QueryTokensResponse);
 
   // For the given index, compute the total number of documents and terms
@@ -31,17 +32,6 @@ service Searchlight {
   rpc ExecuteTextCompaction(TextCompactionRequest) returns (TextCompactionResponse);
 }
 
-message QueryRequest {
-  SearchIndexConfig index_config = 2;
-  TextQuery query = 3;
-  Bm25StatisticsDiff memory_statistics_diff = 4;
-  TermShortlist memory_shortlisted_terms = 5;
-  uint32 limit = 6;
-  StorageKey disk_index = 7;
-  StorageType storage_type = 8;
-  reserved 9;
-}
-
 message TextQuery {
   repeated TextQueryTerm search_terms = 1;
   repeated bytes filter_conditions = 2;
@@ -50,7 +40,7 @@ message TextQuery {
 message TextQueryTerm {
   oneof term_type {
     ExactTextTerm exact = 1;
-    FuzzyTextTerm fuzzy = 2;
+    PrefixTextTerm prefix = 2;
   }
 }
 
@@ -58,57 +48,15 @@ message ExactTextTerm {
   string token = 1;
 }
 
-message FuzzyTextTerm {
+message PrefixTextTerm {
   string token = 1;
-  uint32 max_distance = 2;
-  bool prefix = 3;
-}
-
-message Bm25StatisticsDiff {
-  map<string, int64> term_statistics = 1;
-  int64 num_documents_diff = 2;
-  int64 num_search_tokens_diff = 3;
-}
-
-message TermShortlist {
-  repeated string shortlist = 1;
-  repeated QueryTermShortlistItems query_term_shortlist_items = 2;
-}
-
-message QueryTermShortlistItems {
-  TextQueryTerm query_term = 1;
-  repeated ShortlistItem items = 2;
-}
-
-message ShortlistItem {
-  uint32 shortlist_id = 1;
-  uint32 distance = 2;
-}
-
-message QueryResponse {
-  repeated CandidateRevisionPositions results = 1;
-  Bm25StatisticsDiff combined_statistics = 2;
-  TermShortlist combined_shortlisted_terms = 3;
-}
-
-message CandidateRevisionPositions {
-  CandidateRevision revision = 1;
-  repeated ShortlistPositions positions = 2;
-}
-
-message ShortlistPositions {
-  uint32 shortlist_id = 1;
-  repeated uint32 positions = 2;
+  reserved 2;
+  reserved 3;
 }
 
 message SearchIndexConfig {
   common.FieldPath search_field_path = 1;
   repeated common.FieldPath filter_fields = 2;
-}
-
-message FilterField {
-  common.FieldPath path = 1;
-  uint32 field = 2;
 }
 
 message CandidateRevision {
@@ -275,17 +223,6 @@ message FieldAndTermOrdinals {
   repeated uint64 term_ordinals = 2;
 }
 
-message FieldTermMetadata {
-  optional uint32 field = 1;
-  repeated TermOrdDeleteCount term_ords_and_delete_counts = 2;
-  optional uint64 num_terms_deleted = 3;
-}
-
-message TermOrdDeleteCount {
-  optional uint64 term_ord = 1;
-  optional uint32 num_docs_deleted = 2;
-}
-
 message QueryTokensRequest {
   StorageType storage_type = 1;
   FragmentedTextSegmentPaths segment = 2;
@@ -312,7 +249,7 @@ message MultiSegmentMetadata {
 
 message TokenQuery {
   optional bytes term = 1;
-  optional uint32 max_distance = 2;
+  reserved 2;
   optional bool prefix = 3;
 }
 
@@ -321,7 +258,7 @@ message QueryTokensResponse {
 }
 
 message TokenMatch {
-  optional uint32 distance = 1;
+  reserved 1;
   optional bool prefix = 2;
   optional bytes tantivy_bytes = 3;
   // Offset into `QueryTokensRequest.token_queries`.

@@ -40,20 +40,3 @@ impl FunctionName {
         *self.0 == *"default"
     }
 }
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for FunctionName {
-    type Parameters = ();
-    type Strategy = proptest::strategy::BoxedStrategy<Self>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        use crate::identifier::arbitrary_regexes::IDENTIFIER_REGEX;
-        IDENTIFIER_REGEX
-            .prop_filter_map("Invalid IdentifierFieldName", |s| {
-                FunctionName::from_str(&s).ok()
-            })
-            .boxed()
-    }
-}

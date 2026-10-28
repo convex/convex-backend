@@ -15,8 +15,7 @@
     "postmark": "~4.0.0",
     "@popperjs/core": "~2.11.6",
     "langchain": "^0.3.37",
-    "chromadb": "=1.9.4",
-    "prettier": "^3.8.0",
+    "chromadb": "=1.10.5",
     "@langchain/openai": "^0.6.0",
     "@langchain/core": "^0.3.80"
   },
@@ -31,7 +30,7 @@
     "eslint": "^9.37.0",
     "shx": "~0.4.0",
     "typescript": "~5.0.3",
-    "typescript-eslint": "~8.38.0",
-    "vite": "^6.4.1"
+    "typescript-eslint": "~8.57.0",
+    "vite": "^6.4.4"
   }
 }

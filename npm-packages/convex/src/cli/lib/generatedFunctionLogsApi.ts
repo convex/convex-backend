@@ -8,68 +8,72 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         FunctionExecutionJson: {
+            udfType: components["schemas"]["UdfTypeJson"];
+            componentPath?: string | null;
+            identifier: string;
+            logLines: components["schemas"]["Value"][];
+            /** Format: double */
+            timestamp: number;
             cachedResult: boolean;
             caller: string;
-            componentPath?: string | null;
-            environment: string;
-            error?: string | null;
-            executionId: string;
+            parentExecutionId?: string | null;
             /** Format: double */
             executionTime: number;
             /** Format: double */
-            executionTimestamp: number;
-            identifier: string;
-            identityType: string;
-            /** @enum {string} */
-            kind: "Completion";
-            logLines: components["schemas"]["Value"][];
-            occInfo?: null | components["schemas"]["OccInfoJson"];
-            parentExecutionId?: string | null;
+            userExecutionTime?: number | null;
+            success?: null | components["schemas"]["Value"];
+            error?: string | null;
             requestId: string;
+            executionId: string;
+            usageStats: components["schemas"]["UsageStatsJson"];
             /** Format: double */
             returnBytes?: number | null;
-            success?: null | components["schemas"]["Value"];
+            occInfo?: null | components["schemas"]["OccInfoJson"];
+            willRetry: boolean;
+            /** Format: double */
+            executionTimestamp: number;
+            identityType: string;
+            environment: string;
+            /** @enum {string} */
+            kind: "Completion";
+        } | {
+            udfType: components["schemas"]["UdfTypeJson"];
+            componentPath?: string | null;
+            identifier: string;
             /** Format: double */
             timestamp: number;
-            udfType: components["schemas"]["UdfTypeJson"];
-            usageStats: components["schemas"]["UsageStatsJson"];
-        } | {
-            componentPath?: string | null;
-            executionId: string;
-            identifier: string;
-            /** @enum {string} */
-            kind: "Progress";
             logLines: components["schemas"]["Value"][];
             requestId: string;
-            /** Format: double */
-            timestamp: number;
-            udfType: components["schemas"]["UdfTypeJson"];
+            executionId: string;
+            /** @enum {string} */
+            kind: "Progress";
         };
         /** @enum {string} */
         LogLevelJson: "DEBUG" | "ERROR" | "WARN" | "INFO" | "LOG";
         LogLineJson: {
-            componentPath?: string | null;
-            isTruncated: boolean;
-            level: components["schemas"]["LogLevelJson"];
             messages: string[];
-            systemMetadata?: null | components["schemas"]["SystemLogMetadataJson"];
+            isTruncated: boolean;
             /** Format: int64 */
             timestamp: number;
+            level: components["schemas"]["LogLevelJson"];
+            systemMetadata?: null | components["schemas"]["SystemLogMetadataJson"];
+            componentPath?: string | null;
             udfPath?: string | null;
         };
         OccInfoJson: {
-            documentId?: string | null;
-            /** Format: int64 */
-            retryCount: number;
             tableName?: string | null;
+            documentId?: string | null;
             writeSource?: string | null;
+            componentPath?: string | null;
+            /** Format: int64 */
+            retryCount?: number | null;
         };
         StreamFunctionLogs: {
-            /** Format: int32 */
-            clientRequestCounter?: number | null;
             /** Format: double */
             cursor: number;
             sessionId?: string | null;
+            /** Format: int32 */
+            clientRequestCounter?: number | null;
         };
         StreamUdfExecutionQueryArgs: {
             /** Format: double */
@@ -89,11 +93,17 @@ export interface components {
             /** Format: int64 */
             databaseReadBytes: number;
             /** Format: int64 */
-            databaseReadDocuments: number;
-            /** Format: int64 */
             databaseWriteBytes: number;
             /** Format: int64 */
-            memoryUsedMb: number;
+            databaseIoReadBytes: number;
+            /** Format: int64 */
+            databaseIoWriteBytes: number;
+            /** Format: int64 */
+            databaseReadDocuments: number;
+            /** Format: int64 */
+            databaseWriteDocuments: number;
+            /** Format: int64 */
+            databaseWriteIndexRows: number;
             /** Format: int64 */
             storageReadBytes: number;
             /** Format: int64 */
@@ -102,6 +112,18 @@ export interface components {
             vectorIndexReadBytes: number;
             /** Format: int64 */
             vectorIndexWriteBytes: number;
+            /** Format: int64 */
+            textIndexQueryBytes: number;
+            /** Format: int64 */
+            textIndexWriteQueryBytes: number;
+            /** Format: int64 */
+            vectorIndexReadQueryBytes: number;
+            /** Format: int64 */
+            vectorIndexWriteQueryBytes: number;
+            /** Format: int64 */
+            networkEgressBytes: number;
+            /** Format: int64 */
+            memoryUsedMb: number;
         };
         Value: unknown;
     };

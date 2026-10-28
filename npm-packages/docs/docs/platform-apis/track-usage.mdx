@@ -1,0 +1,69 @@
+---
+title: Tracking Usage
+sidebar_position: 30
+---
+
+# Tracking Usage
+
+Products built on the Platform APIs often create many Convex deployments
+programmatically. For example, an AI app builder may spin up a fresh deployment
+for every user-generated app. In these scenarios, it's important to attribute
+resource usage back to the deployment that produced it, so you can monitor cost
+per app, charge your end users, or detect runaway workloads in real time.
+
+Convex exposes per-deployment usage data through
+[Log Streams](/production/integrations/log-streams). Log streams emit structured
+events for every function execution and periodic snapshots of storage usage,
+with the same resource fields that drive Convex billing.
+
+This page describes how to set up log streams programmatically through the
+Platform API, and how to use the resulting events to attribute usage to each
+deployment you manage.
+
+## Setting up a log stream per deployment
+
+When you create a new deployment on behalf of a user, configure a log stream for
+it as part of the same provisioning step. Use the
+[Create log stream](/deployment-api/create-log-stream) endpoint, authenticated
+with a deploy key for the deployment.
+
+You can point the log stream at any of the supported integrations (Axiom,
+Datadog, PostHog, or a custom webhook).
+
+For aggregating usage across many deployments into your own system, a custom
+webhook pointed at an endpoint you control is typically the simplest option.
+
+Store the returned log stream `id` alongside your record of the deployment so
+you can [update](/deployment-api/update-log-stream) or
+[delete](/deployment-api/delete-log-stream) it later (for example, when an end
+user deletes their app).
+
+<Admonition type="note">
+  Identify which deployment a payload came from using the deployment name in the
+  payload.
+</Admonition>
+
+## Using log stream events for usage attribution
+
+Two event types from the
+[log streams reference](/production/integrations/log-streams) carry the bulk of
+the usage signal:
+
+- **`function_execution`** — emitted after every query, mutation, action, and
+  HTTP action. Use the resource fields (`database_io_read_bytes`,
+  `database_io_write_bytes`, `execution_time_ms`, `action_memory_used_mb`,
+  `file_storage_read_bytes`, `network_egress_bytes`,
+  `vector_search_query_bytes`, `text_search_query_bytes`, etc.) to compute
+  compute and bandwidth usage per deployment in real time.
+- **`current_storage_usage`** — periodic snapshots of total document, index,
+  vector, text, file, and backup storage bytes. Use these to track storage usage
+  per deployment over time.
+
+For file downloads served directly by Convex's storage HTTP API, the
+`storage_api_bandwidth` event reports egress bytes per download, which you can
+roll up into bandwidth attribution alongside `function_execution` events.
+
+A typical pipeline is to receive these events at your webhook, tag each one with
+the deployment it came from, and write the resource counters into your own
+metering system. From there you can show end users their current usage, enforce
+per-app quotas, or bill them based on actual consumption.

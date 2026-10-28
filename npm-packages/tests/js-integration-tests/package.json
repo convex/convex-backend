@@ -1,0 +1,31 @@
+{
+  "name": "js-integration-tests",
+  "version": "0.0.0",
+  "scripts": {
+    "test-integration": "jest warmup-jest-cache.test.ts && jest --silent",
+    "clean": "",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "jest": "^30.0.0",
+    "js-sha256": "~0.11.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "jose": "^5.10.0"
+  },
+  "devDependencies": {
+    "@babel/preset-env": "^7.27.1",
+    "@jest/types": "^30.0.0",
+    "@testing-library/react": "~16.3.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^18.17.0",
+    "@types/node-fetch": "^2.6.1",
+    "@types/react": "^19.2.4",
+    "@types/ws": "^8.5.13",
+    "convex": "workspace:*",
+    "node-fetch": "^2.6.1",
+    "ts-jest": "^29.1.1",
+    "typescript": "~5.0.3",
+    "ws": "8.21.0"
+  }
+}

@@ -1,7 +1,12 @@
 use std::{
-    borrow::Cow,
+    borrow::{
+        Borrow,
+        Cow,
+    },
     cmp::Ordering,
     collections::{
+        btree_map,
+        btree_set::UnorderedKeyError,
         BTreeMap,
         BTreeSet,
         VecDeque,
@@ -19,6 +24,7 @@ use std::{
         size_of,
     },
     ops::{
+        Bound,
         Deref,
         RangeBounds,
     },
@@ -27,20 +33,12 @@ use std::{
 };
 
 use compact_str::CompactString;
-use imbl::Vector;
-#[cfg(any(test, feature = "testing"))]
-use proptest::{
-    prelude::Arbitrary,
-    strategy::{
-        BoxedStrategy,
-        Strategy,
-    },
-};
 use serde_json::Value as JsonValue;
 use sync_types::{
     CanonicalizedUdfPath,
     ErrorPayload,
     FunctionName,
+    IdentityVersion,
     LogLinesMessage,
     ServerMessage,
     SessionId,
@@ -129,10 +127,7 @@ impl<T: Ord> Ord for WithHeapSize<T> {
 
 impl<T: Debug> Debug for WithHeapSize<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WithHeapSize")
-            .field("inner", &self.inner)
-            .field("elements_heap_size", &self.elements_heap_size)
-            .finish()
+        Debug::fmt(&self.inner, f)
     }
 }
 
@@ -179,37 +174,7 @@ where
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl<T> Arbitrary for WithHeapSize<T>
-where
-    WithHeapSize<T>: From<T>,
-    T: Arbitrary + 'static,
-{
-    type Parameters = T::Parameters;
-    type Strategy = BoxedStrategy<WithHeapSize<T>>;
-
-    fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
-        T::arbitrary_with(args)
-            .prop_map(|v| WithHeapSize::from(v))
-            .boxed()
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-pub fn of<V, T>(t: T) -> impl Strategy<Value = WithHeapSize<V>>
-where
-    V: Debug,
-    WithHeapSize<V>: From<V>,
-    T: Strategy<Value = V>,
-{
-    t.prop_map(|v| WithHeapSize::from(v))
-}
-
 impl<T: ElementsHeapSize> WithHeapSize<T> {
-    #[cfg(test)]
-    fn verify_heap_size(&self) {
-        assert_eq!(self.elements_heap_size, self.inner.elements_heap_size());
-    }
 }
 
 // HeapSize for Vec<u8> can be implemented in constant time.
@@ -284,69 +249,9 @@ impl<T: HeapSize> From<WithHeapSize<Vec<T>>> for Vec<T> {
     }
 }
 
-impl<T: HeapSize> ElementsHeapSize for Vector<T> {
-    const RECALCULATE_AFTER_CLONE: bool = false;
-
-    fn elements_heap_size(&self) -> usize {
-        self.iter().map(|v| v.heap_size()).sum::<usize>()
-    }
-}
-
 impl<T: HeapSize> HeapSize for WithHeapSize<Vec<T>> {
     fn heap_size(&self) -> usize {
         self.capacity() * mem::size_of::<T>() + self.elements_heap_size
-    }
-}
-
-impl<T: HeapSize + Clone> WithHeapSize<imbl::Vector<T>> {
-    pub fn push_back(&mut self, value: T) {
-        self.elements_heap_size += value.heap_size();
-        self.inner.push_back(value)
-    }
-
-    pub fn push_front(&mut self, value: T) {
-        self.elements_heap_size += value.heap_size();
-        self.inner.push_front(value)
-    }
-
-    fn remove_from_heap_size(&mut self, element: &Option<T>) {
-        if let Some(value) = element {
-            self.elements_heap_size -= value.heap_size();
-        }
-    }
-
-    pub fn pop_front(&mut self) -> Option<T> {
-        let result = self.inner.pop_front();
-        self.remove_from_heap_size(&result);
-        result
-    }
-
-    pub fn pop_back(&mut self) -> Option<T> {
-        let result = self.inner.pop_back();
-        self.remove_from_heap_size(&result);
-        result
-    }
-}
-
-impl<T: HeapSize + Clone> HeapSize for WithHeapSize<Vector<T>> {
-    fn heap_size(&self) -> usize {
-        self.elements_heap_size
-    }
-}
-
-impl<T: HeapSize + Clone> From<Vector<T>> for WithHeapSize<Vector<T>> {
-    fn from(value: Vector<T>) -> Self {
-        let elements_heap_size = value.elements_heap_size();
-        Self {
-            inner: value,
-            elements_heap_size,
-        }
-    }
-}
-
-impl<T: HeapSize + Clone> From<WithHeapSize<Vector<T>>> for Vector<T> {
-    fn from(value: WithHeapSize<Vector<T>>) -> Self {
-        value.inner
     }
 }
 
@@ -445,7 +350,7 @@ impl<T: HeapSize, U: HeapSize, V: HeapSize> HeapSize for (T, U, V) {
     }
 }
 
-impl<T: HeapSize> HeapSize for Arc<T> {
+impl<T: HeapSize + ?Sized> HeapSize for Arc<T> {
     #[inline]
     fn heap_size(&self) -> usize {
         // this is not entirely correct in the presence of sharing
@@ -496,6 +401,13 @@ impl HeapSize for Timestamp {
     }
 }
 
+impl HeapSize for IdentityVersion {
+    #[inline]
+    fn heap_size(&self) -> usize {
+        (**self).heap_size()
+    }
+}
+
 impl HeapSize for CanonicalizedUdfPath {
     fn heap_size(&self) -> usize {
         // We use the string length as an approximation since we don't have
@@ -531,6 +443,13 @@ impl HeapSize for UserIdentityAttributes {
 }
 
 impl HeapSize for &str {
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.len()
+    }
+}
+
+impl HeapSize for str {
     #[inline]
     fn heap_size(&self) -> usize {
         self.len()
@@ -724,6 +643,17 @@ impl<K: HeapSize + Ord, V: HeapSize> WithHeapSize<BTreeMap<K, V>> {
         result
     }
 
+    pub fn upper_bound_mut<'a, Q>(&'a mut self, bound: Bound<&Q>) -> WrappedCursorMut<'a, K, V>
+    where
+        K: Borrow<Q> + Ord,
+        Q: Ord + ?Sized,
+    {
+        WrappedCursorMut {
+            elements_heap_size: &mut self.elements_heap_size,
+            cursor: self.inner.upper_bound_mut(bound),
+        }
+    }
+
     /// Alternative to entry.or_insert_with() that requires passing a function
     /// to modify the entry. The more limiting API makes it easier for us
     /// easy to track the size after the mutation.
@@ -733,11 +663,11 @@ impl<K: HeapSize + Ord, V: HeapSize> WithHeapSize<BTreeMap<K, V>> {
         F: FnOnce(&mut V) -> T,
     {
         let value = match self.inner.entry(key) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
+            btree_map::Entry::Vacant(entry) => {
                 self.elements_heap_size += entry.key().heap_size();
                 entry.insert(default())
             },
-            std::collections::btree_map::Entry::Occupied(mut entry) => {
+            btree_map::Entry::Occupied(mut entry) => {
                 let value = entry.get_mut();
                 self.elements_heap_size -= value.heap_size();
                 entry.into_mut()
@@ -772,6 +702,69 @@ impl<K: HeapSize + Ord, V: HeapSize> WithHeapSize<BTreeMap<K, V>> {
             },
             None => mutation(None),
         }
+    }
+}
+
+pub struct WrappedCursorMut<'a, K, V> {
+    elements_heap_size: &'a mut usize,
+    cursor: btree_map::CursorMut<'a, K, V>,
+}
+
+impl<'a, K, V> WrappedCursorMut<'a, K, V> {
+    pub fn peek_prev(&mut self) -> Option<(&K, &V)> {
+        self.cursor.peek_prev().map(|(k, v)| (k, v as _))
+    }
+
+    pub fn peek_next(&mut self) -> Option<(&K, &V)> {
+        self.cursor.peek_next().map(|(k, v)| (k, v as _))
+    }
+
+    pub fn remove_prev(&mut self) -> Option<(K, V)>
+    where
+        K: Ord + HeapSize,
+        V: HeapSize,
+    {
+        let (k, v) = self.cursor.remove_prev()?;
+        *self.elements_heap_size -= k.heap_size();
+        *self.elements_heap_size -= v.heap_size();
+        Some((k, v))
+    }
+
+    pub fn remove_next(&mut self) -> Option<(K, V)>
+    where
+        K: Ord + HeapSize,
+        V: HeapSize,
+    {
+        let (k, v) = self.cursor.remove_next()?;
+        *self.elements_heap_size -= k.heap_size();
+        *self.elements_heap_size -= v.heap_size();
+        Some((k, v))
+    }
+
+    pub fn insert_after(&mut self, k: K, v: V) -> Result<(), UnorderedKeyError>
+    where
+        K: Ord + HeapSize,
+        V: HeapSize,
+    {
+        let heap_size = k.heap_size() + v.heap_size();
+        let r = self.cursor.insert_after(k, v);
+        if r.is_ok() {
+            *self.elements_heap_size += heap_size;
+        }
+        r
+    }
+
+    pub fn insert_before(&mut self, k: K, v: V) -> Result<(), UnorderedKeyError>
+    where
+        K: Ord + HeapSize,
+        V: HeapSize,
+    {
+        let heap_size = k.heap_size() + v.heap_size();
+        let r = self.cursor.insert_before(k, v);
+        if r.is_ok() {
+            *self.elements_heap_size += heap_size;
+        }
+        r
     }
 }
 
@@ -1022,208 +1015,5 @@ impl HeapSize for FunctionName {
         // This isn't strictly correct (we should be checking capacity) but is close
         // enough.
         self.len()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::{
-            BTreeMap,
-            BTreeSet,
-            VecDeque,
-        },
-        mem,
-    };
-
-    use super::{
-        estimate_btree_heap_size,
-        InternalNode,
-        LeafNode,
-        WithHeapSize,
-    };
-    use crate::heap_size::HeapSize;
-
-    #[test]
-    fn test_btree_estimation() {
-        let internal_size = mem::size_of::<InternalNode<u32, u64>>();
-        let leaf_size = mem::size_of::<LeafNode<u32, u64>>();
-
-        let test_cases = [
-            // Zero levels
-            (0, (0, 0)),
-            // One level
-            (1, (0, 1)),
-            (7, (0, 1)),
-            // Two levels
-            (11, (1, 0)),
-            (12, (1, 1)),
-            (13, (1, 1)),
-            (25, (1, 2)),
-            (142, (1, 12)),
-            // Three levels
-            (143, (13, 0)),
-            (144, (13, 1)),
-            (300, (13, 15)),
-            (600, (13, 42)),
-            // Four levels
-            (1727, (157, 0)),
-        ];
-        for (n, (internal_nodes, leaf_nodes)) in test_cases {
-            assert_eq!(
-                estimate_btree_heap_size::<u32, u64>(n),
-                internal_size * internal_nodes + leaf_size * leaf_nodes,
-                "estimate({}) = {}, not {} * {} + {} * {}",
-                n,
-                estimate_btree_heap_size::<u32, u64>(n),
-                internal_size,
-                internal_nodes,
-                leaf_size,
-                leaf_nodes,
-            )
-        }
-    }
-
-    #[test]
-    fn test_vec_with_heap_size() {
-        let mut vec: WithHeapSize<Vec<String>> = WithHeapSize::default();
-        vec.push("John".to_owned());
-        assert_eq!(vec.elements_heap_size, 4);
-        vec.push("Doe".to_owned());
-        assert_eq!(vec.elements_heap_size, 7);
-        vec.push("Jimmy".to_owned());
-        assert_eq!(vec.elements_heap_size, 12);
-        assert_eq!(vec.drain(1..2).collect::<Vec<_>>(), vec!["Doe".to_owned()]);
-        assert_eq!(vec.elements_heap_size, 9);
-        assert_eq!(vec.pop(), Some("Jimmy".to_owned()));
-        assert_eq!(vec.elements_heap_size, 4);
-        assert_eq!(vec.pop(), Some("John".to_owned()));
-        assert_eq!(vec.elements_heap_size, 0);
-        assert_eq!(vec.pop(), None);
-        assert_eq!(vec.elements_heap_size, 0);
-    }
-
-    #[test]
-    fn test_vec_deque_with_heap_size() {
-        let mut vec: WithHeapSize<VecDeque<String>> = WithHeapSize::default();
-        vec.push_back("one".to_owned());
-        assert_eq!(vec.elements_heap_size, 3);
-        vec.push_back("two".to_owned());
-        assert_eq!(vec.elements_heap_size, 6);
-        vec.push_back("three".to_owned());
-        assert_eq!(vec.elements_heap_size, 11);
-        vec.push_front("zero".to_owned());
-        assert_eq!(vec.elements_heap_size, 15);
-
-        assert_eq!(vec.pop_back(), Some("three".to_owned()));
-        assert_eq!(vec.elements_heap_size, 10);
-        assert_eq!(vec.pop_front(), Some("zero".to_owned()));
-        assert_eq!(vec.elements_heap_size, 6);
-        assert_eq!(vec.pop_back(), Some("two".to_owned()));
-        assert_eq!(vec.elements_heap_size, 3);
-        assert_eq!(vec.pop_front(), Some("one".to_owned()));
-        assert_eq!(vec.elements_heap_size, 0);
-        assert_eq!(vec.pop_back(), None);
-        assert_eq!(vec.elements_heap_size, 0);
-    }
-
-    #[test]
-    fn test_btree_map_with_heap_size() {
-        let mut map: WithHeapSize<BTreeMap<String, String>> = WithHeapSize::default();
-        let old_value = map.insert("one".to_owned(), "one".to_owned());
-        assert_eq!(old_value, None);
-        assert_eq!(map.elements_heap_size, 6);
-        let old_value = map.insert("one".to_owned(), "zero+one".to_owned());
-        assert_eq!(old_value, Some("one".to_owned()));
-        assert_eq!(map.elements_heap_size, 11);
-        let old_value = map.insert("two".to_owned(), "two".to_owned());
-        assert_eq!(old_value, None);
-        assert_eq!(map.elements_heap_size, 17);
-        let old_value = map.insert("three".to_owned(), "three".to_owned());
-        assert_eq!(old_value, None);
-        assert_eq!(map.elements_heap_size, 27);
-        let removed_value = map.remove(&"four".to_owned());
-        assert_eq!(removed_value, None);
-        assert_eq!(map.elements_heap_size, 27);
-        let removed_value = map.remove(&"two".to_owned());
-        assert_eq!(removed_value, Some("two".to_owned()));
-        assert_eq!(map.elements_heap_size, 21);
-        let result = map.mutate_entry_or_default("three".to_owned(), |v| {
-            let original_len = v.len();
-            *v = "one+one+one".to_owned();
-            original_len
-        });
-        assert_eq!(result, 5);
-        assert_eq!(map.elements_heap_size, 27);
-        let result = map.mutate_entry_or_default("two".to_owned(), |v| {
-            let original_len = v.len();
-            *v = "two".to_owned();
-            original_len
-        });
-        assert_eq!(result, 0);
-        assert_eq!(map.elements_heap_size, 33);
-        let result = map.mutate(&"two".to_owned(), |v| {
-            let original_len = v.as_ref().unwrap().len();
-            *v.unwrap() = "one+one".to_owned();
-            original_len
-        });
-        assert_eq!(result, 3);
-        assert_eq!(map.elements_heap_size, 37);
-
-        assert_eq!(
-            map.pop_first(),
-            Some(("one".to_owned(), "zero+one".to_owned()))
-        );
-        assert_eq!(map.elements_heap_size, 26);
-        assert_eq!(
-            map.pop_first(),
-            Some(("three".to_owned(), "one+one+one".to_owned()))
-        );
-        assert_eq!(map.elements_heap_size, 10);
-        assert_eq!(
-            map.pop_first(),
-            Some(("two".to_owned(), "one+one".to_owned()))
-        );
-        assert_eq!(map.elements_heap_size, 0);
-        assert_eq!(map.pop_first(), None);
-        assert_eq!(map.elements_heap_size, 0);
-    }
-
-    #[test]
-    fn test_btree_set_with_heap_size() {
-        let mut set: WithHeapSize<BTreeSet<String>> = WithHeapSize::default();
-        let newly_inserted = set.insert("one".to_owned());
-        assert!(newly_inserted);
-        assert_eq!(set.elements_heap_size, 3);
-        let newly_inserted = set.insert("four".to_owned());
-        assert!(newly_inserted);
-        assert_eq!(set.elements_heap_size, 7);
-        let newly_inserted = set.insert("one".to_owned());
-        assert!(!newly_inserted);
-        assert_eq!(set.elements_heap_size, 7);
-        let was_removed = set.remove(&"one".to_owned());
-        assert!(was_removed);
-        assert_eq!(set.elements_heap_size, 4);
-        let was_removed = set.remove(&"one".to_owned());
-        assert!(!was_removed);
-        assert_eq!(set.elements_heap_size, 4);
-    }
-
-    #[test]
-    fn test_cloned_heap_size() {
-        let mut long_string = "foo".to_string();
-        long_string.reserve(1 << 20);
-        let value: WithHeapSize<Vec<WithHeapSize<Vec<String>>>> =
-            vec![vec![long_string, "bar".to_string()].into()].into();
-        assert!(value.heap_size() > 1 << 20);
-        value.verify_heap_size();
-        value[0].verify_heap_size();
-        // Cloning `value` recursively reallocates all contained objects, effectively
-        // shrinking excess capacity.
-        #[allow(clippy::redundant_clone)]
-        let cloned_value = value.clone();
-        assert!(cloned_value.heap_size() < 1 << 20);
-        cloned_value.verify_heap_size();
-        cloned_value[0].verify_heap_size();
     }
 }

@@ -45,7 +45,7 @@ export function FileStorageListHeader({
   };
 
   return (
-    <div className="relative min-w-[36.25rem] border-b p-2 py-3 text-xs text-content-secondary">
+    <div className="relative min-w-145 border-b p-2 py-3 text-xs text-content-secondary">
       <div
         // The scrolling-related styles are needed to account for the scrollbar that may be present in the list itself.
         className={`grid w-full items-center gap-2 ${FILE_STORAGE_LIST_GRID_CLASSES} scrollbar overflow-auto`}

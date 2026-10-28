@@ -22,14 +22,10 @@ use pb::{
         HttpActionOutcome as HttpActionOutcomeProto,
     },
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use semver::Version;
 use sync_types::types::SerializedArgs;
 use value::JsonPackedValue;
 
-#[cfg(any(test, feature = "testing"))]
-use crate::HttpActionRequest;
 use crate::{
     validation::ValidatedPathAndArgs,
     HttpActionRequestHead,
@@ -37,20 +33,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub enum HttpActionResult {
     Streamed,
     Error(JsError),
 }
 
-#[derive(Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, Debug, PartialEq)
-)]
+#[derive(Clone, Debug)]
 pub struct ActionOutcome {
     pub path: CanonicalizedComponentFunctionPath,
     pub arguments: SerializedArgs,
@@ -61,15 +49,7 @@ pub struct ActionOutcome {
     pub result: Result<JsonPackedValue, JsError>,
     pub syscall_trace: SyscallTrace,
 
-    #[cfg_attr(any(test, feature = "testing"), proptest(value = "None"))]
     pub udf_server_version: Option<semver::Version>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "(0..=i64::MAX as u64, any::<u32>()).prop_map(|(secs, nanos)| \
-                        Some(Duration::new(secs, nanos)))"
-        )
-    )]
     // None if node action
     pub user_execution_time: Option<Duration>,
 }
@@ -162,16 +142,8 @@ impl TryFrom<ActionOutcome> for ActionOutcomeProto {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct HttpActionOutcome {
     pub route: HttpActionRoute,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "any::<HttpActionRequest>().prop_map(|req| req.head)")
-    )]
     pub http_request: HttpActionRequestHead,
     pub identity: InertIdentity,
 
@@ -180,17 +152,9 @@ pub struct HttpActionOutcome {
     pub result: HttpActionResult,
     pub syscall_trace: SyscallTrace,
 
-    #[cfg_attr(any(test, feature = "testing"), proptest(value = "None"))]
     pub udf_server_version: Option<semver::Version>,
 
     memory_in_mb: u64,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "(0..=i64::MAX as u64, any::<u32>()).prop_map(|(secs, nanos)| \
-                        Some(Duration::new(secs, nanos)))"
-        )
-    )]
     // TODO(ENG-10204): Make required
     pub user_execution_time: Option<Duration>,
 }
@@ -312,62 +276,5 @@ impl TryFrom<HttpActionOutcome> for HttpActionOutcomeProto {
             method: Some(route.method.to_string()),
             user_execution_time: user_execution_time.map(|t| t.try_into()).transpose()?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::{
-        ActionOutcome,
-        ActionOutcomeProto,
-        HttpActionOutcomeProto,
-        ValidatedPathAndArgs,
-    };
-    use crate::HttpActionOutcome;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_action_udf_outcome_roundtrips(udf_outcome in any::<ActionOutcome>()) {
-            let udf_outcome_clone = udf_outcome.clone();
-            let path = udf_outcome.path.clone();
-            let arguments = udf_outcome.arguments.clone();
-            let version = udf_outcome.udf_server_version.clone();
-            let identity = udf_outcome_clone.identity.clone();
-            let path_and_args = ValidatedPathAndArgs::new_for_tests_in_component(
-                path,
-                arguments,
-                version
-            );
-            let proto = ActionOutcomeProto::try_from(udf_outcome_clone).unwrap();
-            let udf_outcome_from_proto = ActionOutcome::from_proto(
-                proto,
-                path_and_args,
-                identity
-            ).unwrap();
-            assert_eq!(udf_outcome, udf_outcome_from_proto);
-        }
-
-        #[test]
-        fn test_http_action_outcome_roundtrips(udf_outcome in any::<HttpActionOutcome>()) {
-            let udf_outcome_clone = udf_outcome.clone();
-            let http_request = udf_outcome.http_request.clone();
-            let version = udf_outcome.udf_server_version.clone();
-            let identity = udf_outcome_clone.identity.clone();
-            let proto = HttpActionOutcomeProto::try_from(udf_outcome_clone).unwrap();
-            let udf_outcome_from_proto = HttpActionOutcome::from_proto(
-                proto,
-                http_request,
-                version,
-                identity,
-            ).unwrap();
-            assert_eq!(udf_outcome, udf_outcome_from_proto);
-        }
     }
 }

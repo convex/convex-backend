@@ -1,0 +1,10 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "outputs": [".next/**", "!.next/cache/**", "src/hooks/generated/**"],
+      // Baked into the build by next.config.js.
+      "env": ["BUILD_TYPE", "EMBEDDED_CORS_HEADERS", "NEXT_PUBLIC_*"]
+    }
+  }
+}

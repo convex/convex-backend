@@ -1,0 +1,100 @@
+---
+title: "Streaming Data in and out of Convex"
+sidebar_label: "Streaming Import/Export"
+description: "Streaming Data in and out of Convex"
+sidebar_position: 4
+---
+
+Convex provides a
+[Data Sync API](https://docs.convex.dev/deployment-api/data-sync) for streaming
+data out of Convex, and a
+[Data Import CLI](https://docs.convex.dev/database/import-export/import).
+
+You can use the APIs directly or opt to use data integration platforms like
+[Fivetran](https://www.fivetran.com) and [Airbyte](https://airbyte.com) to
+automate and smooth the process of syncing your Convex data with other
+databases.
+
+Fivetran enables streaming export from Convex to any of their
+[supported destinations](https://fivetran.com/docs/destinations). The Convex
+team maintains a Convex source connector for streaming export. Streaming import
+into Convex via Fivetran is not supported.
+
+Airbyte enables streaming import into Convex from any of their
+[supported sources](https://airbyte.com/connectors?connector-type=Sources). The
+Convex team maintains a Convex destination connector for streaming import.
+Streaming export from Convex via Airbyte is not supported.
+
+<BetaAdmonition feature="Fivetran & Airbyte integrations" verb="are" />
+
+## Streaming Export
+
+Exporting data can be useful for handling workloads that aren't supported by
+Convex directly. For simple analyses, we recommend
+[downloading a backup](/database/backup-restore) and processing it. For more
+advanced use cases where you need to continuously stream data, try out the
+Fivetran streaming export connector. Some use cases include:
+
+1. Analytics
+   - Convex isn't optimized for queries that load huge amounts of data. A data
+     platform like [Databricks](https://www.databricks.com) or
+     [Snowflake](https://www.snowflake.com/) is more appropriate.
+2. Flexible querying
+   - While Convex has powerful
+     [database queries](/database/reading-data/reading-data.mdx#querying-documents)
+     and built-in [full text search](/search/overview.mdx) support, there are
+     still some queries that are difficult to write within Convex. If you need
+     very dynamic sorting and filtering for something like an "advanced search"
+     view, databases like [ElasticSearch](https://www.elastic.co) can be
+     helpful.
+3. Machine learning training
+   - Convex isn't optimized for queries running computationally intensive
+     machine learning algorithms.
+
+<ProFeatureUpsell feature="Streaming export" verb="requires" />
+
+The Fivetran connector authenticates with a Convex
+[deploy key](/cli/deploy-key-types.mdx). When you create the key, enable the
+`deployment:data:view` permission so the connector can read the documents in
+your tables and their schema. See
+[Role Actions](/team-management/role-actions.mdx#data-plane-and-runtime) for the
+full list of actions a deploy key can be granted.
+
+See the [Fivetran](https://fivetran.com/integrations/convex) docs to learn how
+to set up a streaming export. [Contact us](https://convex.dev/community) if you
+need help or have questions.
+
+## Streaming Import
+
+Adopting new technologies can be a slow, daunting process, especially when the
+technologies involve databases. Streaming import enables adopting Convex
+alongside your existing stack without having to write your own migration or data
+sync tooling. Some use cases include:
+
+1. Prototyping how Convex could replace your project's existing backend using
+   its own data.
+2. Building new products faster by using Convex alongside existing databases.
+3. Developing a reactive UI-layer on top of an existing dataset.
+4. Migrating your data to Convex (if the [CLI tool](/cli/reference/import.mdx)
+   doesn't meet your needs).
+
+<Admonition type="caution" title="Make imported tables read-only">
+  A common use case is to "mirror" a table in the source database to Convex to
+  build something new using Convex. We recommend leaving imported tables as
+  read-only in Convex because syncing the results back to the source database
+  could result in dangerous write conflicts. While Convex doesn't yet have
+  access controls that would ensure a table is read-only, you can make sure that
+  there are no mutations or actions writing to imported tables in your code and
+  avoid editing documents in imported tables in the dashboard.
+</Admonition>
+
+The Airbyte connector authenticates with a Convex
+[deploy key](/cli/deploy-key-types.mdx). When you create the key, enable the
+`deployment:backups:import` permission so the connector can write imported data
+into your deployment. See
+[Role Actions](/team-management/role-actions.mdx#data-plane-and-runtime) for the
+full list of actions a deploy key can be granted.
+
+Streaming import is included with all Convex plans. See the Airbyte docs on how
+to set up the Convex destination connector
+[here](https://docs.airbyte.com/integrations/destinations/convex).

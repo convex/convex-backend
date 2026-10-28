@@ -85,28 +85,3 @@ tuple_impls! {
         (4) -> (E, BorrowE);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::two::TupleKey;
-    use crate::comparators::AsComparator;
-
-    #[test]
-    fn test_two_int() {
-        let mut s = BTreeMap::new();
-        s.insert((1, 2), 3);
-        let q = (&4, &5);
-        assert_eq!(s.get(&q as &dyn TupleKey<_, _>), None);
-        assert_eq!(s.get((&4, &5).as_comparator()), None);
-    }
-
-    #[test]
-    fn test_two_str() {
-        let mut s = BTreeMap::new();
-        s.insert(("ironic".to_owned(), "he".to_owned()), 0);
-        let q = ("could", "save");
-        assert_eq!(s.get(&q as &dyn TupleKey<str, str>), None);
-    }
-}

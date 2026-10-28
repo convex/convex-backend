@@ -22,7 +22,7 @@ export function ProgressBar({
       aria-label={ariaLabel}
     >
       <div
-        className="h-full w-full overflow-hidden motion-safe:transition-[clip-path]"
+        className="size-full overflow-hidden motion-safe:transition-[clip-path]"
         style={{
           clipPath:
             fraction !== undefined
@@ -31,7 +31,7 @@ export function ProgressBar({
         }}
       >
         <div
-          className={cn("box-content h-full w-full bg-util-accent pl-8", {
+          className={cn("box-content size-full bg-util-accent pl-8", {
             "motion-safe:animate-[.5s_indeterminateProgressBar_infinite_linear]":
               variant === "stripes",
           })}

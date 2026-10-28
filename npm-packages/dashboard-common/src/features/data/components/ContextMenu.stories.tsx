@@ -55,13 +55,13 @@ function ContextMenuDemo() {
 
       <ContextMenu target={target} onClose={() => setTarget(null)}>
         <ContextMenu.Item
-          icon={<ExternalLinkIcon className="h-4 w-4" />}
+          icon={<ExternalLinkIcon className="size-4" />}
           label="Open"
           shortcut={["CtrlOrCmd", "O"]}
           action={() => {}}
         />
         <ContextMenu.Submenu
-          icon={<StarIcon className="h-4 w-4" />}
+          icon={<StarIcon className="size-4" />}
           label="Submenu"
           action={() => {}}
         >
@@ -105,7 +105,7 @@ function ContextMenuDemo() {
         </ContextMenu.Submenu>
         <hr />
         <ContextMenu.Item
-          icon={<TrashIcon className="h-4 w-4" />}
+          icon={<TrashIcon className="size-4" />}
           label="Delete"
           shortcut={["Backspace"]}
           variant="danger"

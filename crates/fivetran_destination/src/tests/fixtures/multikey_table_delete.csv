@@ -1,3 +1,0 @@
-id1,id2,text,_fivetran_deleted,_fivetran_synced
-1,100,"does not matter",true,"2024-01-09T04:23:41.165531936Z"
-3,300,"this value does not matter, and neither does _fivetran_deleted -- the row will still be hard deleted because it's in this file",false,"2024-01-09T04:23:41.165531936Z"

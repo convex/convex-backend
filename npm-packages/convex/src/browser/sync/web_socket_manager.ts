@@ -825,6 +825,7 @@ export class WebSocketManager {
       case "ready":
         if (this.socket.paused === "uninitialized") {
           this.socket = { ...this.socket, paused: "no" };
+          this._hasEverConnected = true;
           this.onOpen({
             connectionCount: this.connectionCount,
             lastCloseReason: this.lastCloseReason,

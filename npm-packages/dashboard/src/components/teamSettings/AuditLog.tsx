@@ -2,14 +2,40 @@ import { Button } from "@ui/Button";
 import { endOfDay } from "date-fns";
 import { LoadingTransition } from "@ui/Loading";
 import { useDateFilters } from "@common/elements/DateRangePicker";
-import { useTeamAuditLog } from "api/auditLog";
+import { AuditLogAction, useTeamAuditLog } from "api/auditLog";
+import { useHasCustomRolePermission } from "api/roles";
 import { useTeamEntitlements, useTeamMembers } from "api/teams";
-import { AuditLogAction, TeamResponse } from "generatedApi";
+import { TeamResponse } from "generatedApi";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
+import { TEAM_RESOURCE } from "lib/permissions";
 import { useRouter } from "next/router";
 import { AuditLogContent } from "./AuditLogContent";
 import { AuditLogToolbar } from "./AuditLogToolbar";
 
 export function AuditLog({ team }: { team: TeamResponse }) {
+  const canViewAuditLog = useHasCustomRolePermission(
+    team.id,
+    "team:auditLog:view",
+    TEAM_RESOURCE,
+    true,
+  );
+
+  if (canViewAuditLog === false) {
+    return (
+      <>
+        <h2>Audit Log</h2>
+        <NoPermissionMessage
+          message="You do not have permission to view the audit log."
+          missingPermission="team:auditLog:view"
+        />
+      </>
+    );
+  }
+
+  return <AuditLogContents team={team} />;
+}
+
+function AuditLogContents({ team }: { team: TeamResponse }) {
   const members = useTeamMembers(team.id);
   const auditLogRetentionDays =
     useTeamEntitlements(team?.id)?.auditLogRetentionDays ?? 0;

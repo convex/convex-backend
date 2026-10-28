@@ -2,20 +2,16 @@
   "name": "middleware",
   "version": "0.0.0",
   "scripts": {
-    "dev": "npm-run-all --parallel dev:backend dev:frontend",
-    "build": "tsc && vite build",
-    "dev:backend": "convex dev",
-    "dev:frontend": "vite --open",
-    "predev": "convex init"
+    "dev": "convex dev --start 'vite --open'",
+    "build": "tsc && vite build"
   },
   "dependencies": {
     "classnames": "^2.3.2",
     "convex": "workspace:*",
-    "hono": "^4.12.4",
-    "prettier": "^3.8.0",
+    "hono": "^4.13.11",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
@@ -24,8 +20,7 @@
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
     "@vitejs/plugin-react": "^4.2.1",
-    "npm-run-all2": "^8.0.0",
     "typescript": "~5.0.3",
-    "vite": "^6.4.1"
+    "vite": "^6.4.4"
   }
 }

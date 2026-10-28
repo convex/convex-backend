@@ -1,10 +1,5 @@
-import { useCallback, useContext } from "react";
-import { useSWRConfig } from "swr";
-import {
-  useDeploymentUrl,
-  useAdminKey,
-  useDeploymentAuthHeader,
-} from "@common/lib/deploymentApi";
+import { useContext } from "react";
+import { useDeploymentUrl, useAdminKey } from "@common/lib/deploymentApi";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 
 export function useDeleteTables(): (
@@ -33,17 +28,6 @@ export function useDeleteTables(): (
     return { success: true };
   };
 }
-
-export const useInvalidateShapes = () => {
-  const { mutate } = useSWRConfig();
-  const deploymentUrl = useDeploymentUrl();
-  const authHeader = useDeploymentAuthHeader();
-
-  return useCallback(
-    async () => mutate([deploymentUrl, `/api/shapes2`, authHeader]),
-    [authHeader, deploymentUrl, mutate],
-  );
-};
 
 export type Index = {
   table?: string;

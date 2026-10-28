@@ -88,9 +88,15 @@ export function createLocalStoreClient(opts: {
     mutationMap,
     logger,
   );
+  const syncClient = opts.convexClient.sync;
+  if (!(syncClient instanceof BaseConvexClient)) {
+    throw new Error(
+      "Expected ConvexReactClient to be backed by a BaseConvexClient",
+    );
+  }
   const driver = new Driver({
     coreLocalStore,
-    network: new NetworkImpl({ convexClient: opts.convexClient.sync }),
+    network: new NetworkImpl({ convexClient: syncClient }),
     localPersistence: persistence ?? new NoopLocalPersistence(),
     logger,
   });

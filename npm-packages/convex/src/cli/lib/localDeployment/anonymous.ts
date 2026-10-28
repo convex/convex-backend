@@ -10,11 +10,7 @@ import {
   logWarning,
 } from "../../../bundler/log.js";
 import { promptSearch, promptYesNo } from "../utils/prompts.js";
-import {
-  bigBrainGenerateAdminKeyForAnonymousDeployment,
-  bigBrainPause,
-  bigBrainStart,
-} from "./bigBrain.js";
+import { bigBrainPause, bigBrainStart } from "./bigBrain.js";
 import { LocalDeploymentError, printLocalDeploymentOnError } from "./errors.js";
 import {
   LocalDeploymentKind,
@@ -28,37 +24,31 @@ import {
 } from "./filePaths.js";
 import { rootDeploymentStateDir } from "./filePaths.js";
 import { LocalDeploymentConfig } from "./filePaths.js";
-import { DeploymentDetails } from "./localDeployment.js";
 import { ensureBackendStopped, localDeploymentUrl } from "./run.js";
-import { ensureBackendRunning } from "./run.js";
-import { handlePotentialUpgrade } from "./upgrade.js";
-import {
-  isOffline,
-  generateInstanceSecret,
-  choosePorts,
-  LOCAL_BACKEND_INSTANCE_SECRET,
-} from "./utils.js";
-import { handleDashboard } from "./dashboard.js";
+import { handlePotentialUpgradeAndStart } from "./upgrade.js";
+import { chooseLocalBackendPorts } from "./utils.js";
 import { recursivelyDelete, recursivelyCopy } from "../fsUtils.js";
 import { ensureBackendBinaryDownloaded } from "./download.js";
-import { isAnonymousDeployment } from "../deployment.js";
+import { DeploymentDetails, isAnonymousDeployment } from "../deployment.js";
 import { createProject } from "../api.js";
 import { removeAnonymousPrefix } from "../deployment.js";
 import { nodeFs } from "../../../bundler/fs.js";
 import { doInitConvexFolder } from "../codegen.js";
 import { readProjectConfig } from "../config.js";
 import { functionsDir } from "../utils/utils.js";
-import { maybeSetupAiFiles } from "../ai/index.js";
+import { attemptSetupAiFiles } from "../aiFiles/index.js";
+import {
+  generateLocalDevSecretsWithLatestBinary,
+  LEGACY_LOCAL_BACKEND_INSTANCE_SECRET,
+} from "./secrets.js";
 
 export async function handleAnonymousDeployment(
   ctx: Context,
   options: {
-    ports?:
-      | {
-          cloud: number;
-          site: number;
-        }
-      | undefined;
+    ports: {
+      cloud: number | undefined;
+      site: number | undefined;
+    };
     backendVersion?: string | undefined;
     dashboardVersion?: string | undefined;
     forceUpgrade: boolean;
@@ -66,21 +56,14 @@ export async function handleAnonymousDeployment(
     chosenConfiguration: "new" | "existing" | "ask" | null;
   },
 ): Promise<DeploymentDetails> {
-  if (await isOffline()) {
-    return await ctx.crash({
-      exitCode: 1,
-      errorType: "fatal",
-      printedMessage: "Cannot run a local deployment while offline",
-    });
-  }
-
   const deployment = await chooseDeployment(ctx, {
     deploymentName: options.deploymentName,
     chosenConfiguration: options.chosenConfiguration,
   });
   if (
     deployment.kind === "first" &&
-    process.env.CONVEX_AGENT_MODE !== "anonymous"
+    process.env.CONVEX_AGENT_MODE !== "anonymous" &&
+    process.stdin.isTTY
   ) {
     logMessage(
       "This command, `npx convex dev`, will run your Convex backend locally and update it with the function you write in the `convex/` directory.",
@@ -119,13 +102,17 @@ export async function handleAnonymousDeployment(
         }
       : { kind: "version", version: options.backendVersion },
   );
-  await handleDashboard(ctx, version);
-  let adminKey: string;
-  let instanceSecret: string;
+
+  const existingCredentials =
+    deployment.kind === "existing"
+      ? {
+          adminKey: deployment.config.adminKey,
+          instanceSecret:
+            deployment.config.instanceSecret ??
+            LEGACY_LOCAL_BACKEND_INSTANCE_SECRET,
+        }
+      : null;
   if (deployment.kind === "existing") {
-    adminKey = deployment.config.adminKey;
-    instanceSecret =
-      deployment.config.instanceSecret ?? LOCAL_BACKEND_INSTANCE_SECRET;
     // If it's still running for some reason, exit and tell the user to kill it.
     // It's fine if a different backend is running on these ports though since we'll
     // pick new ones.
@@ -137,43 +124,32 @@ export async function handleAnonymousDeployment(
       deploymentName: deployment.deploymentName,
       allowOtherDeployments: true,
     });
-  } else {
-    instanceSecret = generateInstanceSecret();
-    const data = await bigBrainGenerateAdminKeyForAnonymousDeployment(ctx, {
-      instanceName: deployment.deploymentName,
-      instanceSecret,
-    });
-    adminKey = data.adminKey;
   }
 
-  const [cloudPort, sitePort] = await choosePorts(ctx, {
-    count: 2,
-    startPort: 3210,
-    requestedPorts: [options.ports?.cloud ?? null, options.ports?.site ?? null],
+  const { cloudPort, sitePort } = await chooseLocalBackendPorts(ctx, {
+    requestedPorts: options.ports,
+    suggestedPorts:
+      deployment.kind === "existing" ? deployment.config.ports : undefined,
   });
-  const onActivity = async (isOffline: boolean, _wasOffline: boolean) => {
-    await ensureBackendRunning(ctx, {
-      cloudPort,
-      deploymentName: deployment.deploymentName,
-      maxTimeSecs: 5,
-    });
-    if (isOffline) {
-      return;
-    }
-  };
 
-  const { cleanupHandle } = await handlePotentialUpgrade(ctx, {
-    deploymentName: deployment.deploymentName,
-    deploymentKind: "anonymous",
-    oldVersion:
-      deployment.kind === "existing" ? deployment.config.backendVersion : null,
-    newBinaryPath: binaryPath,
-    newVersion: version,
-    ports: { cloud: cloudPort, site: sitePort },
-    adminKey,
-    instanceSecret,
-    forceUpgrade: options.forceUpgrade,
-  });
+  const { cleanupHandle, adminKey } = await handlePotentialUpgradeAndStart(
+    ctx,
+    {
+      deploymentName: deployment.deploymentName,
+      deploymentKind: "anonymous",
+      oldVersion:
+        deployment.kind === "existing"
+          ? deployment.config.backendVersion
+          : null,
+      newBinaryPath: binaryPath,
+      newVersion: version,
+      ports: { cloud: cloudPort, site: sitePort },
+      existingCredentials,
+      forceUpgrade: options.forceUpgrade,
+      // Anonymous deployments aren't registered against a cloud project.
+      cloudProjectId: undefined,
+    },
+  );
 
   const cleanupFunc = ctx.removeCleanup(cleanupHandle);
   ctx.registerCleanup(async (exitCode, err) => {
@@ -187,13 +163,19 @@ export async function handleAnonymousDeployment(
     const { configPath, projectConfig } = await readProjectConfig(ctx);
     const convexDir = path.resolve(functionsDir(configPath, projectConfig));
     const projectDir = path.resolve(path.dirname(configPath));
-    await maybeSetupAiFiles(ctx, convexDir, projectDir);
+    await attemptSetupAiFiles({
+      ctx,
+      aiFilesConfig: projectConfig.aiFiles,
+      convexDir,
+      projectDir,
+    });
   }
   return {
     adminKey,
     deploymentName: deployment.deploymentName,
     deploymentUrl: localDeploymentUrl(cloudPort),
-    onActivity,
+    reference: null,
+    isDefault: false,
   };
 }
 
@@ -354,6 +336,11 @@ async function chooseDeployment(
     return { deploymentName: generateDeploymentName(), kind: "new" };
   }
 
+  // Non-interactive terminal - auto-create a new deployment
+  if (!process.stdin.isTTY) {
+    return { deploymentName: generateDeploymentName(), kind: "new" };
+  }
+
   // Legacy deployments exist - prompt user to choose
   const newOrExisting = await promptSearch(ctx, {
     message: "Which project would you like to use?",
@@ -414,6 +401,7 @@ export async function handleLinkToProject(
   args: {
     deploymentName: string;
     teamSlug: string;
+    teamId: number;
     projectSlug: string | null;
   },
 ): Promise<{
@@ -447,7 +435,7 @@ export async function handleLinkToProject(
     projectSlug = args.projectSlug;
   } else {
     const { projectSlug: newProjectSlug } = await createProject(ctx, {
-      teamSlug: args.teamSlug,
+      teamId: args.teamId,
       projectName,
       deploymentToProvision: null,
     });
@@ -455,15 +443,17 @@ export async function handleLinkToProject(
   }
   logVerbose(`Creating local deployment in project ${projectSlug}`);
   // Register it in big brain
-  const { deploymentName: localDeploymentName, adminKey } = await bigBrainStart(
-    ctx,
-    {
+  const { deploymentName: localDeploymentName, projectId } =
+    await bigBrainStart(ctx, {
       port: config.ports.cloud,
       projectSlug,
       teamSlug: args.teamSlug,
       instanceName: null,
-    },
-  );
+    });
+  const { instanceSecret, adminKey } =
+    await generateLocalDevSecretsWithLatestBinary(ctx, {
+      deploymentName: localDeploymentName,
+    });
   const localConfig = loadDeploymentConfig(ctx, "local", localDeploymentName);
   if (localConfig !== null) {
     return ctx.crash({
@@ -486,9 +476,11 @@ export async function handleLinkToProject(
   );
   logVerbose(`Saving deployment config for ${localDeploymentName}`);
   saveDeploymentConfig(ctx, "local", localDeploymentName, {
+    instanceSecret,
     adminKey,
     backendVersion: config.backendVersion,
     ports: config.ports,
+    cloudProjectId: projectId,
   });
   await bigBrainPause(ctx, {
     projectSlug,

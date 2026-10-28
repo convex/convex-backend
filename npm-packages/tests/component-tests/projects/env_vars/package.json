@@ -1,0 +1,16 @@
+{
+  "name": "component-tests-env-vars",
+  "version": "0.0.0",
+  "dependencies": {
+    "convex": "workspace:*",
+    "prettier": "3.8.1"
+  },
+  "devDependencies": {
+    "typescript": "~5.0.3",
+    "@types/node": "^18.17.0"
+  },
+  "scripts": {
+    "build": "",
+    "test": "tsc -p convex"
+  }
+}

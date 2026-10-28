@@ -3,6 +3,7 @@ import {
   waitUntilCalled,
   deploymentFetch,
   logAndHandleFetchError,
+  ThrowingFetchError,
 } from "./utils/utils.js";
 import { Context } from "../../bundler/context.js";
 import {
@@ -12,6 +13,7 @@ import {
   logError,
   stopSpinner,
   changeSpinner,
+  failExistingSpinner,
 } from "../../bundler/log.js";
 import { subscribe } from "./run.js";
 import { nodeFs } from "../../bundler/fs.js";
@@ -46,6 +48,7 @@ export async function exportFromDeployment(
     inputPath,
     adminKey,
     deploymentUrl,
+    snapshotExportDashboardLink,
   });
 
   switch (snapshotExportState.state) {
@@ -156,6 +159,7 @@ export async function startSnapshotExport(
     inputPath: string;
     adminKey: string;
     deploymentUrl: string;
+    snapshotExportDashboardLink?: string | undefined;
   },
 ) {
   const fetch = deploymentFetch(ctx, {
@@ -170,6 +174,23 @@ export async function startSnapshotExport(
       },
     );
   } catch (e) {
+    if (
+      e instanceof ThrowingFetchError &&
+      e.serverErrorData?.code === "ExportInProgress"
+    ) {
+      failExistingSpinner();
+      const progressAdvice =
+        args.snapshotExportDashboardLink === undefined
+          ? ""
+          : `\nCheck its progress at ${args.snapshotExportDashboardLink}`;
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage:
+          "A snapshot export is already requested or in progress. Only one can run at a time, so wait for it to finish and try again." +
+          progressAdvice,
+      });
+    }
     return await logAndHandleFetchError(ctx, e);
   }
 

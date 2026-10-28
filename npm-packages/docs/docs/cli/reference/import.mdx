@@ -1,0 +1,107 @@
+---
+sidebar_position: 4
+title: "npx convex import"
+sidebar_label: "npx convex import"
+description: "Import data from a file to your deployment"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex import`
+
+Import data from a file to your Convex deployment.
+
+- From a snapshot: <CodeWithCopyButton text={"npx convex import snapshot.zip"} />
+- For a single table: <CodeWithCopyButton text={"npx convex import --table tableName file.json"} />
+
+By default, this imports into your dev deployment.
+
+See the data import guide (https://docs.convex.dev/database/import-export/import) for details and use cases.
+
+## Syntax
+
+```sh
+npx convex import [options] <path>
+```
+
+## Arguments
+
+<dl>
+<dt>`<path>`</dt>
+<dd>
+
+Path to the input file
+
+</dd>
+</dl>
+
+## Options
+
+<dl>
+<dt>`--table <table>`</dt>
+<dd>
+
+Destination table name. Required if format is csv, jsonLines, or jsonArray. Not supported if format is zip.
+
+</dd>
+<dt>`--replace`</dt>
+<dd>
+
+Replace all existing data in any of the imported tables
+
+</dd>
+<dt>`--append`</dt>
+<dd>
+
+Append imported data to any existing tables
+
+</dd>
+<dt>`--replace-all`</dt>
+<dd>
+
+Replace all existing data in the deployment with the imported tables,
+deleting tables that don't appear in the import file or the schema,
+and clearing tables that appear in the schema but not in the import file
+
+</dd>
+<dt>`-y, --yes`</dt>
+<dd>
+
+Skip confirmation prompt when import leads to deleting existing documents
+
+</dd>
+<dt>`--format <format>`</dt>
+<dd>
+
+Input file format. This flag is only required if the filename is missing an extension.
+- CSV files must have a header, and each row's entries are interpreted either as a (floating point) number or a string.
+- JSON files must be an array of JSON objects.
+- JSONLines files must have a JSON object per line.
+- ZIP files must have one directory per table, containing \<table>/documents.jsonl. Snapshot exports from the Convex dashboard have this format.
+
+</dd>
+<dt>`--component <path>`</dt>
+<dd>
+
+Path to the component (e.g. "workflow" or "workflow/workpool")
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Import data into this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Import data into a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

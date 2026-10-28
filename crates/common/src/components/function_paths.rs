@@ -23,25 +23,23 @@ pub struct ComponentDefinitionFunctionPath {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct ResolvedComponentFunctionPath {
     pub component: ComponentId,
     pub udf_path: CanonicalizedUdfPath,
     // For error messages and logging.
-    pub component_path: Option<ComponentPath>,
+    pub component_path: ComponentPath,
 }
 
 impl ResolvedComponentFunctionPath {
     pub fn for_logging(self) -> CanonicalizedComponentFunctionPath {
         CanonicalizedComponentFunctionPath {
-            component: self.component_path.unwrap_or_else(ComponentPath::root),
+            component: self.component_path,
             udf_path: self.udf_path,
         }
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct ComponentFunctionPath {
     pub component: ComponentPath,
     pub udf_path: UdfPath,
@@ -93,7 +91,6 @@ impl TryFrom<CanonicalizedComponentFunctionPath> for SerializedComponentFunction
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CanonicalizedComponentFunctionPath {
     pub component: ComponentPath,
     pub udf_path: CanonicalizedUdfPath,
@@ -137,7 +134,6 @@ impl HeapSize for CanonicalizedComponentFunctionPath {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct ExportPath {
     path: CanonicalizedUdfPath,
 }
@@ -201,7 +197,6 @@ impl HeapSize for ExportPath {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum PublicFunctionPath {
     RootExport(ExportPath),
     Component(CanonicalizedComponentFunctionPath),

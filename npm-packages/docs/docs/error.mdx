@@ -26,7 +26,7 @@ A mutation `updateCounter` always updates the same document:
 export const updateCounter = mutation({
   args: {},
   handler: async (ctx) => {
-    const doc = await ctx.db.get("counts", process.env.COUNTER_ID);
+    const doc = (await ctx.db.query("counts").first())!;
     await ctx.db.patch("counts", doc._id, { value: doc.value + 1 });
   },
 });
@@ -97,7 +97,7 @@ To fix this issue:
 
 ### Resources
 
-- Learn more about [optimistic concurrency control](/database/advanced/occ.md).
+- Learn more about [optimistic concurrency control](/database/advanced/occ.mdx).
 - See this [Stack post](https://stack.convex.dev/waitlist) for an example of
   designing an app to avoid mutation conflicts.
 
@@ -196,7 +196,7 @@ If you suspect a circular import but aren't sure where it is, tools like
 [madge](https://github.com/pahen/madge) can help you visualize your import graph
 and list cycles:
 
-```bash
+```sh
 npx madge convex/ --extensions ts --exclude api.d.ts --circular
 ```
 

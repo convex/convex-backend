@@ -18,7 +18,7 @@ use common::{
         ComponentName,
         Resource,
     },
-    document::DocumentUpdateWithPrevTs,
+    document::PendingDocumentUpdate,
     errors::JsError,
     execution_context::ExecutionContext,
     log_lines::LogLine,
@@ -30,6 +30,7 @@ use common::{
     types::{
         IndexId,
         RepeatableTimestamp,
+        UdfRuntime,
         UdfType,
     },
 };
@@ -38,8 +39,8 @@ use database::{
     Transaction,
     TransactionReadSet,
     TransactionReadSize,
+    UploadedFileUpload,
 };
-use isolate::ActionCallbacks;
 use keybroker::Identity;
 pub use metrics::record_module_sizes;
 use model::{
@@ -55,8 +56,6 @@ use model::{
     },
     udf_config::types::UdfConfig,
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::strategy::Strategy;
 use server::{
     FunctionMetadata,
     HttpActionMetadata,
@@ -67,12 +66,14 @@ use sync_types::{
 };
 use tokio::sync::mpsc;
 use udf::{
+    ActionCallbacks,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
 };
 use usage_tracking::FunctionUsageStats;
 use value::{
     identifier::Identifier,
+    ResolvedDocumentId,
     TabletId,
 };
 
@@ -87,6 +88,7 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
     async fn run_function(
         &self,
         udf_type: UdfType,
+        udf_runtime: Option<UdfRuntime>,
         identity: Identity,
         ts: RepeatableTimestamp,
         existing_writes: FunctionWrites,
@@ -150,15 +152,12 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
 }
 
 /// Reads and writes from a UDF that executed in Funrun
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(Clone, Debug, PartialEq, proptest_derive::Arbitrary)
-)]
 pub struct FunctionFinalTransaction {
     pub begin_timestamp: Timestamp,
     pub reads: FunctionReads,
     pub writes: FunctionWrites,
     pub rows_read_by_tablet: BTreeMap<TabletId, u64>,
+    pub uploaded_files: BTreeMap<ResolvedDocumentId, UploadedFileUpload>,
 }
 
 impl<RT: Runtime> TryFrom<Transaction<RT>> for FunctionFinalTransaction {
@@ -172,6 +171,7 @@ impl<RT: Runtime> TryFrom<Transaction<RT>> for FunctionFinalTransaction {
             .iter()
             .map(|(table, stats)| (*table, stats.rows_read))
             .collect();
+        let uploaded_files = tx.get_uploaded_files()?;
         let (reads, writes) = tx.into_reads_and_writes();
         Ok(Self {
             begin_timestamp,
@@ -184,14 +184,11 @@ impl<RT: Runtime> TryFrom<Transaction<RT>> for FunctionFinalTransaction {
                     .collect(),
             },
             rows_read_by_tablet,
+            uploaded_files,
         })
     }
 }
 
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(Clone, Debug, PartialEq, proptest_derive::Arbitrary)
-)]
 pub struct FunctionReads {
     pub reads: ReadSet,
     pub num_intervals: usize,
@@ -216,26 +213,8 @@ impl From<TransactionReadSet> for FunctionReads {
 
 /// Subset of [`Writes`] that is returned by [FunctionRunner] after a function
 /// has executed.
-#[cfg_attr(any(test, feature = "testing"), derive(Clone, Debug, PartialEq))]
 #[derive(Default)]
 pub struct FunctionWrites {
     /// N.B.: these are expected to have unique `id`s
-    pub updates: Vec<DocumentUpdateWithPrevTs>,
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for FunctionWrites {
-    type Parameters = ();
-
-    type Strategy = impl Strategy<Value = FunctionWrites>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        proptest::collection::vec(proptest::prelude::any::<DocumentUpdateWithPrevTs>(), 0..4)
-            .prop_map(|mut updates| {
-                updates.sort_by_key(|u| u.id);
-                updates.dedup_by_key(|u| u.id);
-                Self { updates }
-            })
-            .boxed()
-    }
+    pub updates: Vec<PendingDocumentUpdate>,
 }

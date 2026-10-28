@@ -1,7 +1,6 @@
 import { Context } from "../../../bundler/context.js";
 import { logMessage } from "../../../bundler/log.js";
 import { detect } from "detect-port";
-import crypto from "crypto";
 import { chalkStderr } from "chalk";
 
 export async function choosePorts(
@@ -9,10 +8,14 @@ export async function choosePorts(
   {
     count,
     requestedPorts,
+    suggestedPorts,
     startPort,
   }: {
     count: number;
+    /** Ports that must mandatorily be used when provided. */
     requestedPorts?: Array<number | null>;
+    /** Ports that will be tried preferentially when provided, but are not required. */
+    suggestedPorts?: Array<number | null>;
     startPort: number;
   },
 ): Promise<Array<number>> {
@@ -30,6 +33,15 @@ export async function choosePorts(
       }
       ports.push(port);
     } else {
+      const suggestedPort = suggestedPorts?.[ports.length] ?? null;
+      if (suggestedPort !== null) {
+        const port = await detect(suggestedPort);
+        if (port === suggestedPort) {
+          ports.push(suggestedPort);
+          continue;
+        }
+      }
+
       const portToTry =
         ports.length > 0 ? ports[ports.length - 1] + 1 : startPort;
       const port = await detect(portToTry);
@@ -39,9 +51,32 @@ export async function choosePorts(
   return ports;
 }
 
-export async function isOffline(): Promise<boolean> {
-  // TODO(ENG-7080) -- implement this for real
-  return false;
+export async function chooseLocalBackendPorts(
+  ctx: Context,
+  options?: {
+    suggestedPorts?:
+      | { cloud?: number | undefined; site?: number | undefined }
+      | undefined;
+    requestedPorts?:
+      | { cloud?: number | undefined; site?: number | undefined }
+      | undefined;
+  },
+): Promise<{ cloudPort: number; sitePort: number }> {
+  const { suggestedPorts, requestedPorts } = options ?? {};
+
+  const [cloudPort, sitePort] = await choosePorts(ctx, {
+    count: 2,
+    startPort: 3210,
+    requestedPorts: [
+      requestedPorts?.cloud ?? null,
+      requestedPorts?.site ?? null,
+    ],
+    suggestedPorts: [
+      suggestedPorts?.cloud ?? null,
+      suggestedPorts?.site ?? null,
+    ],
+  });
+  return { cloudPort, sitePort };
 }
 
 export function printLocalDeploymentWelcomeMessage() {
@@ -53,16 +88,17 @@ export function printLocalDeploymentWelcomeMessage() {
       "To learn more, read the docs: https://docs.convex.dev/cli/local-deployments",
     ),
   );
-  logMessage(
-    chalkStderr.cyan(
-      "To opt out at any time, run `npx convex disable-local-deployments`",
-    ),
-  );
-}
-
-export function generateInstanceSecret(): string {
-  return crypto.randomBytes(32).toString("hex");
 }
 
 export const LOCAL_BACKEND_INSTANCE_SECRET =
   "4361726e697461732c206c69746572616c6c79206d65616e696e6720226c6974";
+
+// Backend releases are tagged `precompiled-YYYY-MM-DD-<commit>`, so the dates
+// sort lexicographically.
+export function releaseDate(version: string): string | null {
+  return /^precompiled-(\d{4}-\d{2}-\d{2})-/.exec(version)?.[1] ?? null;
+}
+
+export function isValidBackendVersion(version: string): boolean {
+  return /^precompiled-\d{4}-\d{2}-\d{2}-[\w.-]+$/.test(version);
+}

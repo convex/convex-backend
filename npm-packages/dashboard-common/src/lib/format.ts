@@ -43,6 +43,16 @@ export const prettier = (stmt: string, printWidth: number = 60) => {
   }
 };
 
+// Pretty-prints a JS expression. It’s wrapped in parentheses so that prettier
+// parses object literals as expressions instead of blocks; prettier keeps the
+// parentheses for some expression types, so they’re stripped afterwards.
+export function formatExpression(expression: string, printWidth?: number) {
+  const formatted = prettier(`(${expression})`, printWidth).replace(/;$/, "");
+  return formatted.startsWith("(") && formatted.endsWith(")")
+    ? formatted.slice(1, -1)
+    : formatted;
+}
+
 export function displaySchemaFromShape({
   shape,
   filterSystemFields = false,
@@ -180,6 +190,8 @@ function displayValidator(validator: ValidatorJSON): string {
       return `v.float64()`;
     case "bigint":
       return `v.int64()`;
+    case "commitTs":
+      return `v.commitTs()`;
     case "boolean":
       return `v.boolean()`;
     case "string":
@@ -393,16 +405,47 @@ export function formatNumber(value: number | null): string | null {
 const NUMBER_FORMAT_COMPACT = new Intl.NumberFormat("en-US", {
   notation: "compact",
   compactDisplay: "short",
+  roundingMode: "trunc",
 });
-export function formatNumberCompact(value: number | bigint): string;
+// Compact formatter that keeps up to `maximumFractionDigits` decimals. Default
+// compact notation drops the fractional part once the magnitude reaches ~2
+// significant digits (12.34 -> "12"); passing a precision preserves it
+// (12.34 -> "12.34"). Cached per precision.
+const NUMBER_FORMAT_COMPACT_WITH_DECIMALS = new Map<
+  number,
+  Intl.NumberFormat
+>();
+export function formatNumberCompact(
+  value: number | bigint,
+  maximumFractionDigits?: number,
+): string;
 export function formatNumberCompact(
   value: number | bigint | null,
+  maximumFractionDigits?: number,
 ): string | null;
 export function formatNumberCompact(
   value: number | bigint | null,
+  maximumFractionDigits?: number,
 ): string | null {
   if (value === null) return null;
-  return NUMBER_FORMAT_COMPACT.format(value);
+  let formatter = NUMBER_FORMAT_COMPACT;
+  if (maximumFractionDigits !== undefined) {
+    let cached = NUMBER_FORMAT_COMPACT_WITH_DECIMALS.get(maximumFractionDigits);
+    if (cached === undefined) {
+      cached = new Intl.NumberFormat("en-US", {
+        notation: "compact",
+        compactDisplay: "short",
+        maximumFractionDigits,
+        roundingMode: "trunc",
+      });
+      NUMBER_FORMAT_COMPACT_WITH_DECIMALS.set(maximumFractionDigits, cached);
+    }
+    formatter = cached;
+  }
+  const formatted = formatter.format(value);
+  // Intl renders -0 (and tiny negatives that round to zero) as "-0"; never
+  // surface a signed zero.
+  return formatted === "-0" ? "0" : formatted;
 }
 
 export function msFormat(n: number): string {
@@ -425,10 +468,44 @@ export function formatDate(date: Date): string {
   return format(date, "MMMM dd, yyyy");
 }
 
+// Renders the calendar date an instant falls on in UTC, matching
+// `formatDate`'s shape. Use it for dates a backend pinned to UTC — billing
+// dates from Orb, say — which `formatDate` would render as the previous day
+// for anyone west of UTC.
+export function formatUtcDate(date: Date): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "UTC",
+    month: "long",
+    day: "2-digit",
+    year: "numeric",
+  }).format(date);
+}
+
 export function toNumericUTC(dateString: string) {
   // Parsing manually the date to use UTC.
   const [year, month, day] = dateString.split("-");
   return Date.UTC(Number(year), Number(month) - 1, Number(day));
+}
+
+export const THIRTY_MINUTES_MS = 30 * 60 * 1000;
+
+export function toDateTimeLocalValue(
+  d: Date,
+  options?: { includeSeconds?: boolean },
+): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hours = String(d.getHours()).padStart(2, "0");
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  const base = `${year}-${month}-${day}T${hours}:${minutes}`;
+  if (!options?.includeSeconds) return base;
+  const seconds = String(d.getSeconds()).padStart(2, "0");
+  return `${base}:${seconds}`;
+}
+
+export function toDateInputValue(d: Date): string {
+  return toDateTimeLocalValue(d).slice(0, 10);
 }
 
 export const timeLabelForMinute = (value: string | number | undefined) => {

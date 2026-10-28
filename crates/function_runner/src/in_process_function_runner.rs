@@ -7,6 +7,7 @@ use std::{
         Arc,
         Weak,
     },
+    time::Duration,
 };
 
 use anyhow::Context;
@@ -22,17 +23,27 @@ use common::{
     errors::JsError,
     execution_context::ExecutionContext,
     http::fetch::FetchClient,
+    knobs::{
+        FUNRUN_ISOLATE_ACTIVE_THREADS,
+        SUBFUNCTIONS_IN_SAME_ISOLATE,
+    },
     log_lines::LogLine,
-    persistence::PersistenceReader,
+    persistence::{
+        PersistenceReader,
+        RepeatablePersistence,
+    },
     runtime::{
         Runtime,
+        SpawnHandle,
         UnixTimestamp,
     },
     schemas::DatabaseSchema,
     types::{
         ConvexOrigin,
+        DeploymentMetadata,
         IndexId,
         RepeatableTimestamp,
+        UdfRuntime,
         UdfType,
     },
 };
@@ -47,7 +58,11 @@ use futures::{
     FutureExt,
     StreamExt,
 };
-use isolate::ActionCallbacks;
+use isolate::{
+    isolate_worker::FunctionRunnerIsolateWorker,
+    ConcurrencyLimiter,
+    IsolateConfig,
+};
 use keybroker::{
     FunctionRunnerKeyBroker,
     Identity,
@@ -73,6 +88,7 @@ use sync_types::{
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use udf::{
+    ActionCallbacks,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
     HttpActionResponseStreamer,
@@ -99,7 +115,7 @@ pub struct InProcessFunctionRunner<RT: Runtime> {
     persistence_reader: Arc<dyn PersistenceReader>,
 
     // Static information about the backend.
-    instance_name: String,
+    deployment: DeploymentMetadata,
     key_broker: FunctionRunnerKeyBroker,
     convex_origin: ConvexOrigin,
     database: Database<RT>,
@@ -107,11 +123,16 @@ pub struct InProcessFunctionRunner<RT: Runtime> {
     // and ApplicationFunctionRunner.
     action_callbacks: Arc<RwLock<Option<Weak<dyn ActionCallbacks>>>>,
     fetch_client: Arc<dyn FetchClient>,
+    _concurrency_logger: Box<dyn SpawnHandle>,
 }
+
+// We gather prometheus stats every 30 seconds, so we should make sure we log
+// active permits more frequently than that.
+const ACTIVE_CONCURRENCY_PERMITS_LOG_FREQUENCY: Duration = Duration::from_secs(10);
 
 impl<RT: Runtime> InProcessFunctionRunner<RT> {
     pub fn new(
-        instance_name: String,
+        deployment: DeploymentMetadata,
         keybroker: FunctionRunnerKeyBroker,
         convex_origin: ConvexOrigin,
         rt: RT,
@@ -120,18 +141,30 @@ impl<RT: Runtime> InProcessFunctionRunner<RT> {
         database: Database<RT>,
         fetch_client: Arc<dyn FetchClient>,
     ) -> anyhow::Result<Self> {
-        // InProcessFunrun is single tenant and thus can use the full capacity.
+        // InProcessFunctionRunner is single tenant and thus can use the full capacity.
         let max_percent_per_client = 100;
-        let server = FunctionRunnerCore::new(rt, storage, max_percent_per_client)?;
+        let concurrency_limiter = if *FUNRUN_ISOLATE_ACTIVE_THREADS > 0 {
+            ConcurrencyLimiter::new(*FUNRUN_ISOLATE_ACTIVE_THREADS)
+        } else {
+            ConcurrencyLimiter::unlimited()
+        };
+        let concurrency_logger = rt.spawn(
+            "concurrency_logger",
+            concurrency_limiter.go_log(rt.clone(), ACTIVE_CONCURRENCY_PERMITS_LOG_FREQUENCY),
+        );
+        let isolate_config = IsolateConfig::new("funrun", concurrency_limiter);
+        let isolate_worker = FunctionRunnerIsolateWorker::new(rt.clone(), isolate_config);
+        let server = FunctionRunnerCore::new(rt, storage, max_percent_per_client, isolate_worker)?;
         Ok(Self {
             server,
             persistence_reader,
-            instance_name,
+            deployment,
             key_broker: keybroker,
             convex_origin,
             database,
             action_callbacks: Arc::new(RwLock::new(None)),
             fetch_client,
+            _concurrency_logger: concurrency_logger,
         })
     }
 
@@ -204,6 +237,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
     async fn run_function(
         &self,
         udf_type: UdfType,
+        _udf_runtime: Option<UdfRuntime>,
         identity: Identity,
         ts: RepeatableTimestamp,
         existing_writes: FunctionWrites,
@@ -222,7 +256,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         pause_client.wait("run_function").await;
 
         let snapshot = self.database.snapshot(ts)?;
-        let table_count_snapshot = Arc::new(snapshot.table_summaries);
+        let table_count_snapshot = Arc::new(snapshot.table_counts);
         let text_index_snapshot = Arc::new(TextIndexManagerSnapshot::new(
             snapshot.index_registry,
             snapshot.text_indexes,
@@ -237,10 +271,15 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
             .upgrade()
             .context(shutdown_error())?;
 
+        let repeatable_persistence = RepeatablePersistence::new(
+            self.persistence_reader.clone(),
+            ts,
+            self.database.retention_validator(),
+        );
+        let index_reader = Arc::new(repeatable_persistence.read_snapshot(ts)?);
         let request_metadata = RunRequestArgs {
-            instance_name: self.instance_name.clone(),
             key_broker: self.key_broker.clone(),
-            reader: self.persistence_reader.clone(),
+            index_reader,
             convex_origin: self.convex_origin.clone(),
             bootstrap_metadata: self.database.bootstrap_metadata.clone(),
             table_count_snapshot,
@@ -251,12 +290,12 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
             function_started_sender: None,
             udf_type,
             identity,
-            ts,
             existing_writes,
             default_system_env_vars,
             in_memory_index_last_modified,
             context,
-            index_reader_override: None,
+            subfunctions_in_same_isolate: *SUBFUNCTIONS_IN_SAME_ISOLATE,
+            deployment: self.deployment.clone(),
         };
 
         // NOTE: We run the function without checking retention until after the
@@ -292,7 +331,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 udf_config,
                 modules,
                 environment_variables,
-                self.instance_name.clone(),
+                self.deployment.name.clone(),
             )
             .await
     }
@@ -313,7 +352,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 dependency_graph,
                 user_environment_variables,
                 system_env_vars,
-                self.instance_name.clone(),
+                self.deployment.name.clone(),
             )
             .await
     }
@@ -334,7 +373,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 definition,
                 args,
                 name,
-                self.instance_name.clone(),
+                self.deployment.name.clone(),
             )
             .await
     }
@@ -353,7 +392,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 source_map,
                 rng_seed,
                 unix_timestamp,
-                self.instance_name.clone(),
+                self.deployment.name.clone(),
             )
             .await
     }
@@ -372,7 +411,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 source_map,
                 environment_variables,
                 explanation,
-                self.instance_name.clone(),
+                self.deployment.name.clone(),
             )
             .await
     }

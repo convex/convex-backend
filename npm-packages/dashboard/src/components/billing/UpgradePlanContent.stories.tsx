@@ -31,19 +31,19 @@ const meta = {
       seatPrice: 25,
       planType: "CONVEX_PROFESSIONAL",
     },
-    isChef: false,
     numMembers: 2,
     paymentDetailsForm: (
-      <Callout className="w-fit">
+      <Callout variant="localDev" className="w-fit">
         STRIPE PAYMENT DETAILS FORM WOULD BE HERE!
       </Callout>
     ),
     setPaymentMethod: fn(),
     billingAddressInputs: (
-      <Callout className="w-fit">Billing address inputs would be here</Callout>
+      <Callout variant="localDev" className="w-fit">
+        Billing address inputs would be here
+      </Callout>
     ),
   },
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof UpgradePlanContent>;
 
 export default meta;
@@ -52,7 +52,7 @@ type Story = StoryObj<typeof meta>;
 function render(args: UpgradePlanContentProps, formState: UpgradeFormState) {
   return (
     <Sheet>
-      <Callout className="mb-4">
+      <Callout variant="localDev" className="mb-4">
         Inputs do not work in this storybook preview. Change the formState prop
         to see different states.
       </Callout>

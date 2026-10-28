@@ -18,38 +18,31 @@ import {
   Pencil2Icon,
   RocketIcon,
   ArchiveIcon,
-  CubeIcon,
   CodeIcon,
   DimensionsIcon,
   ExternalLinkIcon,
   QuestionMarkCircledIcon,
 } from "@radix-ui/react-icons";
-import Link from "next/link";
+import { PackageVersionIcon } from "@common/elements/icons";
+import { Link } from "@ui/Link";
 import { useContext, useEffect, useState } from "react";
 import semver from "semver";
 import { Button } from "@ui/Button";
 import { Tooltip } from "@ui/Tooltip";
 import { Spinner } from "@ui/Spinner";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
-
-function getBackgroundColor(
-  deploymentType: PlatformDeploymentResponse["deploymentType"],
-): string {
-  switch (deploymentType) {
-    case "prod":
-      return "border-purple-600 dark:border-purple-100 bg-purple-100 text-purple-600 dark:bg-purple-700 dark:text-purple-100";
-    case "preview":
-      return "border-orange-600 dark:border-orange-400 bg-orange-100 text-orange-600 dark:bg-orange-900 dark:text-orange-400";
-    case "dev":
-      return "border-green-600 dark:border-green-400 bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-400";
-    case "custom":
-      return "border-neutral-4 dark:border-neutral-6 bg-neutral-1 text-neutral-11 dark:bg-neutral-12 dark:text-neutral-2";
-    default: {
-      deploymentType satisfies never;
-      return "";
-    }
-  }
-}
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
+import {
+  deploymentTypeColorClasses,
+  deploymentTypeLabel,
+} from "@common/lib/deploymentTypeColorClasses";
+import {
+  IndexCreationStatus,
+  SchemaValidationStatus,
+  useDeployProgress,
+} from "@common/features/health/components/DeployProgress";
 
 function useLatestConvexVersion(currentVersion: string | undefined) {
   const [hasUpdate, setHasUpdate] = useState(false);
@@ -129,47 +122,59 @@ function DeploymentIcon({
   return null;
 }
 
-function getDeploymentTypeLabel(
-  deploymentType: PlatformDeploymentResponse["deploymentType"],
-): string {
-  switch (deploymentType) {
-    case "prod":
-      return "Production";
-    case "preview":
-      return "Preview";
-    case "dev":
-      return "Development";
-    case "custom":
-      return "Custom";
-    default: {
-      deploymentType satisfies never;
-      return "";
-    }
-  }
-}
-
 export function DeploymentSummary({
   deployment,
   teamSlug,
   projectSlug,
   lastBackupTime,
-  creatorId,
-  creatorName,
+  teamMembers,
   regions,
+  showDeployProgress = false,
 }: {
   deployment: PlatformDeploymentResponse;
   teamSlug: string;
   projectSlug: string;
   lastBackupTime?: number | null;
-  creatorId?: number;
-  creatorName?: string;
+  teamMembers?: Array<{ id: number; name?: string | null; email: string }>;
   regions?: Array<{ name: string; displayName: string }>;
+  showDeployProgress?: boolean;
 }) {
-  const { TeamMemberLink } = useContext(DeploymentInfoContext);
-  const lastPushEvent = useQuery(udfs.deploymentEvents.lastPushEvent, {});
-  const convexCloudUrl = useQuery(udfs.convexCloudUrl.default, {});
-  const convexSiteUrl = useQuery(udfs.convexSiteUrl.default, {});
-  const serverVersion = useQuery(udfs.getVersion.default);
+  const { TeamMemberLink, healthDeployProgressEnabled } = useContext(
+    DeploymentInfoContext,
+  );
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewData = useIsOperationAllowed("ViewData");
+  const canViewBackups = useIsOperationAllowed("ViewBackups");
+  const deployProgress = useDeployProgress(
+    showDeployProgress && healthDeployProgressEnabled,
+  );
+
+  const lastPushEvent = useQuery(
+    udfs.deploymentEvents.lastPushEvent,
+    canViewData ? {} : "skip",
+  );
+
+  // Resolve the team member who last deployed from the push event
+  const deployer = teamMembers?.find(
+    (tm) => lastPushEvent && tm.id === Number(lastPushEvent.member_id),
+  );
+  const deployerId = lastPushEvent
+    ? Number(lastPushEvent.member_id) || undefined
+    : undefined;
+  const deployerName = deployer?.name || deployer?.email || undefined;
+
+  const convexCloudUrl = useQuery(
+    udfs.convexCloudUrl.default,
+    canViewData ? {} : "skip",
+  );
+  const convexSiteUrl = useQuery(
+    udfs.convexSiteUrl.default,
+    canViewData ? {} : "skip",
+  );
+  const serverVersion = useQuery(
+    udfs.getVersion.default,
+    canViewData ? undefined : "skip",
+  );
   const { hasUpdate, latestVersion } = useLatestConvexVersion(
     serverVersion || undefined,
   );
@@ -183,19 +188,20 @@ export function DeploymentSummary({
         deployment.region
       : undefined;
 
-  // Check if we're still loading critical data
+  // Check if we're still loading critical data. Queries we deliberately
+  // skipped (no `deployment:data:view`) return `undefined`, so exclude
+  // them from the loading gate.
   const isLoading =
-    lastPushEvent === undefined ||
-    serverVersion === undefined ||
-    (deployment.kind === "cloud" &&
-      (convexCloudUrl === undefined ||
-        convexSiteUrl === undefined ||
-        lastBackupTime === undefined));
+    canViewData &&
+    (lastPushEvent === undefined ||
+      serverVersion === undefined ||
+      (deployment.kind === "cloud" &&
+        (convexCloudUrl === undefined || convexSiteUrl === undefined)));
 
   if (isLoading) {
     return (
       <Sheet className="flex w-fit flex-col bg-transparent" padding={false}>
-        <div className="flex min-h-[7.5rem] min-w-[32rem] items-center justify-center rounded-lg bg-background-secondary p-2 py-3">
+        <div className="flex min-h-30 min-w-lg items-center justify-center rounded-lg bg-background-secondary p-2 py-3">
           <div>
             <Spinner className="size-8" />
           </div>
@@ -204,25 +210,48 @@ export function DeploymentSummary({
     );
   }
 
+  // The Cloud URL panel only renders when (1) the deployment is cloud
+  // and (2) the member can view data (the URL queries are
+  // ViewData-gated). When the panel is hidden, round all corners of
+  // the main panel.
+  const showUrlPanel = deployment.kind === "cloud" && canViewData;
+  const mainPanelRounding = showUrlPanel
+    ? "rounded-l-lg rounded-tr-lg rounded-bl-none lg:flex-1 lg:rounded-tr-none lg:rounded-bl-lg"
+    : "rounded-lg";
+
   return (
     <Sheet className="flex w-fit flex-col bg-transparent" padding={false}>
       <div className="flex flex-col lg:flex-row">
         {/* Main deployment info */}
-        <div className="flex flex-col gap-4 rounded-l-lg rounded-tr-lg rounded-bl-none bg-background-secondary p-2 py-3 lg:flex-1 lg:rounded-tr-none lg:rounded-bl-lg lg:pr-4">
-          {/* Row 1: Type + Name (always together) */}
+        <div
+          className={cn(
+            "flex flex-col gap-4 bg-background-secondary p-2 py-3 lg:pr-4",
+            mainPanelRounding,
+          )}
+        >
+          {/* Row 1: Type + Reference + Name (always together) */}
           <div className="flex flex-wrap items-center gap-2">
             <div
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
-                getBackgroundColor(deployment.deploymentType),
+                deploymentTypeColorClasses(deployment.deploymentType),
               )}
             >
               <DeploymentIcon deployment={deployment} className="size-3.5" />
-              <span>{getDeploymentTypeLabel(deployment.deploymentType)}</span>
+              <span>{deploymentTypeLabel(deployment.deploymentType)}</span>
             </div>
-            <div className="font-mono text-sm text-content-primary">
-              {deployment.name}
-            </div>
+            {deployment.kind === "cloud" ? (
+              <div className="flex flex-wrap gap-x-1.5 text-sm text-content-primary">
+                <strong className="font-medium">{deployment.reference}</strong>{" "}
+                <span className="font-mono text-content-secondary">
+                  ({deployment.name})
+                </span>
+              </div>
+            ) : (
+              <span className="font-mono text-sm text-content-secondary">
+                {deployment.name}
+              </span>
+            )}
           </div>
 
           {/* Row 2: Region/Port + Class + Version */}
@@ -264,14 +293,13 @@ export function DeploymentSummary({
                     tip={
                       <span className="flex items-center gap-1">
                         Deployment class
-                        <a
+                        <Link
                           href="https://docs.convex.dev/production/state/limits"
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-content-link hover:underline"
                         >
                           <QuestionMarkCircledIcon className="size-3.5" />
-                        </a>
+                        </Link>
                       </span>
                     }
                   >
@@ -291,8 +319,8 @@ export function DeploymentSummary({
             {lastPushEvent && (
               <div className="flex items-center gap-2">
                 <Tooltip tip="Convex package version">
-                  <CubeIcon
-                    className="size-4 shrink-0 text-content-secondary"
+                  <PackageVersionIcon
+                    className="text-content-secondary"
                     aria-label="Convex package version"
                   />
                 </Tooltip>
@@ -316,9 +344,10 @@ export function DeploymentSummary({
                       size="xs"
                       inline
                       aria-label="Convex NPM Package Upgrade Available"
-                      href="https://github.com/get-convex/convex-js/blob/main/CHANGELOG.md#changelog"
+                      href="https://github.com/convex/convex-js/blob/main/CHANGELOG.md#changelog"
                       target="_blank"
-                      className="h-[1.25rem] text-content-link"
+                      // eslint-disable-next-line no-restricted-syntax -- manual Link-Button hybrid implementation
+                      className="h-5 text-content-link"
                     >
                       <div>({latestVersion} available)</div>
                     </Button>
@@ -330,37 +359,47 @@ export function DeploymentSummary({
 
           {/* Row 3: Last Deployed + Last Backup */}
           <div className="flex flex-wrap items-center gap-6 gap-y-4">
-            {/* Last Deployed */}
-            <div className="flex items-center gap-2">
-              <Tooltip tip="Last deployment">
-                <RocketIcon
-                  className="size-4 shrink-0 text-content-secondary"
-                  aria-label="Last deployment"
-                />
-              </Tooltip>
-              {!lastPushEvent ? (
-                <span className="text-sm text-content-secondary">
-                  Never deployed
-                </span>
-              ) : (
-                <div className="flex flex-wrap items-center gap-1 text-sm text-content-primary">
-                  <span>Last deployed</span>
-                  <TimestampDistance
-                    date={new Date(lastPushEvent._creationTime)}
-                    className="text-sm text-content-primary"
+            {/* Last Deployed — hidden when the member can't view data
+                since the underlying query is `deployment:data:view`
+                gated and we'd otherwise misreport "Never deployed". */}
+            {canViewData && (
+              <div className="flex items-center gap-2">
+                <Tooltip tip="Last deployment">
+                  <RocketIcon
+                    className="size-4 shrink-0 text-content-secondary"
+                    aria-label="Last deployment"
                   />
-                  {creatorId && creatorName && (
-                    <>
-                      <span>by</span>
-                      <TeamMemberLink memberId={creatorId} name={creatorName} />
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
+                </Tooltip>
+                {!lastPushEvent ? (
+                  <span className="text-sm text-content-secondary">
+                    Never deployed
+                  </span>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-1 text-sm text-content-primary">
+                    <span>Last deployed</span>
+                    <TimestampDistance
+                      date={new Date(lastPushEvent._creationTime)}
+                      className="text-sm text-content-primary"
+                    />
+                    {deployerId !== undefined && deployerName && (
+                      <>
+                        <span>by</span>
+                        <TeamMemberLink
+                          memberId={deployerId}
+                          name={deployerName}
+                        />
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
-            {/* Last Backup (only for cloud deployments) */}
-            {deployment.kind === "cloud" && (
+            {/* Last Backup (only for cloud deployments). Loads
+                independently from the rest of the summary — render a
+                small placeholder while the backup list is in flight so
+                the panel doesn't reflow when it resolves. */}
+            {deployment.kind === "cloud" && canViewBackups && (
               <div className="flex items-center gap-2">
                 <Tooltip tip="Last backup">
                   <ArchiveIcon
@@ -369,43 +408,50 @@ export function DeploymentSummary({
                   />
                 </Tooltip>
                 <div className="flex items-center gap-1">
-                  {lastBackupTime === null ? (
-                    <>
+                  {lastBackupTime === undefined ? (
+                    <Spinner className="size-4" />
+                  ) : lastBackupTime === null ? (
+                    deployment.class.startsWith("d") ? (
+                      <span className="text-sm text-content-primary">
+                        Backup every 24 hours
+                      </span>
+                    ) : (
                       <span className="text-sm text-content-secondary">
                         No backup yet
                       </span>
-                      <Link
-                        href={backupSettingsUrl}
-                        className="text-content-link hover:underline"
-                        aria-label="View backup settings"
-                      >
-                        <ExternalLinkIcon className="size-3.5" />
-                      </Link>
-                    </>
+                    )
                   ) : (
                     <>
                       <span className="text-sm text-content-primary">
                         Last backup created{" "}
                       </span>
                       <TimestampDistance
-                        date={new Date(lastBackupTime!)}
+                        date={new Date(lastBackupTime)}
                         className="text-sm text-content-primary"
                       />
-                      <Link
-                        href={backupSettingsUrl}
-                        className="text-content-link hover:underline"
-                        aria-label="View backup settings"
-                      >
-                        <ExternalLinkIcon className="size-3.5" />
-                      </Link>
                     </>
                   )}
+                  <Link
+                    href={backupSettingsUrl}
+                    aria-label="View backup settings"
+                  >
+                    <ExternalLinkIcon className="size-3.5" />
+                  </Link>
                 </div>
               </div>
             )}
           </div>
 
-          {/* Row 4: Expiry warning (ephemeral deployments) */}
+          {/* Row 4: Work the last deploy is still doing. Each line unfolds
+              its progress inline on hover rather than in a popover. */}
+          {deployProgress.schema && (
+            <SchemaValidationStatus schema={deployProgress.schema} />
+          )}
+          {deployProgress.indexes.length > 0 && (
+            <IndexCreationStatus indexes={deployProgress.indexes} />
+          )}
+
+          {/* Row 5: Expiry warning (ephemeral deployments) */}
           {deployment.kind === "cloud" && deployment.expiresAt && (
             <div className="flex items-center gap-2">
               <Tooltip tip="This deployment will be automatically deleted">
@@ -436,9 +482,10 @@ export function DeploymentSummary({
           )}
         </div>
 
-        {/* Deployment URLs */}
-        {deployment.kind === "cloud" && (
-          <div className="flex flex-col justify-center gap-4 rounded-b-lg border-t bg-background-secondary/70 p-2 py-4 lg:rounded-r-lg lg:rounded-bl-none lg:border-t-0 lg:border-l lg:py-3 lg:pl-4">
+        {/* Deployment URLs (cloud only, hidden when the member lacks
+            `deployment:data:view` since the URL queries are gated). */}
+        {showUrlPanel && (
+          <div className="flex flex-col justify-start gap-4 rounded-b-lg border-t bg-background-secondary/70 p-2 py-4 lg:rounded-r-lg lg:rounded-bl-none lg:border-t-0 lg:border-l lg:py-3 lg:pl-4">
             <div className="flex flex-col gap-1">
               <span className="text-xs font-medium text-content-secondary">
                 Cloud URL
@@ -447,7 +494,8 @@ export function DeploymentSummary({
                 href={convexCloudUrl!}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-xs break-all text-content-link hover:underline"
+                className="font-mono text-xs break-all"
+                noUnderline
               >
                 {convexCloudUrl}
               </Link>
@@ -460,7 +508,8 @@ export function DeploymentSummary({
                 href={convexSiteUrl!}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-xs break-all text-content-link hover:underline"
+                className="font-mono text-xs break-all"
+                noUnderline
               >
                 {convexSiteUrl}
               </Link>

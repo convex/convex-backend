@@ -1,3 +1,4 @@
+import { paths as PlatformDeploymentPaths } from "@convex-dev/platform/deploymentApi";
 import { paths as PlatformManagementPaths } from "@convex-dev/platform/managementApi";
 import { chalkStderr } from "chalk";
 import os from "os";
@@ -24,6 +25,7 @@ import {
 } from "../localDeployment/bigBrain.js";
 import type {
   paths as CliManagementPaths,
+  RegionName,
   TeamResponse,
 } from "../../generatedApi.js";
 import createClient from "openapi-fetch";
@@ -37,6 +39,8 @@ export const BIG_BRAIN_URL = `${provisionHost}/api/`;
 const PLATFORM_MANAGEMENT_API_URL = `${provisionHost}/v1/`;
 export const ENV_VAR_FILE_PATH = ".env.local";
 export const CONVEX_DEPLOY_KEY_ENV_VAR_NAME = "CONVEX_DEPLOY_KEY";
+// Alias for CONVEX_DEPLOY_KEY. Accepted anywhere CONVEX_DEPLOY_KEY is.
+export const CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME = "CONVEX_DEPLOYMENT_TOKEN";
 export const CONVEX_DEPLOYMENT_ENV_VAR_NAME = "CONVEX_DEPLOYMENT";
 export const CONVEX_SELF_HOSTED_URL_VAR_NAME = "CONVEX_SELF_HOSTED_URL";
 export const CONVEX_SELF_HOSTED_ADMIN_KEY_VAR_NAME =
@@ -82,6 +86,65 @@ export async function processDeployKeyValue(
   }
 
   return deployKey;
+}
+
+/**
+ * Reads the deploy key from environment variables, accepting either
+ * CONVEX_DEPLOY_KEY or its alias CONVEX_DEPLOYMENT_TOKEN. CONVEX_DEPLOY_KEY
+ * takes precedence when both are set.
+ */
+export function readDeployKeyFromEnv(
+  getEnv: (name: string) => string | undefined | null,
+): string | undefined {
+  const fromDeployKey = getEnv(CONVEX_DEPLOY_KEY_ENV_VAR_NAME);
+  const fromToken = getEnv(CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME);
+  return fromDeployKey || fromToken || undefined;
+}
+
+// The prefix the backend's `require_operation` checks use when an identity
+// lacks a permission. The full message names the missing permission, e.g.
+// `You do not have permission to perform this operation (deployment:data:view).`
+const PERMISSION_DENIED_MESSAGE_PREFIX =
+  "You do not have permission to perform this operation";
+
+function deployKeyPermissionAdvice(): string | null {
+  // Name whichever env var is actually set. `CONVEX_DEPLOY_KEY` takes
+  // precedence over `CONVEX_DEPLOYMENT_TOKEN` when both are present.
+  const envVarName = process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
+    ? CONVEX_DEPLOY_KEY_ENV_VAR_NAME
+    : process.env[CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME]
+      ? CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME
+      : null;
+  if (envVarName === null) {
+    return null;
+  }
+  return `This is determined by the permissions granted to ${envVarName}.`;
+}
+
+/**
+ * Detects a server-side authorization failure (a `require_operation` error,
+ * surfaced both as an HTTP 403 and as an error from a system UDF query) and
+ * produces a clean, single-line message naming the missing permission. When a
+ * deploy key is in use, appends advice for configuring its permissions.
+ *
+ * Returns `null` if `errorMessage` is not a permission error, so callers can
+ * fall back to their normal error handling.
+ */
+export function permissionDeniedErrorMessage(
+  errorMessage: string,
+): string | null {
+  const index = errorMessage.indexOf(PERMISSION_DENIED_MESSAGE_PREFIX);
+  if (index === -1) {
+    return null;
+  }
+  // Drop any wrapping context (e.g. the `[CONVEX Q(...)]` prefix) and stack
+  // trace, keeping just the permission sentence.
+  let msg = errorMessage.slice(index).split("\n")[0].trim();
+  const advice = deployKeyPermissionAdvice();
+  if (advice) {
+    msg = `${msg}\n${advice}`;
+  }
+  return msg;
 }
 
 export function parsePositiveInteger(value: string) {
@@ -160,6 +223,16 @@ export class ThrowingFetchError extends Error {
     } else if (this.response.status === 401) {
       error_type = "fatal";
       msg = `${msg}\nAuthenticate with \`npx convex dev\``;
+    } else if (this.response.status === 403) {
+      error_type = "fatal";
+      // Surface the missing permission cleanly (e.g. the server includes the
+      // required action like `deployment:data:view`) instead of the noisy
+      // "Error fetching ..." wrapper.
+      msg = this.serverErrorData?.message ?? msg;
+      const advice = deployKeyPermissionAdvice();
+      if (advice) {
+        msg = `${msg}\n${advice}`;
+      }
     } else if (this.response.status === 404) {
       error_type = "fatal";
       msg = `${msg}: ${this.response.url}`;
@@ -357,8 +430,6 @@ export async function selectDevDeploymentType(
     userHasChosenSomethingInteractively,
     // from `--configure --dev-deployment local|cloud`
     devDeploymentFromFlag,
-    // from `--cloud or --local`
-    forceDevDeployment,
   }:
     | {
         chosenConfiguration: "new" | "existing" | "ask" | null;
@@ -367,7 +438,6 @@ export async function selectDevDeploymentType(
         projectSlug: string;
         userHasChosenSomethingInteractively: boolean;
         devDeploymentFromFlag: "cloud" | "local" | undefined;
-        forceDevDeployment: "cloud" | "local" | undefined;
       }
     | {
         chosenConfiguration: "new" | "existing" | "ask" | null;
@@ -377,10 +447,8 @@ export async function selectDevDeploymentType(
         projectSlug: undefined;
         userHasChosenSomethingInteractively: boolean;
         devDeploymentFromFlag: "cloud" | "local" | undefined;
-        forceDevDeployment: "cloud" | "local" | undefined;
       },
 ): Promise<{ devDeployment: "cloud" | "local" }> {
-  if (forceDevDeployment) return { devDeployment: forceDevDeployment };
   if (devDeploymentFromFlag) return { devDeployment: devDeploymentFromFlag };
 
   if (newOrExisting === "existing" && chosenConfiguration === null) {
@@ -418,18 +486,24 @@ export async function selectDevDeploymentType(
   });
   return { devDeployment };
 }
+
+export async function logNoDefaultRegionMessage(teamSlug: string) {
+  const { teamDashboardUrl } = await import("../dashboard.js");
+  const noDefaultRegionMessage = chalkStderr.gray(
+    `Tip: you can configure a default region for your team at ${chalkStderr.underline(`${teamDashboardUrl(teamSlug)}/settings`)}`,
+  );
+  logMessage(noDefaultRegionMessage);
+}
+
 export async function selectRegionOrUseDefault(
   ctx: Context,
   selectedTeam: TeamResponse,
   deploymentType: CloudDeploymentType,
 ) {
-  const noDefaultRegionMessage = chalkStderr.gray(
-    `Tip: you can configure a default region for your team at ${chalkStderr.underline(`https://dashboard.convex.dev/t/${selectedTeam.slug}/settings`)}`,
-  );
   if (!process.stdin.isTTY) {
     // Use the team default in non-interactive terminals
     if (!selectedTeam.defaultRegion) {
-      logMessage(noDefaultRegionMessage);
+      await logNoDefaultRegionMessage(selectedTeam.slug);
     }
     return selectedTeam.defaultRegion ?? null;
   }
@@ -437,16 +511,34 @@ export async function selectRegionOrUseDefault(
     selectedTeam.defaultRegion ??
     (await selectRegion(ctx, selectedTeam.id, deploymentType));
   if (!selectedTeam.defaultRegion) {
-    logMessage(noDefaultRegionMessage);
+    // Log after the user chooses a region
+    await logNoDefaultRegionMessage(selectedTeam.slug);
   }
   return selectedRegionName;
+}
+
+// Mirrors the order of `REGION_PRESENTATION` in
+// `npm-packages/dashboard/src/lib/regions.ts`, so both region pickers list
+// regions in the same order.
+const REGION_ORDER: string[] = [
+  "aws-us-east-1",
+  "aws-eu-west-1",
+  "aws-ca-central-1",
+  "aws-ap-southeast-2",
+];
+
+// Regions missing from `REGION_ORDER` (e.g. newly launched ones) go last, in
+// server order, since `Array.prototype.sort` is stable.
+function regionSortIndex(regionName: string): number {
+  const index = REGION_ORDER.indexOf(regionName);
+  return index === -1 ? REGION_ORDER.length : index;
 }
 
 export async function selectRegion(
   ctx: Context,
   teamId: number,
   deploymentType: CloudDeploymentType,
-): Promise<string | null> {
+): Promise<RegionName> {
   const regionsResponse = (
     await typedPlatformClient(ctx).GET(
       "/teams/{team_id}/list_deployment_regions",
@@ -463,12 +555,7 @@ export async function selectRegion(
       name: item.displayName,
       value: item.name,
     }))
-    .sort((a, b) => {
-      // Show US region first if it exists
-      if (a.value === "aws-us-east-1") return -1;
-      if (b.value === "aws-us-east-1") return 1;
-      return 0;
-    });
+    .sort((a, b) => regionSortIndex(a.value) - regionSortIndex(b.value));
   return await promptOptions(ctx, {
     message: `Where should this ${deploymentType} deployment run?`,
     suffix: `\n${chalkStderr.gray(
@@ -484,16 +571,18 @@ export async function hasProject(
   projectSlug: string,
 ) {
   try {
-    const projects: Project[] = (
-      await typedBigBrainClient(ctx).GET("/teams/{team_slug}/projects", {
+    await typedPlatformClient(ctx, { throw: true }).GET(
+      "/teams/{team_id_or_slug}/projects/{project_slug}",
+      {
         params: {
           path: {
-            team_slug: teamSlug,
+            team_id_or_slug: teamSlug,
+            project_slug: projectSlug,
           },
         },
-      })
-    ).data!;
-    return !!projects.find((project) => project.slug === projectSlug);
+      },
+    );
+    return true;
   } catch {
     return false;
   }
@@ -506,19 +595,27 @@ export async function hasProjects(ctx: Context) {
 export async function validateOrSelectProject(
   ctx: Context,
   projectSlug: string | undefined,
-  teamSlug: string,
+  teamId: number,
   singleProjectPrompt: string,
   multiProjectPrompt: string,
 ): Promise<string | null> {
-  const projects: Project[] = (
-    await typedBigBrainClient(ctx).GET("/teams/{team_slug}/projects", {
-      params: {
-        path: {
-          team_slug: teamSlug,
+  const projects: Project[] = [];
+  const client = typedPlatformClient(ctx);
+  let cursor: string | undefined;
+  do {
+    const { items, pagination } = (
+      await client.GET("/teams/{team_id}/projects", {
+        params: {
+          path: { team_id: teamId },
+          query: cursor === undefined ? {} : { cursor },
         },
-      },
-    })
-  ).data!;
+      })
+    ).data!;
+    projects.push(...items);
+    cursor = pagination.hasMore
+      ? (pagination.nextCursor ?? undefined)
+      : undefined;
+  } while (cursor !== undefined);
   if (projects.length === 0) {
     return await ctx.crash({
       exitCode: 1,
@@ -527,18 +624,10 @@ export async function validateOrSelectProject(
     });
   }
   if (!projectSlug) {
-    const nonDemoProjects = projects.filter((project) => !project.isDemo);
-    if (nonDemoProjects.length === 0) {
-      return await ctx.crash({
-        exitCode: 1,
-        errorType: "fatal",
-        printedMessage: `No existing non-demo projects! Run this command again and choose "create a new project."`,
-      });
-    }
     // Prompt the user to select project.
-    switch (nonDemoProjects.length) {
+    switch (projects.length) {
       case 1: {
-        const project = nonDemoProjects[0];
+        const project = projects[0];
         const confirmed = await promptYesNo(ctx, {
           message: `${singleProjectPrompt} ${project.name} (${project.slug})?`,
         });
@@ -546,12 +635,12 @@ export async function validateOrSelectProject(
         if (!confirmed) {
           return null;
         }
-        return nonDemoProjects[0].slug;
+        return projects[0].slug;
       }
       default:
         return await promptSearch(ctx, {
           message: multiProjectPrompt,
-          choices: nonDemoProjects.map((project: Project) => ({
+          choices: projects.map((project: Project) => ({
             name: `${project.name} (${project.slug})`,
             value: project.slug,
           })),
@@ -686,7 +775,7 @@ export function cacheDir() {
  *
  * This fetch() also has retries and throws if the response is not ok.
  */
-export async function bigBrainFetch(ctx: Context): Promise<typeof fetch> {
+export function bigBrainFetch(ctx: Context): typeof fetch {
   const authHeader = ctx.bigBrainAuth()?.header;
   const bigBrainHeaders: Record<string, string> = authHeader
     ? {
@@ -752,26 +841,25 @@ export async function bigBrainAPI<T = any>({
  *
  * Pass { throw: true } to throw ThrowingFetchErrors instead of exiting the process.
  */
-function typedBigBrainClientFactory<T>(baseUrl: string) {
+function typedApiClientFactory<T>(
+  baseUrl: string,
+  fetchBuilder: (ctx: Context) => typeof fetch,
+) {
   return (ctx: Context, options: { throw?: boolean } = {}) => {
     type Paths = T extends CliManagementPaths
       ? CliManagementPaths
       : T extends PlatformManagementPaths
         ? PlatformManagementPaths
-        : never;
-    const bigBrainClient = createClient<Paths>({
+        : T extends PlatformDeploymentPaths
+          ? PlatformDeploymentPaths
+          : never;
+    const client = createClient<Paths>({
       baseUrl,
-      fetch: async (
-        resource: Request,
-        options?: RequestInit,
-      ): Promise<Response> => {
-        const fetch = await bigBrainFetch(ctx);
-        return fetch(resource, options);
-      },
+      fetch: fetchBuilder(ctx),
     });
 
     // Wrap the client with error handling - go back to proxy since middleware doesn't catch parsing errors
-    return new Proxy(bigBrainClient, {
+    return new Proxy(client, {
       get(target, prop) {
         const originalMethod = target[prop as keyof typeof target];
 
@@ -804,12 +892,30 @@ function typedBigBrainClientFactory<T>(baseUrl: string) {
   };
 }
 
-export const typedBigBrainClient =
-  typedBigBrainClientFactory<CliManagementPaths>(BIG_BRAIN_URL);
+export const typedBigBrainClient = typedApiClientFactory<CliManagementPaths>(
+  BIG_BRAIN_URL,
+  bigBrainFetch,
+);
 export const typedPlatformClient =
-  typedBigBrainClientFactory<PlatformManagementPaths>(
+  typedApiClientFactory<PlatformManagementPaths>(
     PLATFORM_MANAGEMENT_API_URL,
+    bigBrainFetch,
   );
+
+export function typedDeploymentClient(
+  ctx: Context,
+  args: { deploymentUrl: string; adminKey: string },
+  options: { throw?: boolean } = {},
+) {
+  return typedApiClientFactory<PlatformDeploymentPaths>(
+    `${args.deploymentUrl}/api/v1`,
+    (ctx) =>
+      deploymentFetch(ctx, {
+        deploymentUrl: args.deploymentUrl,
+        adminKey: args.adminKey,
+      }),
+  )(ctx, options);
+}
 
 export async function bigBrainAPIMaybeThrows({
   ctx,
@@ -822,7 +928,7 @@ export async function bigBrainAPIMaybeThrows({
   path: string;
   data?: any;
 }): Promise<any> {
-  const fetch = await bigBrainFetch(ctx);
+  const fetch = bigBrainFetch(ctx);
   const dataString =
     data === undefined
       ? method === "POST"
@@ -888,19 +994,49 @@ export function waitUntilCalled(): [Promise<unknown>, () => void] {
   return [waitPromise, () => onCalled(null)];
 }
 
-// We can eventually switch to something like `filesize` for i18n and
-// more robust formatting, but let's keep our CLI bundle small for now.
+const BYTE_UNITS = ["bytes", "KiB", "MiB", "GiB", "TiB", "PiB"];
+
+/**
+ * Format a byte count into a human-friendly string, rounded to one decimal
+ * place (dropped when it would be ".0"), e.g. "4.1 MiB" or "128 MiB".
+ */
 export function formatSize(n: number): string {
-  if (n < 1024) {
-    return `${n} B`;
+  let value = n;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unitIndex++;
   }
-  if (n < 1024 * 1024) {
-    return `${(n / 1024).toFixed(1)} KB`;
+  // Rounding to one decimal place can itself reach the next unit's
+  // boundary (e.g. 1023.999 KiB -> "1024.0 KiB" instead of "1.0 MiB").
+  const roundedValue = Number(value.toFixed(1));
+  if (roundedValue >= 1024 && unitIndex < BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unitIndex++;
   }
-  if (n < 1024 * 1024 * 1024) {
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  const formatted = value.toFixed(1).replace(/\.0$/, "");
+  return `${formatted} ${BYTE_UNITS[unitIndex]}`;
+}
+
+/**
+ * Read an integer override from the environment, falling back to
+ * `defaultValue` when the variable is unset. The whole value must be a
+ * base-10 integer: `parseInt` would read a typo like `100_000` or `100k` as
+ * 100 and silently move the threshold, so anything else is rejected with a
+ * warning instead.
+ */
+export function integerFromEnv(envVar: string, defaultValue: number): number {
+  const envValue = process.env[envVar];
+  if (envValue === undefined) {
+    return defaultValue;
   }
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (!/^[+-]?\d+$/.test(envValue.trim())) {
+    logWarning(
+      `Ignoring ${envVar}=${JSON.stringify(envValue)}: expected an integer, using ${defaultValue}`,
+    );
+    return defaultValue;
+  }
+  return Number(envValue);
 }
 
 export function formatDuration(ms: number): string {
@@ -1090,12 +1226,12 @@ export function spawnAsync(
 
 const IDEMPOTENT_METHODS = ["GET", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE"];
 
-function retryDelay(
+// immediate, 1s delay, 2s delay, 4s delay, etc.
+export function retryDelay(
   attempt: number,
   _error: Error | null,
   _response: Response | null,
 ): number {
-  // immediate, 1s delay, 2s delay, 4s delay, etc.
   const delay = attempt === 0 ? 1 : 2 ** (attempt - 1) * 1000;
   const randomSum = delay * 0.2 * Math.random();
   return delay + randomSum;
@@ -1104,8 +1240,13 @@ function retryDelay(
 function deploymentFetchRetryOn(
   onError?: (err: any, attempt: number) => void,
   method?: string,
+  maxRetries: number = MAX_RETRIES,
+  shouldRetryOverride?: (
+    error: Error | null,
+    response: Response | null,
+  ) => boolean,
 ) {
-  const shouldRetry = function (
+  const defaultShouldRetry = function (
     _attempt: number,
     error: Error | null,
     response: Response | null,
@@ -1161,6 +1302,21 @@ function deploymentFetchRetryOn(
     return { kind: "stop" };
   };
 
+  const shouldRetry = shouldRetryOverride
+    ? function (
+        _attempt: number,
+        error: Error | null,
+        response: Response | null,
+      ): { kind: "retry"; error: any } | { kind: "stop" } {
+        return shouldRetryOverride(error, response)
+          ? {
+              kind: "retry",
+              error:
+                error ?? `Received response with status ${response?.status}`,
+            }
+          : { kind: "stop" };
+      }
+    : defaultShouldRetry;
   return function (
     attempt: number,
     error: Error | null,
@@ -1170,7 +1326,7 @@ function deploymentFetchRetryOn(
     if (result.kind === "retry") {
       onError?.(result.error, attempt);
     }
-    if (attempt >= MAX_RETRIES) {
+    if (attempt >= maxRetries) {
       // Stop retrying if we've exhausted all retries, but do this after we've
       // called `onError` so that the caller can still log the error.
       return false;
@@ -1229,15 +1385,30 @@ export function deploymentFetch(
     deploymentUrl: string;
     adminKey: string;
     onError?: (err: any) => void;
+    // Defaults to MAX_RETRIES. Lower this for best-effort requests (e.g.
+    // advisory checks) where a slow retry loop against an unsupported or
+    // unhealthy endpoint shouldn't hold up the surrounding command.
+    maxRetries?: number | undefined;
+    // Replaces the default retry policy (which is tuned for pushes: network
+    // errors, 404s on fresh deployments, retries of idempotent methods).
+    // Return true to retry the request. Backoff and retry logging are
+    // shared either way.
+    shouldRetry?: (error: Error | null, response: Response | null) => boolean;
   },
-): typeof throwingFetch {
-  const { deploymentUrl, adminKey, onError } = options;
+): typeof fetch {
+  const {
+    deploymentUrl,
+    adminKey,
+    onError,
+    maxRetries = MAX_RETRIES,
+    shouldRetry,
+  } = options;
   const onErrorWithAttempt = (err: any, attempt: number) => {
     onError?.(err);
     if (attempt >= RETRY_LOG_THRESHOLD) {
       logMessage(
         chalkStderr.gray(
-          `Retrying request (attempt ${attempt}/${MAX_RETRIES})...`,
+          `Retrying request (attempt ${attempt}/${maxRetries})...`,
         ),
       );
     }
@@ -1262,7 +1433,12 @@ export function deploymentFetch(
     }
     const func = throwingFetch(url, {
       retryDelay,
-      retryOn: deploymentFetchRetryOn(onErrorWithAttempt, options?.method),
+      retryOn: deploymentFetchRetryOn(
+        onErrorWithAttempt,
+        options?.method,
+        maxRetries,
+        shouldRetry,
+      ),
       ...options,
       headers,
     });

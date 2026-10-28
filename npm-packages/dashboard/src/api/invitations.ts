@@ -1,31 +1,34 @@
-import { useBBMutation, useBBQuery } from "./api";
+import {
+  useBBMutation,
+  useManagementApiMutation,
+  useManagementApiQuery,
+} from "./api";
 
 export function useTeamInvites(teamId: number) {
-  const { data: invites } = useBBQuery({
-    path: `/teams/{team_id}/invites`,
+  const { data } = useManagementApiQuery({
+    path: "/teams/{team_id}/list_pending_invites",
     pathParams: {
       team_id: teamId.toString(),
     },
   });
-
-  return invites;
+  return data?.items;
 }
 
 export function useCreateInvite(teamId: number) {
-  return useBBMutation({
-    path: "/teams/{team_id}/invites",
+  return useManagementApiMutation({
+    path: "/teams/{team_id}/invite_team_member",
     pathParams: { team_id: teamId.toString() },
-    mutateKey: "/teams/{team_id}/invites",
+    mutateKey: "/teams/{team_id}/list_pending_invites",
     mutatePathParams: { team_id: teamId.toString() },
     successToast: "Invitation sent.",
   });
 }
 
 export function useCancelInvite(teamId: number) {
-  return useBBMutation({
-    path: "/teams/{team_id}/invites/cancel",
+  return useManagementApiMutation({
+    path: "/teams/{team_id}/cancel_team_member_invite",
     pathParams: { team_id: teamId.toString() },
-    mutateKey: "/teams/{team_id}/invites",
+    mutateKey: "/teams/{team_id}/list_pending_invites",
     mutatePathParams: { team_id: teamId.toString() },
     successToast: "Invitation revoked.",
   });

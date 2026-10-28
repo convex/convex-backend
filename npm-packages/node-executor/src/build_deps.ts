@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import { logDurationMs } from "./log";
 import { Hash } from "crypto";
 
@@ -158,19 +159,19 @@ async function buildDepsInner(
   const zippedSizeBytes = fs.statSync(`${dir}/node_modules.zip`).size;
 
   // Upload "node_modules.zip" to specified url
-  let key: string;
   let readStream: fs.ReadStream;
   const startUpload = performance.now();
   switch (url.protocol) {
     // This case is used for local backends that use the filesystem instead of S3 as a storage layer
-    case "file:":
-      fs.mkdirSync(path.dirname(url.pathname), {
+    case "file:": {
+      const filePath = fileURLToPath(url);
+      fs.mkdirSync(path.dirname(filePath), {
         recursive: true,
         mode: 0o744,
       });
-      key = url.pathname;
-      fs.renameSync(`${dir}/node_modules.zip`, key);
+      fs.renameSync(`${dir}/node_modules.zip`, filePath);
       break;
+    }
     // This is the S3 case
     case "https:":
       readStream = fs.createReadStream(`${dir}/node_modules.zip`);

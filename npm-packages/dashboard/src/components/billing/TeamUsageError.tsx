@@ -12,23 +12,14 @@ export function UsageNoDataError() {
   );
 }
 
-export function UsageDataNotAvailable({ entity }: { entity: string }) {
-  return (
-    <TeamUsageError
-      title={`${entity} not available`}
-      description={`${entity} is not available for the period shown.`}
-    />
-  );
-}
-
 export function UsageDataError({ entity = "usage" }: { entity?: string }) {
   const title = `Error fetching ${entity} data`;
   const description = `An error occurred while fetching ${entity.toLowerCase()} data. Please try again later.`;
 
   return (
     <div className="flex h-56 animate-fadeInFromLoading flex-col justify-center p-2 text-center">
-      <CrossCircledIcon className="mx-auto h-6 w-6 text-content-error" />
-      <h5 className="mt-2">{title}</h5>
+      <CrossCircledIcon className="mx-auto size-6 text-content-error" />
+      <h4 className="mt-2">{title}</h4>
       <p className="mt-1 text-sm text-content-secondary">{description}</p>
     </div>
   );
@@ -52,8 +43,8 @@ export function TeamUsageError({
 }) {
   return (
     <div className="flex h-56 animate-fadeInFromLoading flex-col justify-center p-2 text-center">
-      <QuestionMarkCircledIcon className="mx-auto h-6 w-6 text-content-tertiary" />
-      <h5 className="mt-2">{title}</h5>
+      <QuestionMarkCircledIcon className="mx-auto size-6 text-content-tertiary" />
+      <h4 className="mt-2">{title}</h4>
       <p className="mt-1 text-sm text-content-secondary">{description}</p>
     </div>
   );

@@ -1,0 +1,21 @@
+---
+title: "http.ts"
+slug: "http.ts"
+sidebar_label: "http.ts"
+description: "Define HTTP actions in the http.ts file."
+---
+
+import Example from "!!raw-loader!@site/../private-demos/snippets-config-files/convex/http.ts";
+
+`convex/http.ts` allows you to define
+[**HTTP actions**](/functions/http-actions), which serve requests on your
+deployment’s `.convex.site` domain. They are useful for receiving webhooks or
+exposing a public HTTP API.
+
+<Snippet title="convex/http.ts" source={Example} />
+
+## Learn More
+
+- [HTTP Actions](/functions/http-actions)
+- [Upload Files via HTTP](/file-storage/upload-files#uploading-files-via-an-http-action)
+- [`HttpRouter` API reference](/api/classes/server.HttpRouter)

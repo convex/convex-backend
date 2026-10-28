@@ -3,7 +3,7 @@ import { v } from "convex/values";
 import { maximumBytesRead, maximumRowsRead } from "../paginationLimits";
 import { queryGeneric } from "../secretSystemTables";
 
-export default queryGeneric({
+export default queryGeneric("ViewData")({
   args: {
     table: v.string(),
     order: v.union(v.literal("asc"), v.literal("desc")),

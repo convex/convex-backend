@@ -27,7 +27,7 @@ async_zip = { workspace = true }
 async_zip_0_0_9 = { workspace = true }
 aws_s3 = { workspace = true }
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 runtime = { workspace = true }
 storage = { workspace = true, features = ["testing"] }

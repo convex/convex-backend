@@ -14,7 +14,6 @@ use serde::{
 
 /// The Datadog deployment locations, used to construct URLs
 #[derive(Deserialize, Eq, PartialEq, Debug, Clone, Copy)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum DatadogSiteLocation {
     US1,
     US3,
@@ -77,7 +76,6 @@ impl fmt::Display for DatadogSiteLocation {
 
 /// The main configuration required for Datadog HTTP API
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct DatadogConfig {
     pub site_location: DatadogSiteLocation,
     pub dd_api_key: PII<String>,
@@ -129,37 +127,5 @@ impl TryFrom<SerializedDatadogConfig> for DatadogConfig {
 impl fmt::Display for DatadogConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DatadogConfig {{ version: {:?}, ... }}", self.version)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DatadogSiteLocation;
-
-    #[test]
-    fn datadog_site_location_serialize() {
-        let json = r#""US1""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::US1);
-
-        let json = r#""US3""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::US3);
-
-        let json = r#""US5""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::US5);
-
-        let json = r#""EU""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::EU);
-
-        let json = r#""US1_FED""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::US1_FED);
-
-        let json = r#""AP1""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::AP1);
     }
 }

@@ -7,6 +7,7 @@ import { Button } from "@ui/Button";
 import { GoogleAnalytics } from "elements/GoogleAnalytics";
 import { useAccessToken } from "hooks/useServerSideData";
 import { withAuthenticatedPage } from "lib/withAuthenticatedPage";
+import { logout } from "lib/logout";
 import { UIProvider } from "@ui/UIContext";
 
 export { getServerSideProps } from "lib/ssr";
@@ -26,7 +27,7 @@ function Auth() {
         <UIProvider>
           <Button
             variant="neutral"
-            href="/api/auth/logout?returnTo=/api/auth/login"
+            onClick={() => logout()}
             className={classNames("mt-4 ml-auto")}
           >
             Log Out

@@ -14,7 +14,6 @@ use super::ComponentName;
 /// `References` are relative paths to `Resources` that start at some
 /// component.
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum Reference {
     /// Reference originating from `component.args` at component definition time
     /// or `ctx.component.args` at runtime.
@@ -210,32 +209,5 @@ impl From<Reference> for String {
             },
         }
         s
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::Reference;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_reference_roundtrips(reference in any::<Reference>()) {
-            let s = String::from(reference.clone());
-            assert_eq!(s.parse::<Reference>().unwrap(), reference);
-        }
-    }
-
-    #[test]
-    fn test_reference_function_string() -> anyhow::Result<()> {
-        let reference = Reference::Function("foo/bar:baz".parse()?);
-        assert_eq!(reference.evaluation_time_debug_str(), "api.foo.bar.baz");
-        Ok(())
     }
 }

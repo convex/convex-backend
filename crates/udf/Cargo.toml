@@ -17,10 +17,14 @@ testing = [
     "keybroker/testing",
     "metrics/testing",
     "model/testing",
+    "roles/testing",
+    "usage_tracking/testing",
+    "vector/testing",
 ]
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 bytes = { workspace = true }
 common = { workspace = true }
 database = { workspace = true }
@@ -39,13 +43,17 @@ proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 proptest-http = { workspace = true, optional = true }
 rand = { workspace = true }
+roles = { workspace = true }
 semver = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sync_types = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+usage_tracking = { workspace = true }
 value = { workspace = true }
+vector = { workspace = true }
 
 [dev-dependencies]
 cmd_util = { workspace = true }
@@ -58,10 +66,14 @@ model = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
 proptest-http = { workspace = true }
+roles = { workspace = true, features = ["testing"] }
+runtime = { workspace = true, features = ["testing"] }
 sync_types = { workspace = true, features = [
     "testing",
 ] }
+usage_tracking = { workspace = true, features = ["testing"] }
 value = { workspace = true, features = ["testing"] }
+vector = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

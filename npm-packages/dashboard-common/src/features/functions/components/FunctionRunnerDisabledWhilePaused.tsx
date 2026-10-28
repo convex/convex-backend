@@ -1,5 +1,5 @@
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useContext } from "react";
 
 export function FunctionRunnerDisabledWhilePaused() {
@@ -8,13 +8,8 @@ export function FunctionRunnerDisabledWhilePaused() {
     <>
       The function runner is not available while the deployment is paused. To
       resume your deployment, go to{" "}
-      <Link
-        passHref
-        href={`${deploymentsURI}/settings/pause-deployment`}
-        className="text-content-link underline hover:underline"
-      >
-        settings.
-      </Link>
+      <Link href={`${deploymentsURI}/settings/pause-deployment`}>settings</Link>
+      .
     </>
   );
 }

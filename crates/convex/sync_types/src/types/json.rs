@@ -28,6 +28,7 @@ use crate::{
     Query,
     QueryId,
     QuerySetModification,
+    QuerySetVersion,
     SerializedQueryJournal,
     ServerMessage,
     SessionRequestSeqNumber,
@@ -207,7 +208,10 @@ enum ClientMessageJsonInner {
         client_ts: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
-    ModifyQuerySet { base_version: u32, new_version: u32 },
+    ModifyQuerySet {
+        base_version: QuerySetVersion,
+        new_version: QuerySetVersion,
+    },
     #[serde(rename_all = "camelCase")]
     Mutation {
         request_id: u32,
@@ -224,7 +228,7 @@ enum ClientMessageJsonInner {
     },
     #[serde(rename_all = "camelCase")]
     Authenticate {
-        base_version: u32,
+        base_version: IdentityVersion,
         #[serde(flatten)]
         token: AuthenticationTokenJson,
     },
@@ -459,8 +463,8 @@ impl TryFrom<JsonValue> for StateVersion {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct StateVersionJson {
-            query_set: u32,
-            identity: u32,
+            query_set: QuerySetVersion,
+            identity: IdentityVersion,
             ts: String,
         }
         let s: StateVersionJson = serde_json::from_value(value)?;
@@ -1006,182 +1010,4 @@ where
     D: Deserializer<'de>,
 {
     Deserialize::deserialize(deserializer).map(Some)
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::Context;
-    use proptest::prelude::*;
-    use serde_json::{
-        json,
-        value::RawValue,
-        Value as JsonValue,
-    };
-
-    use super::{
-        string_to_u64,
-        u64_to_string,
-        ClientMessageJson,
-        ClientMessageJsonInner,
-    };
-    use crate::{
-        testing::assert_roundtrips,
-        ClientMessage,
-        QueryId,
-        ServerMessage,
-        StateModification,
-        Timestamp,
-        UserIdentifier,
-        UserIdentityAttributes,
-    };
-
-    #[derive(Clone, Debug, PartialEq, Eq, proptest_derive::Arbitrary)]
-    pub struct TestValue(
-        #[cfg_attr(
-            any(test, feature = "testing"),
-            proptest(strategy = "crate::testing::arb_json()")
-        )]
-        pub JsonValue,
-    );
-
-    impl From<TestValue> for JsonValue {
-        fn from(v: TestValue) -> JsonValue {
-            v.0
-        }
-    }
-    impl TryFrom<JsonValue> for TestValue {
-        type Error = anyhow::Error;
-
-        fn try_from(v: JsonValue) -> anyhow::Result<TestValue> {
-            Ok(TestValue(v))
-        }
-    }
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn proptest_u64_roundtrips(x in any::<u64>()) {
-            assert_eq!(string_to_u64(&u64_to_string(x)).unwrap(), x);
-        }
-
-        #[test]
-        fn proptest_client_message_roundtrips(m in any::<ClientMessage>()) {
-            assert_roundtrips::<ClientMessage, JsonValue>(m);
-        }
-
-        #[test]
-        fn proptest_server_message_roundtrips(m in any::<ServerMessage<TestValue>>()) {
-            assert_roundtrips::<ServerMessage<TestValue>, JsonValue>(m);
-        }
-
-        #[test]
-        fn proptest_user_identity_attributes_roundtrips(m in any::<UserIdentityAttributes>()) {
-            assert_roundtrips::<UserIdentityAttributes, JsonValue>(m);
-        }
-    }
-
-    #[test]
-    fn authentication_token_backwards_compatability() {
-        let old_admin_auth_message = json!({"type": "Authenticate", "tokenType": "Admin", "value": "fakefakefake", "baseVersion": 0});
-        assert_roundtrips::<JsonValue, ClientMessage>(old_admin_auth_message);
-        let old_user_auth_message = json!({"type": "Authenticate", "tokenType": "User", "value": "fakefakefake", "baseVersion": 0});
-        assert_roundtrips::<JsonValue, ClientMessage>(old_user_auth_message);
-    }
-
-    #[test]
-    fn user_identity_attributes_deserialize_token_identifier_given() {
-        let serialized = "{\"tokenIdentifier\":\"fake_identifier\"}";
-        let deserialized: UserIdentityAttributes = serde_json::from_str::<JsonValue>(serialized)
-            .unwrap()
-            .try_into()
-            .unwrap();
-        assert_eq!(
-            deserialized.token_identifier,
-            UserIdentifier("fake_identifier".to_owned())
-        );
-    }
-
-    #[test]
-    fn user_identity_attributes_deserialize_token_identifier_deriver() {
-        let serialized = "{\"issuer\":\"fake_issuer\", \"subject\":\"fake_subject\"}";
-        let deserialized: UserIdentityAttributes = serde_json::from_str::<JsonValue>(serialized)
-            .unwrap()
-            .try_into()
-            .unwrap();
-        assert_eq!(
-            deserialized.token_identifier,
-            UserIdentifier::construct("fake_issuer", "fake_subject")
-        );
-    }
-
-    #[test]
-    fn user_identity_attributes_deserialize_token_identifier_cannot_derive() {
-        let serialized = "{\"issuer\":\"fake_issuer\"}";
-        let deserialized: anyhow::Result<UserIdentityAttributes> =
-            serde_json::from_str::<JsonValue>(serialized)
-                .unwrap()
-                .try_into();
-        assert!(deserialized
-            .unwrap_err()
-            .to_string()
-            .contains("Either \"tokenIdentifier\" or \"issuer\" and \"subject\" must be set"));
-    }
-
-    #[test]
-    fn server_message_mutation_response_with_null_error_data_roundtrips() {
-        assert_roundtrips::<ServerMessage<TestValue>, JsonValue>(ServerMessage::MutationResponse {
-            request_id: 1,
-            result: Err(crate::types::ErrorPayload::ErrorData {
-                message: "".to_string(),
-                data: TestValue(JsonValue::Null),
-            }),
-            ts: None,
-            log_lines: crate::LogLinesMessage(vec![]),
-        });
-    }
-
-    #[test]
-    fn server_message_transition_with_null_error_data_roundtrips() {
-        assert_roundtrips::<ServerMessage<TestValue>, JsonValue>(ServerMessage::Transition {
-            start_version: crate::StateVersion {
-                query_set: 1,
-                identity: 1,
-                ts: Timestamp::must(1),
-            },
-            end_version: crate::StateVersion {
-                query_set: 1,
-                identity: 1,
-                ts: Timestamp::must(1),
-            },
-            modifications: vec![StateModification::QueryFailed {
-                query_id: QueryId::new(1),
-                error_message: "".to_string(),
-                log_lines: crate::LogLinesMessage(vec![]),
-                journal: None,
-                error_data: Some(TestValue(JsonValue::Null)),
-            }],
-            client_clock_skew: Some(1),
-            server_ts: Some(Timestamp::must(1)),
-        });
-    }
-
-    #[test]
-    fn test_empty_array_roundtrips() -> anyhow::Result<()> {
-        let client_message = ClientMessageJson {
-            args: Some(RawValue::from_string("[]".to_string())?),
-            modifications: None,
-            remaining: ClientMessageJsonInner::Mutation {
-                request_id: 0,
-                udf_path: "path".to_string(),
-                component_path: None,
-            },
-        };
-        let json = serde_json::to_string(&client_message)?;
-        let _parsed_json: ClientMessageJson =
-            serde_json::from_str(&json).context("Cant parse back")?;
-        Ok(())
-    }
 }

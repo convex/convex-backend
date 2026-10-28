@@ -1,38 +1,42 @@
 import { useFlags } from "launchdarkly-react-client-sdk";
 import kebabCase from "lodash/kebabCase";
 
-const flagDefaults: {
-  commandPalette: boolean;
+export const flagDefaults: {
   commandPaletteDeleteProjects: boolean;
-  singleSignOn: boolean;
-  workOsEnvironmentProvisioningDashboardUi: boolean;
   enableNewDashboardVersionNotification: boolean;
-  enableStatuspageWidget: boolean;
   connectionStateCheckIntervalMs: number;
-  showReferences: boolean;
-  postHogIntegrations: boolean;
+  ephemeralZipExportToken: boolean;
+  directorySync: boolean;
+  promos: boolean;
+  dashboardShowCashUsage: boolean;
+  s3ExportIntegration: boolean;
+  showFivetranSyncProgress: boolean;
+  supportTicketForAllPlans: boolean;
+  healthDeployProgress: boolean;
+  componentSwitcherTreeEnabled: boolean;
+  preAuthorizeStarterPlan: boolean;
+  preAuthorizePaymentMethodChange: boolean;
 } = {
-  commandPalette: false,
   commandPaletteDeleteProjects: false,
-  singleSignOn: false,
-  workOsEnvironmentProvisioningDashboardUi: false,
   enableNewDashboardVersionNotification: false,
-  enableStatuspageWidget: true,
   connectionStateCheckIntervalMs: 2500,
-  showReferences: false,
-  postHogIntegrations: false,
+  ephemeralZipExportToken: false,
+  directorySync: false,
+  promos: false,
+  dashboardShowCashUsage: false,
+  s3ExportIntegration: false,
+  showFivetranSyncProgress: false,
+  supportTicketForAllPlans: false,
+  healthDeployProgress: false,
+  componentSwitcherTreeEnabled: false,
+  preAuthorizeStarterPlan: false,
+  preAuthorizePaymentMethodChange: false,
 };
 
-function kebabCaseKeys(object: typeof flagDefaults) {
-  return Object.entries(object).reduce(
-    (carry, [key, value]) => ({ ...carry, [kebabCase(key)]: value }),
-    {} as { [key: string]: any },
-  );
-}
-
-// Flag defaults need to be in the default kebab-case format:
-// https://docs.launchdarkly.com/sdk/client-side/react/react-web#configuring-the-react-sdk
-export const flagDefaultsKebabCase = kebabCaseKeys(flagDefaults);
+export const flagDefaultsKebabCase = Object.entries(flagDefaults).reduce(
+  (carry, [key, value]) => ({ ...carry, [kebabCase(key)]: value }),
+  {} as { [key: string]: any },
+);
 
 // useLaunchDarkly is a thin wrapper on LaunchDarkly's react sdk which adds manual to flag keys.
 // At some point, we can generate this file.

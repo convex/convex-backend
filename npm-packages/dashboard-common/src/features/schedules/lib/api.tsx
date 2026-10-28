@@ -1,5 +1,5 @@
 import { useContext } from "react";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useAdminKey, useDeploymentUrl } from "@common/lib/deploymentApi";
 import { useNents } from "@common/lib/useNents";
 import { toast } from "@common/lib/utils";
@@ -34,10 +34,7 @@ export function useCancelAllJobs(): (udfPath?: string) => Promise<void> {
           "error",
           <span>
             There are too many functions being scheduled in this deployment.{" "}
-            <Link
-              href={`${deploymentsURI}/settings/pause-deployment`}
-              className="text-content-link hover:underline"
-            >
+            <Link href={`${deploymentsURI}/settings/pause-deployment`}>
               Pause your deployment
             </Link>{" "}
             to cancel all functions.

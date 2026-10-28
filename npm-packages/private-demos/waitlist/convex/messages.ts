@@ -55,7 +55,9 @@ export const updateConversation = internalMutation({
     const conversationParticipantsToExpire =
       conversationParticipantsUpForExpiration.slice(0, headOfWaitlist.length);
     for (const participant of conversationParticipantsToExpire) {
-      await ctx.db.patch(participant._id, { active: false });
+      await ctx.db.patch("conversationParticipant", participant._id, {
+        active: false,
+      });
     }
     for (const waitlistMember of headOfWaitlist) {
       await ctx.db.insert("conversationParticipant", {

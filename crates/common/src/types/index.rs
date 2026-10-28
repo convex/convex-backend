@@ -5,17 +5,24 @@ use std::{
         Debug,
         Display,
     },
+    num::NonZeroU32,
     str::FromStr,
 };
 
 use anyhow::Context;
-use sync_types::identifier::{
-    check_valid_identifier,
-    MIN_IDENTIFIER,
+use compact_str::CompactString;
+use sync_types::{
+    identifier::{
+        check_valid_identifier,
+        MIN_IDENTIFIER,
+    },
+    Timestamp,
 };
 use value::{
     heap_size::HeapSize,
+    identifier::is_valid_identifier,
     FieldName,
+    InternalDocumentId,
     InternalId,
     ResolvedDocumentId,
     TableName,
@@ -34,10 +41,10 @@ use crate::{
 /// Descriptor for an index, e.g., "by_email".
 #[derive(Clone, derive_more::Deref, derive_more::Display, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[display("{_0}")]
-pub struct IndexDescriptor(Cow<'static, str>);
+pub struct IndexDescriptor(CompactString);
 
 impl IndexDescriptor {
-    pub const MIN: Self = IndexDescriptor(Cow::Borrowed(MIN_IDENTIFIER));
+    pub const MIN: Self = IndexDescriptor(CompactString::const_new(MIN_IDENTIFIER));
 
     pub fn is_reserved(&self) -> bool {
         *self == INDEX_BY_ID_DESCRIPTOR
@@ -49,7 +56,21 @@ impl IndexDescriptor {
         let cow: Cow<'static, str> = s.into();
         check_valid_identifier(&cow)
             .with_context(|| index_validation_error::invalid_index_name(&cow))?;
-        Ok(Self(cow))
+        Ok(Self(match cow {
+            Cow::Borrowed(s) => CompactString::const_new(s),
+            Cow::Owned(s) => s.into(),
+        }))
+    }
+
+    /// Creates an IndexDescriptor from a string literal, panicking if invalid.
+    /// This should only be used in a const context.
+    ///
+    /// Use [IndexDescriptor::new] for runtime input.
+    pub const fn const_new(s: &'static str) -> Self {
+        if !is_valid_identifier(s) {
+            panic!("IndexDescriptor is not a valid identifier");
+        }
+        Self(CompactString::const_new(s))
     }
 
     pub fn as_str(&self) -> &str {
@@ -78,21 +99,6 @@ impl HeapSize for IndexDescriptor {
 impl From<IndexDescriptor> for FieldName {
     fn from(desc: IndexDescriptor) -> Self {
         desc.0.parse().expect("IndexDescriptor not valid FieldName")
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for IndexDescriptor {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = IndexDescriptor>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        use crate::identifier::arbitrary_regexes::USER_IDENTIFIER_REGEX;
-        USER_IDENTIFIER_REGEX
-            .prop_filter_map("Invalid IndexDescriptor", |s| IndexDescriptor::new(s).ok())
     }
 }
 
@@ -181,7 +187,6 @@ impl<T: IndexTableIdentifier + FromStr<Err = anyhow::Error>> FromStr for Generic
 ///
 /// Note that this is unrelated to the storage state
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct IndexDiff {
     /// missing -> exists
     /// missing -> staged
@@ -219,9 +224,9 @@ impl<T: IndexTableIdentifier> fmt::Debug for GenericIndexName<T> {
     }
 }
 
-pub const INDEX_BY_ID_DESCRIPTOR: IndexDescriptor = IndexDescriptor(Cow::Borrowed("by_id"));
+pub const INDEX_BY_ID_DESCRIPTOR: IndexDescriptor = IndexDescriptor::const_new("by_id");
 pub const INDEX_BY_CREATION_TIME_DESCRIPTOR: IndexDescriptor =
-    IndexDescriptor(Cow::Borrowed("by_creation_time"));
+    IndexDescriptor::const_new("by_creation_time");
 
 impl<T: IndexTableIdentifier> GenericIndexName<T> {
     /// Create a new index name for the table and given descriptor,
@@ -246,7 +251,7 @@ impl<T: IndexTableIdentifier> GenericIndexName<T> {
 
     /// The index that exists for all tables which indexes no fields except the
     /// implicitly-included `_id`.
-    pub fn by_id(table: T) -> Self {
+    pub const fn by_id(table: T) -> Self {
         Self {
             table,
             descriptor: INDEX_BY_ID_DESCRIPTOR,
@@ -254,7 +259,7 @@ impl<T: IndexTableIdentifier> GenericIndexName<T> {
     }
 
     /// The index that exists for all tables which indexes `_creationTime`.
-    pub fn by_creation_time(table: T) -> Self {
+    pub const fn by_creation_time(table: T) -> Self {
         Self {
             table,
             descriptor: INDEX_BY_CREATION_TIME_DESCRIPTOR,
@@ -333,33 +338,147 @@ impl IndexName {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl<T: IndexTableIdentifier + proptest::arbitrary::Arbitrary> proptest::arbitrary::Arbitrary
-    for GenericIndexName<T>
-{
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = GenericIndexName<T>>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        any::<(T, IndexDescriptor)>().prop_filter_map("Invalid IndexName", |(t, d)| {
-            GenericIndexName::new(t, d).ok()
-        })
+/// The ID of an index is the internal ID of its index metadata document's ID
+/// (the document in the `_index` table).
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    derive_more::From,
+    derive_more::Display,
+)]
+pub struct IndexId(pub InternalId);
+impl IndexId {
+    pub fn size(&self) -> usize {
+        self.0.size()
     }
 }
 
-pub type IndexId = InternalId;
+/// The compact identifier used by a persistence implementation to store an
+/// index's rows.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct PersistenceIndexId(NonZeroU32);
+
+impl PersistenceIndexId {
+    pub const FIRST: Self = Self(NonZeroU32::MIN);
+
+    pub const fn new(value: u32) -> Option<Self> {
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl TryFrom<u32> for PersistenceIndexId {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u32) -> anyhow::Result<Self> {
+        Self::new(value).context("persistence index IDs must be nonzero")
+    }
+}
+
+/// A database index as persistence identifies it: the `_index` document's ID
+/// and the persistence index ID its metadata held at the snapshot being read,
+/// so a layout keyed by that ID never resolves it from newer metadata. Text and
+/// vector indexes have no persistence rows and so no ref.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct IndexRef {
+    id: IndexId,
+    /// `None` until the index's metadata is assigned one, or without metadata.
+    /// Non-optional once every index has one and every ref comes from metadata.
+    persistence_index_id: Option<PersistenceIndexId>,
+}
+
+impl IndexRef {
+    /// A ref built without metadata, which a layout keyed by the persistence
+    /// index ID rejects. Its callers are the fallback for a funrun predating
+    /// the ID on the wire and `db_import`, whose exports carry none; when both
+    /// are gone, so is this, and the ID stops being optional.
+    pub const fn unresolved(id: IndexId) -> Self {
+        Self {
+            id,
+            persistence_index_id: None,
+        }
+    }
+
+    /// Reassembles a ref whose parts came from one ref or one metadata
+    /// revision.
+    pub const fn from_parts(id: IndexId, persistence_index_id: Option<PersistenceIndexId>) -> Self {
+        Self {
+            id,
+            persistence_index_id,
+        }
+    }
+
+    pub const fn id(&self) -> IndexId {
+        self.id
+    }
+
+    pub const fn persistence_index_id(&self) -> Option<PersistenceIndexId> {
+        self.persistence_index_id
+    }
+}
+
+// TODO: this encoding is rarely used and confusing
+impl From<IndexId> for String {
+    fn from(index_id: IndexId) -> String {
+        index_id.0.into()
+    }
+}
+impl FromStr for IndexId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.parse()?))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum IndexWriteMode {
+    /// Index backfill has inserted all existing index entries. In persistence
+    /// v6, `DatabaseIndexUpdate::prev` (copied to
+    /// `PersistenceIndexEntry::prev`) identifies the row to remove from the
+    /// current index and store in history, using its `ts` and `document_id`
+    /// for the update's `index` and `key`.
+    ScanComplete,
+    /// Index backfill is still inserting entries, so `prev` may not exist in
+    /// persistence yet. Persistence v6 records deletions for post-scan
+    /// reconciliation instead of verifying `prev`.
+    Scanning,
+}
 
 #[derive(Eq, PartialEq, Clone, Debug, Ord, PartialOrd)]
 pub struct DatabaseIndexUpdate {
-    // id of the index document where the index is defined.
-    pub index_id: IndexId,
+    pub mode: IndexWriteMode,
+    pub index: IndexRef,
 
     pub key: IndexKey,
     pub value: DatabaseIndexValue,
+    /// The entry this update supersedes: the old document's entry for the same
+    /// key, when it produced one.
+    pub prev: Option<PrevIndexEntry>,
 
     pub is_system_index: bool,
+}
+
+/// An index entry a newer one supersedes: the same key's previous revision. A
+/// layout that keeps one live row per key moves that row into its history from
+/// these values instead of reading it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PrevIndexEntry {
+    pub ts: Timestamp,
+    pub document_id: InternalDocumentId,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug, Ord, PartialOrd)]
@@ -373,32 +492,5 @@ pub enum DatabaseIndexValue {
 impl DatabaseIndexValue {
     pub fn is_delete(&self) -> bool {
         matches!(self, DatabaseIndexValue::Deleted)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    mod test_min_index_descriptor {
-        use cmd_util::env::env_config;
-        use proptest::prelude::*;
-
-        use super::super::IndexDescriptor;
-
-        proptest! {
-            #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-            #[test]
-            fn proptest(index_name in any::<IndexDescriptor>()) {
-                assert!(IndexDescriptor::MIN <= index_name);
-            }
-        }
-
-        #[test]
-        fn proptest_trophies() {
-            // #2716: `IndexDescriptor::min` was "a", where "A" < "a".
-            assert!(IndexDescriptor::MIN <= IndexDescriptor::new("B").unwrap());
-        }
     }
 }

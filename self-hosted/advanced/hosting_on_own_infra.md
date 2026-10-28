@@ -3,11 +3,11 @@
 It's possible to run Convex on your own servers, with your own routing.
 
 Download the
-[`docker-compose.yml` file](https://github.com/get-convex/convex-backend/tree/main/self-hosted/docker/docker-compose.yml)
+[`docker-compose.yml` file](https://github.com/convex/convex-backend/tree/main/self-hosted/docker/docker-compose.yml)
 onto the server you want to run Convex on.
 
 ```sh
-curl -O https://raw.githubusercontent.com/get-convex/convex-backend/main/self-hosted/docker/docker-compose.yml
+curl -O https://raw.githubusercontent.com/convex/convex-backend/main/self-hosted/docker/docker-compose.yml
 ```
 
 Your Convex backend will be running on this server at port 3210, with HTTP

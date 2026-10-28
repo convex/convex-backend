@@ -5,6 +5,7 @@ use std::{
     },
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::Context;
@@ -64,9 +65,12 @@ use value::{
 
 use super::{
     AsyncOpRequest,
-    IsolateEnvironment,
+    JsEnvironment,
+    OpProvider,
+    SyscallProvider,
 };
 use crate::{
+    context_cache::ContextCache,
     environment::{
         helpers::syscall_error::{
             syscall_description_for_error,
@@ -79,9 +83,11 @@ use crate::{
         Isolate,
         CONVEX_SCHEME,
     },
+    module_cache::V8ModuleSource,
     request_scope::RequestScope,
     strings,
     timeout::Timeout,
+    ConcurrencyPermit,
 };
 
 pub struct AppDefinitionEvaluator {
@@ -112,7 +118,8 @@ impl AppDefinitionEvaluator {
 
     pub async fn evaluate<RT: Runtime>(
         self,
-        client_id: String,
+        context_cache: &mut ContextCache,
+        mut permit: ConcurrencyPermit,
         isolate: &mut Isolate<RT>,
     ) -> anyhow::Result<EvaluateAppDefinitionsResult> {
         let mut in_progress = BTreeSet::new();
@@ -147,10 +154,10 @@ impl AppDefinitionEvaluator {
                     let (filename, source) = if path.is_root() {
                         (
                             APP_CONFIG_FILE_NAME,
-                            FullModuleSource {
+                            V8ModuleSource::new(FullModuleSource {
                                 source: self.app_definition.source.clone(),
                                 source_map: self.app_definition.source_map.clone(),
-                            },
+                            }),
                         )
                     } else {
                         let component_definition = self
@@ -159,22 +166,24 @@ impl AppDefinitionEvaluator {
                             .context("Component definition not found")?;
                         (
                             COMPONENT_CONFIG_FILE_NAME,
-                            FullModuleSource {
+                            V8ModuleSource::new(FullModuleSource {
                                 source: component_definition.source.clone(),
                                 source_map: component_definition.source_map.clone(),
-                            },
+                            }),
                         )
                     };
-                    let result = self
+                    let (result, permit_) = self
                         .evaluate_definition(
-                            client_id.clone(),
                             isolate,
+                            context_cache,
+                            permit,
                             &path,
                             &definitions,
                             filename,
                             Arc::new(source),
                         )
                         .await?;
+                    permit = permit_;
                     in_progress.remove(&path);
                     definitions.insert(path, result);
                 },
@@ -185,13 +194,14 @@ impl AppDefinitionEvaluator {
 
     async fn evaluate_definition<RT: Runtime>(
         &self,
-        client_id: String,
         isolate: &mut Isolate<RT>,
+        context_cache: &mut ContextCache,
+        permit: ConcurrencyPermit,
         path: &ComponentDefinitionPath,
         evaluated_components: &BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
         filename: &str,
-        source: Arc<FullModuleSource>,
-    ) -> anyhow::Result<ComponentDefinitionMetadata> {
+        source: Arc<V8ModuleSource>,
+    ) -> anyhow::Result<(ComponentDefinitionMetadata, ConcurrencyPermit)> {
         let environment_variables = if path.is_root() {
             let mut env_vars = self.system_env_vars.clone();
             env_vars.extend(self.user_environment_variables.clone());
@@ -206,12 +216,12 @@ impl AppDefinitionEvaluator {
             environment_variables,
         };
 
-        let (handle, state, mut timeout) = isolate.start_request(client_id.into(), env).await?;
+        let (handle, state, mut timeout) =
+            isolate.start_request(context_cache, permit, env).await?;
         scope!(let handle_scope, isolate.isolate());
         let v8_context = v8::Context::new(handle_scope, v8::ContextOptions::default());
         let context_scope = &mut v8::ContextScope::new(handle_scope, v8_context);
-        let mut isolate_context =
-            RequestScope::new(context_scope, handle.clone(), state, false).await?;
+        let mut isolate_context = RequestScope::new(context_scope, handle.clone(), state, false)?;
         let handle = isolate_context.handle();
 
         let result = {
@@ -297,9 +307,9 @@ impl AppDefinitionEvaluator {
 
         isolate_context.checkpoint();
         drop(isolate_context);
-        handle.take_termination_error(None, "evaluate_definition")??;
+        handle.take_termination_error("evaluate_definition")??;
 
-        Ok(result)
+        Ok((result, timeout.finish_with_permit()?))
     }
 }
 
@@ -353,25 +363,26 @@ impl ComponentInitializerEvaluator {
 
     pub async fn evaluate<RT: Runtime>(
         self,
-        client_id: String,
+        context_cache: &mut ContextCache,
+        permit: ConcurrencyPermit,
         isolate: &mut Isolate<RT>,
     ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
         let filename = COMPONENT_CONFIG_FILE_NAME.to_string();
         let env = DefinitionEnvironment {
             expected_filename: filename.clone(),
-            source: Arc::new(FullModuleSource {
+            source: Arc::new(V8ModuleSource::new(FullModuleSource {
                 source: self.definition.source,
                 source_map: self.definition.source_map,
-            }),
+            })),
             evaluated_definitions: self.evaluated_definitions,
             environment_variables: None,
         };
-        let (handle, state, mut timeout) = isolate.start_request(client_id.into(), env).await?;
+        let (handle, state, mut timeout) =
+            isolate.start_request(context_cache, permit, env).await?;
         scope!(let handle_scope, isolate.isolate());
         let v8_context = v8::Context::new(handle_scope, v8::ContextOptions::default());
         let context_scope = &mut v8::ContextScope::new(handle_scope, v8_context);
-        let mut isolate_context =
-            RequestScope::new(context_scope, handle.clone(), state, true).await?;
+        let mut isolate_context = RequestScope::new(context_scope, handle.clone(), state, true)?;
         let handle = isolate_context.handle();
 
         let result = {
@@ -462,7 +473,7 @@ impl ComponentInitializerEvaluator {
 
         isolate_context.checkpoint();
         drop(isolate_context);
-        handle.take_termination_error(None, "evaluate")??;
+        handle.take_termination_error("evaluate")??;
 
         Ok(result)
     }
@@ -473,7 +484,7 @@ const APP_CONFIG_FILE_NAME: &str = "convex.config.js";
 
 struct DefinitionEnvironment {
     expected_filename: String,
-    source: Arc<FullModuleSource>,
+    source: Arc<V8ModuleSource>,
 
     evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
     /// Environment variables are allowed in app but not in
@@ -481,7 +492,7 @@ struct DefinitionEnvironment {
     environment_variables: Option<BTreeMap<EnvVarName, EnvVarValue>>,
 }
 
-impl<RT: Runtime> IsolateEnvironment<RT> for DefinitionEnvironment {
+impl OpProvider for DefinitionEnvironment {
     fn trace(&mut self, _level: LogLevel, messages: Vec<String>) -> anyhow::Result<()> {
         tracing::warn!(
             "Unexpected Console access when evaluating app definition: {}",
@@ -511,6 +522,20 @@ impl<RT: Runtime> IsolateEnvironment<RT> for DefinitionEnvironment {
         ))
     }
 
+    fn performance_now(&mut self) -> anyhow::Result<Duration> {
+        anyhow::bail!(ErrorMetadata::bad_request(
+            "NoPerformanceDuringDefinitionEvaluation",
+            "The Performance API is not supported when evaluating app definition"
+        ))
+    }
+
+    fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
+        anyhow::bail!(ErrorMetadata::bad_request(
+            "NoPerformanceDuringDefinitionEvaluation",
+            "The Performance API is not supported when evaluating app definition"
+        ))
+    }
+
     fn get_environment_variable(
         &mut self,
         name: EnvVarName,
@@ -530,12 +555,14 @@ impl<RT: Runtime> IsolateEnvironment<RT> for DefinitionEnvironment {
             "Getting the table mapping unsupported when evaluating app definition"
         ))
     }
+}
 
+impl<RT: Runtime> SyscallProvider<RT> for DefinitionEnvironment {
     async fn lookup_source(
         &mut self,
         path: &str,
         _timeout: &mut Timeout<RT>,
-    ) -> anyhow::Result<Option<(Arc<FullModuleSource>, ModuleCodeCacheResult)>> {
+    ) -> anyhow::Result<Option<(Arc<V8ModuleSource>, ModuleCodeCacheResult)>> {
         if path == &self.expected_filename {
             return Ok(Some((self.source.clone(), ModuleCodeCacheResult::noop())));
         }
@@ -554,12 +581,12 @@ impl<RT: Runtime> IsolateEnvironment<RT> for DefinitionEnvironment {
             let default_name_string = match def.definition_type {
                 ComponentDefinitionType::App => anyhow::bail!(ErrorMetadata::bad_request(
                     "NoImportAppDuringDefinitionEvaluation",
-                    format!("App should not be imported while evaluating app definition")
+                    "App should not be imported while evaluating app definition".to_string()
                 )),
                 ComponentDefinitionType::ChildComponent { ref name, args: _ } => name.to_string(),
             };
 
-            let synthetic_module = FullModuleSource {
+            let synthetic_module = V8ModuleSource::new(FullModuleSource {
                 source: ModuleSource::new(&format!(
                     "export default {{ export: () => {{ return {} }}, componentDefinitionPath: \
                      \"{}\", defaultName: \"{}\"}}",
@@ -568,7 +595,7 @@ impl<RT: Runtime> IsolateEnvironment<RT> for DefinitionEnvironment {
                     default_name_string
                 )),
                 source_map: None,
-            };
+            });
             return Ok(Some((
                 Arc::new(synthetic_module),
                 ModuleCodeCacheResult::noop(),
@@ -586,12 +613,21 @@ impl<RT: Runtime> IsolateEnvironment<RT> for DefinitionEnvironment {
             format!("Syscall {name} unsupported when evaluating app definition")
         ))
     }
+}
+
+impl<RT: Runtime> JsEnvironment<RT> for DefinitionEnvironment {
+    type AsyncResolver = v8::Global<v8::PromiseResolver>;
+    type SyscallProvider = Self;
+
+    fn syscall_provider(&mut self) -> &mut Self::SyscallProvider {
+        self
+    }
 
     fn start_async_syscall(
         &mut self,
         name: String,
         _args: JsonValue,
-        _resolver: v8::Global<v8::PromiseResolver>,
+        _resolver: Self::AsyncResolver,
     ) -> anyhow::Result<()> {
         anyhow::bail!(ErrorMetadata::bad_request(
             format!("No{}DuringAppDefinition", syscall_name_for_error(&name)),
@@ -605,7 +641,7 @@ impl<RT: Runtime> IsolateEnvironment<RT> for DefinitionEnvironment {
     fn start_async_op(
         &mut self,
         request: AsyncOpRequest,
-        _resolver: v8::Global<v8::PromiseResolver>,
+        _resolver: Self::AsyncResolver,
     ) -> anyhow::Result<()> {
         anyhow::bail!(ErrorMetadata::bad_request(
             format!("No{}DuringAppDefinition", request.name_for_error()),

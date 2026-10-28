@@ -34,7 +34,54 @@ import {
 } from "convex/server";
 
 import { DefaultFunctionArgs } from "convex/server";
-import { performOp } from "udf-syscall-ffi";
+import { performOp, performAsyncSyscall } from "udf-syscall-ffi";
+
+declare const Convex: {
+  syscall: (op: string, jsonArgs: string) => string;
+};
+
+export type NoPermissionRequired = { noPermissionRequired: true };
+// Allows permissions a system op without a specific operation check. Still requires an admin identity for system functions.
+export const noPermissionRequired: NoPermissionRequired = {
+  noPermissionRequired: true,
+};
+
+export type DeploymentOp =
+  | "Deploy"
+  | "ViewEnvironmentVariables"
+  | "WriteEnvironmentVariables"
+  | "PauseDeployment"
+  | "UnpauseDeployment"
+  | "ViewLogs"
+  | "ViewMetrics"
+  | "ViewIntegrations"
+  | "WriteIntegrations"
+  | "ViewData"
+  | "WriteData"
+  | "ViewBackups"
+  | "CreateBackups"
+  | "DownloadBackups"
+  | "DeleteBackups"
+  | "ImportBackups"
+  | "ActAsUser"
+  | "RunInternalQueries"
+  | "RunInternalMutations"
+  | "RunInternalActions"
+  | "RunTestQuery"
+  | "ViewAuditLog"
+  | "ViewUsage"
+  | "ViewUsageLimits"
+  | "WriteUsageLimits"
+  | "UseAiGateway";
+
+export function requireOperation(
+  operation: DeploymentOp | NoPermissionRequired,
+): void {
+  if (typeof operation === "object" && operation.noPermissionRequired) {
+    return;
+  }
+  Convex.syscall("1.0/requireOperation", JSON.stringify({ operation }));
+}
 
 type FunctionDefinition = {
   args: Record<string, GenericValidator>;
@@ -52,46 +99,56 @@ type WrappedFunctionDefinition = {
 
 type Wrapper = (def: FunctionDefinition) => WrappedFunctionDefinition;
 
-function withArgsValidated<T>(wrapper: T): T {
-  return ((functionDefinition: FunctionDefinition) => {
-    if (!("args" in functionDefinition)) {
-      throw new Error("args validator required for system udf");
+function withArgsValidated<T>(
+  wrapper: T,
+): (operation: DeploymentOp | NoPermissionRequired) => T {
+  return (operation: DeploymentOp | NoPermissionRequired) => {
+    if (!operation) {
+      throw new Error("operation required for system udf");
     }
-    const wrap: Wrapper = wrapper as Wrapper;
-    const func = wrap({
-      args: functionDefinition.args,
-      returns: functionDefinition.returns,
-      handler: () => {},
-    });
-    const argsValidatorJson = func.exportArgs();
-    const returnsValidatorJson = func.exportReturns();
-    return wrap({
-      args: functionDefinition.args,
-      returns: functionDefinition.returns,
-      handler: async (ctx: any, args: any) => {
-        const validateArgsResult = await performOp(
-          "validateArgs",
-          argsValidatorJson,
-          JSON.stringify(convexToJson(args)),
-        );
-        if (!validateArgsResult.valid) {
-          throw new Error(validateArgsResult.message);
-        }
-        const functionResult = await functionDefinition.handler(ctx, args);
-        const validateReturnsResult = await performOp(
-          "validateReturns",
-          returnsValidatorJson,
-          JSON.stringify(
-            convexToJson(functionResult === undefined ? null : functionResult),
-          ),
-        );
-        if (!validateReturnsResult.valid) {
-          throw new Error(validateReturnsResult.message);
-        }
-        return functionResult;
-      },
-    });
-  }) as T;
+    return ((functionDefinition: FunctionDefinition) => {
+      if (!("args" in functionDefinition)) {
+        throw new Error("args validator required for system udf");
+      }
+      const wrap: Wrapper = wrapper as Wrapper;
+      const func = wrap({
+        args: functionDefinition.args,
+        returns: functionDefinition.returns,
+        handler: () => {},
+      });
+      const argsValidatorJson = func.exportArgs();
+      const returnsValidatorJson = func.exportReturns();
+      return wrap({
+        args: functionDefinition.args,
+        returns: functionDefinition.returns,
+        handler: async (ctx: any, args: any) => {
+          requireOperation(operation);
+          const validateArgsResult = await performOp(
+            "validateArgs",
+            argsValidatorJson,
+            JSON.stringify(convexToJson(args)),
+          );
+          if (!validateArgsResult.valid) {
+            throw new Error(validateArgsResult.message);
+          }
+          const functionResult = await functionDefinition.handler(ctx, args);
+          const validateReturnsResult = await performOp(
+            "validateReturns",
+            returnsValidatorJson,
+            JSON.stringify(
+              convexToJson(
+                functionResult === undefined ? null : functionResult,
+              ),
+            ),
+          );
+          if (!validateReturnsResult.valid) {
+            throw new Error(validateReturnsResult.message);
+          }
+          return functionResult;
+        },
+      });
+    }) as T;
+  };
 }
 
 export const queryGeneric = withArgsValidated(baseQueryGeneric);
@@ -105,23 +162,40 @@ export const internalActionGeneric = withArgsValidated(
   baseInternalActionGeneric,
 );
 
-export const mutationGeneric = ((functionDefinition: FunctionDefinition) => {
-  return mutationGenericWithoutComponent({
-    args: functionDefinition.args,
-    returns: functionDefinition.returns,
-    handler: async (ctx: any, args: any) => {
-      if (
-        "componentId" in args &&
-        args.componentId !== null &&
-        args.componentId !== undefined
-      ) {
-        const ref = currentSystemUdfInComponent(args.componentId);
-        return await ctx.runMutation(ref, { ...args, componentId: null });
-      }
-      return functionDefinition.handler(ctx, args);
-    },
+export const mutationGeneric = (
+  operation: DeploymentOp,
+): typeof baseMutationGeneric => {
+  if (!operation) {
+    throw new Error("operation required for system udf");
+  }
+  return ((functionDefinition: FunctionDefinition) => {
+    return mutationGenericWithoutComponent(operation)({
+      args: functionDefinition.args,
+      returns: functionDefinition.returns,
+      handler: async (ctx: any, args: any) => {
+        if (
+          "componentId" in args &&
+          args.componentId !== null &&
+          args.componentId !== undefined
+        ) {
+          const ref = currentSystemUdfInComponent(args.componentId);
+          return await ctx.runMutation(ref, { ...args, componentId: null });
+        }
+        return functionDefinition.handler(ctx, args);
+      },
+    });
+  }) as typeof baseMutationGeneric;
+};
+
+export async function writeAuditLog(
+  action: string,
+  metadata: Record<string, unknown>,
+) {
+  await performAsyncSyscall("1.0/writeDeploymentAuditLog", {
+    action,
+    metadata,
   });
-}) as typeof baseMutationGeneric;
+}
 
 // Specific to this schema.
 export const query = withArgsValidated(baseQuery);

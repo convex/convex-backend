@@ -36,7 +36,7 @@ export function ConvexStatusWidget({ status }: { status?: ConvexStatus }) {
         <>
           <span className="relative flex size-3 shrink-0">
             {status.indicator === "none" && (
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-content-success opacity-75" />
+              <span className="absolute inline-flex size-full animate-ping rounded-full bg-content-success opacity-75" />
             )}
             <span
               className={cn(

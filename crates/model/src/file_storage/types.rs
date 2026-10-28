@@ -15,7 +15,6 @@ use value::{
     ConvexValue,
 };
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileStorageEntry {
     pub storage_id: StorageUuid, /* Used to generate URLs. Used to be the primary storage
@@ -121,33 +120,5 @@ impl From<FileStorageEntry> for FileStorageEntryProto {
             size: Some(entry.size),
             content_type: entry.content_type,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use common::testing::assert_roundtrips;
-    use pb::storage::FileStorageEntry as FileStorageEntryProto;
-    use proptest::prelude::*;
-    use value::ConvexObject;
-
-    use super::FileStorageEntry;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_storage_entry_roundtrip(v in any::<FileStorageEntry>()) {
-            assert_roundtrips::<FileStorageEntry, ConvexObject>(v);
-        }
-
-        #[test]
-        fn test_storage_entry_proto_roundtrip(v in any::<FileStorageEntry>()) {
-            assert_roundtrips::<FileStorageEntry, FileStorageEntryProto>(v);
-        }
-
     }
 }

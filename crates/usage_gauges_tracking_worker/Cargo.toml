@@ -22,7 +22,6 @@ metrics = { workspace = true }
 model = { workspace = true }
 parking_lot = { workspace = true, features = ["hardware-lock-elision"] }
 rand = { workspace = true }
-storage = { workspace = true }
 tracing = { workspace = true }
 usage_tracking = { workspace = true }
 value = { workspace = true }

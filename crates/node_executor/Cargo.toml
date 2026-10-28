@@ -23,23 +23,23 @@ testing = [
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 cmd_util = { workspace = true }
-command-fds = { workspace = true }
 common = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
-home = { workspace = true }
 isolate = { workspace = true }
 keybroker = { workspace = true }
 maplit = { workspace = true }
+memchr = { workspace = true }
 metrics = { workspace = true }
 model = { workspace = true }
+rand = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sourcemap = { workspace = true }
 storage = { workspace = true }
 sync_types = { workspace = true }
 tempfile = { workspace = true }
@@ -53,7 +53,7 @@ anyhow = "1"
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 isolate = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }

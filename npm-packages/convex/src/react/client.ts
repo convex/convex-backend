@@ -12,6 +12,7 @@ import {
   AuthTokenFetcher,
   BaseConvexClientOptions,
   ConnectionState,
+  BaseConvexClientInterface,
 } from "../browser/sync/client.js";
 import type { UserIdentityAttributes } from "../browser/sync/protocol.js";
 import { RequestForQueries, useQueries } from "./use_queries.js";
@@ -20,11 +21,12 @@ import { parseArgs } from "../common/index.js";
 import {
   ArgsAndOptions,
   FunctionArgs,
-  FunctionReference,
   FunctionReturnType,
   OptionalRestArgs,
   getFunctionName,
   makeFunctionReference,
+  FunctionReference,
+  FunctionReference_future,
 } from "../server/api.js";
 import { EmptyObject } from "../server/registration.js";
 import {
@@ -32,7 +34,7 @@ import {
   instantiateNoopLogger,
   Logger,
 } from "../browser/logging.js";
-import { ConvexQueryOptions } from "../browser/query_options.js";
+import type { QueryOptions } from "../browser/query_options.js";
 import { LoadMoreOfPaginatedQuery } from "../browser/sync/pagination.js";
 import {
   PaginatedQueryClient,
@@ -54,7 +56,11 @@ if (typeof React === "undefined") {
  *
  * @public
  */
-export interface ReactMutation<Mutation extends FunctionReference<"mutation">> {
+export interface ReactMutation<
+  Mutation extends
+    | FunctionReference<"mutation">
+    | FunctionReference_future<"mutation">,
+> {
   /**
    * Execute the mutation on the server, returning a `Promise` of its return value.
    *
@@ -94,7 +100,9 @@ export interface ReactMutation<Mutation extends FunctionReference<"mutation">> {
 
 // Exported only for testing.
 export function createMutation(
-  mutationReference: FunctionReference<"mutation">,
+  mutationReference:
+    | FunctionReference<"mutation">
+    | FunctionReference_future<"mutation">,
   client: ConvexReactClient,
   update?: OptimisticUpdate<any>,
 ): ReactMutation<any> {
@@ -125,7 +133,11 @@ export function createMutation(
  *
  * @public
  */
-export interface ReactAction<Action extends FunctionReference<"action">> {
+export interface ReactAction<
+  Action extends
+    | FunctionReference<"action">
+    | FunctionReference_future<"action">,
+> {
   /**
    * Execute the function on the server, returning a `Promise` of its return value.
    *
@@ -137,7 +149,9 @@ export interface ReactAction<Action extends FunctionReference<"action">> {
 }
 
 function createAction(
-  actionReference: FunctionReference<"action">,
+  actionReference:
+    | FunctionReference<"action">
+    | FunctionReference_future<"action">,
   client: ConvexReactClient,
 ): ReactAction<any> {
   return function (args?: Record<string, Value>): Promise<unknown> {
@@ -287,7 +301,22 @@ export interface MutationOptions<Args extends Record<string, Value>> {
  *
  * @public
  */
-export interface ConvexReactClientOptions extends BaseConvexClientOptions {}
+export interface ConvexReactClientOptions extends BaseConvexClientOptions {
+  /**
+   * An already-constructed {@link BaseConvexClient} to use instead of
+   * constructing one internally. When provided, this client (and its
+   * derived {@link PaginatedQueryClient}) is used for all operations.
+   *
+   * @internal
+   */
+  baseClient?: BaseConvexClientInterface;
+
+  // FIXME: Ideally we define `ConvexReactClientOptions` as
+  // `type ConvexReactClientOptions = BaseConvexClientOptions | { baseClient: BaseConvexClient }`
+  // so that callers won’t try to set `BaseConvexClientOptions` attributes that are ineffective.
+  // But since `baseClient` is internal at the moment, I don’t think we can do that.
+  // We can fix this if we ever make `baseClient` public.
+}
 
 /**
  * A Convex client for use within React.
@@ -298,7 +327,7 @@ export interface ConvexReactClientOptions extends BaseConvexClientOptions {}
  */
 export class ConvexReactClient {
   private address: string;
-  private cachedSync?: BaseConvexClient | undefined;
+  private cachedSync?: BaseConvexClientInterface | undefined;
   private cachedPaginatedQueryClient?: PaginatedQueryClient | undefined;
   private listeners: Map<QueryToken | PaginatedQueryToken, Set<() => void>>;
   private options: ConvexReactClientOptions;
@@ -367,11 +396,13 @@ export class ConvexReactClient {
       return this.cachedSync;
     }
     // BaseConvexClient and paginated query client are always created together.
-    this.cachedSync = new BaseConvexClient(
-      this.address,
-      () => {}, // Use the PaginatedQueryClient's transition instead.
-      this.options,
-    );
+    this.cachedSync =
+      this.options.baseClient ??
+      new BaseConvexClient(
+        this.address,
+        () => {}, // Use the PaginatedQueryClient's transition instead.
+        this.options,
+      );
     if (this.adminAuth) {
       this.cachedSync.setAdminAuth(this.adminAuth, this.fakeUserIdentity);
     }
@@ -404,10 +435,12 @@ export class ConvexReactClient {
    * when the user's rights were permanently revoked.
    * @param fetchToken - an async function returning the JWT-encoded OpenID Connect Identity Token
    * @param onChange - a callback that will be called when the authentication status changes
+   * @param onRefreshChange - a callback called with `true` when the socket is paused to fetch a replacement token after a server rejection, and `false` when refresh completes
    */
   setAuth(
     fetchToken: AuthTokenFetcher,
     onChange?: (isAuthenticated: boolean) => void,
+    onRefreshChange?: (isRefreshing: boolean) => void,
   ) {
     if (typeof fetchToken === "string") {
       throw new Error(
@@ -421,6 +454,7 @@ export class ConvexReactClient {
         (() => {
           // Do nothing
         }),
+      onRefreshChange,
     );
   }
 
@@ -460,7 +494,11 @@ export class ConvexReactClient {
    *
    * @returns The {@link Watch} object.
    */
-  watchQuery<Query extends FunctionReference<"query">>(
+  watchQuery<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
     ...argsAndOptions: ArgsAndOptions<Query, WatchQueryOptions>
   ): Watch<FunctionReturnType<Query>> {
@@ -536,11 +574,11 @@ export class ConvexReactClient {
    * @param queryOptions - A query (function reference from an api object) and its args, plus
    * an optional extendSubscriptionFor for how long to subscribe to the query.
    */
-  prewarmQuery<Query extends FunctionReference<"query">>(
-    queryOptions: ConvexQueryOptions<Query> & {
-      extendSubscriptionFor?: number;
-    },
-  ) {
+  prewarmQuery<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(queryOptions: QueryOptions<Query> & { extendSubscriptionFor?: number }) {
     const extendSubscriptionFor =
       queryOptions.extendSubscriptionFor ?? DEFAULT_EXTEND_SUBSCRIPTION_FOR;
     const watch = this.watchQuery(queryOptions.query, queryOptions.args || {});
@@ -565,9 +603,13 @@ export class ConvexReactClient {
    *
    * @internal
    */
-  watchPaginatedQuery<Query extends FunctionReference<"query">>(
+  watchPaginatedQuery<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
-    args: Query["_args"],
+    args: FunctionArgs<Query>,
     options: WatchPaginatedQueryOptions,
   ): PaginatedWatch<FunctionReturnType<Query>> {
     const name = getFunctionName(query);
@@ -615,7 +657,11 @@ export class ConvexReactClient {
    * @param options - A {@link MutationOptions} options object for the mutation.
    * @returns A promise of the mutation's result.
    */
-  mutation<Mutation extends FunctionReference<"mutation">>(
+  mutation<
+    Mutation extends
+      | FunctionReference<"mutation">
+      | FunctionReference_future<"mutation">,
+  >(
     mutation: Mutation,
     ...argsAndOptions: ArgsAndOptions<
       Mutation,
@@ -636,7 +682,11 @@ export class ConvexReactClient {
    * the arguments will be `{}`.
    * @returns A promise of the action's result.
    */
-  action<Action extends FunctionReference<"action">>(
+  action<
+    Action extends
+      | FunctionReference<"action">
+      | FunctionReference_future<"action">,
+  >(
     action: Action,
     ...args: OptionalRestArgs<Action>
   ): Promise<FunctionReturnType<Action>> {
@@ -656,7 +706,11 @@ export class ConvexReactClient {
    * the arguments will be `{}`.
    * @returns A promise of the query's result.
    */
-  query<Query extends FunctionReference<"query">>(
+  query<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
     ...args: OptionalRestArgs<Query>
   ): Promise<FunctionReturnType<Query>> {
@@ -796,10 +850,31 @@ export const ConvexProvider: React.FC<{
   );
 };
 
-export type OptionalRestArgsOrSkip<FuncRef extends FunctionReference<any>> =
-  FuncRef["_args"] extends EmptyObject
+export type OptionalRestArgsOrSkip<
+  FuncRef extends FunctionReference<any> | FunctionReference_future<any>,
+> =
+  FunctionArgs<FuncRef> extends EmptyObject
     ? [args?: EmptyObject | "skip"]
-    : [args: FuncRef["_args"] | "skip"];
+    : [args: FunctionArgs<FuncRef> | "skip"];
+
+/**
+ * Result returned by object-form {@link useQuery_experimental}.
+ *
+ * @public
+ */
+export type UseQueryResult<QueryResult, ThrowOnError extends boolean = false> =
+  | { status: "pending" }
+  | { status: "success"; data: QueryResult }
+  | (ThrowOnError extends true ? never : { status: "error"; error: Error });
+
+type UseQueryOptions<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+  ThrowOnError extends boolean,
+> = {
+  query: Query;
+  args: FunctionArgs<Query> | "skip";
+  throwOnError?: ThrowOnError;
+};
 
 /**
  * Load a reactive query within a React component.
@@ -844,13 +919,14 @@ export type OptionalRestArgsOrSkip<FuncRef extends FunctionReference<any>> =
  * @see https://docs.convex.dev/client/react#fetching-data
  * @public
  */
-export function useQuery<Query extends FunctionReference<"query">>(
+export function useQuery<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+>(
   query: Query,
   ...args: OptionalRestArgsOrSkip<Query>
-): Query["_returnType"] | undefined {
+): FunctionReturnType<Query> | undefined {
   const skip = args[0] === "skip";
   const argsObject = args[0] === "skip" ? {} : parseArgs(args[0]);
-
   const queryReference =
     typeof query === "string"
       ? makeFunctionReference<"query", any, any>(query)
@@ -871,10 +947,102 @@ export function useQuery<Query extends FunctionReference<"query">>(
 
   const results = useQueries(queries);
   const result = results["query"];
+
   if (result instanceof Error) {
     throw result;
   }
   return result;
+}
+
+/**
+ * Load a reactive query within a React component using an options object.
+ *
+ * This is an experimental form of {@link useQuery} that accepts a single
+ * {@link UseQueryOptions} object instead of positional arguments.
+ *
+ * Consumers are expected to check the returned object `status` field to
+ * make proper use of the result. If an error occurs, it will be present
+ * in the result object unless `throwOnError` is `true`, in which case
+ * the error will be thrown instead.
+ *
+ * @example
+ * ```tsx
+ * import { useQuery_experimental as useQuery } from "convex/react";
+ * import { api } from "../convex/_generated/api";
+ *
+ * function TaskList() {
+ *   const state = useQuery({ query: api.tasks.list, args: { completed: false } });
+ *
+ *   if (state.status === "pending") return <div>Loading...</div>;
+ *   if (state.status === "error") return <div>Error: {state.error.message}</div>;
+ *   return state.data.map((task) => <div key={task._id}>{task.text}</div>);
+ * }
+ * ```
+ *
+ * @param options - Query options. Pass `args: "skip"` to disable the query.
+ * @returns the current query state as a {@link UseQueryResult} object.
+ *
+ * @see https://docs.convex.dev/client/react#fetching-data
+ * @public
+ */
+export function useQuery_experimental<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+  ThrowOnError extends boolean = false,
+>(
+  options: UseQueryOptions<Query, ThrowOnError>,
+): UseQueryResult<FunctionReturnType<Query>, ThrowOnError>;
+
+export function useQuery_experimental<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+  ThrowOnError extends boolean = false,
+>(
+  options: UseQueryOptions<Query, ThrowOnError>,
+): UseQueryResult<FunctionReturnType<Query>, false> {
+  const throwOnError = options.throwOnError ?? false;
+  const queryReference =
+    typeof options.query === "string"
+      ? (makeFunctionReference<"query", any, any>(options.query) as Query)
+      : options.query;
+  const skip = options.args === "skip";
+  const argsObject = !skip
+    ? parseArgs(options.args as Record<string, Value>)
+    : {};
+
+  const queryName = getFunctionName(queryReference);
+  const queries = useMemo(
+    () =>
+      skip
+        ? ({} as RequestForQueries)
+        : { query: { query: queryReference, args: argsObject } },
+    // Stringify args so args that are semantically the same don't trigger a
+    // rerender. Saves developers from adding `useMemo` on every args usage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(convexToJson(argsObject)), queryName, skip],
+  );
+
+  const results = useQueries(queries);
+  const result = results["query"];
+
+  if (result instanceof Error) {
+    if (throwOnError) {
+      throw result;
+    }
+    return {
+      error: result,
+      status: "error",
+    };
+  }
+
+  if (result === undefined) {
+    return {
+      status: "pending",
+    };
+  }
+
+  return {
+    data: result,
+    status: "success",
+  };
 }
 
 /**
@@ -913,9 +1081,11 @@ export function useQuery<Query extends FunctionReference<"query">>(
  * @see https://docs.convex.dev/client/react#editing-data
  * @public
  */
-export function useMutation<Mutation extends FunctionReference<"mutation">>(
-  mutation: Mutation,
-): ReactMutation<Mutation> {
+export function useMutation<
+  Mutation extends
+    | FunctionReference<"mutation">
+    | FunctionReference_future<"mutation">,
+>(mutation: Mutation): ReactMutation<Mutation> {
   const mutationReference =
     typeof mutation === "string"
       ? makeFunctionReference<"mutation", any, any>(mutation)
@@ -982,9 +1152,11 @@ export function useMutation<Mutation extends FunctionReference<"mutation">>(
  * @see https://docs.convex.dev/functions/actions#calling-actions-from-clients
  * @public
  */
-export function useAction<Action extends FunctionReference<"action">>(
-  action: Action,
-): ReactAction<Action> {
+export function useAction<
+  Action extends
+    | FunctionReference<"action">
+    | FunctionReference_future<"action">,
+>(action: Action): ReactAction<Action> {
   const convex = useContext(ConvexContext);
   const actionReference =
     typeof action === "string"

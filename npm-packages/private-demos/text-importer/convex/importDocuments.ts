@@ -89,7 +89,7 @@ export const populateTableInternal = internalMutation({
         (currentDbSize?.size ?? BigInt(0)) + BigInt(updatedInserts);
       console.debug("Updating size to", newSize);
       if (currentDbSize) {
-        await ctx.db.replace(currentDbSize._id, { size: newSize });
+        await ctx.db.replace("size", currentDbSize._id, { size: newSize });
       } else {
         await ctx.db.insert("size", { size: newSize });
       }

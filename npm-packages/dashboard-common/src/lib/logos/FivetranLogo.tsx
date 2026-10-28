@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { useTheme } from "next-themes";
+import { useCurrentTheme } from "../useCurrentTheme";
 
 export function FivetranLogo({
   className,
@@ -8,7 +8,7 @@ export function FivetranLogo({
   className?: string;
   size: number;
 }) {
-  const { resolvedTheme: currentTheme } = useTheme();
+  const currentTheme = useCurrentTheme();
   const image =
     currentTheme === "dark" ? "/fivetran-white.svg" : "/fivetran-blue.svg";
   return (

@@ -15,8 +15,7 @@
     "build": "rm -rf dist && npm run build-esm && npm run build-cjs",
     "build-esm": "tsc",
     "build-cjs": "tsc --module commonjs --outDir dist/cjs --target es2015 && echo '{\"type\": \"commonjs\"}' > dist/cjs/package.json",
-    "clean": "rm -rf dist",
-    "prepare": "npm run build"
+    "clean": "rm -rf dist"
   },
   "author": "Convex, Inc.",
   "license": "Apache-2.0",

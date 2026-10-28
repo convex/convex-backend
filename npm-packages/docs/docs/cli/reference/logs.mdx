@@ -1,0 +1,60 @@
+---
+sidebar_position: 7
+title: "npx convex logs"
+sidebar_label: "npx convex logs"
+description: "Watch logs from your deployment"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex logs`
+
+Stream function logs from your Convex deployment.
+By default, this streams from your project's dev deployment.
+
+## Syntax
+
+```sh
+npx convex logs [options]
+```
+
+## Options
+
+<dl>
+<dt>`--history [n]`</dt>
+<dd>
+
+Show `n` most recent logs. Defaults to showing all available logs.
+
+</dd>
+<dt>`--success`</dt>
+<dd>
+
+Print a log line for every successful function execution
+
+</dd>
+<dt>`--jsonl`</dt>
+<dd>
+
+Output raw log events as JSONL
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Watch logs from this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Watch logs from a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  AuthRefreshing,
   Authenticated,
   Unauthenticated,
+  useConvex,
   useConvexAuth,
   useMutation,
   useQuery,
@@ -15,6 +17,9 @@ import "./styles.css";
 export default function App() {
   return (
     <div className="container">
+      <AuthRefreshing>
+        <div className="refresh-banner">Refreshing session…</div>
+      </AuthRefreshing>
       <header className="header">
         <h1>Convex + React + Convex Auth</h1>
         <SignOutButton />
@@ -28,6 +33,28 @@ export default function App() {
         </Unauthenticated>
       </main>
     </div>
+  );
+}
+
+function ForceReauthButton() {
+  const convex = useConvex();
+  const handleClick = () => {
+    const authMgr = (
+      convex as unknown as {
+        sync: { authenticationManager: { onAuthError: (e: unknown) => void } };
+      }
+    ).sync.authenticationManager;
+    authMgr.onAuthError({
+      type: "AuthError",
+      error: "test reauth (forced from UI)",
+      baseVersion: 1_000_000,
+      authUpdateAttempted: false,
+    });
+  };
+  return (
+    <button className="btn btn-secondary" onClick={handleClick}>
+      Force reauth
+    </button>
   );
 }
 
@@ -121,6 +148,9 @@ function Content() {
 
   return (
     <div>
+      <div className="reauth-controls">
+        <ForceReauthButton />
+      </div>
       <div className="messages-container">
         {messages.length === 0 ? (
           <div className="empty-state">

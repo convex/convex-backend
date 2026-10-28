@@ -1,5 +1,5 @@
 {
-  "$schema": "../../convex/schemas/convex.schema.json",
+  "$schema": "node_modules/convex/schemas/convex.schema.json",
   "codegen": {
     "fileType": "js/dts",
     "legacyComponentApi": true

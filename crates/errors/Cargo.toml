@@ -19,6 +19,7 @@ prometheus = { workspace = true }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 sentry = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }

@@ -6,7 +6,7 @@
  * @module
  */
 
-export { convexToJson, jsonToConvex } from "./value.js";
+export { convexToJson, jsonToConvex, CommitTsPlaceholder } from "./value.js";
 export type {
   Id as GenericId,
   JSONValue,
@@ -30,6 +30,7 @@ export type {
   VId,
   VFloat64,
   VInt64,
+  VCommitTs,
   VBoolean,
   VBytes,
   VString,

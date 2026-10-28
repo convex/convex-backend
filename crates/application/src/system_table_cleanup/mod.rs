@@ -43,6 +43,8 @@ use common::{
 use database::{
     BootstrapComponentsModel,
     Database,
+    IndexBackfillTable,
+    IndexModel,
     ResolvedQuery,
     SystemMetadataModel,
     TableModel,
@@ -91,6 +93,7 @@ use crate::system_table_cleanup::metrics::log_tablet_hard_deleted;
 mod metrics;
 
 const MAX_ORPHANED_TABLE_NAMESPACE_AGE: Duration = Duration::from_days(2);
+const MAX_INDEX_BACKFILLS_PER_RUN: usize = 1000;
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
@@ -146,6 +149,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
 
             self.cleanup_hidden_tables().await?;
             self.cleanup_orphaned_table_namespaces().await?;
+            self.cleanup_index_backfills().await?;
             self.cleanup_expired_exports().await?;
             self.cleanup_unused_source_packages().await?;
 
@@ -250,6 +254,39 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
             tracing::info!("Deleted {num_deleted} hidden tables");
         }
 
+        Ok(())
+    }
+
+    async fn cleanup_index_backfills(&self) -> anyhow::Result<()> {
+        let mut tx = self.database.begin(Identity::system()).await?;
+        let unfinished_index_ids = IndexModel::new(&mut tx)
+            .get_all_indexes()?
+            .filter(|index| index.config.is_backfilling() || index.config.is_backfilled())
+            .map(|index| index.id().developer_id)
+            .collect::<BTreeSet<_>>();
+
+        let mut num_deleted = 0;
+        let index = SystemIndex::<IndexBackfillTable>::by_id();
+        let mut query = tx.query_system(TableNamespace::Global, &index)?.build();
+        while let Some(backfill) = query.next().await? {
+            if unfinished_index_ids.contains(&backfill.index_id) {
+                continue;
+            }
+            SystemMetadataModel::new_global(query.tx())
+                .delete(backfill.id())
+                .await?;
+            num_deleted += 1;
+            if num_deleted >= MAX_INDEX_BACKFILLS_PER_RUN {
+                break;
+            }
+        }
+
+        if num_deleted > 0 {
+            self.database
+                .commit_with_write_source(tx, "system_table_cleanup")
+                .await?;
+            tracing::info!("Deleted {num_deleted} finished index backfills");
+        }
         Ok(())
     }
 
@@ -476,7 +513,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
         let mut num_deleted = 0;
         'deletes: for namespace in tx
             .table_mapping()
-            .namespaces_for_name(SourcePackagesTable::table_name())
+            .namespaces_for_name(&SourcePackagesTable::TABLE_NAME)
         {
             let mut source_package_ids: BTreeSet<SourcePackageId> = BTreeSet::new();
             for module in ModuleModel::new(&mut tx)
@@ -518,169 +555,4 @@ enum CreationTimeInterval {
     All,
     None,
     Before(CreationTime),
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        num::NonZeroU32,
-        sync::Arc,
-        time::Duration,
-    };
-
-    use common::{
-        db_schema,
-        document::CreationTime,
-        identity::InertIdentity,
-        runtime::{
-            new_rate_limiter,
-            Runtime,
-        },
-        schemas::DocumentSchema,
-    };
-    use database::{
-        test_helpers::DbFixtures,
-        SchemaModel,
-    };
-    use governor::Quota;
-    use keybroker::Identity;
-    use model::{
-        components::config::ComponentConfigModel,
-        session_requests::{
-            types::{
-                SessionRequestOutcome,
-                SessionRequestRecord,
-            },
-            SessionRequestModel,
-            SESSION_REQUESTS_TABLE,
-        },
-        test_helpers::DbFixturesWithModel,
-    };
-    use runtime::testing::TestRuntime;
-    use storage::LocalDirStorage;
-    use sync_types::SessionId;
-    use value::{
-        ConvexValue,
-        JsonPackedValue,
-        TableNamespace,
-    };
-
-    use crate::system_table_cleanup::{
-        CreationTimeInterval,
-        SystemTableCleanupWorker,
-        MAX_ORPHANED_TABLE_NAMESPACE_AGE,
-    };
-
-    async fn test_system_table_cleanup_helper(
-        rt: TestRuntime,
-        num_deleters: usize,
-    ) -> anyhow::Result<()> {
-        let DbFixtures { db, .. } = DbFixtures::new_with_model(&rt).await?;
-        let exports_storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let worker = SystemTableCleanupWorker {
-            database: db.clone(),
-            runtime: rt.clone(),
-            exports_storage: exports_storage.clone(),
-        };
-
-        let mut creation_times = vec![];
-        for _ in 0..10 {
-            let mut tx = db.begin_system().await?;
-            SessionRequestModel::new(&mut tx)
-                .record_session_request(
-                    SessionRequestRecord {
-                        session_id: SessionId::new(rt.new_uuid_v4()),
-                        request_id: 0,
-                        outcome: SessionRequestOutcome::Mutation {
-                            result: JsonPackedValue::pack(ConvexValue::Null),
-                            log_lines: vec![].into(),
-                        },
-                        identity: InertIdentity::System,
-                    },
-                    Identity::system(),
-                )
-                .await?;
-            creation_times.push(*tx.begin_timestamp());
-            db.commit(tx).await?;
-            rt.advance_time(Duration::from_secs(1)).await;
-        }
-
-        let cutoff = CreationTime::try_from(creation_times[4])?;
-        let rate_limiter =
-            new_rate_limiter(rt.clone(), Quota::per_second(NonZeroU32::new(10).unwrap()));
-
-        let (deleted, _cursor) = worker
-            .cleanup_system_table(
-                TableNamespace::Global,
-                &SESSION_REQUESTS_TABLE,
-                CreationTimeInterval::Before(cutoff),
-                &rate_limiter,
-                num_deleters,
-                None,
-            )
-            .await?;
-        assert_eq!(deleted, 3);
-
-        let count = db
-            .begin_system()
-            .await?
-            .count(TableNamespace::Global, &SESSION_REQUESTS_TABLE)
-            .await?;
-        assert_eq!(count, Some(7));
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_system_table_cleanup_1(rt: TestRuntime) -> anyhow::Result<()> {
-        test_system_table_cleanup_helper(rt, 1).await
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_system_table_cleanup_2(rt: TestRuntime) -> anyhow::Result<()> {
-        test_system_table_cleanup_helper(rt, 2).await
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_system_table_cleanup_8(rt: TestRuntime) -> anyhow::Result<()> {
-        test_system_table_cleanup_helper(rt, 8).await
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_cleanup_orphaned_table_namespaces_with_schema(
-        rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let DbFixtures { db, .. } = DbFixtures::new_with_model(&rt).await?;
-        let exports_storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let worker = SystemTableCleanupWorker {
-            database: db.clone(),
-            runtime: rt.clone(),
-            exports_storage: exports_storage.clone(),
-        };
-        let mut tx = db.begin_system().await?;
-        // Create an orphaned table with a schema.
-        // In particular, test the case of a table starting with an uppercase
-        // letter, because uppercase letters sort after the underscore character
-        // in ASCII, and therefore the table name sorts after system tables.
-        let component = ComponentConfigModel::new(&mut tx)
-            .initialize_component_namespace(false /* is_root */)
-            .await?;
-        SchemaModel::new(&mut tx, TableNamespace::ByComponent(component))
-            .submit_pending(
-                db_schema!("UserTable" => DocumentSchema::Any, "user_table" => DocumentSchema::Any),
-            )
-            .await?;
-        db.commit(tx).await?;
-        rt.advance_time(MAX_ORPHANED_TABLE_NAMESPACE_AGE * 2).await;
-        db.bump_max_repeatable_ts().await?;
-        worker.cleanup_orphaned_table_namespaces().await?;
-        assert_eq!(
-            db.latest_snapshot()?
-                .table_mapping()
-                .namespace(TableNamespace::ByComponent(component))
-                .iter()
-                .count(),
-            0
-        );
-        Ok(())
-    }
 }

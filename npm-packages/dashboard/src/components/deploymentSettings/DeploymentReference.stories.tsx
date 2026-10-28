@@ -1,14 +1,14 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
 import { fn } from "storybook/test";
-import { DeploymentReferenceInner } from "./DeploymentReference";
+import { DeploymentReference } from "./DeploymentReference";
 
-const meta: Meta<typeof DeploymentReferenceInner> = {
-  component: DeploymentReferenceInner,
+const meta: Meta<typeof DeploymentReference> = {
+  component: DeploymentReference,
   args: {
     value: "dev/nicolas",
+    canManage: true,
     onUpdate: fn(),
   },
-  parameters: { a11y: { test: "todo" } },
 };
 
 export default meta;
@@ -45,5 +45,11 @@ export const SubmissionFailing = {
       });
       throw new Error("This reference is already used.");
     },
+  },
+};
+
+export const CanNotManage: Story = {
+  args: {
+    canManage: false,
   },
 };

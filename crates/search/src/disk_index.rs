@@ -1,9 +1,6 @@
 use std::{
     path::Path,
-    sync::{
-        Arc,
-        LazyLock,
-    },
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -16,7 +13,6 @@ use async_zip_0_0_9::{
     ZipEntryBuilderExt,
 };
 use bytes::Bytes;
-use cmd_util::env::env_config;
 use common::{
     bootstrap_model::index::{
         text_index::FragmentedTextSegment,
@@ -38,7 +34,7 @@ use storage::{
 use tantivy::{
     Index,
     IndexReader,
-    IndexWriter,
+    ReloadPolicy,
 };
 use tokio::{
     fs,
@@ -66,12 +62,8 @@ use crate::{
     },
     NewTextSegment,
     SearchFileType,
-    TantivySearchIndexSchema,
     TextSegmentPaths,
 };
-
-static SEARCH_INDEXING_MEMORY_ARENA_BYTES: LazyLock<usize> =
-    LazyLock::new(|| env_config("SEARCH_INDEXING_MEMORY_ARENA_BYTES", 50_000_000));
 
 #[fastrace::trace]
 pub async fn index_reader_for_directory<P: AsRef<Path>>(
@@ -84,39 +76,19 @@ pub async fn index_reader_for_directory<P: AsRef<Path>>(
     index
         .tokenizers()
         .register(CONVEX_EN_TOKENIZER, convex_en());
-    let reader = index.reader()?;
+    // These directories hold an immutable snapshot of one committed segment
+    // that this process never writes to, and every caller takes
+    // `reader.searcher()` immediately and never reloads. The default
+    // `ReloadPolicy::OnCommit` spawns a thread per reader that polls
+    // `meta.json` every 500ms for the reader's whole lifetime, and once the
+    // archive cache deletes the directory that thread warns about the missing
+    // file twice a second forever.
+    let reader = index
+        .reader_builder()
+        .reload_policy(ReloadPolicy::Manual)
+        .try_into()?;
     timer.finish();
     Ok(reader)
-}
-
-pub async fn index_writer_for_directory<P: AsRef<Path>>(
-    directory: P,
-    tantivy_schema: &TantivySearchIndexSchema,
-) -> anyhow::Result<IndexWriter> {
-    let directory = directory.as_ref().to_path_buf();
-    let schema = tantivy_schema.schema.clone();
-    let index = tokio_spawn_blocking("disk_index_create", move || {
-        Index::create_in_dir(&directory, schema)
-    })
-    .await??;
-    index
-        .tokenizers()
-        .register(CONVEX_EN_TOKENIZER, convex_en());
-    Ok(index.writer(*SEARCH_INDEXING_MEMORY_ARENA_BYTES)?)
-}
-
-#[cfg(any(test, feature = "testing"))]
-pub async fn download_single_file_original<P: AsRef<Path>>(
-    key: &ObjectKey,
-    path: P,
-    storage: Arc<dyn Storage>,
-) -> anyhow::Result<()> {
-    let stream = storage.get(key).await?.unwrap().into_tokio_reader();
-    let mut file = fs::File::create(path).await?;
-    let mut reader = BufReader::with_capacity(2 << 16, stream);
-    tokio::io::copy_buf(&mut reader, &mut file).await?;
-    file.flush().await?;
-    Ok(())
 }
 
 pub async fn download_single_file_zip<P: AsRef<Path>>(
@@ -386,205 +358,4 @@ async fn zip_single_file<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     tokio::io::copy_buf(reader, &mut stream).await?;
     stream.close().await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use anyhow::{
-        Context,
-        Ok,
-    };
-    use async_zip_0_0_9::read::mem::ZipFileReader;
-    use common::runtime::testing::TestDriver;
-    use runtime::prod::ProdRuntime;
-    use storage::{
-        LocalDirStorage,
-        Storage,
-        StorageExt,
-    };
-    use tokio::{
-        fs,
-        io::{
-            AsyncReadExt,
-            AsyncWriteExt,
-            BufReader,
-        },
-    };
-
-    use super::{
-        upload_index_archive_from_path,
-        write_index_archive,
-    };
-    use crate::{
-        disk_index::{
-            download_single_file_original,
-            download_single_file_zip,
-            upload_single_file_from_path,
-            write_single_file,
-            SingleFileFormat,
-        },
-        SearchFileType,
-    };
-
-    #[convex_macro::prod_rt_test]
-    async fn test_upload_download_single_file_zip(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt)?);
-
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("test");
-        let mut file = fs::File::create(file_path.clone()).await?;
-        file.write_all(b"file content").await?;
-        file.sync_all().await?;
-
-        let key =
-            upload_single_file_from_path(file_path, storage.clone(), SearchFileType::VectorSegment)
-                .await?;
-
-        let target_file_path = dir.path().join("output");
-        download_single_file_zip(&key, target_file_path.clone(), storage.clone()).await?;
-
-        let mut target_file = fs::File::open(target_file_path).await?;
-        let mut contents = vec![];
-        target_file.read_to_end(&mut contents).await?;
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_upload_download_single_file_original(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt)?);
-
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("test");
-        let mut file = fs::File::create(file_path.clone()).await?;
-        file.write_all(b"file content").await?;
-        file.sync_all().await?;
-
-        let key = upload_single_file_from_path(
-            file_path,
-            storage.clone(),
-            SearchFileType::FragmentedVectorSegment,
-        )
-        .await?;
-
-        let target_file_path = dir.path().join("output");
-        // Download the file again.
-        download_single_file_original(&key, &target_file_path, storage).await?;
-
-        // Ensure it matches the original.
-        let mut target_file = fs::File::open(target_file_path).await?;
-        let mut contents = vec![];
-        target_file.read_to_end(&mut contents).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_write_single_file() -> anyhow::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let file_path = dir.path().join("test");
-        let mut file = fs::File::create(file_path.clone()).await?;
-        file.write_all(b"file content").await?;
-        file.sync_all().await?;
-
-        let mut buffer: Vec<u8> = Vec::new();
-        let file = fs::File::open(file_path).await?;
-        let mut file = BufReader::new(file);
-        write_single_file(
-            &mut file,
-            "test".to_string(),
-            &mut buffer,
-            SingleFileFormat::ZIP,
-        )
-        .await?;
-
-        let mut reader = ZipFileReader::new(&buffer).await?;
-        let reader = reader.entry_reader(0).await?;
-        let value = reader.read_to_string_crc().await?;
-
-        assert_eq!(value, "file content");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_write_index_archive() -> anyhow::Result<()> {
-        // Set up a directory with a top-level file and a file in a subdirectory.
-        let dir = tempfile::tempdir()?;
-        {
-            let mut h = fs::File::create(dir.path().join("top")).await?;
-            h.write_all(b"file content").await?;
-            h.sync_all().await?;
-        }
-        fs::create_dir(dir.path().join("mid")).await?;
-        {
-            let mut h = fs::File::create(dir.path().join("mid").join("bottom")).await?;
-            h.write_all(b"more file content").await?;
-            h.sync_all().await?;
-        }
-
-        // Output the zip file into a buffer (no need for a real file).
-        let mut buffer: Vec<u8> = Vec::new();
-        write_index_archive(dir.path(), &mut buffer).await?;
-        // Now read it back and verify it's what we expect.
-        let mut reader = ZipFileReader::new(&buffer).await?;
-        assert_eq!(reader.entries().len(), 2);
-
-        // Entry order is alphabetical
-        let mut entries = vec![];
-        for i in 0..reader.entries().len() {
-            let entry_reader = reader.entry_reader(i).await?;
-            entries.push((
-                entry_reader.entry().filename().to_owned(),
-                entry_reader.read_to_string_crc().await?,
-            ));
-        }
-        entries.sort_by_key(|(filename, _)| filename.clone());
-        assert_eq!(
-            entries[0],
-            ("mid/bottom".to_owned(), "more file content".to_owned())
-        );
-        assert_eq!(entries[1], ("top".to_owned(), "file content".to_owned()));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_upload_index_archive() -> anyhow::Result<()> {
-        let upper_dir = tempfile::tempdir()?;
-        // Set up a directory with a top-level file and a file in a subdirectory.
-        // We specifically choose the name of this directory so we can verify the output
-        // filename.
-        let dir = upper_dir.path().join("directory_name");
-        tokio::fs::create_dir(&dir).await?;
-        {
-            let mut h = fs::File::create(dir.as_path().join("top")).await?;
-            h.write_all(b"file content").await?;
-            h.sync_all().await?;
-        }
-        fs::create_dir(dir.join("mid")).await?;
-        {
-            let mut h = fs::File::create(dir.as_path().join("mid").join("bottom")).await?;
-            h.write_all(b"more file content").await?;
-            h.sync_all().await?;
-        }
-
-        let td = TestDriver::new();
-        let rt = td.rt();
-        let storage: Arc<dyn Storage> = Arc::new(LocalDirStorage::new(rt)?);
-        let key =
-            upload_index_archive_from_path(&dir, storage.clone(), SearchFileType::Text).await?;
-
-        // Read it back out from storage, into a buffer.
-        let uploaded_file_bytes = storage
-            .get(&key)
-            .await?
-            .context("Not found")?
-            .collect_as_bytes()
-            .await?;
-
-        // Ensure it's the same zip file we'd get from calling `write_index_archive`.
-        let mut in_memory_bytes: Vec<u8> = Vec::new();
-        write_index_archive(&dir, &mut in_memory_bytes).await?;
-        assert_eq!(uploaded_file_bytes, in_memory_bytes);
-        Ok(())
-    }
 }

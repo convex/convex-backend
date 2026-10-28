@@ -1,5 +1,26 @@
 [build]
   ignore = "bash npm-packages/docs/scripts/should-build.sh"
+  # Runs from the repo root. `npm-packages/convex`'s build script runs under uv, which
+  # the build image doesn't ship, so install the version mise.toml pins (self-updating
+  # mise first, see MISE_IGNORED_CONFIG_PATHS below) and put mise's shims on PATH.
+  command = """
+    mise self-update \
+    && MISE_IGNORED_CONFIG_PATHS= mise install uv \
+    && eval "$(mise activate bash --shims)" \
+    && cd scripts \
+    && npm ci \
+    && cd ../npm-packages/docs \
+    && export PATH="$PWD/../../scripts/node_modules/.bin:$PATH" \
+    && pnpm --filter 'docs...' install --frozen-lockfile \
+    && turbo run build --filter=docs^... \
+    && npm run build
+  """
+
+[build.environment]
+  # Netlify's build image has a version of mise older than the min_version specified in
+  # our mise.toml, so mise can't read that config until the build command self-updates
+  # it; the command unsets this where it needs the pinned tool versions.
+  MISE_IGNORED_CONFIG_PATHS = "/opt/build/repo/mise.toml"
 
 [[headers]]
   for = "/fonts/*"

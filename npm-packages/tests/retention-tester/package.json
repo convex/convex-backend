@@ -1,0 +1,19 @@
+{
+  "name": "retention-tester",
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "convex dev --start 'vite --open'",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "convex": "workspace:*",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "@faker-js/faker": "^10.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^6.4.4",
+    "typescript": "~5.0.3"
+  }
+}

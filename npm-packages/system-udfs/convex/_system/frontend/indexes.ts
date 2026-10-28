@@ -1,7 +1,7 @@
 import { Base64, v } from "convex/values";
 import { queryPrivateSystem } from "../secretSystemTables";
-import { decodeId } from "id-encoding";
-import { DataModel } from "../../_generated/dataModel";
+import { decodeId, encodeId } from "id-encoding";
+import { DataModel, Doc, Id } from "../../_generated/dataModel";
 import { GenericDatabaseReader } from "convex/server";
 
 async function getTableId(
@@ -13,6 +13,7 @@ async function getTableId(
   const tablesWithName = await db
     .query("_tables")
     .withIndex("by_name", (q) => q.eq("name", tableName))
+    // eslint-disable-next-line @convex-dev/no-filter-in-query -- FIXME: we could have a `_by_name_and_state` index here (but we’re already using a filter for name so it’s still okay)
     .filter((q) => q.eq(q.field("state"), "active"))
     .collect();
   let tableId;
@@ -40,7 +41,96 @@ async function getTableId(
   return urlSafeInternalId;
 }
 
-export default queryPrivateSystem({
+type IndexConfig = Doc<"_index">["config"];
+
+function indexFieldsAndState(config: IndexConfig): {
+  fields:
+    | string[]
+    | { searchField: string; filterFields: string[] }
+    | {
+        vectorField: string;
+        filterFields: string[];
+        dimensions: number;
+      };
+  state: "backfilling" | "backfilled" | "done";
+  staged: boolean;
+} {
+  switch (config.type) {
+    case "database": {
+      const stateType = config.onDiskState.type;
+      let staged;
+      let state;
+      switch (stateType) {
+        case "Backfilling":
+          staged = config.onDiskState.backfillState.staged ?? false;
+          state = "backfilling" as const;
+          break;
+        case "Backfilled2":
+          staged = config.onDiskState.staged ?? false;
+          state = "backfilled" as const;
+          break;
+        default:
+          staged = false;
+          state = "done" as const;
+      }
+      return { fields: config.fields, state, staged };
+    }
+    case "search": {
+      const stateType = config.onDiskState.state;
+      const state =
+        stateType === "backfilling" || stateType === "backfilling2"
+          ? ("backfilling" as const)
+          : stateType === "backfilled" || stateType === "backfilled2"
+            ? ("backfilled" as const)
+            : ("done" as const);
+      const fields = {
+        searchField: config.searchField,
+        filterFields: config.filterFields,
+      };
+      const staged =
+        stateType === "backfilling" ||
+        stateType === "backfilling2" ||
+        stateType === "backfilled2"
+          ? (config.onDiskState.staged ?? false)
+          : false;
+      return {
+        fields,
+        state,
+        staged,
+      };
+    }
+    case "vector": {
+      const stateType = config.onDiskState.state;
+      const state =
+        stateType === "backfilling"
+          ? ("backfilling" as const)
+          : stateType === "backfilled" || stateType === "backfilled2"
+            ? ("backfilled" as const)
+            : ("done" as const);
+      const staged =
+        stateType === "backfilling" ||
+        stateType === "backfilled" ||
+        stateType === "backfilled2"
+          ? (config.onDiskState.staged ?? false)
+          : false;
+      return {
+        fields: {
+          vectorField: config.vectorField,
+          filterFields: config.filterFields,
+          dimensions: Number(config.dimensions),
+        },
+        state,
+        staged,
+      };
+    }
+    default: {
+      config satisfies never;
+      throw new Error(`Unknown index type`);
+    }
+  }
+}
+
+export default queryPrivateSystem("ViewData")({
   args: {
     tableName: v.optional(v.union(v.string(), v.null())),
     // Pass the `componentId` for this arg.
@@ -61,6 +151,7 @@ export default queryPrivateSystem({
     const indexes = await db
       .query("_index")
       .withIndex("by_id", (q) => q)
+      // eslint-disable-next-line @convex-dev/no-filter-in-query -- FIXME
       .filter((q) => q.eq(q.field("table_id"), tableId))
       .collect();
     const userIndexes = indexes.filter(
@@ -69,94 +160,7 @@ export default queryPrivateSystem({
     );
     return Promise.all(
       userIndexes.map(async (index) => {
-        function getIndexFieldsAndState(config: typeof index.config): {
-          fields:
-            | string[]
-            | { searchField: string; filterFields: string[] }
-            | {
-                vectorField: string;
-                filterFields: string[];
-                dimensions: number;
-              };
-          state: "backfilling" | "backfilled" | "done";
-          staged: boolean;
-        } {
-          switch (config.type) {
-            case "database": {
-              const stateType = config.onDiskState.type;
-              let staged;
-              let state;
-              switch (stateType) {
-                case "Backfilling":
-                  staged = config.onDiskState.backfillState.staged ?? false;
-                  state = "backfilling" as const;
-                  break;
-                case "Backfilled2":
-                  staged = config.onDiskState.staged ?? false;
-                  state = "backfilled" as const;
-                  break;
-                default:
-                  staged = false;
-                  state = "done" as const;
-              }
-              return { fields: config.fields, state, staged };
-            }
-            case "search": {
-              const stateType = config.onDiskState.state;
-              const state =
-                stateType === "backfilling" || stateType === "backfilling2"
-                  ? ("backfilling" as const)
-                  : stateType === "backfilled" || stateType === "backfilled2"
-                    ? ("backfilled" as const)
-                    : ("done" as const);
-              const fields = {
-                searchField: config.searchField,
-                filterFields: config.filterFields,
-              };
-              const staged =
-                stateType === "backfilling" ||
-                stateType === "backfilling2" ||
-                stateType === "backfilled2"
-                  ? (config.onDiskState.staged ?? false)
-                  : false;
-              return {
-                fields,
-                state,
-                staged,
-              };
-            }
-            case "vector": {
-              const stateType = config.onDiskState.state;
-              const state =
-                stateType === "backfilling"
-                  ? ("backfilling" as const)
-                  : stateType === "backfilled" || stateType === "backfilled2"
-                    ? ("backfilled" as const)
-                    : ("done" as const);
-              const staged =
-                stateType === "backfilling" ||
-                stateType === "backfilled" ||
-                stateType === "backfilled2"
-                  ? (config.onDiskState.staged ?? false)
-                  : false;
-              return {
-                fields: {
-                  vectorField: config.vectorField,
-                  filterFields: config.filterFields,
-                  dimensions: Number(config.dimensions),
-                },
-                state,
-                staged,
-              };
-            }
-            default: {
-              config satisfies never;
-              throw new Error(`Unknown index type`);
-            }
-          }
-        }
-
-        const { fields, state, staged } = getIndexFieldsAndState(index.config);
+        const { fields, state, staged } = indexFieldsAndState(index.config);
         if (state === "backfilling") {
           const indexBackfill = await db
             .query("_index_backfills")
@@ -187,3 +191,105 @@ export default queryPrivateSystem({
     );
   },
 });
+
+export type BackfillingIndex = {
+  tableName: string;
+  name: string;
+  kind: IndexConfig["type"];
+  staged: boolean;
+  stats: { numDocsIndexed: number; totalDocs: number | null } | null;
+};
+
+/// Every index still backfilling on a root-component table, sorted by table
+/// then index name. It walks `_index_backfills`, which only holds in-flight
+/// backfills, and fetches each index and table by ID, so it stays cheap on
+/// deployments with thousands of tables and indexes. The database index
+/// workers and the search flusher both record progress there, so database,
+/// search and vector backfills are all listed; `kind` tells them apart.
+/// `_index` and `_index_backfills` live only in the root namespace, so this
+/// query takes no component argument.
+export const backfilling = queryPrivateSystem("ViewData")({
+  args: {},
+  handler: async ({ db }): Promise<BackfillingIndex[]> => {
+    const backfills = await db
+      .query("_index_backfills")
+      .withIndex("by_id", (q) => q)
+      .collect();
+    if (backfills.length === 0) {
+      return [];
+    }
+    // `_index.table_id` is a table's raw internal ID, and any `_tables`
+    // document ID carries the number that turns it back into a document ID.
+    const someTable = await db
+      .query("_tables")
+      .withIndex("by_id", (q) => q)
+      .first();
+    if (someTable === null) {
+      throw new Error(
+        "_tables is empty while _index_backfills is not: every backfilling index belongs to a table",
+      );
+    }
+    const tablesTableNumber = decodeId(someTable._id).tableNumber;
+    const result: BackfillingIndex[] = [];
+    for (const backfill of backfills) {
+      const index = await db.get(backfill.indexId);
+      if (
+        index === null ||
+        index.descriptor === "by_id" ||
+        index.descriptor === "by_creation_time"
+      ) {
+        continue;
+      }
+      const { state, staged } = indexFieldsAndState(index.config);
+      if (state !== "backfilling") {
+        continue;
+      }
+      const table = await tableByInternalId(
+        db,
+        tablesTableNumber,
+        index.table_id,
+      );
+      if (
+        table === null ||
+        table.state !== "active" ||
+        table.namespace !== undefined
+      ) {
+        continue;
+      }
+      result.push({
+        tableName: table.name,
+        name: index.descriptor,
+        kind: index.config.type,
+        staged,
+        stats: {
+          numDocsIndexed: Number(backfill.numDocsIndexed),
+          totalDocs:
+            backfill.totalDocs === null ? null : Number(backfill.totalDocs),
+        },
+      });
+    }
+    return result.sort(
+      (a, b) =>
+        a.tableName.localeCompare(b.tableName) || a.name.localeCompare(b.name),
+    );
+  },
+});
+
+/// The `_tables` document whose ID wraps `internalId`, the URL-safe base64
+/// form `_index.table_id` uses, or null when the ID is not one.
+async function tableByInternalId(
+  db: GenericDatabaseReader<DataModel>,
+  tablesTableNumber: number,
+  internalId: string,
+): Promise<Doc<"_tables"> | null> {
+  const standardBase64 = internalId.replace(/-/g, "+").replace(/_/g, "/");
+  const padded =
+    standardBase64 + "=".repeat((4 - (standardBase64.length % 4)) % 4);
+  let id: string;
+  try {
+    id = encodeId(tablesTableNumber, Base64.toByteArray(padded));
+  } catch {
+    return null;
+  }
+  return db.get(id as Id<"_tables">);
+}

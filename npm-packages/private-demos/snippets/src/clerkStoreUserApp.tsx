@@ -1,4 +1,4 @@
-import { SignInButton, UserButton } from "@clerk/clerk-react";
+import { SignInButton, UserButton } from "@clerk/react";
 import { useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { useStoreUserEffect } from "./useStoreUserEffect.js";

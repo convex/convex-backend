@@ -1,62 +1,10 @@
 ---
-title: "Custom Domains & Hosting"
-sidebar_label: "Custom Domains & Hosting"
+title: "Custom Hosting"
+sidebar_label: "Custom Hosting"
 description:
-  "Serve requests from any domains and host your frontend on any static hosting
-  provider, such as GitHub."
+  "Host your frontend on any static hosting provider, such as GitHub Pages."
 sidebar_position: 100
 ---
-
-## Custom Domains
-
-You can configure a custom domain, like `api.example.com`, to serve HTTP actions
-or Convex functions from your Convex deployments. The settings for this feature
-are accessed through the Deployment Settings page on any of your deployments.
-
-![Add Custom Domain](/screenshots/add_custom_domain.png)
-
-After you enter a domain, you will be shown which records to set on your DNS
-provider. Some popular DNS providers that you can use to buy a domain are
-Cloudflare and GoDaddy. We will verify your domain in the background, and once
-these records are set, you will see a green checkmark.
-
-When you see that checkmark, your backend will now serve traffic from that
-domain. The first request may take up to a minute because Convex will have to
-mint a new SSL certificate.
-
-Reach out to support@convex.dev if you have any questions about getting set up!
-
-<ProFeatureUpsell feature="Custom domains" verb="require" />
-
-### Hosting with a Custom Domain
-
-To use a custom domain to serve your Convex functions, there's an additional
-step: override the `CONVEX_CLOUD_URL` environment variable.
-
-![Override system environment variables](/screenshots/override_system_env_vars.png)
-
-Then re-deploy your project. This may entail clicking "Redeploy" in Vercel or
-Netlify, or directly running `npx convex deploy --cmd 'npm run build'`. The
-newly deployed code will access your Convex functions through your custom
-domain.
-
-The `CONVEX_CLOUD_URL` environment variable is used in several places:
-
-- `npx convex deploy --cmd '...'` sets `CONVEX_URL` (or similarly named) for
-  your frontend to connect websockets and HTTP clients
-- In your Convex functions, it is available as `process.env.CONVEX_CLOUD_URL`
-- File storage URLs: `ctx.storage.getUrl(id)` and
-  `ctx.storage.generateUploadUrl()`
-- Generate an OpenAPI spec with `npx convex function-spec --prod`
-
-You may also override the `CONVEX_SITE_URL` environment variable to be a custom
-HTTP Action domain.
-
-- In your Convex functions, it is available as `process.env.CONVEX_SITE_URL`
-- It may be used for webhooks
-- It may be used in `auth.config.ts` as the `issuer` for Convex Auth
-
-## Custom Hosting
 
 If you're using only Convex for backend functionality you can host your web app
 on any static hosting provider. This guide will use
@@ -69,7 +17,7 @@ to use a provider that supports it, such as
 via a
 [static export](https://nextjs.org/docs/pages/building-your-application/deploying/static-exports).
 
-### Configure your build
+## Configure your build
 
 First make sure that you have a working build process.
 
@@ -80,7 +28,7 @@ which uses GitHub actions.
 
 We'll use Vite and GitHub Pages as an example.
 
-1. Configure <JSDialectFileName name="vite.config.mts" />:
+1. Configure `vite.config.mts`:
 
    ```ts title="vite.config.mts"
    import { defineConfig } from "vite";
@@ -108,7 +56,7 @@ We'll use Vite and GitHub Pages as an example.
    this case we will serve on
    `https://<some username>.github.io/<some repo name>`.
 
-### Configure your hosting provider
+## Configure your hosting provider
 
 With GitHub Pages, you can choose whether you want to include your build output
 in your main working branch or publish from a separate branch.
@@ -119,7 +67,7 @@ deployment_ > _Source_ choose `Deploy from a branch`.
 Under _branch_ choose a branch (if you want to use a separate branch, push at
 least one commit to it first), and the `/docs` folder name. Hit _Save_.
 
-### Build and deploy to Convex and GitHub Pages
+## Build and deploy to Convex and GitHub Pages
 
 To manually deploy to GitHub pages follow these steps:
 
@@ -128,7 +76,7 @@ To manually deploy to GitHub pages follow these steps:
    push your current backend code to your **production** deployment
 3. Commit the build output changes and push to GitHub.
 
-### How it works
+## How it works
 
 First, `npx convex deploy` runs through these steps:
 
@@ -151,7 +99,8 @@ frontend code if the `deploy` command cannot infer it, like
 npx convex deploy --cmd-url-env-var-name CUSTOM_CONVEX_URL --cmd 'npm run build'
 ```
 
-### Authentication
+## Authentication
 
-You will want to configure your [authentication](/auth.mdx) provider (Clerk,
-Auth0 or other) to accept your production URL, where your frontend is served.
+You will want to configure your [authentication](/auth/overview.mdx) provider
+(Clerk, Auth0 or other) to accept your production URL, where your frontend is
+served.

@@ -34,8 +34,6 @@ fi
 # Check if all required S3 environment variables are present
 MISSING_VARS=()
 [ -z "$AWS_REGION" ] && MISSING_VARS+=("AWS_REGION")
-[ -z "$AWS_ACCESS_KEY_ID" ] && MISSING_VARS+=("AWS_ACCESS_KEY_ID")
-[ -z "$AWS_SECRET_ACCESS_KEY" ] && MISSING_VARS+=("AWS_SECRET_ACCESS_KEY")
 [ -z "$S3_STORAGE_EXPORTS_BUCKET" ] && MISSING_VARS+=("S3_STORAGE_EXPORTS_BUCKET")
 [ -z "$S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET" ] && MISSING_VARS+=("S3_STORAGE_SNAPSHOT_IMPORTS_BUCKET")
 [ -z "$S3_STORAGE_MODULES_BUCKET" ] && MISSING_VARS+=("S3_STORAGE_MODULES_BUCKET")
@@ -45,7 +43,7 @@ MISSING_VARS=()
 if [ ${#MISSING_VARS[@]} -eq 0 ]; then
     STORAGE_FLAGS=(--s3-storage)
 else
-    if [ ${#MISSING_VARS[@]} -lt 8 ]; then
+    if [ ${#MISSING_VARS[@]} -lt 6 ]; then
         echo "Warning: Some AWS/S3 environment variables are missing. Falling back to local storage."
         echo "Missing variables: ${MISSING_VARS[*]}"
     fi

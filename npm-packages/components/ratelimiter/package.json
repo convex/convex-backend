@@ -7,7 +7,7 @@
     "typecheck": "tsc --noEmit",
     "dev": "convex dev --typecheck-components",
     "codegen": "convex codegen --component-dir ./src/component",
-    "prepare": "npm run build",
+    "prepublishOnly": "npm run build",
     "prepack": "node node10stubs.mjs",
     "postpack": "node node10stubs.mjs --cleanup"
   },
@@ -38,17 +38,11 @@
   "dependencies": {
     "convex": "workspace:*"
   },
-  "dependenciesMeta": {
-    "convex": {
-      "injected": true
-    }
-  },
   "devDependencies": {
     "@types/node": "^18.17.0",
     "convex-test": "^0.0.41",
-    "prettier": "^3.8.0",
     "typescript": "~5.0.3",
-    "vite": "^6.4.1"
+    "vite": "^6.4.4"
   },
   "types": "./dist/client/index.d.ts",
   "module": "./dist/client/index.js"

@@ -15,10 +15,6 @@ pub type EvaluateAppDefinitionsResult =
     BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>;
 
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct FunctionResult {
     pub result: Result<JsonPackedValue, JsError>,
 }

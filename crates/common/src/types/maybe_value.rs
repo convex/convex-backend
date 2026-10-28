@@ -107,35 +107,3 @@ impl From<MaybeValue> for JsonValue {
         value.to_internal_json()
     }
 }
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for MaybeValue {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = MaybeValue>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        any::<Option<ConvexValue>>().prop_map(MaybeValue)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use serde_json::Value as JsonValue;
-    use sync_types::testing::assert_roundtrips;
-
-    use super::MaybeValue;
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-
-        #[test]
-        fn test_maybe_value_roundtrips(value in any::<MaybeValue>()) {
-            assert_roundtrips::<MaybeValue, JsonValue>(value);
-        }
-    }
-}

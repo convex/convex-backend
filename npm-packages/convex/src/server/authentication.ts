@@ -235,3 +235,82 @@ export interface Auth {
    */
   getUserIdentity(): Promise<UserIdentity | null>;
 }
+
+/**
+ * {@link Auth} for mutations, which can also sign JWTs with this deployment's
+ * key.
+ *
+ * @public
+ */
+export interface MutationAuth extends Auth {
+  /**
+   * Sign an ES256 JWT with this deployment's key.
+   *
+   * Pass the `claims` and `expiresInSeconds` values that match your use case.
+   *
+   * Convex populates the header and sets the `iss`, `iat` and `exp` claims.
+   *
+   * The `iss` is `process.env.CONVEX_CLOUD_URL` for the app and
+   * `${process.env.CONVEX_CLOUD_URL}/components/<name>` for a component.
+   *
+   * Anyone can verify these tokens against the public keys at
+   * `${process.env.CONVEX_CLOUD_URL}/.well-known/jwks.json`.
+   *
+   * Claims are signed but not encrypted, so anyone holding the token can read
+   * them.
+   *
+   * Prefer short token lifetimes: a token can't be revoked individually, and a
+   * mutation can always sign a fresh one to reassert the claims. This API
+   * allows a token to have a max expiration of 1 hour from issuance.
+   *
+   * Claims that start with `convex` or `cvx` (case insensitive) and the `nbf`
+   * claim are reserved and may not be set.
+   */
+  signJwt(options: SignJwtOptions): Promise<string>;
+}
+
+/**
+ * Claims that callers may not set on JWTs with {@link MutationAuth.signJwt}.
+ */
+export type ReservedJwtClaim = "iss" | "iat" | "exp" | "nbf";
+
+/**
+ * Every ASCII casing of `S`: `AnyCase<"cvx">` is `"cvx" | "cvX" | "cVx" | ...`.
+ */
+type AnyCase<S extends string> = S extends `${infer First}${infer Rest}`
+  ? `${Lowercase<First> | Uppercase<First>}${AnyCase<Rest>}`
+  : S;
+
+/**
+ * Claim names starting with `convex` or `cvx`, in any casing, are reserved
+ * for Convex. They may not be set on JWTs with {@link MutationAuth.signJwt}.
+ */
+// NOTE: only relatively short prefixes should ever be passed below. The AnyCase
+// type produces 2^length string literals which can get out of hand for anything
+// but short strings.
+export type ReservedJwtClaimPrefix = AnyCase<"convex" | "cvx">;
+
+/**
+ * Rejects claim names starting with a {@link ReservedJwtClaimPrefix}.
+ */
+// Kept as a named alias rather than inlined into SignJwtClaims: typedoc's
+// markdown renderer mangles template-literal index signatures into invalid
+// MDX, but renders a reference to a named type as plain text.
+type ReservedPrefixJwtClaims = {
+  [K: `${ReservedJwtClaimPrefix}${string}`]: never;
+};
+
+/**
+ * The claims a caller passes to {@link MutationAuth.signJwt}: any JSON value,
+ * except for the {@link ReservedJwtClaim}s and names starting with a
+ * {@link ReservedJwtClaimPrefix}.
+ */
+export type SignJwtClaims = Record<string, JSONValue> & {
+  [K in ReservedJwtClaim]?: never;
+} & ReservedPrefixJwtClaims;
+
+export type SignJwtOptions = {
+  claims?: SignJwtClaims;
+  /** How long the token stays valid, at least 1 second and at most 1 hour. */
+  expiresInSeconds: number;
+};

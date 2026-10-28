@@ -1,4 +1,4 @@
-import { Meta, StoryFn, StoryObj } from "@storybook/nextjs";
+import { Decorator, Meta, StoryObj } from "@storybook/nextjs";
 import { Calendar } from "@common/elements/Calendar";
 
 export const Single: Story = {
@@ -41,13 +41,13 @@ export const RestrictedRange: Story = {
 const meta = {
   component: Calendar,
   decorators: [
-    (Story: StoryFn) => (
+    ((Story) => (
       // The calendar itself has a transparent background, but should generally be
       // placed over `background-secondary` to ensure proper contrast.
       <div className="w-min bg-background-secondary p-2">
         <Story />
       </div>
-    ),
+    )) satisfies Decorator,
   ],
 } satisfies Meta<typeof Calendar>;
 

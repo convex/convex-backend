@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { logOutput } from "../../bundler/log.js";
 import { runSystemQuery } from "./run.js";
 import { Context } from "../../bundler/context.js";
+import { convexToJson } from "../../values/value.js";
 
 export async function functionSpecForDeployment(
   ctx: Context,
@@ -27,7 +28,11 @@ export async function functionSpecForDeployment(
     args: {},
   })) as string;
 
-  const output = JSON.stringify({ url, functions }, null, 2);
+  const output = JSON.stringify(
+    { url, functions: convexToJson(functions) },
+    null,
+    2,
+  );
 
   if (options.file) {
     const fileName = `function_spec_${Date.now().valueOf()}.json`;

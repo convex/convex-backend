@@ -2,17 +2,18 @@
   "name": "udf-runtime",
   "version": "0.0.0",
   "scripts": {
-    "build": ""
+    "build": "tsc --noEmit"
   },
   "dependencies": {
     "object-inspect": "^1.12.0",
     "base64-js": "^1.5.1",
     "web-streams-polyfill": "~3.3.0",
     "abortcontroller-polyfill": "1.7.6",
-    "prettier": "^3.8.0",
     "udf-syscall-ffi": "workspace:*"
   },
   "devDependencies": {
-    "@types/object-inspect": "^1.8.1"
+    "@types/node": "^18.17.0",
+    "@types/object-inspect": "^1.8.1",
+    "typescript": "^5.9.2"
   }
 }

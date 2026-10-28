@@ -1,5 +1,6 @@
 {
-  "name": "nuxt-app",
+  "name": "quickstart-nuxt",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,11 +11,11 @@
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
-    "convex": "^1.25.4",
+    "convex": "workspace:*",
     "convex-nuxt": "^0.1.5",
     "convex-vue": "^0.1.5",
-    "nuxt": "^4.0.1",
-    "vue": "^3.5.17",
+    "nuxt": "^4.6.2",
+    "vue": "^3.5.42",
     "vue-router": "^4.5.1"
   }
 }

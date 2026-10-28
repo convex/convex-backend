@@ -54,14 +54,6 @@ impl ComponentId {
         matches!(self, ComponentId::Root)
     }
 
-    /// Component for tests where we need a user component.
-    /// Ideally we could switch this to some other component with no test
-    /// breakage.
-    #[cfg(any(test, feature = "testing"))]
-    pub const fn test_user() -> Self {
-        ComponentId::Root
-    }
-
     pub fn serialize_to_string(&self) -> Option<String> {
         match self {
             ComponentId::Root => None,
@@ -91,34 +83,6 @@ impl From<TableNamespace> for ComponentId {
         match value {
             TableNamespace::Global => ComponentId::Root,
             TableNamespace::ByComponent(id) => ComponentId::Child(id),
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-mod proptests {
-    use proptest::prelude::*;
-
-    use super::{
-        ComponentDefinitionId,
-        ComponentId,
-    };
-
-    impl Arbitrary for ComponentId {
-        type Parameters = ();
-        type Strategy = BoxedStrategy<Self>;
-
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            Just(ComponentId::Root).boxed()
-        }
-    }
-
-    impl Arbitrary for ComponentDefinitionId {
-        type Parameters = ();
-        type Strategy = BoxedStrategy<Self>;
-
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            Just(ComponentDefinitionId::Root).boxed()
         }
     }
 }

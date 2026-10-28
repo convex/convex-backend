@@ -10,31 +10,7 @@ use std::{
 };
 
 use prost::Message;
-use tonic_build::FileDescriptorSet;
-
-pub fn set_protoc_path() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("protoc");
-    let include_path = std::fs::canonicalize(root.join("include"))
-        .expect("Failed to canonicalize protoc include path");
-    unsafe { std::env::set_var("PROTOC_INCLUDE", include_path) };
-    if std::env::var_os("PROTOC").is_none() {
-        let protoc_binary_name = if cfg!(target_os = "macos") {
-            "protoc-macos-universal"
-        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-            "protoc-linux-aarch64"
-        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            "protoc-linux-x86_64"
-        } else if cfg!(all(target_os = "windows")) {
-            // works on arm too
-            "protoc-windows-x86_64"
-        } else {
-            panic!("no protoc binary available for this architecture");
-        };
-        let binary_path = std::fs::canonicalize(root.join(protoc_binary_name))
-            .expect("Failed to canonicalize protoc path");
-        unsafe { std::env::set_var("PROTOC", binary_path) };
-    }
-}
+use tonic_prost_build::FileDescriptorSet;
 
 fn find_packages(proto_dir: &Path) -> Result<Vec<String>> {
     let mut packages = vec![];
@@ -49,8 +25,7 @@ fn find_packages(proto_dir: &Path) -> Result<Vec<String>> {
     Ok(packages)
 }
 
-pub fn pb_build(features: Vec<&'static str>, mut extra_includes: Vec<&'static str>) -> Result<()> {
-    set_protoc_path();
+pub fn pb_build(features: Vec<&'static str>, extra_includes: Vec<&'static str>) -> Result<()> {
     println!("cargo:rerun-if-changed=protos");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let mut packages = find_packages(Path::new("protos/"))?;
@@ -76,11 +51,11 @@ pub fn pb_build(features: Vec<&'static str>, mut extra_includes: Vec<&'static st
         external_paths.append(&mut packages)
     }
 
-    let mut includes = vec!["protos/"];
-    includes.append(&mut extra_includes);
+    let mut includes = vec!["protos/".to_string()];
+    includes.extend(extra_includes.into_iter().map(str::to_string));
 
     let descriptor_set_path = out_dir.join("descriptors.bin");
-    let mut builder = tonic_build::configure().file_descriptor_set_path(&descriptor_set_path);
+    let mut builder = tonic_prost_build::configure().file_descriptor_set_path(&descriptor_set_path);
     for (proto_path, rust_path) in external_paths {
         builder = builder.extern_path(proto_path, rust_path);
     }

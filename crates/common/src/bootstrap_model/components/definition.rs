@@ -16,6 +16,8 @@ use value::{
     heap_size::HeapSize,
     identifier::Identifier,
     ConvexValue,
+    TableMapping,
+    TableNamespace,
 };
 
 use crate::{
@@ -25,39 +27,27 @@ use crate::{
         Reference,
     },
     schemas::validator::Validator,
+    types::EnvVarName,
+    virtual_system_mapping::VirtualSystemMapping,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct ComponentDefinitionMetadata {
     pub path: ComponentDefinitionPath,
     pub definition_type: ComponentDefinitionType,
 
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "proptest::collection::vec(proptest::prelude::any::<ComponentInstantiation>(), 0..2)"
-        )
-    )]
     pub child_components: Vec<ComponentInstantiation>,
 
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "proptest::collection::btree_map(proptest::prelude::any::<HttpMountPath>(), \
-                             proptest::prelude::any::<Reference>(), 0..2)"
-        )
-    )]
     pub http_mounts: BTreeMap<HttpMountPath, Reference>,
 
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "proptest::collection::btree_map(proptest::prelude::any::<PathComponent>(), \
-                        proptest::prelude::any::<ComponentExport>(), 0..4)"
-        )
-    )]
+    /// For App definitions only: the HTTP path prefix under which the app's
+    /// own `http.ts` routes are served. Child component mounts are specified
+    /// as absolute paths (via `http_mounts`) and are unaffected by this field.
+    pub http_prefix: Option<HttpMountPath>,
+
     pub exports: BTreeMap<PathComponent, ComponentExport>,
+
+    pub env_vars: BTreeMap<Identifier, EnvVarValidator>,
 }
 
 impl ComponentDefinitionMetadata {
@@ -67,12 +57,22 @@ impl ComponentDefinitionMetadata {
             definition_type: ComponentDefinitionType::App,
             child_components: Vec::new(),
             http_mounts: BTreeMap::new(),
+            http_prefix: None,
             exports: BTreeMap::new(),
+            env_vars: BTreeMap::new(),
         }
     }
 
     pub fn is_app(&self) -> bool {
         self.definition_type == ComponentDefinitionType::App
+    }
+
+    pub fn required_env_var_names(&self) -> Vec<String> {
+        self.env_vars
+            .iter()
+            .filter(|(_, v)| !v.optional)
+            .map(|(name, _)| name.to_string())
+            .collect()
     }
 }
 
@@ -90,18 +90,6 @@ impl Deref for HttpMountPath {
 impl From<HttpMountPath> for String {
     fn from(value: HttpMountPath) -> Self {
         value.0
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for HttpMountPath {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        r"/([a-zA-Z0-9_]/)+".prop_map(|s| s.parse().unwrap())
     }
 }
 
@@ -125,7 +113,6 @@ impl FromStr for HttpMountPath {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ComponentDefinitionType {
     App,
     ChildComponent {
@@ -139,6 +126,7 @@ pub struct ComponentInstantiation {
     pub name: ComponentName,
     pub path: ComponentDefinitionPath,
     pub args: Option<BTreeMap<Identifier, ComponentArgument>>,
+    pub env: BTreeMap<Identifier, EnvBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,15 +136,48 @@ pub enum ComponentExport {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ComponentArgumentValidator {
     Value(Validator),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
+pub struct EnvVarValidator {
+    pub validator: Validator,
+    pub optional: bool,
+}
+
+impl EnvVarValidator {
+    /// Checks that a value directly provided for a component env var matches
+    /// the validator that the component defined.
+    ///
+    /// The internal validator might constrain string further (e.g. to be one
+    /// of a set of literal values) so it's not sufficient to just know the
+    /// type is a string.
+    pub fn check_provided_value(&self, value: &str) -> anyhow::Result<()> {
+        // Empty mappings are safe: env var validators are constrained to be
+        // string-like, and check_value only consults table mappings for
+        // Validator::Id which can't appear here.
+        // TODO(CX-6540): Remove hack where we pass in empty mappings.
+        let table_mapping = TableMapping::new().namespace(TableNamespace::by_component_TODO());
+        let virtual_system_mapping = VirtualSystemMapping::default();
+        let convex_value = ConvexValue::String(value.try_into()?);
+        self.validator
+            .check_value(&convex_value, &table_mapping, &virtual_system_mapping)
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ComponentArgument {
     Value(ConvexValue),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum EnvBinding {
+    Value(
+        String,
+    ),
+    EnvVar(EnvVarName),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -166,7 +187,10 @@ pub struct SerializedComponentDefinitionMetadata {
     definition_type: SerializedComponentDefinitionType,
     child_components: Vec<SerializedComponentInstantiation>,
     http_mounts: Option<BTreeMap<String, String>>,
+    http_prefix: Option<String>,
     exports: SerializedComponentExport,
+    #[serde(default)]
+    env_vars: Option<Vec<(String, SerializedEnvVarValidator)>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -187,8 +211,25 @@ pub enum SerializedComponentArgumentValidator {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+pub enum SerializedEnvVarValidator {
+    Value {
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        optional: Option<bool>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum SerializedComponentArgument {
     Value { value: String },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SerializedEnvBinding {
+    Value { value: String },
+    EnvVar { name: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -197,6 +238,8 @@ struct SerializedComponentInstantiation {
     name: String,
     path: String,
     args: Option<Vec<(String, SerializedComponentArgument)>>,
+    #[serde(default)]
+    env: Vec<(String, SerializedEnvBinding)>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -214,6 +257,16 @@ impl TryFrom<ComponentDefinitionMetadata> for SerializedComponentDefinitionMetad
     type Error = anyhow::Error;
 
     fn try_from(m: ComponentDefinitionMetadata) -> anyhow::Result<Self> {
+        let env_vars = if m.env_vars.is_empty() {
+            None
+        } else {
+            Some(
+                m.env_vars
+                    .into_iter()
+                    .map(|(name, v)| anyhow::Ok((String::from(name), v.try_into()?)))
+                    .try_collect()?,
+            )
+        };
         Ok(Self {
             path: String::from(m.path),
             definition_type: m.definition_type.try_into()?,
@@ -228,7 +281,9 @@ impl TryFrom<ComponentDefinitionMetadata> for SerializedComponentDefinitionMetad
                     .map(|(k, v)| (String::from(k), String::from(v)))
                     .collect(),
             ),
+            http_prefix: m.http_prefix.map(String::from),
             exports: ComponentExport::Branch(m.exports).try_into()?,
+            env_vars,
         })
     }
 }
@@ -240,6 +295,12 @@ impl TryFrom<SerializedComponentDefinitionMetadata> for ComponentDefinitionMetad
         let ComponentExport::Branch(exports) = m.exports.try_into()? else {
             anyhow::bail!("Expected branch of exports at the top level");
         };
+        let env_vars: BTreeMap<Identifier, EnvVarValidator> = m
+            .env_vars
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, v)| anyhow::Ok((name.parse()?, v.try_into()?)))
+            .try_collect()?;
         Ok(Self {
             path: m.path.parse()?,
             definition_type: m.definition_type.try_into()?,
@@ -254,7 +315,9 @@ impl TryFrom<SerializedComponentDefinitionMetadata> for ComponentDefinitionMetad
                 .into_iter()
                 .map(|(k, v)| anyhow::Ok((k.parse()?, v.parse()?)))
                 .try_collect()?,
+            http_prefix: m.http_prefix.map(|s| s.parse()).transpose()?,
             exports,
+            env_vars,
         })
     }
 }
@@ -310,6 +373,11 @@ impl TryFrom<ComponentInstantiation> for SerializedComponentInstantiation {
                         .try_collect()
                 })
                 .transpose()?,
+            env: i
+                .env
+                .into_iter()
+                .map(|(k, v)| anyhow::Ok((String::from(k), v.try_into()?)))
+                .try_collect()?,
         })
     }
 }
@@ -329,6 +397,11 @@ impl TryFrom<SerializedComponentInstantiation> for ComponentInstantiation {
                         .try_collect()
                 })
                 .transpose()?,
+            env: i
+                .env
+                .into_iter()
+                .map(|(k, v)| anyhow::Ok((k.parse()?, v.try_into()?)))
+                .try_collect()?,
         })
     }
 }
@@ -357,6 +430,29 @@ impl TryFrom<SerializedComponentArgumentValidator> for ComponentArgumentValidato
     }
 }
 
+impl TryFrom<EnvVarValidator> for SerializedEnvVarValidator {
+    type Error = anyhow::Error;
+
+    fn try_from(v: EnvVarValidator) -> anyhow::Result<Self> {
+        Ok(Self::Value {
+            value: v.validator.json_serialize()?,
+            optional: if v.optional { Some(true) } else { None },
+        })
+    }
+}
+
+impl TryFrom<SerializedEnvVarValidator> for EnvVarValidator {
+    type Error = anyhow::Error;
+
+    fn try_from(v: SerializedEnvVarValidator) -> anyhow::Result<Self> {
+        let SerializedEnvVarValidator::Value { value, optional } = v;
+        Ok(Self {
+            validator: Validator::json_deserialize(&value)?,
+            optional: optional.unwrap_or(false),
+        })
+    }
+}
+
 impl TryFrom<ComponentArgument> for SerializedComponentArgument {
     type Error = anyhow::Error;
 
@@ -377,6 +473,30 @@ impl TryFrom<SerializedComponentArgument> for ComponentArgument {
             SerializedComponentArgument::Value { value: v } => ComponentArgument::Value(
                 ConvexValue::try_from(serde_json::from_str::<JsonValue>(&v)?)?,
             ),
+        })
+    }
+}
+
+impl TryFrom<EnvBinding> for SerializedEnvBinding {
+    type Error = anyhow::Error;
+
+    fn try_from(b: EnvBinding) -> anyhow::Result<Self> {
+        Ok(match b {
+            EnvBinding::Value(s) => SerializedEnvBinding::Value { value: s },
+            EnvBinding::EnvVar(name) => SerializedEnvBinding::EnvVar {
+                name: String::from(name),
+            },
+        })
+    }
+}
+
+impl TryFrom<SerializedEnvBinding> for EnvBinding {
+    type Error = anyhow::Error;
+
+    fn try_from(b: SerializedEnvBinding) -> anyhow::Result<Self> {
+        Ok(match b {
+            SerializedEnvBinding::Value { value } => EnvBinding::Value(value),
+            SerializedEnvBinding::EnvVar { name } => EnvBinding::EnvVar(name.parse()?),
         })
     }
 }
@@ -418,41 +538,3 @@ codegen_convex_serialization!(
     ComponentDefinitionMetadata,
     SerializedComponentDefinitionMetadata
 );
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for ComponentExport {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = ComponentExport>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        let leaf = any::<Reference>().prop_map(ComponentExport::Leaf);
-        leaf.prop_recursive(2, 4, 2, |inner| {
-            prop::collection::btree_map(any::<PathComponent>(), inner, 1..4)
-                .prop_map(ComponentExport::Branch)
-        })
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for ComponentInstantiation {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = ComponentInstantiation>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        (
-            any::<ComponentName>(),
-            any::<ComponentDefinitionPath>(),
-            prop::option::of(prop::collection::btree_map(
-                any::<Identifier>(),
-                any::<ComponentArgument>(),
-                0..4,
-            )),
-        )
-            .prop_map(|(name, path, args)| ComponentInstantiation { name, path, args })
-    }
-}

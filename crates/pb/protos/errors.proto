@@ -28,6 +28,7 @@ message OccInfo {
   optional string write_source = 3;
   bool is_system = 4;
   optional uint64 write_ts = 5;
+  optional string component_path = 6;
 }
 
 message ErrorMetadata {

@@ -1,33 +1,30 @@
 import { SWRConfiguration } from "swr";
 
 import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
-import { useBBMutation, useBBQuery } from "api/api";
-
-export type ProjectEnvironmentVariable = {
-  name: string;
-  value: string;
-};
+import { useManagementApiMutation, useManagementApiQuery } from "api/api";
 
 export function useProjectEnvironmentVariables(
   projectId?: number,
   refreshInterval?: SWRConfiguration["refreshInterval"],
 ): { configs: ProjectEnvVarConfig[] } | undefined {
-  const { data } = useBBQuery({
-    path: `/projects/{project_id}/environment_variables/list`,
-    pathParams: {
-      project_id: projectId?.toString() || "",
-    },
+  const { data } = useManagementApiQuery({
+    path: "/projects/{project_id}/list_default_environment_variables",
+    pathParams: { project_id: projectId ?? 0 },
     swrOptions: { refreshInterval },
   });
-  return data;
+  if (data?.pagination.hasMore) {
+    throw new Error("Unexpected pagination in default environment variables");
+  }
+  return data ? { configs: data.items } : undefined;
 }
 
 export function useUpdateProjectEnvVars(projectId?: number) {
-  return useBBMutation({
-    path: "/projects/{project_id}/environment_variables/update_batch",
-    pathParams: { project_id: projectId?.toString() || "" },
-    mutateKey: `/projects/{project_id}/environment_variables/list`,
-    mutatePathParams: { project_id: projectId?.toString() || "" },
+  return useManagementApiMutation({
+    path: "/projects/{project_id}/update_default_environment_variables",
+    pathParams: { project_id: projectId ?? 0 },
+    mutateKey:
+      "/projects/{project_id}/list_default_environment_variables" as const,
+    mutatePathParams: { project_id: projectId ?? 0 },
     successToast: "Environment variables updated.",
   });
 }

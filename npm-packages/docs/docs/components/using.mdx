@@ -2,7 +2,6 @@
 title: "Using Components"
 slug: "using"
 sidebar_position: 20
-hide_table_of_contents: true
 description: "Using existing components"
 ---
 
@@ -21,7 +20,7 @@ as an example.
 <StepByStep>
   <Step title="Install from `npm`">
 
-```bash
+```sh
 npm i @convex-dev/agent
 ```
 
@@ -47,7 +46,7 @@ export default app;
   <Step title="Run convex dev">
   The `convex dev` CLI command will generate code necessary for using the component.
 
-```bash
+```sh
 npx convex dev
 ```
 
@@ -100,7 +99,7 @@ export const myAction = internalAction({
 Some components abstract away the component's API. For instance, the `Agent`
 class from `@convex-dev/agent` is initialized with `components.agent`, and its
 methods take in `ctx` so they can call the component's API internally.
-[Learn more about the Agent Component here](/agents.mdx).
+[Learn more about the Agent Component here](/agents/overview.mdx).
 
 ## Transactions
 
@@ -139,19 +138,52 @@ ignore rate limits if there is a development environment override. In this case,
 only the component mutation will be rolled back, and the rest of the mutation
 will continue.
 
+## HTTP Routes
+
+Components can define their own [HTTP actions](/functions/http-actions.mdx) in
+an `http.ts` file. To expose a component's HTTP routes, pass an `httpPrefix`
+when installing the component:
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import myComponent from "./components/myComponent/convex.config.js";
+
+const app = defineApp();
+app.use(myComponent, { httpPrefix: "/my-component/" });
+export default app;
+```
+
+With this configuration, if the component defines a route for `/hello`, it will
+be accessible at `/my-component/hello` on your deployment's `.convex.site`
+domain.
+
+If no `httpPrefix` is provided, the component's HTTP routes are not exposed.
+This ensures the app always controls its URL space.
+
+You can also set an `httpPrefix` on the app itself to namespace the routes
+defined in your `convex/http.ts`:
+
+```ts title="convex/convex.config.ts"
+const app = defineApp({ httpPrefix: "/app/" });
+```
+
+**Note:** An app `httpPrefix` doesn't influence component HTTP routes. Component
+routes mounted with their own `httpPrefix` are always relative to `/`.
+
+See [Authoring Components: HTTP Actions](/components/authoring.mdx#http-actions)
+for details on defining HTTP routes within a component, including limitations
+around `ctx.auth` and environment variables.
+
 ## Dashboard
 
 You can see your component’s data, functions, files, logs, and other info using
 the dropdown in the Dashboard. You can also use the dropdown to exclude info
 from certain components.
 
-<p style={{ textAlign: "center" }}>
-  <img
-    src="/screenshots/component_dropdown.png"
-    alt="Screenshot of the component dropdown"
-    width={414}
-  />
-</p>
+<Screenshot
+  story="docs/pages/project/deployment/Data#Component Dropdown"
+  alt="Screenshot of the component dropdown"
+/>
 
 ## Testing components
 

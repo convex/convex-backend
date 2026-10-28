@@ -33,13 +33,21 @@ import {
   safePolygon,
   useClick,
   useMergeRefs,
+  type Placement,
 } from "@floating-ui/react";
 import classNames from "classnames";
-import { ChevronRightIcon } from "@radix-ui/react-icons";
+import { ChevronDownIcon, ChevronRightIcon } from "@radix-ui/react-icons";
+import { Cross2Icon } from "@radix-ui/react-icons";
 import { UrlObject } from "url";
 import { Button } from "@ui/Button";
 import { TooltipSide } from "@ui/Tooltip";
 import { Key, KeyboardShortcut } from "@ui/KeyboardShortcut";
+import { useWindowSize } from "react-use";
+
+function useIsMobile() {
+  const { width } = useWindowSize();
+  return width < 640;
+}
 
 const ContextMenuContext = React.createContext<{
   getItemProps: (
@@ -60,6 +68,7 @@ export type Target = { x: number; y: number };
 type ContextMenuProps = React.PropsWithChildren<{
   target: Target | null;
   onClose: () => void;
+  placement?: Placement;
 }>;
 
 // Based on https://codesandbox.io/s/trusting-rui-2duieo
@@ -72,7 +81,13 @@ export function ContextMenu(props: ContextMenuProps) {
   );
 }
 
-function ContextMenuInner({ target, onClose, children }: ContextMenuProps) {
+function ContextMenuInner({
+  target,
+  onClose,
+  children,
+  placement = "right-start",
+}: ContextMenuProps) {
+  const isMobile = useIsMobile();
   const isOpen = target !== null;
   const onOpenChange = useCallback(
     (newIsOpen: boolean) => {
@@ -83,17 +98,19 @@ function ContextMenuInner({ target, onClose, children }: ContextMenuProps) {
     [onClose],
   );
 
+  const isVertical =
+    placement.startsWith("bottom") || placement.startsWith("top");
   const { refs, floatingStyles, context } = useFloating({
     open: isOpen,
     onOpenChange,
     middleware: [
-      offset({ mainAxis: 5, alignmentAxis: 4 }),
+      offset(isVertical ? { mainAxis: 5 } : { mainAxis: 5, alignmentAxis: 4 }),
       flip({
-        fallbackPlacements: ["left-start"],
+        fallbackPlacements: isVertical ? ["top-start"] : ["left-start"],
       }),
       shift({ padding: 10 }),
     ],
-    placement: "right-start",
+    placement,
     strategy: "fixed",
     whileElementsMounted: autoUpdate,
   });
@@ -173,6 +190,56 @@ function ContextMenuInner({ target, onClose, children }: ContextMenuProps) {
     [activeIndex, setActiveIndex, getItemProps, isOpen],
   );
 
+  if (isMobile) {
+    return (
+      <FloatingNode id={nodeId}>
+        <ContextMenuContext.Provider value={contextValue}>
+          <FloatingList elementsRef={listItemsRef} labelsRef={listContentRef}>
+            {isOpen && (
+              <FloatingPortal>
+                <FloatingFocusManager
+                  context={context}
+                  initialFocus={refs.floating}
+                >
+                  <div className="fixed inset-0 z-50" role="dialog">
+                    {/* Backdrop — keyboard dismiss handled by FloatingFocusManager/useDismiss */}
+                    {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+                    <div
+                      className="fixed inset-0 animate-fadeInFromLoading bg-black/50"
+                      onClick={onClose}
+                    />
+                    {/* Bottom sheet */}
+                    <div
+                      className="fixed inset-x-0 bottom-0 z-50 flex animate-slideUp flex-col rounded-t-xl bg-background-secondary shadow-xl outline-hidden dark:border dark:border-b-0"
+                      ref={refs.setFloating}
+                      {...getFloatingProps()}
+                    >
+                      {/* Close button */}
+                      <div className="flex justify-end px-3 pt-3">
+                        <Button
+                          onClick={onClose}
+                          aria-label="Close menu"
+                          icon={<Cross2Icon aria-hidden="true" />}
+                          variant="neutral"
+                          inline
+                          size="xs"
+                        />
+                      </div>
+                      {/* Scrollable menu content */}
+                      <div className="max-h-[80dvh] overflow-y-auto px-1 pb-[env(safe-area-inset-bottom)] text-xs">
+                        <div className="py-2">{children}</div>
+                      </div>
+                    </div>
+                  </div>
+                </FloatingFocusManager>
+              </FloatingPortal>
+            )}
+          </FloatingList>
+        </ContextMenuContext.Provider>
+      </FloatingNode>
+    );
+  }
+
   return (
     <FloatingNode id={nodeId}>
       <ContextMenuContext.Provider value={contextValue}>
@@ -224,6 +291,7 @@ function ContextMenuItem({
   tipSide?: TooltipSide;
   blankTarget?: boolean;
 }) {
+  const isMobile = useIsMobile();
   const menu = useContext(ContextMenuContext);
   const { itemRef: labelRef, itemText: labelText } = useTextContent();
   const item = useListItem({ label: disabled ? null : labelText });
@@ -234,7 +302,8 @@ function ContextMenuItem({
     <Button
       variant="unstyled"
       className={classNames(
-        "w-full flex max-w-xs gap-2 items-center px-3 py-1.5 text-left",
+        "w-full flex gap-2 items-center px-3 py-1.5 text-left",
+        !isMobile && "max-w-xs",
         "active:bg-background-tertiary disabled:active:bg-background-secondary focus:bg-background-tertiary disabled:focus:bg-background-secondary outline-hidden",
         disabled
           ? "cursor-not-allowed fill-content-tertiary text-content-tertiary"
@@ -313,6 +382,7 @@ function ContextMenuSubmenu({
   action,
   disabled = false,
 }: ContextMenuSubmenuProps) {
+  const isMobile = useIsMobile();
   // Item in the parent menu
   const parent = useContext(ContextMenuContext);
   const { itemRef: labelRef, itemText: labelText } = useTextContent();
@@ -333,7 +403,9 @@ function ContextMenuSubmenu({
     onOpenChange: setIsOpen,
     placement: "right-start",
     middleware: [
-      offset({ mainAxis: 0, alignmentAxis: 0 }),
+      // Pull the submenu up by its own top padding and border so its first
+      // item lines up with the parent item that opened it.
+      offset({ mainAxis: 0, alignmentAxis: -9 }),
       flip(),
       shift({ padding: 10 }),
     ],
@@ -342,14 +414,14 @@ function ContextMenuSubmenu({
 
   // Interactions
   const hover = useHover(context, {
-    enabled: true,
+    enabled: !isMobile,
     delay: { open: 75 },
     handleClose: safePolygon({ blockPointerEvents: true }),
   });
   const click = useClick(context, {
     event: "mousedown",
-    toggle: false,
-    ignoreMouse: true,
+    toggle: isMobile,
+    ignoreMouse: !isMobile,
   });
   const role = useRole(context, { role: "menu" });
   const dismiss = useDismiss(context, { bubbles: true });
@@ -411,7 +483,8 @@ function ContextMenuSubmenu({
         ref={useMergeRefs([refs.setReference, item.ref])}
         variant="unstyled"
         className={classNames(
-          "w-full flex max-w-xs gap-2 items-center px-3 py-1.5 text-left",
+          "w-full flex gap-2 items-center px-3 py-1.5 text-left",
+          !isMobile && "max-w-xs",
           "outline-hidden text-content-primary",
           "active:bg-background-tertiary focus:bg-background-tertiary",
           !isClickable && "cursor-default hover:bg-background-tertiary",
@@ -421,7 +494,7 @@ function ContextMenuSubmenu({
         tabIndex={item.index === parent.activeIndex ? 0 : -1}
         {...getReferenceProps(parent.getItemProps())}
         onClick={
-          isClickable
+          isClickable && !isMobile
             ? () => {
                 action?.();
                 tree?.events.emit("click");
@@ -435,28 +508,40 @@ function ContextMenuSubmenu({
         </span>
         {!disabled && (
           <span className="ml-auto shrink-0 text-content-primary">
-            <ChevronRightIcon className="ml-2" />
+            {isMobile && isOpen ? (
+              <ChevronDownIcon className="ml-2" />
+            ) : (
+              <ChevronRightIcon className="ml-2" />
+            )}
           </span>
         )}
       </Button>
 
       <ContextMenuContext.Provider value={contextValue}>
         <FloatingList elementsRef={elementsRef} labelsRef={labelsRef}>
-          {!disabled && isOpen && (
-            <FloatingPortal>
-              {/* 20px = twice the padding in the `shift` middleware (https://floating-ui.com/docs/misc#handling-large-content) */}
-              <div
-                className="z-50 overflow-hidden rounded-lg border bg-background-secondary shadow-md outline-hidden"
-                ref={refs.setFloating}
-                style={floatingStyles}
-                {...getFloatingProps()}
-              >
-                <div className="flex max-h-[calc(100vh-20px)] flex-col overflow-x-hidden overflow-y-auto py-2 text-xs whitespace-nowrap">
+          {isMobile
+            ? !disabled &&
+              isOpen && (
+                <div className="pl-4 text-xs" ref={refs.setFloating}>
                   {children}
                 </div>
-              </div>
-            </FloatingPortal>
-          )}
+              )
+            : !disabled &&
+              isOpen && (
+                <FloatingPortal>
+                  {/* 20px = twice the padding in the `shift` middleware (https://floating-ui.com/docs/misc#handling-large-content) */}
+                  <div
+                    className="z-50 overflow-hidden rounded-lg border bg-background-secondary shadow-md outline-hidden"
+                    ref={refs.setFloating}
+                    style={floatingStyles}
+                    {...getFloatingProps()}
+                  >
+                    <div className="flex max-h-[calc(100vh-20px)] flex-col overflow-x-hidden overflow-y-auto py-2 text-xs whitespace-nowrap">
+                      {children}
+                    </div>
+                  </div>
+                </FloatingPortal>
+              )}
         </FloatingList>
       </ContextMenuContext.Provider>
     </FloatingNode>

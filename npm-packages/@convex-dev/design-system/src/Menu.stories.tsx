@@ -48,11 +48,9 @@ export const WithTooltip: Story = {
     },
     placement: "bottom",
     children: (
-      <>
-        <MenuItem tip="world" action={() => {}} shortcut={["CtrlOrCmd", "C"]}>
-          Item 1
-        </MenuItem>
-      </>
+      <MenuItem tip="world" action={() => {}} shortcut={["CtrlOrCmd", "C"]}>
+        Item 1
+      </MenuItem>
     ),
   },
 };

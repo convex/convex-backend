@@ -330,7 +330,6 @@ impl SearchMemoryIdTracker {
 }
 
 // TODO(CX-6565): Make protos private
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq, Debug, Clone))]
 #[derive(Default)]
 /// Mutable data structure for tracking term deletions for a field in a segment.
 /// [DeletedTermsTable] is a more efficient read-only version of this data
@@ -344,60 +343,10 @@ pub struct FieldTermMetadata {
     pub num_terms_deleted: u64,
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for FieldTermMetadata {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = FieldTermMetadata>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        (
-            any::<u64>(),
-            prop::collection::btree_map(any::<u64>(), any::<u32>(), 0..10),
-        )
-            .prop_filter_map(
-                "Invalid FieldTermMetadata",
-                |(num_terms_deleted, term_documents_deleted)| {
-                    if (num_terms_deleted == 0) != term_documents_deleted.is_empty() {
-                        return None;
-                    }
-                    Some(FieldTermMetadata {
-                        term_documents_deleted,
-                        num_terms_deleted,
-                    })
-                },
-            )
-    }
-}
-
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq, Debug, Clone))]
 #[derive(Default)]
 /// Term deletion metadata for a segment, tracked by field.
 pub struct SegmentTermMetadata {
     pub term_metadata_by_field: BTreeMap<Field, FieldTermMetadata>,
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for SegmentTermMetadata {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = SegmentTermMetadata>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        prop::collection::btree_map(any::<u32>(), any::<FieldTermMetadata>(), 0..10).prop_map(
-            |term_documents_deleted| {
-                let term_documents_deleted = term_documents_deleted
-                    .into_iter()
-                    .map(|(k, v)| (Field::from_field_id(k), v))
-                    .collect();
-                SegmentTermMetadata {
-                    term_metadata_by_field: term_documents_deleted,
-                }
-            },
-        )
-    }
 }
 
 impl AddAssign for SegmentTermMetadata {
@@ -537,88 +486,5 @@ impl MemoryDeletionTracker {
         self.alive_bitset.serialize(&mut alive_bitset)?;
         self.segment_term_metadata.write(&mut deleted_terms)?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use maplit::btreemap;
-    use proptest::prelude::*;
-    use tantivy::schema::Field;
-
-    use super::{
-        FieldTermMetadata,
-        MemoryDeletionTracker,
-    };
-    use crate::tracker::{
-        SegmentTermMetadata,
-        StaticDeletionTracker,
-    };
-
-    #[test]
-    fn test_empty_deleted_term_table_roundtrips() -> anyhow::Result<()> {
-        let memory_tracker = MemoryDeletionTracker::new(10);
-        let mut buf = Vec::new();
-        memory_tracker.segment_term_metadata.write(&mut buf)?;
-        let file_len = buf.len();
-        assert!(StaticDeletionTracker::load_deleted_terms(file_len, &buf[..])?.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn test_deleted_term_table_roundtrips() -> anyhow::Result<()> {
-        let mut memory_tracker = MemoryDeletionTracker::new(10);
-        let term_documents_deleted = btreemap! {
-            5 => 2,
-            3 => 1,
-        };
-        let field = Field::from_field_id(1);
-        let segment_term_metadata = SegmentTermMetadata {
-            term_metadata_by_field: btreemap! {
-                field => FieldTermMetadata {
-                    term_documents_deleted,
-                    num_terms_deleted: 0,
-                }
-            },
-        };
-        memory_tracker.update_term_metadata(segment_term_metadata);
-
-        let mut buf = Vec::new();
-        memory_tracker.segment_term_metadata.write(&mut buf)?;
-
-        let file_len = buf.len();
-        let deleted_terms_tables = StaticDeletionTracker::load_deleted_terms(file_len, &buf[..])?;
-        assert_eq!(deleted_terms_tables.len(), 1);
-        let deleted_terms_table = deleted_terms_tables.get(&field).unwrap();
-        assert_eq!(deleted_terms_table.term_documents_deleted(5)?, 2);
-        assert_eq!(deleted_terms_table.term_documents_deleted(3)?, 1);
-        Ok(())
-    }
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn randomized_deleted_term_table(segment_term_metadata in any::<SegmentTermMetadata>())  {
-            let mut memory_tracker = MemoryDeletionTracker::new(10);
-            memory_tracker.update_term_metadata(segment_term_metadata.clone());
-            let mut buf = Vec::new();
-            memory_tracker.segment_term_metadata.clone().write(&mut buf).unwrap();
-
-            let file_len = buf.len();
-            let deleted_terms_tables = StaticDeletionTracker::load_deleted_terms(
-                file_len, &buf[..]
-            ).unwrap();
-            for (field, deleted_terms_table) in deleted_terms_tables {
-                let field_term_metadata = segment_term_metadata
-                    .term_metadata_by_field
-                    .get(&field).unwrap();
-                let field_term_metadata_read = FieldTermMetadata::from(deleted_terms_table);
-                assert_eq!(field_term_metadata, &field_term_metadata_read);
-            }
-
-        }
     }
 }

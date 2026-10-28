@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { walkAst } from "@common/elements/ObjectEditor/ast/walkAst";
 
 export function usePasteListener(
-  cellRef: React.RefObject<HTMLDivElement>,
+  cellRef: React.RefObject<HTMLDivElement | null>,
   columnName: string,
   edit: (value: Value) => void,
   allowTopLevelUndefined: boolean = true,

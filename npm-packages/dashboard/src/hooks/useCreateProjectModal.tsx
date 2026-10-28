@@ -2,48 +2,47 @@ import { Modal } from "@ui/Modal";
 import { TextInput } from "@ui/TextInput";
 import { Button } from "@ui/Button";
 import { Loading } from "@ui/Loading";
-import { LocalDevCallout } from "@common/elements/LocalDevCallout";
-import { ReactElement, useState } from "react";
+
 import { useFormik } from "formik";
 import * as Yup from "yup";
-import { TeamResponse, CreateProjectResponse } from "generatedApi";
+import { createGlobalState } from "react-use";
+import { TeamResponse } from "generatedApi";
+import type { PlatformCreateProjectResponse } from "@convex-dev/platform/managementApi";
 import { useCurrentTeam } from "api/teams";
 import { useCreateProject } from "api/projects";
 import { cn } from "@ui/cn";
 import { usePostHog } from "hooks/usePostHog";
 
-export function useCreateProjectModal(): [
-  ReactElement | null,
-  (team?: TeamResponse) => void,
-] {
-  const [modalOpen, setModalOpen] = useState(false);
-  const [team, setTeam] = useState<TeamResponse | undefined>();
+export const useCreateProjectModalRequest = createGlobalState<{
+  team?: TeamResponse;
+} | null>(null);
+
+export function CreateProjectModal() {
+  const [request, setRequest] = useCreateProjectModalRequest();
   const currentTeam = useCurrentTeam();
 
-  const selectedTeam = team || currentTeam;
+  if (!request) {
+    return null;
+  }
 
-  const modal = modalOpen ? (
-    <Modal title="Create Project" onClose={() => setModalOpen(false)}>
+  const close = () => setRequest(null);
+  const selectedTeam = request.team || currentTeam;
+
+  return (
+    <Modal title="Create Project" onClose={close}>
       <>
         {selectedTeam && (
-          <>
-            <p className="mb-5">
-              Create a project in{" "}
-              <span className="font-semibold">{selectedTeam?.name}</span>.
-            </p>
-            <LocalDevCallout
-              className="mb-5"
-              tipText="Tip: Run this to increase the number of projects you can create:"
-              command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement max_projects --team-id ${selectedTeam.id} --reason "local" 500 --for-real`}
-            />
-          </>
+          <p className="mb-5">
+            Create a project in{" "}
+            <span className="font-semibold">{selectedTeam?.name}</span>.
+          </p>
         )}
         {selectedTeam ? (
           <CreateProjectForm
-            onClose={() => setModalOpen(false)}
+            onClose={close}
             team={selectedTeam}
             onSuccess={(project) => {
-              const projectUrl = `/t/${selectedTeam.slug}/${project.projectSlug}/development`;
+              const projectUrl = `/t/${selectedTeam.slug}/${project.slug}/development`;
               window.location.href = projectUrl;
             }}
           />
@@ -52,15 +51,7 @@ export function useCreateProjectModal(): [
         )}
       </>
     </Modal>
-  ) : null;
-
-  return [
-    modal,
-    (t?: TeamResponse) => {
-      setModalOpen(true);
-      setTeam(t);
-    },
-  ];
+  );
 }
 
 export const ProjectNameSchema = Yup.string()
@@ -80,7 +71,7 @@ export function CreateProjectForm({
   onClose(): void;
   team: TeamResponse;
   showLabel?: boolean;
-  onSuccess: (project: CreateProjectResponse) => void;
+  onSuccess: (project: PlatformCreateProjectResponse) => void;
 }) {
   const createProject = useCreateProject(team.id);
   const { capture } = usePostHog();
@@ -94,7 +85,6 @@ export function CreateProjectForm({
     onSubmit: async (values: { projectName: string }) => {
       const project = await createProject({
         ...values,
-        team: team.slug,
         deploymentType: null,
       });
       capture("created_project");

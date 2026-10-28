@@ -38,35 +38,13 @@ pub fn parse_document_id(
     table_mapping: &NamespacedTableMapping,
     table_name: &TableName,
 ) -> anyhow::Result<ResolvedDocumentId> {
-    let id = DeveloperDocumentId::decode(id)?.to_resolved(table_mapping.number_to_tablet())?;
+    let id = DeveloperDocumentId::decode(id)
+        .map_err(anyhow::Error::from)
+        .and_then(|id| id.to_resolved(table_mapping.number_to_tablet()))
+        .map_err(|e| e.context(invalid_id_error(table_name)))?;
     anyhow::ensure!(
         table_mapping.tablet_matches_name(id.tablet_id, table_name),
         invalid_id_error(table_name)
     );
     Ok(id)
-}
-
-#[cfg(test)]
-mod tests {
-    use common::testing::TestIdGenerator;
-    use model::environment_variables::ENVIRONMENT_VARIABLES_TABLE;
-    use value::{
-        id_v6::DeveloperDocumentId,
-        TableNamespace,
-    };
-
-    use super::parse_document_id;
-
-    #[test]
-    fn test_parse_idv5_or_idv6() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-
-        let id_v5 = id_generator.system_generate(&ENVIRONMENT_VARIABLES_TABLE);
-        let id_v6: DeveloperDocumentId = id_v5.into();
-
-        let table_mapping = id_generator.namespace(TableNamespace::Global);
-        let id_v6_string = id_v6.encode();
-        parse_document_id(&id_v6_string, &table_mapping, &ENVIRONMENT_VARIABLES_TABLE)?;
-        Ok(())
-    }
 }

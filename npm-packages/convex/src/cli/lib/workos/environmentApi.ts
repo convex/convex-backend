@@ -35,15 +35,11 @@ export async function createRedirectURI(
   );
 
   if (!response.ok) {
-    if (response.status === 422) {
-      const errorText = await response.text();
-      if (errorText.includes("already exists")) {
-        // This redirect URI already exists.
-        return { modified: false };
-      }
-    }
-
     const errorText = await response.text();
+    if (response.status === 422 && errorText.includes("already exists")) {
+      // This redirect URI already exists.
+      return { modified: false };
+    }
     return await ctx.crash({
       exitCode: 1,
       errorType: "fatal",
@@ -109,18 +105,15 @@ export async function createCORSOrigin(
   );
 
   if (!response.ok) {
-    if (response.status === 409) {
-      const errorText = await response.text();
-      if (
-        errorText.includes("duplicate_cors_origin") ||
-        errorText.includes("already exists")
-      ) {
-        // This CORS origin already exists.
-        return { modified: false };
-      }
-    }
-
     const errorText = await response.text();
+    if (
+      response.status === 409 &&
+      (errorText.includes("duplicate_cors_origin") ||
+        errorText.includes("already exists"))
+    ) {
+      // This CORS origin already exists.
+      return { modified: false };
+    }
     return await ctx.crash({
       exitCode: 1,
       errorType: "fatal",

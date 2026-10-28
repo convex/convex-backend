@@ -2,19 +2,15 @@
   "name": "users-and-clerk-webhooks",
   "version": "0.0.0",
   "scripts": {
-    "dev": "npm-run-all --parallel dev:backend dev:frontend",
-    "build": "tsc --noEmit && vite build",
-    "dev:backend": "convex dev",
-    "dev:frontend": "vite --open",
-    "predev": "convex dev --until-success"
+    "dev": "convex dev --start 'vite --open'",
+    "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
     "convex": "workspace:*",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "@clerk/backend": "^1.19.2",
-    "@clerk/clerk-react": "^5.20.0",
-    "prettier": "^3.8.0",
+    "@clerk/backend": "^3.2.14",
+    "@clerk/react": "^6.4.3",
     "svix": "^1.21.0"
   },
   "devDependencies": {
@@ -24,7 +20,6 @@
     "@types/react-dom": "^18.0.0",
     "@vitejs/plugin-react": "^4.2.1",
     "typescript": "~5.0.3",
-    "vite": "^6.4.1",
-    "npm-run-all2": "^8.0.0"
+    "vite": "^6.4.4"
   }
 }

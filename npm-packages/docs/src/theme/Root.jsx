@@ -1,6 +1,5 @@
-import { logEvent } from "convex-analytics";
-import React, { createContext, useContext, useEffect, useState } from "react";
-import Analytics from "../components/Analytics/Analytics";
+import React, { useEffect } from "react";
+import { WebAnalyticsProvider } from "@convex-internal/web-analytics/react";
 
 import { Toaster } from "sonner";
 
@@ -12,10 +11,6 @@ import "@fontsource/inter/700.css";
 import "@fontsource/inter/800.css";
 
 function Root({ children }) {
-  useEffect(() => {
-    logEvent("view doc load", { path: location.pathname });
-  }, []);
-
   // Scroll the active sidebar item into view in case
   // it's below fold.
   useEffect(() => {
@@ -35,25 +30,12 @@ function Root({ children }) {
     });
   }, []);
 
-  const [lang, setLang] = useState("TS");
-
   return (
-    <DialectContext.Provider value={{ lang, setLang }}>
+    <WebAnalyticsProvider>
       {children}
-      <Analytics />
       <Toaster />
-    </DialectContext.Provider>
+    </WebAnalyticsProvider>
   );
-}
-
-const DialectContext = createContext();
-
-export function useSelectedDialect() {
-  return useContext(DialectContext).lang;
-}
-
-export function useSetDialect() {
-  return useContext(DialectContext).setLang;
 }
 
 export default Root;

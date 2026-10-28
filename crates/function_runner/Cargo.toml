@@ -4,10 +4,6 @@ version = "0.1.0"
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["mysql"]
-development = ["mysql"]
-
 [features]
 testing = [
     "common/testing",
@@ -33,13 +29,11 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 async_lru = { workspace = true }
 common = { workspace = true }
-convex_macro = { workspace = true }
 database = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
 file_storage = { workspace = true }
 futures = { workspace = true }
-imbl = { workspace = true }
 indexing = { workspace = true }
 isolate = { workspace = true }
 keybroker = { workspace = true }

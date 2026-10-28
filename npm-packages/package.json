@@ -1,0 +1,12 @@
+{
+  "name": "convex-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=22.0.0 <27.0.0"
+  },
+  "devDependencies": {
+    "turbo": "2.10.5"
+  }
+}

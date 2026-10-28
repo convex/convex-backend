@@ -7,7 +7,7 @@ import { DatabaseReader } from "../../_generated/server";
 /**
  * Paginated query for the deployment events from most recent to least recent
  */
-export default queryPrivateSystem({
+export default queryPrivateSystem("ViewAuditLog")({
   args: {
     paginationOpts: paginationOptsValidator,
     filters: v.object({
@@ -30,7 +30,10 @@ export default queryPrivateSystem({
           : partial;
       })
       .order("desc")
+      // eslint-disable-next-line @convex-dev/no-filter-in-query -- we allow filtering by multiple member IDs/actions
       .filter((q) => {
+        // FIXME: Note that here, we could use an index for the case where we filter for a single member ID and/or a single action
+
         const queryFilters = [];
         if (filters.authorMemberIds !== undefined) {
           queryFilters.push(

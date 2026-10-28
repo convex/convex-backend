@@ -1,9 +1,9 @@
 // @snippet start openai
-import { action } from "./_generated/server";
+import { action, env } from "./_generated/server";
 import { api } from "./_generated/api";
 import { v } from "convex/values";
 
-const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY!;
+const TOGETHER_API_KEY = env.TOGETHER_API_KEY;
 
 export const chat = action({
   args: {

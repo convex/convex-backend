@@ -1,5 +1,5 @@
 import type { Environment } from "vitest";
-import { builtinEnvironments, populateGlobal } from "vitest/environments";
+import { builtinEnvironments } from "vitest/runtime";
 
 import ws from "ws";
 const nodeWebSocket = ws as unknown as typeof WebSocket;
@@ -8,7 +8,7 @@ const happy = builtinEnvironments["happy-dom"];
 
 export default <Environment>{
   name: "happy-dom-plus-ws",
-  transformMode: happy.transformMode,
+  viteEnvironment: "client",
   // optional - only if you support "experimental-vm" pool
   async setupVM(options) {
     const { getVmContext: happyGetVmContext, teardown: happyTeardown } =

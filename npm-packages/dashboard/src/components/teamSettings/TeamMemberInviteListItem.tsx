@@ -1,69 +1,99 @@
-import { Button } from "@ui/Button";
-import { Cross2Icon, ReloadIcon } from "@radix-ui/react-icons";
-import startCase from "lodash/startCase";
+import { Menu, MenuItem } from "@ui/Menu";
+import { DotsVerticalIcon } from "@radix-ui/react-icons";
 import {
   CancelInvitationArgs,
   CreateInvitationArgs,
   InvitationResponse,
-} from "generatedApi";
+} from "@convex-dev/platform/managementApi";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
+import { RoleDisplay } from "./RoleDisplay";
 
 type TeamMemberInviteListItemProps = {
   invite: InvitationResponse;
-  hasAdminPermissions: boolean;
+  teamSlug: string;
+  // Both gates may be `undefined` while permissions are loading.
+  canInvite: boolean | undefined;
+  canCancelInvite: boolean | undefined;
   onCreateInvite: (body: CreateInvitationArgs) => void;
   onCancelInvite: (body: CancelInvitationArgs) => void;
 };
 
 export function TeamMemberInviteListItem({
   invite,
-  hasAdminPermissions,
+  teamSlug,
+  canInvite,
+  canCancelInvite,
   onCreateInvite,
   onCancelInvite,
 }: TeamMemberInviteListItemProps) {
+  const onResend = () => {
+    if (invite.role === "custom") {
+      onCreateInvite({
+        email: invite.email,
+        role: "custom",
+        customRoles: (invite.customRoles ?? []).map((r) => r.id),
+      });
+    } else {
+      onCreateInvite({ email: invite.email, role: invite.role });
+    }
+  };
+  const resendDisabled = canInvite !== true;
+  const cancelDisabled = canCancelInvite !== true;
+  const resendTip = resendDisabled
+    ? permissionDeniedTip(
+        "You do not have permission to resend invitations.",
+        "member:invite",
+      )
+    : undefined;
+  const cancelTip = cancelDisabled
+    ? permissionDeniedTip(
+        "You do not have permission to revoke invitations.",
+        "member:cancelInvitation",
+      )
+    : undefined;
   return (
-    <div className="flex items-center gap-4 border-b py-2 last:border-b-0">
+    <div className="flex items-center justify-between gap-4 border-b py-2 last:border-b-0">
       <div className="flex flex-col">
         <div className="text-sm text-content-secondary">{invite.email}</div>
       </div>
-      <div className="mr-2 ml-auto flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {invite.expired && (
           <span className="text-sm font-semibold text-content-error">
             Invitation expired
           </span>
         )}
-        <span className="text-sm text-content-secondary">
-          {startCase(invite.role)}
-        </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <Button
-          onClick={() =>
-            onCreateInvite({ email: invite.email, role: invite.role })
-          }
-          icon={<ReloadIcon />}
-          variant="neutral"
-          disabled={!hasAdminPermissions}
-          tip={
-            !hasAdminPermissions
-              ? "You do not have permission to invite team members"
-              : undefined
-          }
+        <RoleDisplay
+          role={invite.role}
+          customRoles={invite.customRoles}
+          teamSlug={teamSlug}
+        />
+        <Menu
+          placement="bottom-end"
+          buttonProps={{
+            variant: "neutral",
+            size: "xs",
+            icon: <DotsVerticalIcon />,
+            "aria-label": "Invitation options",
+          }}
         >
-          Resend
-        </Button>
-        <Button
-          onClick={() => onCancelInvite({ email: invite.email })}
-          variant="danger"
-          icon={<Cross2Icon />}
-          disabled={!hasAdminPermissions}
-          tip={
-            !hasAdminPermissions
-              ? "You do not have permission to cancel invitations"
-              : undefined
-          }
-        >
-          Revoke
-        </Button>
+          <MenuItem
+            disabled={resendDisabled}
+            tip={resendTip}
+            tipSide="left"
+            action={onResend}
+          >
+            Resend
+          </MenuItem>
+          <MenuItem
+            variant="danger"
+            disabled={cancelDisabled}
+            tip={cancelTip}
+            tipSide="left"
+            action={() => onCancelInvite({ email: invite.email })}
+          >
+            Revoke
+          </MenuItem>
+        </Menu>
       </div>
     </div>
   );

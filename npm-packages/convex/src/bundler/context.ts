@@ -153,6 +153,39 @@ class OneoffContextImpl {
   }
 }
 
+/**
+ * Install a SIGINT handler that gracefully exits via ctx.flushAndExit.
+ *
+ * `bun run` and `npm run` can deliver a duplicate SIGINT to the child
+ * process immediately while the first handler is still starting cleanup:
+ *   bun:  https://github.com/oven-sh/bun/issues/14799
+ *         https://github.com/oven-sh/bun/issues/11400
+ *   npm:  https://github.com/npm/cli/issues/5021
+ *         https://github.com/npm/cli/issues/8164
+ *         https://github.com/npm/cli/issues/7693
+ * We ignore a second signal within 500ms of the first to avoid
+ * double-cleanup, but treat a later Ctrl+C as a force-exit escape hatch.
+ */
+export function installSigintHandler(ctx: OneoffCtx) {
+  const DUPLICATE_GRACE_MS = 500;
+  let cleanupStartTime: number | null = null;
+  process.on("SIGINT", async () => {
+    if (cleanupStartTime !== null) {
+      if (Date.now() - cleanupStartTime < DUPLICATE_GRACE_MS) {
+        logVerbose(
+          "Received SIGINT during cleanup, ignoring duplicate signal...",
+        );
+        return;
+      }
+      logVerbose("Received SIGINT during cleanup, exiting immediately...");
+      process.exit(130);
+    }
+    cleanupStartTime = Date.now();
+    logVerbose("Received SIGINT, cleaning up...");
+    await ctx.flushAndExit(130);
+  });
+}
+
 export const oneoffContext: (args: {
   url?: string | undefined;
   adminKey?: string | undefined;

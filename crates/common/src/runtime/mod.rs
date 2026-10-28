@@ -51,8 +51,6 @@ use governor::{
 use metrics::CONVEX_METRICS_REGISTRY;
 use parking_lot::Mutex;
 use pin_project::pin_project;
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use rand::RngCore;
 use sentry::SentryFutureExt;
 use serde::Serialize;
@@ -80,9 +78,6 @@ use crate::{
 
 mod join_map;
 mod join_set;
-
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
 
 #[derive(Error, Debug)]
 pub enum JoinError {
@@ -284,6 +279,7 @@ pub async fn try_join<T: Send + 'static>(
 #[async_trait]
 pub trait Runtime: Clone + Sync + Send + 'static {
     /// Sleep for the given duration.
+    #[must_use]
     fn wait(&self, duration: Duration) -> Pin<Box<dyn FusedFuture<Output = ()> + Send + 'static>>;
 
     /// Spawn a future on the runtime's executor.
@@ -406,19 +402,6 @@ impl UnixTimestamp {
 impl HeapSize for UnixTimestamp {
     fn heap_size(&self) -> usize {
         0
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for UnixTimestamp {
-    type Parameters = ();
-
-    type Strategy = impl Strategy<Value = UnixTimestamp>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        (0..=i64::MAX as u64, 0..i32::MAX as u32)
-            .prop_map(|(secs, nanos)| Self(Duration::new(secs, nanos)))
     }
 }
 

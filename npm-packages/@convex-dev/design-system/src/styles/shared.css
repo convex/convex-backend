@@ -21,6 +21,7 @@
   --color-red-300: var(--red-300);
   --color-red-400: var(--red-400);
   --color-red-500: var(--red-500);
+  --color-red-600: var(--red-600);
   --color-red-700: var(--red-700);
   --color-red-900: var(--red-900);
 
@@ -114,10 +115,11 @@
   --color-util-brand-yellow: var(--brand-yellow);
 
   /* Font families */
-  --font-display: "GT America", "Inter Variable", ui-sans-serif, system-ui,
-    -apple-system, "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue",
-    "Arial", "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
+  --font-display:
+    "GT America", "Inter Variable", ui-sans-serif, system-ui, -apple-system,
+    "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue", "Arial",
+    "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji", sans-serif;
 
   /* Animations */
   --animate-blink: blink 2s linear infinite;
@@ -133,6 +135,9 @@
   --animate-blinkFill: blinkFill 1.2s ease-in-out infinite;
   --animate-rotate: fadeIn 0.8s, rotate 0.75s linear infinite;
   --animate-dashLength: dashLength 1.5s ease-in-out infinite;
+  --animate-slideUp: slideUp 0.3s ease-out;
+  --animate-fadeInBackdrop: fadeIn 0.3s ease-out;
+  --animate-indeterminateBar: indeterminateBar 1.3s ease-in-out infinite;
 
   /* Keyframes */
   @keyframes rotate {
@@ -277,12 +282,30 @@
     }
   }
 
+  @keyframes slideUp {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
   @keyframes indeterminateProgressBar {
     0% {
       transform: none;
     }
     100% {
       transform: translateX(-1rem);
+    }
+  }
+
+  @keyframes indeterminateBar {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(400%);
     }
   }
 }
@@ -293,6 +316,7 @@
   --red-300: rgb(252, 165, 165);
   --red-400: rgb(253, 76, 65);
   --red-500: rgb(238, 52, 47);
+  --red-600: rgb(218, 43, 37);
   --red-700: rgb(168, 21, 21);
   --red-900: rgb(107, 33, 31);
   --purple-100: rgb(241, 200, 233);
@@ -340,14 +364,15 @@
   --brand-purple: var(--purple-500);
   --brand-red: var(--red-500);
   --brand-yellow: var(--yellow-500);
-  --chart-line-1: rgb(31, 119, 180);
-  --chart-line-2: rgb(255, 127, 14);
-  --chart-line-3: rgb(44, 160, 44);
-  --chart-line-4: rgb(214, 39, 40);
-  --chart-line-5: rgb(148, 103, 189);
-  --chart-line-6: rgb(140, 86, 75);
-  --chart-line-7: rgb(227, 119, 194);
-  --chart-line-8: rgb(188, 189, 34);
+  /* Okabe-Ito colorblind-safe palette (canonical black replaced with grey). */
+  --chart-line-1: rgb(0, 114, 178); /* Blue           #0072B2 */
+  --chart-line-2: rgb(230, 159, 0); /* Orange         #E69F00 */
+  --chart-line-3: rgb(0, 158, 115); /* Bluish green   #009E73 */
+  --chart-line-4: rgb(213, 94, 0); /* Vermillion     #D55E00 */
+  --chart-line-5: rgb(86, 180, 233); /* Sky blue       #56B4E9 */
+  --chart-line-6: rgb(204, 121, 167); /* Reddish purple #CC79A7 */
+  --chart-line-7: rgb(240, 228, 66); /* Yellow         #F0E442 */
+  --chart-line-8: rgb(153, 153, 153); /* Neutral grey   #999999 */
 }
 
 html.light {
@@ -361,19 +386,24 @@ html.light {
   --background-error: var(--red-100);
   --background-errorSecondary: var(--red-200);
   --content-primary: rgb(42, 40, 37);
-  --content-secondary: rgb(120, 118, 113);
-  --content-tertiary: rgb(120, 118, 113);
+  --content-secondary: rgb(112, 111, 106);
+  --content-tertiary: rgb(112, 111, 106);
   --content-accent: rgb(48, 106, 207);
   --content-success: var(--green-700);
   --content-warning: var(--yellow-900);
   --content-error: var(--red-700);
-  --content-errorSecondary: var(--red-500);
+  --content-errorSecondary: var(--red-600);
   --content-link: var(--blue-700);
   --border-transparent: rgba(33, 34, 30, 0.14);
   --border-selected: rgb(30, 28, 25);
   --macosScrollbar-thumb: rgb(193, 193, 193);
   --macosScrollbar-thumb-hover: rgb(125, 125, 125);
   --macosScrollbar-track: rgb(250, 250, 250);
+
+  /* Canonical Okabe-Ito was designed for light backgrounds and its slots
+     rely on luminance variation for distinguishability, so we keep them
+     as-is. The one exception is yellow, which is unreadable on cream. */
+  --chart-line-7: rgb(153, 136, 0); /* Mustard        #998800 */
 }
 
 html.dark {
@@ -388,12 +418,12 @@ html.dark {
   --background-errorSecondary: var(--red-700);
   --content-primary: rgb(255, 255, 255);
   --content-secondary: rgb(185, 177, 170);
-  --content-tertiary: rgb(143, 135, 128);
+  --content-tertiary: rgb(151, 144, 138);
   --content-accent: rgb(99, 168, 248);
   --content-success: var(--green-200);
   --content-warning: var(--yellow-200);
   --content-error: var(--red-200);
-  --content-errorSecondary: var(--red-400);
+  --content-errorSecondary: var(--red-300);
   --content-link: var(--blue-200);
   --border-transparent: rgba(163, 156, 148, 0.3);
   --border-selected: rgb(225, 215, 205);

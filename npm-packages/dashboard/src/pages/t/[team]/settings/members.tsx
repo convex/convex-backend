@@ -4,7 +4,7 @@ import { withAuthenticatedPage } from "lib/withAuthenticatedPage";
 
 export { getServerSideProps } from "lib/ssr";
 
-function TeamSettingsPage() {
+export function TeamMembersPage() {
   return (
     <TeamSettingsLayout
       page="members"
@@ -14,4 +14,4 @@ function TeamSettingsPage() {
   );
 }
 
-export default withAuthenticatedPage(TeamSettingsPage);
+export default withAuthenticatedPage(TeamMembersPage);

@@ -44,10 +44,7 @@ use indexing::index_registry::{
     IndexRegistry,
 };
 use storage::Storage;
-use value::{
-    InternalId,
-    ResolvedDocumentId,
-};
+use value::ResolvedDocumentId;
 
 use crate::{
     memory_index::MemoryVectorIndex,
@@ -80,7 +77,7 @@ pub enum IndexState {
 impl IndexState {
     pub fn insert(
         &mut self,
-        id: InternalId,
+        id: IndexId,
         state: VectorIndexState,
         memory_index: MemoryVectorIndex,
     ) {
@@ -122,7 +119,7 @@ impl IndexState {
         Ok(())
     }
 
-    pub fn delete(&mut self, id: &InternalId) {
+    pub fn delete(&mut self, id: &IndexId) {
         match self {
             IndexState::Bootstrapping(indexes) => {
                 indexes.remove(id);
@@ -136,7 +133,7 @@ impl IndexState {
 
 fn get_vector_index_states(
     registry: &IndexRegistry,
-) -> anyhow::Result<OrdMap<InternalId, VectorIndexState>> {
+) -> anyhow::Result<OrdMap<IndexId, VectorIndexState>> {
     let mut indexes = OrdMap::new();
 
     for index in registry.all_vector_indexes() {
@@ -147,7 +144,7 @@ fn get_vector_index_states(
         else {
             continue;
         };
-        indexes.insert(index.id().internal_id(), on_disk_state.clone());
+        indexes.insert(index.id().internal_id().into(), on_disk_state.clone());
     }
     Ok(indexes)
 }
@@ -181,7 +178,7 @@ impl VectorIndexManager {
 
     fn require_ready_indexes(
         &self,
-    ) -> anyhow::Result<&OrdMap<InternalId, (VectorIndexState, MemoryVectorIndex)>> {
+    ) -> anyhow::Result<&OrdMap<IndexId, (VectorIndexState, MemoryVectorIndex)>> {
         if let IndexState::Ready(ref indexes) = self.indexes {
             Ok(indexes)
         } else {
@@ -194,7 +191,7 @@ impl VectorIndexManager {
 
     fn require_ready_index(
         &self,
-        id: &InternalId,
+        id: &IndexId,
     ) -> anyhow::Result<Option<&(VectorIndexState, MemoryVectorIndex)>> {
         Ok(self.require_ready_indexes()?.get(id))
     }
@@ -279,7 +276,7 @@ impl VectorIndexManager {
                     };
                     let index = VectorIndexState::Backfilling(state.clone());
                     self.indexes.insert(
-                        insertion.id().internal_id(),
+                        insertion.id().internal_id().into(),
                         index,
                         MemoryVectorIndex::new(ts),
                     );
@@ -290,6 +287,21 @@ impl VectorIndexManager {
             (Some(prev_version), Some(next_version)) => {
                 let prev_metadata: ParsedDocument<IndexMetadata<_>> = prev_version.parse()?;
                 let next_metadata: ParsedDocument<IndexMetadata<_>> = next_version.parse()?;
+                // We can truncate in-memory indexes as we backfill since we know everything
+                // through last_segment_ts is now on disk. Prevents unbounded growth of
+                // in-memory indexes.
+                if let IndexConfig::Vector {
+                    on_disk_state: VectorIndexState::Backfilling(next_backfill_state),
+                    ..
+                } = &next_metadata.config
+                    && let Some(cursor) = &next_backfill_state.cursor
+                {
+                    let last_segment_ts = cursor.last_segment_ts;
+                    self.indexes
+                        .update(&id.internal_id().into(), None, |memory_index| {
+                            memory_index.truncate(last_segment_ts.succ()?)
+                        })?;
+                }
                 let (old_snapshot, new_snapshot, staged) =
                     match (&prev_metadata.config, &next_metadata.config) {
                         (
@@ -409,7 +421,7 @@ impl VectorIndexManager {
                         };
 
                         self.indexes.update(
-                            &id.internal_id(),
+                            &id.internal_id().into(),
                             Some(updated_state),
                             |memory_index| memory_index.truncate(new_snapshot.ts.succ()?),
                         )?;
@@ -426,7 +438,7 @@ impl VectorIndexManager {
             (Some(deletion), None) => {
                 let metadata: ParsedDocument<IndexMetadata<_>> = deletion.parse()?;
                 if metadata.is_vector_index() {
-                    self.indexes.delete(&deletion.id().internal_id());
+                    self.indexes.delete(&deletion.id().internal_id().into());
                     metrics::log_index_deleted();
                 }
             },
@@ -605,6 +617,23 @@ impl VectorIndexManager {
     pub fn in_memory_sizes(&self) -> Vec<(IndexId, usize)> {
         if let IndexState::Ready(ref indexes) = self.indexes {
             indexes.iter().map(|(id, (_, s))| (*id, s.size())).collect()
+        } else {
+            vec![]
+        }
+    }
+
+    /// In-memory index sizes used to decide whether to reject writes that are
+    /// too large. Excludes backfilling indexes: they aren't queryable, their
+    /// in-memory contents are kept bounded by the backfill flusher (which
+    /// truncates the memory index as it persists progress), and they should
+    /// never block writes to the table.
+    pub fn flushable_in_memory_index_sizes(&self) -> Vec<(IndexId, usize)> {
+        if let IndexState::Ready(ref indexes) = self.indexes {
+            indexes
+                .iter()
+                .filter(|(_, (state, _))| !matches!(state, VectorIndexState::Backfilling(_)))
+                .map(|(id, (_, s))| (*id, s.size()))
+                .collect()
         } else {
             vec![]
         }

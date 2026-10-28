@@ -1,0 +1,14 @@
+{
+  "name": "audit-logging",
+  "version": "0.0.0",
+  "scripts": {
+    "build": "",
+    "test": ""
+  },
+  "dependencies": {
+    "convex": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "~5.0.3"
+  }
+}

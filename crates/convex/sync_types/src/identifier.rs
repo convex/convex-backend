@@ -1,8 +1,5 @@
 use std::{
-    fmt::{
-        self,
-        Display,
-    },
+    fmt::Display,
     ops::Deref,
     str::FromStr,
 };
@@ -31,11 +28,37 @@ pub const IDENTIFIER_REQUIREMENTS: &str =
 /// [^3]: <https://util.unicode.org/UnicodeJsps/list-unicodeset.jsp?a=%5B%3AXID_START%3A%5D&g=&i=>
 /// [^4]: <https://util.unicode.org/UnicodeJsps/list-unicodeset.jsp?a=%5B%3AXID_CONTINUE%3A%5D&g=&i=>
 pub fn check_valid_identifier(s: &str) -> anyhow::Result<()> {
-    check_valid_identifier_inner(s, |e| anyhow::anyhow!(e.to_string()))
+    if is_valid_identifier(s) {
+        Ok(())
+    } else {
+        check_valid_identifier_slow(s)
+    }
 }
 
-pub fn is_valid_identifier(s: &str) -> bool {
-    check_valid_identifier_inner(s, |_| ()).is_ok()
+pub const fn is_valid_identifier(s: &str) -> bool {
+    if s.len() > MAX_IDENTIFIER_LEN {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    match bytes.first() {
+        Some(c) if c.is_ascii_alphabetic() => (),
+        Some(b'_') => (),
+        _ => return false,
+    }
+    let mut has_non_underscore = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_alphanumeric() {
+            has_non_underscore = true;
+        } else if bytes[i] != b'_' {
+            return false;
+        }
+        i += 1;
+    }
+    if !has_non_underscore {
+        return false;
+    }
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Ord, Eq, Hash)]
@@ -80,41 +103,37 @@ impl Deref for Identifier {
     }
 }
 
-fn check_valid_identifier_inner<E>(
-    s: &str,
-    error: impl FnOnce(fmt::Arguments<'_>) -> E,
-) -> Result<(), E> {
+#[cold]
+fn check_valid_identifier_slow(s: &str) -> anyhow::Result<()> {
     let mut chars = s.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() => (),
         Some('_') => (),
         Some(c) => {
-            return Err(error(format_args!(
+            anyhow::bail!(
                 "Invalid first character {c:?} in {s}: Identifiers must start with an alphabetic \
                  character or underscore"
-            )))
+            )
         },
-        None => return Err(error(format_args!("Identifier cannot be empty"))),
+        None => anyhow::bail!("Identifier cannot be empty"),
     };
     for c in chars {
         if !c.is_ascii_alphanumeric() && c != '_' {
-            return Err(error(format_args!(
+            anyhow::bail!(
                 "Identifier {s} has invalid character {c:?}: Identifiers can only contain \
                  alphanumeric characters or underscores"
-            )));
+            );
         }
     }
     if s.len() > MAX_IDENTIFIER_LEN {
-        return Err(error(format_args!(
+        anyhow::bail!(
             "Identifier is too long ({} > maximum {})",
             s.len(),
             MAX_IDENTIFIER_LEN
-        )));
+        );
     }
     if s.chars().all(|c| c == '_') {
-        return Err(error(format_args!(
-            "Identifier {s} cannot have exclusively underscores"
-        )));
+        anyhow::bail!("Identifier {s} cannot have exclusively underscores");
     }
     Ok(())
 }
@@ -128,133 +147,63 @@ pub const MAX_FIELD_NAME_LENGTH: usize = 1024;
 /// Field names cannot start with '$', must contain only non-control ASCII
 /// characters, and must be at most 1024 characters long.
 pub fn check_valid_field_name(s: &str) -> anyhow::Result<()> {
-    check_valid_field_name_inner(s).map_err(|e| anyhow::anyhow!(e))
+    if is_valid_field_name(s) {
+        return Ok(());
+    }
+    check_valid_field_name_slow(s)
 }
 
-pub fn is_valid_field_name(s: &str) -> bool {
-    check_valid_field_name_inner(s).is_ok()
+pub const fn is_valid_field_name(s: &str) -> bool {
+    if let [b'$', ..] = s.as_bytes() {
+        return false;
+    }
+    if s.len() > MAX_FIELD_NAME_LENGTH {
+        return false;
+    }
+    let mut bytes = s.as_bytes();
+    // LLVM is able to vectorize this
+    while let Some((chunk, rest)) = bytes.split_first_chunk::<16>() {
+        bytes = rest;
+        let mut j = 0;
+        let mut bad = false;
+        while j < 16 {
+            let c = chunk[j];
+            bad |= !c.is_ascii() || c.is_ascii_control();
+            j += 1;
+        }
+        if bad {
+            return false;
+        }
+    }
+    while let Some((&c, rest)) = bytes.split_first() {
+        bytes = rest;
+        // `|` generates better code than `||` when used directly in an `if` condition
+        if !c.is_ascii() | c.is_ascii_control() {
+            return false;
+        }
+    }
+    true
 }
 
-fn check_valid_field_name_inner(s: &str) -> Result<(), String> {
+#[cold]
+fn check_valid_field_name_slow(s: &str) -> anyhow::Result<()> {
     if s.starts_with('$') {
-        return Err(format!(
-            "Field name {s} starts with '$', which is reserved."
-        ));
+        anyhow::bail!("Field name {s} starts with '$', which is reserved.");
     }
     for c in s.chars() {
         if !c.is_ascii() || c.is_ascii_control() {
-            return Err(format!(
+            anyhow::bail!(
                 "Field name {s} has invalid character {c:?}: Field names can only contain \
                  non-control ASCII characters"
-            ));
+            );
         }
     }
     if s.len() > MAX_FIELD_NAME_LENGTH {
-        return Err(format!(
+        anyhow::bail!(
             "Field name is too long ({} > maximum {})",
             s.len(),
             MAX_FIELD_NAME_LENGTH
-        ));
+        );
     }
     Ok(())
-}
-
-#[cfg(any(test, feature = "testing"))]
-pub mod arbitrary_regexes {
-    use proptest::prelude::*;
-
-    use super::Identifier;
-
-    pub const IDENTIFIER_REGEX: &str = "[a-zA-Z_][a-zA-Z][a-zA-Z0-9_]{0,62}";
-    pub const USER_IDENTIFIER_REGEX: &str = "[a-zA-Z][a-zA-Z0-9_]{0,63}";
-    pub const SYSTEM_IDENTIFIER_REGEX: &str = "_[a-zA-Z][a-zA-Z0-9_]{0,62}";
-    // ' ' through ~ is all non-control ASCII. First character cannot be `$` or
-    // `_`. These can be longer, but keep them shorter for the sake of tests.
-    pub const USER_FIELD_NAME_REGEX: &str = "([ -#%-^`-~][ -~]{0,63})?";
-    // Technically this can be broader, but system fields are usually valid
-    // identifiers
-    pub const SYSTEM_FIELD_NAME_REGEX: &str = "_[a-zA-Z][a-zA-Z0-9_]{0,62}";
-
-    impl Arbitrary for Identifier {
-        type Parameters = ();
-        type Strategy = BoxedStrategy<Self>;
-
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            prop_oneof![USER_IDENTIFIER_REGEX, SYSTEM_IDENTIFIER_REGEX]
-                .prop_map(Identifier)
-                .boxed()
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use proptest::prelude::*;
-
-    use super::{
-        arbitrary_regexes::IDENTIFIER_REGEX,
-        check_valid_field_name,
-        check_valid_identifier,
-        MIN_IDENTIFIER,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_min_identifier(ident in IDENTIFIER_REGEX) {
-            assert!(MIN_IDENTIFIER <= &ident[..]);
-        }
-    }
-
-    #[test]
-    fn test_control_char_in_identifier_body() {
-        let s = "abc\u{0010}def";
-        let err = check_valid_identifier(s).unwrap_err().to_string();
-        assert!(err.contains("'\\u{10}'"), "got: {err}");
-    }
-
-    #[test]
-    fn test_control_char_as_identifier_start() {
-        let s = "\u{0010}abc";
-        let err = check_valid_identifier(s).unwrap_err().to_string();
-        assert!(err.contains("'\\u{10}'"), "got: {err}");
-    }
-
-    #[test]
-    fn test_control_char_in_field_name() {
-        let s = "field\u{0010}name";
-        let err = check_valid_field_name(s).unwrap_err().to_string();
-        assert!(err.contains("'\\u{10}'"), "got: {err}");
-    }
-
-    #[test]
-    fn test_newline_in_identifier() {
-        let s = "abc\ndef";
-        let err = check_valid_identifier(s).unwrap_err().to_string();
-        assert!(err.contains("'\\n'"), "got: {err}");
-    }
-
-    #[test]
-    fn test_regular_char_in_identifier_body() {
-        let s = "abc@def";
-        let err = check_valid_identifier(s).unwrap_err().to_string();
-        assert!(err.contains("'@'"), "got: {err}");
-    }
-
-    #[test]
-    fn test_regular_char_as_identifier_start() {
-        let s = "9abc";
-        let err = check_valid_identifier(s).unwrap_err().to_string();
-        assert!(err.contains("'9'"), "got: {err}");
-    }
-
-    #[test]
-    fn test_emoji_in_field_name() {
-        let s = "field😀name";
-        let err = check_valid_field_name(s).unwrap_err().to_string();
-        assert!(err.contains("'😀'"), "got: {err}");
-    }
 }

@@ -8,7 +8,7 @@ import { PriceSummary } from "components/billing/PriceSummary";
 import { debounceDurationMs } from "components/billing/UpgradePlanContent";
 import { planNameMap } from "components/billing/planCards/PlanCard";
 import { PlanResponse, TeamResponse } from "generatedApi";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useState } from "react";
 import { useDebounce } from "react-use";
 
@@ -44,12 +44,7 @@ export function DowngradePlanDialog({
           {newPlan.planType === "CONVEX_STARTER" && (
             <p>
               If this team's{" "}
-              <Link
-                className="text-content-link hover:underline"
-                href={`/t/${team?.slug}/settings/usage`}
-              >
-                usage
-              </Link>{" "}
+              <Link href={`/t/${team?.slug}/settings/usage`}>usage</Link>{" "}
               exceeds the {newPlanName} plan limits, your projects may be
               automatically disabled.
             </p>
@@ -83,7 +78,7 @@ export function UpgradePlanDialog({
   team,
 }: {
   onClose: () => void;
-  onConfirm: (planId: string) => Promise<void>;
+  onConfirm: (planId: string, promoCode?: string) => Promise<void>;
   newPlan: PlanResponse;
   team: TeamResponse;
 }) {
@@ -146,10 +141,19 @@ export function UpgradePlanDialog({
           )}
         </div>
       }
-      disableConfirm={team.managedBy === "vercel" || couponData.isLoading}
+      disableConfirm={
+        team.managedBy === "vercel" ||
+        couponData.isLoading ||
+        promoCode !== debouncedPromoCode
+      }
       variant="primary"
       confirmText="Upgrade"
-      onConfirm={() => onConfirm(couponData.coupon?.planId ?? newPlan.id)}
+      onConfirm={() =>
+        onConfirm(
+          couponData.coupon?.planId ?? newPlan.id,
+          debouncedPromoCode || undefined,
+        )
+      }
     />
   );
 }

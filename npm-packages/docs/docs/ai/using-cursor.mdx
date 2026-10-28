@@ -1,16 +1,66 @@
 ---
 title: "Using Cursor with Convex"
-sidebar_position: 100
+sidebar_position: 180
 sidebar_label: Using Cursor
-description: "Tips and best practices for using Cursor with Convex"
+description:
+  "Build and scale apps with Cursor and Convex, and get the full power of Convex
+  out of the official Cursor plugin: MCP tools, hooks, and skills."
 slug: "using-cursor"
 ---
 
 [Cursor](https://cursor.com), the AI code editor, makes it easy to write and
-maintain apps built with Convex. Let's walk through how to setup Cursor for the
+maintain apps built with Convex. Let's walk through how to set up Cursor for the
 best possible results with Convex.
 
-## Add Convex `.cursor/rules`
+## Cursor and Convex
+
+Cursor works great with Convex out of the box. Because Convex is one type-safe
+TypeScript backend (database, functions, real-time sync, and file storage),
+Cursor writes code that's caught at compile time, stays transactional, and
+scales without extra infrastructure, which is plenty to build a chat app, a
+collaborative editor, or a multiplayer game. Adding the plugin lets you leverage
+the full power of Convex: Cursor reads your real deployment through the MCP
+server instead of guessing, catches its own type and deploy errors as it works,
+and follows the idiomatic Convex patterns the skills encode.
+
+## Install the Convex plugin in Cursor
+
+The official Convex plugin makes Cursor work better with your Convex project. It
+includes:
+
+- **Tools** that let your agent securely interact with your dev deployment (e.g.
+  read the data/logs/insights or run functions).
+- **Development hooks** that keep your generated types in sync and catch type
+  and deploy errors as the agent works.
+- **Rules, skills, and specialized agents** that teach your agent how to use
+  Convex the most effectively.
+
+See the [Agent Plugins overview](/ai/convex-plugins.mdx) for everything the
+plugin bundles.
+
+To install the plugin, go to the _Customize_ page of the Agents window, search
+for the _Convex_ plugin and click _Add_.
+
+<video controls autoPlay playsInline muted loop width="100%">
+  <source src="/video/install_cursor_plugin.mp4" type="video/mp4" />
+  Installing the Cursor plugin from the Agents window
+</video>
+
+Alternatively, you can run `/add-plugin convex` from an agent conversation.
+
+<Admonition type="caution" title="Using Cursor Cloud Agents / Cursor CLI">
+
+Cursor plugins aren't available in Cloud Agents or the Cursor CLI. In those
+environments, we recommend installing rules and the MCP server manually.
+
+</Admonition>
+
+## Manual setup
+
+If you'd rather not install the plugin, you can wire up rules and the MCP server
+yourself.
+
+### Add Convex `.cursor/rules`
 
 To get the best results from Cursor put the model specific `.mdc` files in your
 project's `.cursor/rules` directory.
@@ -26,22 +76,22 @@ project's `.cursor/rules` directory.
 
 We're constantly working on improving the quality of these rules for Convex by
 using rigorous evals. You can help by
-[contributing to our evals repo](https://github.com/get-convex/convex-evals).
+[contributing to our evals repo](https://github.com/convex/convex-evals).
 
-## Setup the Convex MCP Server
+### Setup the Convex MCP Server
 
 The Convex CLI comes with a
 [Convex Model Context Protocol](/ai/convex-mcp-server.mdx) (MCP) server built
 in. The Convex MCP server gives your AI coding agent access to the your Convex
 deployment to query and optimize your project.
 
-### Quick Install
+#### Quick Install
 
 You can click this handy deep-link below:
 
 [![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=convex&config=eyJjb21tYW5kIjoibnB4IC15IGNvbnZleEBsYXRlc3QgbWNwIHN0YXJ0In0%3D)
 
-### Manual Install
+#### Manual Install
 
 To get started with Cursor, open "Cursor Settings > Tools & Integrations", click
 on "New MCP Server", and add a "convex" section to "mcpServers" in the
@@ -72,15 +122,16 @@ Now start asking it questions like:
 
 ## Tips and tricks
 
-### Install and run Convex yourself
+### Run Convex during development
 
-Keeping Convex running is crucial because
-[it automatically generates](https://docs.convex.dev/cli#run-the-convex-dev-server)
-the client-side types. Without this, the agent can get stuck in a linting loop
-since it can't access the types for the queries and mutations it created.
+Run Convex (`npx convex dev`) in a terminal while you build so your functions
+deploy and your app updates live.
 
-We recommended that you install (`npm install convex`) and run convex
-(`npx convex dev`) yourself in a terminal window.
+With the plugin installed, its development hooks keep your
+[generated types](https://docs.convex.dev/cli#run-the-convex-dev-server) in sync
+as the agent works, so it won't get stuck in the linting loop that stale types
+can otherwise cause. Without the plugin, keeping `npx convex dev` running is
+what keeps those types fresh.
 
 ### Keep your requests small
 

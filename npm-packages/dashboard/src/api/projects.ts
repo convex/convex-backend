@@ -1,29 +1,41 @@
 import { useRouter } from "next/router";
 import { SWRConfiguration } from "swr";
 import { useMemo, useEffect, useRef, useState, useCallback } from "react";
-import { PaginatedProjectsResponse, operations } from "generatedApi";
 import { useDebounce } from "react-use";
 import { useProjectsPageSize } from "hooks/useProjectsPageSize";
-import { createInfiniteHook } from "swr-openapi";
 import { useAuthHeader } from "hooks/fetching";
 import flatMap from "lodash/flatMap";
 import { useCurrentTeam } from "./teams";
-import { useBBMutation, useBBQuery, client } from "./api";
-
-const useInfinite = createInfiniteHook(client, "big-brain");
+import type { PlatformPaginatedProjectsResponse } from "@convex-dev/platform/managementApi";
+import {
+  useBBMutation,
+  useManagementApiInfiniteQuery,
+  useManagementApiMutation,
+  useManagementApiQuery,
+  useMutateManagementApi,
+} from "./api";
 
 export function useCurrentProject() {
+  return useCurrentProjectWithStatus().project;
+}
+
+/**
+ * The current project plus whether it's still resolving, for callers that have
+ * to tell "not here yet" from "not there" — a distinction `useCurrentProject`
+ * erases by returning `undefined` for both.
+ */
+export function useCurrentProjectWithStatus() {
   const team = useCurrentTeam();
   const { query } = useRouter();
   const { project: projectSlug } = query;
-  return useProjectBySlug(team?.id, projectSlug as string);
+  return useProjectBySlugWithStatus(team?.id, projectSlug as string);
 }
 
 export function useProjectById(projectId: number | undefined) {
-  const { data, isLoading, error } = useBBQuery({
+  const { data, isLoading, error } = useManagementApiQuery({
     path: "/projects/{project_id}",
     pathParams: {
-      project_id: projectId?.toString() || "",
+      project_id: projectId ?? 0,
     },
   });
   return { project: data, isLoading, error };
@@ -33,17 +45,31 @@ export function useProjectBySlug(
   teamId: number | undefined,
   projectSlug: string | undefined,
 ) {
-  const { data, isLoading } = useBBQuery({
-    path: "/teams/{team_id}/projects/{project_slug}",
+  return useProjectBySlugWithStatus(teamId, projectSlug).project;
+}
+
+function useProjectBySlugWithStatus(
+  teamId: number | undefined,
+  projectSlug: string | undefined,
+) {
+  const { data, isLoading, isValidating } = useManagementApiQuery({
+    path: "/teams/{team_id_or_slug}/projects/{project_slug}",
     pathParams: {
-      team_id: teamId || 0,
+      team_id_or_slug: teamId?.toString() || "",
       project_slug: projectSlug || "",
     },
   });
-  if (isLoading) {
-    return undefined;
-  }
-  return data;
+  // keepPreviousData hands back the previously viewed project while the new
+  // slug loads, and keeps handing it back if that request fails. Withhold it
+  // either way, since returning the wrong project races project/deployment
+  // 404s -- but only report loading while a request is actually in flight.
+  // Reporting the failure as loading would strand callers that wait for this to
+  // settle, since the retained project never starts matching the new slug.
+  const isStale = data !== undefined && data.slug !== projectSlug;
+  return {
+    project: isLoading || isStale ? undefined : data,
+    isLoading: isLoading || (isStale && isValidating),
+  };
 }
 
 export function usePaginatedProjects(
@@ -54,51 +80,53 @@ export function usePaginatedProjects(
     limitOverride?: number;
   },
   refreshInterval?: SWRConfiguration["refreshInterval"],
-): (PaginatedProjectsResponse & { isLoading: boolean }) | undefined {
+): (PlatformPaginatedProjectsResponse & { isLoading: boolean }) | undefined {
   const { pageSize } = useProjectsPageSize();
 
   const queryParams = useMemo(
-    () =>
-      ({
-        cursor: options.cursor,
-        limit: options.limitOverride || pageSize,
-        q: options.q,
-      }) satisfies operations["get_projects_for_team"]["parameters"]["query"],
+    () => ({
+      cursor: options.cursor,
+      limit: options.limitOverride || pageSize,
+      q: options.q,
+    }),
     [options, pageSize],
   );
 
-  const { data, isLoading } = useBBQuery({
+  const { data, isLoading, isValidating } = useManagementApiQuery({
     path: "/teams/{team_id}/projects",
     pathParams: {
-      team_id: teamId?.toString() || "",
+      team_id: teamId ?? 0,
     },
     queryParams,
-    swrOptions: { refreshInterval },
+    swrOptions: {
+      refreshInterval,
+      // The SSR-seeded projects list is served as SWR fallback data with
+      // `hasMore: false` (see lib/ssr.ts + the bigBrainAuth middleware). Always
+      // revalidate on mount so the correct pagination metadata replaces that
+      // seed promptly rather than waiting for a focus/interval revalidation.
+      revalidateOnMount: true,
+    },
   });
 
   if (data === undefined) {
     return undefined;
   }
 
-  // If it's an array (simple response), convert to paginated format
-  if (Array.isArray(data)) {
-    return {
-      items: data,
-      pagination: {
-        hasMore: false,
-      },
-      isLoading,
-    };
-  }
-
-  return { ...data, isLoading };
+  // Report loading while the mount revalidation is in flight, even though the
+  // SSR seed already populated `data`, so callers don't trust its stale
+  // pagination metadata.
+  return { ...data, isLoading: isLoading || isValidating };
 }
 
 /**
  * Hook for infinite scroll pagination of projects with search support
  * Returns paginated projects data with loading state and pagination controls
  */
-export function useInfiniteProjects(teamId: number, searchQuery: string = "") {
+export function useInfiniteProjects(
+  teamId: number,
+  searchQuery: string = "",
+  keepPreviousData: boolean = true,
+) {
   const authHeader = useAuthHeader();
   const { pageSize } = useProjectsPageSize();
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -112,11 +140,11 @@ export function useInfiniteProjects(teamId: number, searchQuery: string = "") {
     [searchQuery],
   );
 
-  const { data, isLoading, size, setSize } = useInfinite(
+  const { data, isLoading, size, setSize } = useManagementApiInfiniteQuery(
     "/teams/{team_id}/projects",
     (
       pageIndex: number,
-      previousPageData: PaginatedProjectsResponse | null,
+      previousPageData: PlatformPaginatedProjectsResponse | null,
     ): any => {
       // Stop if we've reached the end (but allow first page)
       if (
@@ -134,7 +162,7 @@ export function useInfiniteProjects(teamId: number, searchQuery: string = "") {
         },
         params: {
           path: {
-            team_id: teamId.toString(),
+            team_id: teamId,
           },
           query: {
             limit: pageSize,
@@ -146,6 +174,9 @@ export function useInfiniteProjects(teamId: number, searchQuery: string = "") {
           },
         },
       };
+    },
+    {
+      keepPreviousData,
     },
   );
 
@@ -179,6 +210,7 @@ export function useInfiniteProjects(teamId: number, searchQuery: string = "") {
   return {
     projects,
     isLoading,
+    isLoadingMore,
     hasMore,
     loadMore,
     debouncedQuery,
@@ -187,25 +219,24 @@ export function useInfiniteProjects(teamId: number, searchQuery: string = "") {
 }
 
 export function useCreateProject(teamId?: number) {
-  return useBBMutation({
-    path: "/create_project",
-    pathParams: undefined,
+  const teamIdNum = teamId ?? 0;
+  return useManagementApiMutation({
+    path: "/teams/{team_id}/create_project",
+    pathParams: { team_id: teamIdNum },
     mutateKey: "/teams/{team_id}/projects",
-    mutatePathParams: {
-      team_id: teamId?.toString() || "",
-    },
+    mutatePathParams: { team_id: teamIdNum },
     googleAnalyticsEvent: "create_project_dash",
   });
 }
 
 export function useUpdateProject(projectId: number) {
-  return useBBMutation({
+  return useManagementApiMutation({
     path: "/projects/{project_id}",
     pathParams: {
-      project_id: projectId.toString(),
+      project_id: projectId,
     },
     successToast: "Project updated.",
-    method: "put",
+    method: "patch",
   });
 }
 
@@ -214,14 +245,14 @@ export function useDeleteProject(
   projectId?: number,
   projectName?: string,
 ) {
-  return useBBMutation({
-    path: "/delete_project/{project_id}",
+  return useManagementApiMutation({
+    path: "/projects/{project_id}/delete",
     pathParams: {
-      project_id: projectId?.toString() || "",
+      project_id: projectId ?? 0,
     },
     mutateKey: "/teams/{team_id}/projects",
     mutatePathParams: {
-      team_id: teamId?.toString() || "",
+      team_id: teamId ?? 0,
     },
     successToast: projectName ? `Deleted project: ${projectName}.` : undefined,
     redirectTo: "/",
@@ -229,13 +260,56 @@ export function useDeleteProject(
 }
 
 export function useDeleteProjects(teamId: number | undefined) {
-  return useBBMutation({
+  const deleteProjects = useBBMutation({
     path: "/delete_projects",
     pathParams: undefined,
-    mutateKey: "/teams/{team_id}/projects",
-    mutatePathParams: {
-      team_id: teamId?.toString() || "",
-    },
     successToast: "Projects deleted.",
   });
+  const mutateManagement = useMutateManagementApi();
+  const teamIdNum = teamId ?? 0;
+  return useCallback(
+    async (body: { projectIds: number[] }) => {
+      const result = await deleteProjects(body);
+      await mutateManagement([
+        "/teams/{team_id}/projects",
+        { params: { path: { team_id: teamIdNum } } },
+      ] as any);
+      return result;
+    },
+    [deleteProjects, mutateManagement, teamIdNum],
+  );
+}
+
+export function useTransferProject(
+  projectId?: number,
+  destinationTeamId?: number,
+  originTeamId?: number,
+) {
+  const transfer = useBBMutation({
+    path: "/projects/{project_id}/transfer",
+    pathParams: {
+      project_id: projectId?.toString() || "",
+    },
+    successToast: "Project transferred.",
+  });
+  const mutateManagement = useMutateManagementApi();
+  return useCallback(
+    async (body: { destinationTeamId: number }) => {
+      const result = await transfer(body);
+      // Invalidate both the destination team's list (the project now appears
+      // there) and the origin team's list (it no longer belongs there).
+      await Promise.all(
+        [destinationTeamId, originTeamId]
+          .filter((id): id is number => id !== undefined)
+          .map((teamId) =>
+            mutateManagement([
+              "/teams/{team_id}/projects",
+              { params: { path: { team_id: teamId } } },
+            ] as any),
+          ),
+      );
+      return result;
+    },
+    [transfer, mutateManagement, destinationTeamId, originTeamId],
+  );
 }

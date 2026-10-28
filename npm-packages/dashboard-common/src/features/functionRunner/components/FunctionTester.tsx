@@ -6,11 +6,11 @@ import {
   ViewVerticalIcon,
 } from "@radix-ui/react-icons";
 import classNames from "classnames";
-import { UserIdentityAttributes } from "convex/browser";
-import { ConvexReactClient } from "convex/react";
+import { BaseConvexClient, UserIdentityAttributes } from "convex/browser";
+import { useQuery } from "convex/react";
 import { ValidatorJSON, Value } from "convex/values";
 import isEqual from "lodash/isEqual";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useCallback, useContext, useState } from "react";
 import { useDebounce } from "react-use";
 import { ZodError, z } from "zod";
@@ -53,33 +53,77 @@ import {
   useIsImpersonating,
 } from "@common/features/functionRunner/components/RunHistory";
 import { useGlobalReactClient } from "@common/features/functionRunner/lib/client";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
+import udfs from "@common/udfs";
 
 const CUSTOM_TEST_QUERY_PLACEHOLDER =
   "__CONVEX_PLACEHOLDER_custom_test_query_1255035852";
 
-const impersonatedUserSchema = z.object({
-  subject: z.string(),
-  issuer: z.string(),
-  name: z.string().optional(),
-  givenName: z.string().optional(),
-  familyName: z.string().optional(),
-  nickname: z.string().optional(),
-  preferredUsername: z.string().optional(),
-  profileUrl: z.string().optional(),
-  pictureUrl: z.string().optional(),
-  email: z.string().optional(),
-  emailVerified: z.boolean().optional(),
-  gender: z.string().optional(),
-  birthday: z.string().optional(),
-  timezone: z.string().optional(),
-  language: z.string().optional(),
-  phoneNumber: z.string().optional(),
-  phoneNumberVerified: z.boolean().optional(),
-  address: z.string().optional(),
-  updatedAt: z.string().optional(),
-  customClaims: z.record(z.any()).optional(),
+// Claims are sent to the backend as JSON, so Convex-only values (bigints,
+// bytes) can't be represented.
+function isJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (typeof value === "string") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+  if (
+    typeof value === "object" &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    return Object.values(value as Record<string, unknown>).every(isJsonValue);
+  }
+  return false;
+}
+
+const customClaimSchema = z.custom<any>(isJsonValue, {
+  message: "custom claims must be JSON values",
 });
+
+const impersonatedUserSchema = z
+  .object({
+    subject: z.string(),
+    issuer: z.string(),
+    name: z.string().optional(),
+    givenName: z.string().optional(),
+    familyName: z.string().optional(),
+    nickname: z.string().optional(),
+    preferredUsername: z.string().optional(),
+    profileUrl: z.string().optional(),
+    pictureUrl: z.string().optional(),
+    email: z.string().optional(),
+    emailVerified: z.boolean().optional(),
+    gender: z.string().optional(),
+    birthday: z.string().optional(),
+    timezone: z.string().optional(),
+    language: z.string().optional(),
+    phoneNumber: z.string().optional(),
+    phoneNumberVerified: z.boolean().optional(),
+    address: z.string().optional(),
+    updatedAt: z.string().optional(),
+    customClaims: z.record(customClaimSchema).optional(),
+  })
+  .catchall(customClaimSchema);
+
+/** Throws a {@link ZodError} if `value` isn't a valid identity. */
+export function parseImpersonatedUser(value: Value): UserIdentityAttributes {
+  const { customClaims, ...rootClaims } = impersonatedUserSchema.parse(value);
+  return {
+    ...rootClaims,
+    ...(customClaims || {}),
+  };
+}
 
 const SUPPORTED_FUNCTION_TYPES = new Set(["Query", "Mutation", "Action"]);
 
@@ -141,8 +185,17 @@ export function GlobalFunctionTester({
         null)
       : null;
 
-  const argsValidator =
-    selectedFunction?.args && JSON.parse(selectedFunction.args);
+  const argsValidatorString = useQuery(
+    udfs.modules.argsValidator,
+    selectedFunction
+      ? {
+          componentId: selectedFunction.componentId,
+          function: selectedFunction.displayName,
+        }
+      : "skip",
+  );
+
+  const argsValidator = argsValidatorString && JSON.parse(argsValidatorString);
   const initialArgs = argsValidator
     ? (defaultValueForValidator(argsValidator) as Record<string, Value>)
     : undefined;
@@ -232,7 +285,7 @@ export function GlobalFunctionTester({
           />
         </Tooltip>
       </div>
-      <div className="flex h-full w-full flex-col">
+      <div className="flex size-full flex-col">
         <div
           className={classNames(
             "flex h-full w-full items-start",
@@ -391,7 +444,7 @@ export function GlobalFunctionTester({
           {isVertical && (
             <>
               {selectedItem?.fn.type === "customQuery" ? (
-                <div className="flex h-full w-full flex-col gap-4 px-4 pt-4 pb-6">
+                <div className="flex size-full flex-col gap-4 px-4 pt-4 pb-6">
                   {queryEditor}
                   {runCustomQueryButton}
                 </div>
@@ -482,15 +535,7 @@ export function useFunctionTester({
           setIsImpersonating(false);
           return;
         }
-        const user = impersonatedUserSchema.parse(v);
-
-        const { customClaims, ...rootClaims } = user;
-        const flattenedUser = {
-          ...rootClaims,
-          ...(customClaims || {}),
-        };
-
-        setImpersonatedUser(flattenedUser);
+        setImpersonatedUser(parseImpersonatedUser(v));
         setImpersonatedUserError(undefined);
       } catch (e: any) {
         if (e instanceof ZodError) {
@@ -533,7 +578,7 @@ export function useFunctionTester({
   );
   const disabled = hasError || isInvalidObject || !!impersonatedUserError;
 
-  const client = (reactClient as ConvexReactClient)?.sync;
+  const client = reactClient?.sync as BaseConvexClient;
 
   const onSubmit = useCallback(() => {
     if (!moduleFunction || !client) {
@@ -565,10 +610,13 @@ export function useFunctionTester({
     };
   }, [client, moduleFunction, parameters]);
 
+  const isInComponent = !!moduleFunction?.componentPath;
   const { button, result: functionResult } = useFunctionResult({
     onSubmit,
     disabled,
     udfType: moduleFunction?.udfType,
+    visibility: moduleFunction?.visibility,
+    isInComponent,
     functionIdentifier: moduleFunction?.identifier,
     componentId: moduleFunction?.componentId || null,
     args: parameters,
@@ -576,9 +624,27 @@ export function useFunctionTester({
     onCopiedQueryResult,
   });
 
+  const { useLogDeploymentEvent, useHasCustomRole } = useContext(
+    DeploymentInfoContext,
+  );
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canRunInternalQueries = useIsOperationAllowed("RunInternalQueries");
+  const canViewData = useIsOperationAllowed("ViewData");
+  const canActAsUser = useIsOperationAllowed("ActAsUser");
+  const hasCustomRole = useHasCustomRole();
+
+  const canRunQuery = (() => {
+    if (!moduleFunction || moduleFunction.udfType !== "Query") return true;
+    if (moduleFunction.visibility?.kind === "internal")
+      return canRunInternalQueries;
+    if (moduleFunction.componentPath) return canViewData;
+    return true;
+  })();
+
   const queryResult = moduleFunction &&
     reactClient &&
-    moduleFunction.udfType === "Query" && (
+    moduleFunction.udfType === "Query" &&
+    canRunQuery && (
       <QueryResult
         paused={disabled}
         module={moduleFunction}
@@ -588,13 +654,38 @@ export function useFunctionTester({
       />
     );
 
-  const { useLogDeploymentEvent } = useContext(DeploymentInfoContext);
+  // Which custom-role action unblocks this query — surfaced inline so
+  // members see exactly which grant is missing.
+  const missingQueryAction = moduleFunction
+    ? moduleFunction.visibility?.kind === "internal"
+      ? ("deployment:functions:runInternalQueries" as const)
+      : moduleFunction.componentPath
+        ? ("deployment:data:view" as const)
+        : null
+    : null;
+  const queryPermissionDenied = moduleFunction &&
+    moduleFunction.udfType === "Query" &&
+    !canRunQuery && (
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+        <p className="text-sm text-content-secondary">
+          You do not have permission to run this function in this deployment.
+        </p>
+        {missingQueryAction && hasCustomRole && (
+          <p className="text-xs text-content-tertiary">
+            Missing permission:{" "}
+            <code className="rounded-sm bg-background-tertiary px-1 py-0.5 font-mono">
+              {missingQueryAction}
+            </code>
+          </p>
+        )}
+      </div>
+    );
   const log = useLogDeploymentEvent();
 
   const args = (
     <div className="scrollbar grid h-full gap-2 overflow-y-auto">
       <div className="px-4">
-        <div className="flex max-w-[48rem] items-end justify-between">
+        <div className="flex max-w-3xl items-end justify-between">
           <h5 className="text-xs text-content-secondary">Arguments</h5>
           {setRunHistoryItem && moduleFunction?.udfType !== "Query" && (
             <RunHistory
@@ -611,76 +702,96 @@ export function useFunctionTester({
         </div>
       </div>
       <div className="relative min-h-28 grow overflow-y-auto px-4">
-        <ObjectEditor
-          className="max-w-[48rem] animate-fadeInFromLoading"
-          key={
-            (moduleFunction?.identifier || "") +
-            (moduleFunction?.componentId || "") +
-            (runHistoryItem?.startedAt.toString() || "")
-          }
-          fullHeight
-          defaultValue={parameters}
-          onChange={onChange}
-          path={`arguments-${moduleFunction?.identifier}-${moduleFunction?.componentId}`}
-          onError={onFirstParameterError}
-          validator={argsValidator}
-          shouldSurfaceValidatorErrors
-          showTableNames
-          mode="editDocument"
-        />
+        {argsValidator !== undefined && (
+          <ObjectEditor
+            className="max-w-3xl animate-fadeInFromLoading"
+            key={
+              (moduleFunction?.identifier || "") +
+              (moduleFunction?.componentId || "") +
+              (runHistoryItem?.startedAt.toString() || "")
+            }
+            fullHeight
+            defaultValue={parameters}
+            onChange={onChange}
+            path={`arguments-${moduleFunction?.identifier}-${moduleFunction?.componentId}`}
+            onError={onFirstParameterError}
+            validator={argsValidator}
+            shouldSurfaceValidatorErrors
+            showTableNames
+            mode="editDocument"
+          />
+        )}
       </div>
       {impersonation && (
         <div className="flex items-start gap-4 px-4">
-          <label
-            htmlFor="actAsUser"
-            className="flex h-9 items-center gap-2 pt-0.5 text-xs whitespace-nowrap accent-util-accent"
+          <Tooltip
+            tip={
+              !canActAsUser ? (
+                <PermissionDeniedTip
+                  message="You do not have permission to act as a user in this deployment."
+                  action="deployment:functions:actAsUser"
+                />
+              ) : undefined
+            }
           >
-            <input
-              data-testid="actAsUser"
-              id="actAsUser"
-              type="checkbox"
-              checked={isImpersonating}
-              className="hover:cursor-pointer"
-              onChange={() => {
-                setIsImpersonating(!isImpersonating);
-                setRunHistoryItem?.(undefined);
-                log("toggle act as user", {
-                  actAsUser: isImpersonating,
-                  function: moduleFunction && {
-                    udfType: moduleFunction.udfType,
-                    visibility: moduleFunction.visibility,
-                    identifier: moduleFunction.identifier,
-                  },
-                });
-              }}
-            />
-            <span className="flex gap-1 select-none">
-              Act as a user{" "}
-              <Tooltip
-                tip={
-                  <>
-                    Run authenticated functions by acting as a user.{" "}
-                    <Link
-                      href="https://docs.convex.dev/dashboard/deployments/functions#assuming-a-user-identity"
-                      passHref
-                      className="underline"
-                      target="_blank"
-                    >
-                      Learn more
-                    </Link>
-                    .
-                  </>
-                }
-              >
-                <QuestionMarkCircledIcon />
-              </Tooltip>
-            </span>
-          </label>
-          <div className="flex max-h-[8rem] w-full flex-col gap-1">
+            <label
+              htmlFor="actAsUser"
+              className={classNames(
+                "flex h-9 items-center gap-2 pt-0.5 text-xs whitespace-nowrap accent-util-accent",
+                !canActAsUser && "opacity-50 cursor-not-allowed",
+              )}
+            >
+              <input
+                data-testid="actAsUser"
+                id="actAsUser"
+                type="checkbox"
+                checked={isImpersonating && canActAsUser}
+                disabled={!canActAsUser}
+                className={classNames(
+                  "hover:cursor-pointer",
+                  !canActAsUser && "cursor-not-allowed",
+                )}
+                onChange={() => {
+                  if (!canActAsUser) return;
+                  setIsImpersonating(!isImpersonating);
+                  setRunHistoryItem?.(undefined);
+                  log("toggle act as user", {
+                    actAsUser: isImpersonating,
+                    function: moduleFunction && {
+                      udfType: moduleFunction.udfType,
+                      visibility: moduleFunction.visibility,
+                      identifier: moduleFunction.identifier,
+                    },
+                  });
+                }}
+              />
+              <span className="flex gap-1 select-none">
+                Act as a user{" "}
+                <Tooltip
+                  tip={
+                    <>
+                      Run authenticated functions by acting as a user.{" "}
+                      <Link
+                        href="https://docs.convex.dev/dashboard/deployments/functions#assuming-a-user-identity"
+                        passHref
+                        target="_blank"
+                      >
+                        Learn more
+                      </Link>
+                      .
+                    </>
+                  }
+                >
+                  <QuestionMarkCircledIcon />
+                </Tooltip>
+              </span>
+            </label>
+          </Tooltip>
+          <div className="flex max-h-32 w-full flex-col gap-1">
             {isImpersonating && (
               <ObjectEditor
                 key={runHistoryItem?.startedAt || ""}
-                className="w-full max-w-[48rem] animate-fadeInFromLoading"
+                className="w-full max-w-3xl animate-fadeInFromLoading"
                 defaultValue={
                   runHistoryItem?.type === "arguments"
                     ? runHistoryItem.user
@@ -695,7 +806,7 @@ export function useFunctionTester({
             )}
             {impersonatedUserError && (
               <p
-                className="mt-1 h-4 text-xs break-words text-content-errorSecondary"
+                className="mt-1 h-4 text-xs wrap-break-word text-content-errorSecondary"
                 role="alert"
               >
                 {impersonatedUserError}
@@ -709,7 +820,7 @@ export function useFunctionTester({
 
   return {
     args,
-    result: functionResult || queryResult,
+    result: functionResult || queryResult || queryPermissionDenied,
     button,
   };
 }

@@ -7,13 +7,18 @@ import {
   TextAlignBottomIcon,
   GearIcon,
   InfoCircledIcon,
+  CubeIcon,
 } from "@radix-ui/react-icons";
 import { useQuery } from "convex/react";
-import Link from "next/link";
-import { useContext, useState, useEffect } from "react";
+import { Link } from "@ui/Link";
+import { JSX, useContext, useState, useEffect } from "react";
 import udfs from "@common/udfs";
 import classNames from "classnames";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  PermissionsProvider,
+  PermissionsContext,
+  DeploymentInfoContext,
+} from "@common/lib/deploymentContext";
 import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
 import { useCollapseSidebarState } from "@common/lib/useCollapseSidebarState";
 import { PulseIcon } from "@common/elements/icons";
@@ -29,6 +34,7 @@ import { useIsCloudDeploymentInSelfHostedDashboard } from "@common/lib/useIsClou
 import { Tooltip } from "@ui/Tooltip";
 import Image from "next/image";
 import { ClosePanelButton } from "@ui/ClosePanelButton";
+import { UsageLimitDisabledBanner } from "@common/features/settings/components/UsageLimitDisabledBanner";
 
 type LayoutProps = {
   children: JSX.Element;
@@ -51,6 +57,7 @@ export function DeploymentDashboardLayout({
   const [isRunnerExpanded, setIsRunnerExpanded] = useState(false);
   const isGlobalRunnerShown = useIsGlobalRunnerShown();
   const { deploymentsURI: uriPrefix } = useContext(DeploymentInfoContext);
+  const { canViewDataCached } = useContext(PermissionsContext);
   const { isCloudDeploymentInSelfHostedDashboard, deploymentName } =
     useIsCloudDeploymentInSelfHostedDashboard();
 
@@ -66,6 +73,12 @@ export function DeploymentDashboardLayout({
       label: "Data",
       Icon: TableIcon,
       href: `${uriPrefix}/data`,
+    },
+    {
+      key: "schema",
+      label: "Schema",
+      Icon: CubeIcon,
+      href: `${uriPrefix}/schema`,
     },
     {
       key: `functions`,
@@ -144,84 +157,95 @@ export function DeploymentDashboardLayout({
   ].filter((group) => group.items.length > 0);
 
   return (
-    <FunctionsProvider>
-      <div className="flex h-full grow flex-col overflow-y-hidden">
-        {(visiblePages === undefined || visiblePages.includes("settings")) && (
-          <PauseBanner />
-        )}
-        <MobileBanner />
-        <div className="flex h-full flex-col overflow-y-auto sm:flex-row">
-          {sidebarItems.length > 0 && (
-            <Sidebar
-              collapsed={!!collapsed}
-              setCollapsed={setCollapsed}
-              items={sidebarItems}
-              header={
-                process.env.NEXT_PUBLIC_HIDE_HEADER ? (
-                  <EmbeddedConvexLogo collapsed={!!collapsed} />
-                ) : undefined
-              }
-            />
-          )}
-          <div
-            className={classNames(
-              "flex w-full grow overflow-x-hidden",
-              !isGlobalRunnerVertical && "flex-col",
+    <PermissionsProvider>
+      <FunctionsProvider>
+        <div className="flex h-full grow flex-col overflow-y-hidden">
+          {(visiblePages === undefined ||
+            visiblePages.includes("settings")) && <DeploymentBanners />}
+          <MobileBanner />
+          <div className="flex h-full flex-col overflow-y-auto sm:flex-row">
+            {sidebarItems.length > 0 && (
+              <Sidebar
+                collapsed={!!collapsed}
+                setCollapsed={setCollapsed}
+                items={sidebarItems}
+                header={
+                  process.env.NEXT_PUBLIC_HIDE_HEADER ? (
+                    <EmbeddedConvexLogo collapsed={!!collapsed} />
+                  ) : undefined
+                }
+              />
             )}
-          >
-            {/* If the function runner is fully expanded, hide the content */}
             <div
-              className={
-                isRunnerExpanded && isGlobalRunnerShown
-                  ? "h-0 w-0"
-                  : "scrollbar h-full w-full overflow-x-auto"
-              }
+              className={classNames(
+                "flex w-full grow overflow-x-hidden",
+                !isGlobalRunnerVertical && "flex-col",
+              )}
             >
-              {children}
+              {/* If the function runner is fully expanded, hide the content */}
+              <div
+                className={
+                  isRunnerExpanded && isGlobalRunnerShown
+                    ? "size-0"
+                    : "scrollbar size-full overflow-x-auto"
+                }
+              >
+                {children}
+              </div>
+              {canViewDataCached && (
+                <FunctionRunnerWrapper
+                  setIsVertical={setIsGlobalRunnerVertical}
+                  isVertical={!!isGlobalRunnerVertical}
+                  isExpanded={isRunnerExpanded}
+                  setIsExpanded={setIsRunnerExpanded}
+                  onRanCustomQuery={onRanCustomQuery}
+                  onCopiedQueryResult={onCopiedQueryResult}
+                />
+              )}
             </div>
-            <FunctionRunnerWrapper
-              setIsVertical={setIsGlobalRunnerVertical}
-              isVertical={!!isGlobalRunnerVertical}
-              isExpanded={isRunnerExpanded}
-              setIsExpanded={setIsRunnerExpanded}
-              onRanCustomQuery={onRanCustomQuery}
-              onCopiedQueryResult={onCopiedQueryResult}
-            />
           </div>
         </div>
-      </div>
-    </FunctionsProvider>
+      </FunctionsProvider>
+    </PermissionsProvider>
   );
 }
 
-function PauseBanner() {
-  const deploymentState = useQuery(udfs.deploymentState.deploymentState);
-
-  const { useCurrentTeam, useCurrentUsageBanner } = useContext(
-    DeploymentInfoContext,
+function DeploymentBanners() {
+  const { canViewDataCached } = useContext(PermissionsContext);
+  const backendState = useQuery(
+    udfs.backendState.backendState,
+    canViewDataCached ? {} : "skip",
   );
 
+  const { useCurrentTeam, useCurrentUsageBanner, deploymentsURI } = useContext(
+    DeploymentInfoContext,
+  );
   const team = useCurrentTeam();
   const teamUsageBanner = useCurrentUsageBanner(team?.id ?? null);
 
-  const { deploymentsURI } = useContext(DeploymentInfoContext);
-
-  if (!(deploymentState?.state === "paused" && teamUsageBanner !== "Paused")) {
-    return null;
-  }
+  const isPaused =
+    backendState?.system === "none" &&
+    backendState?.user === "paused" &&
+    teamUsageBanner !== "Paused";
+  const isUsageLimitDisabled = backendState?.usage_limit === "disabled";
 
   return (
-    <div className="border-y bg-background-error py-2 text-center text-content-error">
-      This deployment is paused. Resume your deployment on the{" "}
-      <Link
-        passHref
-        href={`${deploymentsURI}/settings/pause-deployment`}
-        className="text-content-link hover:underline"
-      >
-        settings
-      </Link>{" "}
-      page.
-    </div>
+    <>
+      {isPaused && (
+        <div className="border-y bg-background-error py-2 text-center text-content-error">
+          This deployment is paused. Resume your deployment on the{" "}
+          <Link passHref href={`${deploymentsURI}/settings/pause-deployment`}>
+            settings
+          </Link>{" "}
+          page.
+        </div>
+      )}
+      {isUsageLimitDisabled && (
+        <UsageLimitDisabledBanner
+          usageLimitsUri={`${deploymentsURI}/settings/usage-limits`}
+        />
+      )}
+    </>
   );
 }
 
@@ -240,7 +264,7 @@ function MobileBanner() {
   return (
     <div className="flex items-center justify-between gap-2 border-b bg-util-accent/10 px-4 py-2 text-sm dark:bg-util-accent/30">
       <div className="flex items-center gap-2">
-        <InfoCircledIcon className="h-4 w-4 shrink-0" />
+        <InfoCircledIcon className="size-4 shrink-0" />
         <p>
           The Convex dashboard is designed for desktop. We recommend using a
           desktop browser for the best experience.

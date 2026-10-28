@@ -33,9 +33,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 strum = { workspace = true }
 tokio = { workspace = true }
-tokio-tungstenite = { workspace = true, features = ["native-tls"] }
 tracing = { workspace = true }
-tungstenite = { workspace = true }
 
 [lints]
 workspace = true

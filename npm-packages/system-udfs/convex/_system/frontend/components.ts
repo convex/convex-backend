@@ -1,7 +1,7 @@
 import { queryPrivateSystem } from "../secretSystemTables";
 import { Doc, Id } from "../../_generated/dataModel";
 
-export const list = queryPrivateSystem({
+export const list = queryPrivateSystem("ViewData")({
   args: {},
   handler: async function ({ db }) {
     const componentDocs = await db.query("_components").collect();
@@ -34,6 +34,7 @@ export const list = queryPrivateSystem({
       path: computeIdToPath(doc),
       args: Object.fromEntries(doc.args ?? []),
       state: doc.state ?? "active",
+      httpPrefix: doc.httpPrefix ?? null,
     }));
   },
 });

@@ -8,8 +8,6 @@ import {
   CaretDownIcon,
   ChevronDownIcon,
   ChevronUpIcon,
-  ExternalLinkIcon,
-  InfoCircledIcon,
   QuestionMarkCircledIcon,
 } from "@radix-ui/react-icons";
 import { Insight } from "api/insights";
@@ -17,12 +15,13 @@ import { Button } from "@ui/Button";
 import { FunctionNameOption } from "@common/elements/FunctionNameOption";
 import { Loading } from "@ui/Loading";
 import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { formatBytes, formatNumberCompact } from "@common/lib/format";
 import { functionIdentifierValue } from "@common/lib/functions/generateFileTree";
 import { ComponentId, useNents } from "@common/lib/useNents";
 import { documentHref } from "@common/lib/utils";
 import { cn } from "@ui/cn";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useContext } from "react";
 
 // Type definitions to match what's in api/insights.ts
@@ -560,10 +559,9 @@ function EventOccDocumentId({
             captureMessage,
           })}
           target="_blank"
-          className="flex items-center gap-1 text-content-link hover:underline"
+          externalIcon
         >
           {event.occDocumentId}
-          <ExternalLinkIcon className="size-3 shrink-0" />
         </Link>
       ) : (
         <span className="text-content-secondary">Unknown</span>
@@ -592,9 +590,9 @@ function EventOccWriteSource({
         (insight.functionId === event.occWriteSource ? (
           <span className="flex items-center gap-1 text-content-secondary">
             Self{" "}
-            <Tooltip tip="Two calls to the same function resulted in this write conflict.">
-              <InfoCircledIcon />
-            </Tooltip>
+            <HelpTooltip>
+              Two calls to the same function resulted in this write conflict.
+            </HelpTooltip>
           </span>
         ) : (
           <FunctionNameOption
@@ -657,9 +655,7 @@ function EventReadAmount({
         {({ open }) => (
           <>
             <div className="flex items-center gap-1">
-              <span className="min-w-[4.25rem]">
-                {format(event.totalCount)}
-              </span>
+              <span className="min-w-17">{format(event.totalCount)}</span>
               <Tooltip tip="View breakdown" side="right" asChild>
                 <DisclosureButton
                   as={Button}
@@ -667,6 +663,7 @@ function EventReadAmount({
                   variant="neutral"
                   size="xs"
                   className="-my-1"
+                  aria-label={open ? "Hide breakdown" : "Show breakdown"}
                 >
                   {open ? <ChevronUpIcon /> : <ChevronDownIcon />}
                 </DisclosureButton>

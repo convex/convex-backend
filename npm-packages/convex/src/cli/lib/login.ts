@@ -1,9 +1,11 @@
 import { errors, BaseClient, custom } from "openid-client";
 import {
   bigBrainAPI,
+  bigBrainFetch,
   logAndHandleFetchError,
   throwingFetch,
   isWebContainer,
+  typedPlatformClient,
 } from "./utils/utils.js";
 import open from "open";
 import { chalkStderr } from "chalk";
@@ -36,20 +38,14 @@ custom.setHttpOptionsDefaults({
   timeout: parseInt(process.env.OPENID_CLIENT_TIMEOUT || "10000"),
 });
 
-interface AuthorizeArgs {
-  authnToken: string;
-  deviceName: string;
-  anonymousId?: string | undefined;
-}
-
-export async function checkAuthorization(
+/**
+ * Whether Big Brain accepts this credential. Takes the header explicitly so
+ * callers can check a credential other than the one `ctx` resolved to.
+ */
+export async function isAuthorizedHeader(
   ctx: Context,
-  acceptOptIns: boolean,
+  header: string,
 ): Promise<boolean> {
-  const header = ctx.bigBrainAuth()?.header ?? null;
-  if (header === null) {
-    return false;
-  }
   try {
     const resp = await fetch(`${provisionHost}/api/authorize`, {
       method: "HEAD",
@@ -61,15 +57,26 @@ export async function checkAuthorization(
     // Don't throw an error if this request returns a non-200 status.
     // Big Brain responds with a variety of error codes -- 401 if the token is correctly-formed but not valid, and either 400 or 500 if the token is ill-formed.
     // We only care if this check returns a 200 code (so we can skip logging in again) -- any other errors should be silently skipped and we'll run the whole login flow again.
-    if (resp.status !== 200) {
-      return false;
-    }
+    return resp.status === 200;
   } catch (e: any) {
     // This `catch` block should only be hit if a network error was encountered
     logError(
       `Unexpected error when authorizing - are you connected to the internet?`,
     );
     return await logAndHandleFetchError(ctx, e);
+  }
+}
+
+export async function checkAuthorization(
+  ctx: Context,
+  acceptOptIns: boolean,
+): Promise<boolean> {
+  const header = ctx.bigBrainAuth()?.header ?? null;
+  if (header === null) {
+    return false;
+  }
+  if (!(await isAuthorizedHeader(ctx, header))) {
+    return false;
   }
 
   // Check that we have optin as well
@@ -330,46 +337,44 @@ export async function performLogin(
   }
 
   const issuer = overrideAuthUrl ?? "https://auth.convex.dev";
-  let authIssuer;
+  const clientId = overrideAuthClient ?? "HFtA247jp9iNs08NTLIB7JsNPMmRIyfi";
   let accessToken: string;
 
-  if (loginFlow === "paste" || (loginFlow === "auto" && isWebContainer())) {
+  if (overrideAccessToken) {
+    // Access token was supplied directly.
+    accessToken = overrideAccessToken;
+  } else if (overrideAuthUsername && overrideAuthPassword) {
+    // Username/Password auth
+    accessToken = await performPasswordAuthentication(
+      ctx,
+      clientId,
+      overrideAuthUsername,
+      overrideAuthPassword,
+    );
+  } else if (
+    loginFlow === "paste" ||
+    (loginFlow === "auto" && isWebContainer())
+  ) {
     accessToken = await promptString(ctx, {
       message:
         "Open https://dashboard.convex.dev/auth, log in and paste the token here:",
     });
   } else {
+    // Device authorization flow. Contact OIDC issuer.
+    let authIssuer;
     try {
       authIssuer = await Issuer.discover(issuer);
     } catch {
       // Couldn't contact https://auth.convex.dev/.well-known/openid-configuration,
       // proceed with manual auth.
-      accessToken = await promptString(ctx, {
-        message:
-          "Open https://dashboard.convex.dev/auth, log in and paste the token here:",
-      });
+      authIssuer = undefined;
     }
-  }
-
-  // typical path
-  if (authIssuer) {
-    const clientId = overrideAuthClient ?? "HFtA247jp9iNs08NTLIB7JsNPMmRIyfi";
-    const authClient = new authIssuer.Client({
-      client_id: clientId,
-      token_endpoint_auth_method: "none",
-      id_token_signed_response_alg: "RS256",
-    });
-
-    if (overrideAccessToken) {
-      accessToken = overrideAccessToken;
-    } else if (overrideAuthUsername && overrideAuthPassword) {
-      accessToken = await performPasswordAuthentication(
-        ctx,
-        clientId,
-        overrideAuthUsername,
-        overrideAuthPassword,
-      );
-    } else {
+    if (authIssuer) {
+      const authClient = new authIssuer.Client({
+        client_id: clientId,
+        token_endpoint_auth_method: "none",
+        id_token_signed_response_alg: "RS256",
+      });
       accessToken = await performDeviceAuthorization(
         ctx,
         authClient,
@@ -377,11 +382,16 @@ export async function performLogin(
         vercel,
         vercelOverride,
       );
+    } else {
+      accessToken = await promptString(ctx, {
+        message:
+          "Open https://dashboard.convex.dev/auth, log in and paste the token here:",
+      });
     }
   }
 
   if (dumpAccessToken) {
-    logOutput(`${accessToken!}`);
+    logOutput(`${accessToken}`);
     return await ctx.crash({
       exitCode: 0,
       errorType: "fatal",
@@ -389,18 +399,23 @@ export async function performLogin(
     });
   }
 
-  const authorizeArgs: AuthorizeArgs = {
-    authnToken: accessToken!,
-    deviceName: deviceName,
-    anonymousId: anonymousId,
-  };
-  const data = await bigBrainAPI({
-    ctx,
-    method: "POST",
-    path: "authorize",
-    data: authorizeArgs,
+  // Exchange the WorkOS access token for a Convex personal access token.
+  ctx._updateBigBrainAuth({
+    accessToken: accessToken,
+    kind: "accessToken",
+    header: `Bearer ${accessToken}`,
   });
-  const globalConfig = { accessToken: data.accessToken };
+  const response = await typedPlatformClient(ctx).POST(
+    "/create_personal_access_token",
+    {
+      // `anonymousId` links a prior anonymous session to this account. It's
+      // intentionally absent from the generated platform API types,
+      // so cast to pass it through.
+      body: { name: deviceName, anonymousId } as { name: string },
+    },
+  );
+  const newAccessToken = response.data!.accessToken;
+  const globalConfig = { accessToken: newAccessToken };
   try {
     await modifyGlobalConfig(ctx, globalConfig);
     const path = globalConfigPath();
@@ -415,7 +430,7 @@ export async function performLogin(
   }
 
   logVerbose(`performLogin: updating big brain auth after login`);
-  await updateBigBrainAuthAfterLogin(ctx, data.accessToken);
+  await updateBigBrainAuthAfterLogin(ctx, newAccessToken);
 
   logVerbose(`performLogin: checking opt ins, acceptOptIns: ${acceptOptIns}`);
   // Do opt in to TOS and Privacy Policy stuff
@@ -426,6 +441,72 @@ export async function performLogin(
       errorType: "fatal",
       printedMessage: null,
     });
+  }
+
+  if (vercel) {
+    await promptJoinVercelTeams(ctx);
+  }
+}
+
+type PotentialVercelTeam = {
+  teamId: number;
+  teamName: string;
+  teamSlug: string;
+  planId: string;
+  planName: string;
+  pricingNotice: string | null;
+};
+
+// After `--vercel` login, surface any Vercel-marketplace teams the user has
+// access to but isn't yet a member of, and prompt to join each.
+async function promptJoinVercelTeams(ctx: Context): Promise<void> {
+  const fetch = bigBrainFetch(ctx);
+  let teams: PotentialVercelTeam[];
+  try {
+    const res = await fetch(
+      new URL("vercel/potential_teams", `${provisionHost}/`),
+    );
+    if (!res.ok) {
+      logVerbose(
+        `vercel/potential_teams returned ${res.status}; skipping team-join prompt`,
+      );
+      return;
+    }
+    teams = await res.json();
+  } catch (err) {
+    logVerbose(`Failed to fetch potential Vercel teams: ${String(err)}`);
+    return;
+  }
+  if (teams.length === 0) return;
+
+  for (const [index, team] of teams.entries()) {
+    const displayName = team.teamName.replace(/ \(Vercel\)$/, "");
+    const counter = teams.length > 1 ? `[${index + 1}/${teams.length}] ` : "";
+    const lines = [
+      chalkStderr.bold(`${counter}You've been invited to join ${displayName}`) +
+        ` (${team.planName}) through the Vercel marketplace.`,
+    ];
+    if (team.pricingNotice) {
+      lines.push(chalkStderr.yellow(team.pricingNotice));
+    }
+    lines.push(`Join "${displayName}"?`);
+    const join = await promptYesNo(ctx, {
+      message: `${lines.join("\n")}`,
+      default: true,
+    });
+    if (!join) continue;
+    try {
+      await fetch(
+        new URL(
+          `vercel/potential_teams/${team.teamId}/join`,
+          `${provisionHost}/`,
+        ),
+        { method: "POST" },
+      );
+      logFinishedStep(`Joined ${displayName}`);
+    } catch (err) {
+      logFailure(`Failed to join ${displayName}: ${String(err)}`);
+    }
   }
 }
 

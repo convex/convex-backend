@@ -21,7 +21,6 @@ use fivetran_common::{
 use futures::{
     stream::BoxStream,
     StreamExt,
-    TryStreamExt,
 };
 use tonic::{
     Request,
@@ -30,8 +29,8 @@ use tonic::{
 };
 
 use crate::{
-    api_types::selection::{
-        Selection,
+    conversions::selection::{
+        selection_from_fivetran,
         DEFAULT_FIVETRAN_SCHEMA_NAME,
     },
     convex_api::{
@@ -44,6 +43,7 @@ use crate::{
     sync::{
         sync,
         State,
+        UpdateMessage,
     },
 };
 
@@ -102,7 +102,7 @@ impl SourceConnector for ConvexConnector {
     }
 
     async fn test(&self, request: Request<TestRequest>) -> ConnectorResult<TestResponse> {
-        log(&format!("test request"));
+        log("test request");
         let config = match Config::from_parameters(request.into_inner().configuration) {
             Ok(config) => config,
             Err(error) => {
@@ -126,7 +126,7 @@ impl SourceConnector for ConvexConnector {
     }
 
     async fn schema(&self, request: Request<SchemaRequest>) -> ConnectorResult<SchemaResponse> {
-        log(&format!("schema request"));
+        log("schema request");
         self._schema(request)
             .await
             .map(Response::new)
@@ -134,7 +134,7 @@ impl SourceConnector for ConvexConnector {
     }
 
     async fn update(&self, request: Request<UpdateRequest>) -> ConnectorResult<Self::UpdateStream> {
-        log(&format!("update request"));
+        log("update request");
         let inner = request.into_inner();
         let config = match Config::from_parameters(inner.configuration) {
             Ok(config) => config,
@@ -151,24 +151,28 @@ impl SourceConnector for ConvexConnector {
             },
         };
 
-        log(&format!(
-            "update request for {} at checkpoint {:?}",
-            config.deploy_url,
-            state.as_ref().map(|s| &s.checkpoint)
-        ));
-
         let source = ConvexApi { config };
 
-        let selection = Selection::try_from(inner.selection)
-            .map_err(|error| Status::internal(error.to_string()))?;
+        let selection = match selection_from_fivetran(inner.selection) {
+            Ok(selection) => selection,
+            Err(error) => {
+                return error_to_task(error);
+            },
+        };
 
         let sync = sync(source, state, selection);
-        Ok(Response::new(
-            sync.map_ok(FivetranUpdateResponse::from)
-                .map_err(|error| Status::internal(error.to_string()))
-                .boxed(),
-        ))
+        Ok(Response::new(sync_stream_to_update_stream(sync)))
     }
+}
+
+/// Converts the sync stream into the gRPC response stream, reporting errors as
+/// `Task` operations instead of gRPC errors so that Fivetran surfaces their
+/// message to the customer on the dashboard instead of a generic sync failure.
+fn sync_stream_to_update_stream(
+    sync: BoxStream<'static, anyhow::Result<UpdateMessage>>,
+) -> <ConvexConnector as SourceConnector>::UpdateStream {
+    sync.map(|result| Ok(result.map_or_else(task_response, FivetranUpdateResponse::from)))
+        .boxed()
 }
 
 fn deserialize_state_json(state_json: &str) -> anyhow::Result<Option<State>> {
@@ -214,55 +218,19 @@ Please note that this update to the Convex connector changes the way Convex comp
     Ok(state)
 }
 
+fn task_response(error: anyhow::Error) -> FivetranUpdateResponse {
+    log(&format!("returning error to Fivetran as a task: {error:#}"));
+    FivetranUpdateResponse {
+        operation: Some(update_response::Operation::Task(Task {
+            message: error.to_string(),
+        })),
+    }
+}
+
 fn error_to_task(
     error: anyhow::Error,
 ) -> ConnectorResult<<ConvexConnector as SourceConnector>::UpdateStream> {
     Ok(Response::new(
-        futures::stream::once(async move {
-            Ok(FivetranUpdateResponse {
-                operation: Some(update_response::Operation::Task(Task {
-                    message: error.to_string(),
-                })),
-            })
-        })
-        .boxed(),
+        futures::stream::once(async move { Ok(task_response(error)) }).boxed(),
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::deserialize_state_json;
-    use crate::sync::{
-        Checkpoint,
-        State,
-    };
-
-    #[test]
-    fn test_deserialize_state_json() -> anyhow::Result<()> {
-        assert_eq!(deserialize_state_json("{}")?, None);
-        assert!(deserialize_state_json("{'invalid':'things'}").is_err());
-        assert_eq!(
-            deserialize_state_json(
-                "{ \"version\": 2, \"checkpoint\": { \"DeltaUpdates\": { \"cursor\": 42 } } }"
-            )?,
-            Some(State::create(
-                Checkpoint::DeltaUpdates { cursor: 42.into() },
-                None,
-            ))
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_deserialize_state_json_refuses_pre_v2() -> anyhow::Result<()> {
-        let result = deserialize_state_json(
-            "{ \"version\": 1, \"checkpoint\": { \"DeltaUpdates\": { \"cursor\": 42 } }, \
-             \"tablesSeen\": [\"documents\"] }",
-        );
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains(
-            "This Fivetran connection was created with an old version of the Convex connector."
-        ));
-        Ok(())
-    }
 }

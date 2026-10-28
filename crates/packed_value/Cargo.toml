@@ -13,10 +13,10 @@ testing = ["proptest", "value/testing"]
 
 [dependencies]
 anyhow = { workspace = true }
-base64 = { workspace = true }
 bytes = { workspace = true }
 flexbuffers = { workspace = true }
 proptest = { workspace = true, optional = true }
+scoped-tls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 value = { workspace = true }
@@ -24,7 +24,6 @@ value = { workspace = true }
 [dev-dependencies]
 cmd_util = { workspace = true }
 criterion = { workspace = true }
-maplit = { workspace = true }
 proptest = { workspace = true }
 value = { workspace = true, features = ["testing"] }
 

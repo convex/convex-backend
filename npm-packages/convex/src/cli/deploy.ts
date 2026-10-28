@@ -3,7 +3,9 @@ import { Command, Option } from "@commander-js/extra-typings";
 import { Context, oneoffContext } from "../bundler/context.js";
 import { logFinishedStep, logMessage, showSpinner } from "../bundler/log.js";
 import { loadSelectedDeploymentCredentials } from "./lib/api.js";
+import { announceDeploymentTarget } from "./lib/announceDeploymentTarget.js";
 import {
+  getDefaultDeployMessage,
   gitBranchFromEnvironment,
   isNonProdBuildEnvironment,
   suggestedEnvVarNames,
@@ -21,19 +23,40 @@ import { getTeamAndProjectFromPreviewAdminKey } from "./lib/deployment.js";
 import { runPush } from "./lib/components.js";
 import { promptYesNo } from "./lib/utils/prompts.js";
 import { deployToDeployment, runCommand } from "./lib/deploy2.js";
-import { getDeploymentSelection } from "./lib/deploymentSelection.js";
+import {
+  DeploymentSelection,
+  getDeploymentSelection,
+} from "./lib/deploymentSelection.js";
 import { deploymentNameAndTypeFromSelection } from "./lib/deploymentSelection.js";
-import { checkVersion } from "./lib/updates.js";
+import { checkVersionAndAiFilesStaleness } from "./lib/updates.js";
 import { readProjectConfig, getAuthKitConfig } from "./lib/config.js";
 import { ensureAuthKitProvisionedBeforeBuild } from "./lib/workos/workos.js";
 import { DASHBOARD_HOST } from "./lib/dashboard.js";
 import { extractDeploymentNameForWorkOS } from "./lib/extractDeploymentNameForWorkOS.js";
 
 export const deploy = new Command("deploy")
-  .summary("Deploy to your prod deployment")
+  .summary("Deploy to a production or preview deployment")
   .description(
-    "Deploy to your deployment. By default, this deploys to your prod deployment.\n\n" +
-      `Deploys to a preview deployment if the \`${CONVEX_DEPLOY_KEY_ENV_VAR_NAME}\` environment variable is set to a Preview Deploy Key.`,
+    [
+      "Deploys code to a deployment.",
+      "This is typically used for deploying to a prod or preview deployment manually or from CI; to deploy to your dev deployment when developing, use `npx convex dev`.",
+      "",
+      "The target deployment is chosen like this:",
+      `• If the \`${CONVEX_DEPLOYMENT_ENV_VAR_NAME}\` environment variable is set (typical during local development), the target is the project’s default production deployment.`,
+      `• If the \`${CONVEX_DEPLOY_KEY_ENV_VAR_NAME}\` environment variable is set (typical in CI), it is the deployment associated with that key.`,
+      `  • When it’s set to a preview deploy key, it will deploy to a preview deployment:`,
+      `    • with the name of the current Git branch when running in CI (Vercel, Netlify, Cloudflare Pages, GitHub)`,
+      `    • or with the name specified by the \`--preview-name\` or \`--preview-create\` flags`,
+      "",
+      "`npx convex deploy` will:",
+      "  1. Run a command if specified with `--cmd`, with the deployment URL available as an environment variable.",
+      "  2. Typecheck your Convex functions.",
+      "  3. Regenerate the generated code in the `convex/_generated` directory.",
+      "  4. Bundle your Convex functions and their dependencies.",
+      "  5. Push your functions, indexes, and schema to the deployment.",
+      "  6. When deploying to a preview deployment, it runs the function specified by `--preview-run`.",
+      "If any step fails, the next steps do not run.",
+    ].join("\n"),
   )
   .allowExcessArguments(false)
   .addDeployOptions()
@@ -45,8 +68,14 @@ export const deploy = new Command("deploy")
   )
   .addOption(
     new Option(
+      "--preview-name <name>",
+      "The name to associate with this preview deployment. Defaults to the current Git branch name in Vercel, Netlify, Cloudflare Pages and GitHub CI. Reuses the existing deployment if one exists.",
+    ).conflicts("preview-create"),
+  )
+  .addOption(
+    new Option(
       "--preview-create <name>",
-      "The name to associate with this deployment if deploying to a newly created preview deployment. Defaults to the current Git branch name in Vercel, Netlify and GitHub CI. This parameter can only be used with a preview deploy key (when used with another type of key, the command will return an error).",
+      "Like --preview-name, but deletes and recreates an existing preview deployment with the same name. This parameter can only be used with a preview deploy key (when used with another type of key, the command will return an error).",
     ).conflicts("preview-name"),
   )
   .addOption(
@@ -63,18 +92,16 @@ export const deploy = new Command("deploy")
   .addOption(new Option("--url <url>").hideHelp())
   .addOption(
     new Option(
-      "--preview-name <name>",
-      "[deprecated] Use `--preview-create` instead. The name to associate with this deployment if deploying to a preview deployment.",
-    )
-      .hideHelp()
-      .conflicts("preview-create"),
-  )
-  .addOption(
-    new Option(
       "--env-file <envFile>",
       `Path to a custom file of environment variables, for choosing the \
 deployment, e.g. ${CONVEX_DEPLOYMENT_ENV_VAR_NAME} or ${CONVEX_SELF_HOSTED_URL_VAR_NAME}. \
 Same format as .env.local or .env files, and overrides them.`,
+    ),
+  )
+  .addOption(
+    new Option(
+      "--message <message>",
+      "Optional message to attach to this deployment in the audit log.",
     ),
   )
   .addOption(
@@ -84,16 +111,32 @@ Same format as .env.local or .env files, and overrides them.`,
     ).hideHelp(),
   )
   .addOption(
-    new Option("--allow-deleting-large-indexes")
-      .hideHelp()
-      .conflicts("preview-create")
-      .conflicts("preview-name"),
+    new Option(
+      "--skip-large-indexes-check",
+      "Skip the confirmation prompt when this push creates, changes, or deletes an index on a large table. Creating or changing an index blocks the deploy until it is backfilled; consider staging it instead so it backfills in the background.",
+    ),
+  )
+  .addOption(
+    // Predecessor of --skip-large-indexes-check, kept hidden so existing
+    // deploy scripts keep working. It still skips only the deletion
+    // confirmation: scripts that opted into that never agreed to let a
+    // blocking backfill through.
+    new Option("--allow-deleting-large-indexes").hideHelp(),
+  )
+  .addOption(
+    new Option(
+      "--allow-unstaging-schema",
+      "Skip the confirmation prompt when this push discards a staged table validator that is validating or already validated.",
+    ),
   )
   .showHelpAfterError()
   .action(async (cmdOptions) => {
     const ctx = await oneoffContext(cmdOptions);
 
-    const deploymentSelection = await getDeploymentSelection(ctx, cmdOptions);
+    const deploymentSelection = await getDeploymentSelection(ctx, {
+      ...cmdOptions,
+      implicitProd: true,
+    });
     if (
       cmdOptions.checkBuildEnvironment === "enable" &&
       isNonProdBuildEnvironment() &&
@@ -127,14 +170,11 @@ Same format as .env.local or .env files, and overrides them.`,
     if (deploymentSelection.kind === "preview") {
       // TODO -- add usage state warnings here too once we can do it without a deployment name
       // await usageStateWarning(ctx);
-      if (cmdOptions.previewName !== undefined) {
-        await ctx.crash({
-          exitCode: 1,
-          errorType: "fatal",
-          printedMessage:
-            "The `--preview-name` flag has been deprecated in favor of `--preview-create`. Please re-run the command using `--preview-create` instead.",
-        });
-      }
+      const previewName =
+        cmdOptions.previewCreate ??
+        cmdOptions.previewName ??
+        gitBranchFromEnvironment();
+      const reuse = cmdOptions.previewCreate === undefined;
 
       const teamAndProjectSlugs = await getTeamAndProjectFromPreviewAdminKey(
         ctx,
@@ -152,6 +192,10 @@ Same format as .env.local or .env files, and overrides them.`,
         },
         {
           ...cmdOptions,
+          previewName: previewName ?? undefined,
+          reuse,
+          skipLargeIndexesCheck: cmdOptions.skipLargeIndexesCheck ?? false,
+          message: cmdOptions.message ?? getDefaultDeployMessage(),
         },
       );
     } else {
@@ -171,11 +215,14 @@ Same format as .env.local or .env files, and overrides them.`,
         });
       }
 
-      await deployToExistingDeployment(ctx, {
+      await deployToExistingDeployment(ctx, deploymentSelection, {
         ...cmdOptions,
         skipWorkosCheck: cmdOptions.skipWorkosCheck ?? false,
+        skipLargeIndexesCheck: cmdOptions.skipLargeIndexesCheck ?? false,
         allowDeletingLargeIndexes:
           cmdOptions.allowDeletingLargeIndexes ?? false,
+        allowUnstagingSchema: cmdOptions.allowUnstagingSchema ?? false,
+        message: cmdOptions.message ?? getDefaultDeployMessage(),
       });
     }
   });
@@ -192,7 +239,8 @@ async function deployToNewPreviewDeployment(
   },
   options: {
     dryRun?: boolean | undefined;
-    previewCreate?: string | undefined;
+    previewName?: string | undefined;
+    reuse: boolean;
     previewRun?: string | undefined;
     cmdUrlEnvVarName?: string | undefined;
     cmd?: string | undefined;
@@ -205,15 +253,17 @@ async function deployToNewPreviewDeployment(
     debug?: boolean | undefined;
     debugBundlePath?: string | undefined;
     skipWorkosCheck?: boolean | undefined;
+    skipLargeIndexesCheck: boolean;
+    message: string | null;
   },
 ) {
-  const previewName = options.previewCreate ?? gitBranchFromEnvironment();
+  const previewName = options.previewName ?? null;
   if (previewName === null) {
     await ctx.crash({
       exitCode: 1,
       errorType: "fatal",
       printedMessage:
-        "`npx convex deploy` to a preview deployment could not determine the preview name. Provide one using `--preview-create`",
+        "`npx convex deploy` to a preview deployment could not determine the preview name. Provide one using `--preview-name`",
     });
   }
 
@@ -243,6 +293,7 @@ async function deployToNewPreviewDeployment(
     data: {
       projectSelection: deploymentSelection.projectSelection,
       identifier: previewName,
+      reuse: options.reuse,
     },
   });
 
@@ -251,6 +302,19 @@ async function deployToNewPreviewDeployment(
 
   // Extract deployment name from URL for WorkOS provisioning
   const deploymentNameForWorkOS = extractDeploymentNameForWorkOS(previewUrl);
+
+  announceDeploymentTarget("Deploying code to deployment:", {
+    url: previewUrl,
+    deploymentFields: {
+      deploymentName: data.deploymentName,
+      deploymentType: "preview",
+      teamSlug: deploymentSelection.projectSelection.teamSlug,
+      projectSlug: deploymentSelection.projectSelection.projectSlug,
+      reference: data.reference,
+      // Preview deployments are never default
+      isDefault: false,
+    },
+  });
 
   // Provision WorkOS before building the client bundle (if configured)
   const { projectConfig } = await readProjectConfig(ctx);
@@ -272,7 +336,8 @@ async function deployToNewPreviewDeployment(
   });
 
   const pushOptions: PushOptions = {
-    deploymentName: null,
+    deploymentName: data.deploymentName,
+    deploymentType: "preview",
     adminKey: previewAdminKey,
     verbose: !!options.verbose,
     dryRun: false,
@@ -286,12 +351,25 @@ async function deployToNewPreviewDeployment(
     liveComponentSources: false,
     pushAllModules: !!options.pushAllModules,
     largeIndexDeletionCheck: "no verification", // fine for preview deployments
+    // A freshly claimed preview has no data to backfill. A reused one keeps
+    // the data earlier pushes wrote, so an unstaged index there can block
+    // the deploy like on any other deployment.
+    largeIndexBackfillCheck: data.isNewDeployment
+      ? "no verification"
+      : options.skipLargeIndexesCheck
+        ? "has confirmation"
+        : "ask for confirmation",
+    // Staged validation on throwaway preview data is cheap to redo, so
+    // discarding it needs no confirmation.
+    stagedValidatorDeletionCheck: "no verification",
+    warnOnSlowSchemaValidation: true,
+    message: options.message,
   };
   showSpinner(`Deploying to ${previewUrl}...`);
   await runPush(ctx, pushOptions);
   logFinishedStep(`Deployed Convex functions to ${previewUrl}`);
 
-  if (options.previewRun !== undefined) {
+  if (options.previewRun !== undefined && data.isNewDeployment) {
     await runFunctionAndLog(ctx, {
       deploymentUrl: previewUrl,
       adminKey: previewAdminKey,
@@ -309,6 +387,7 @@ async function deployToNewPreviewDeployment(
 
 async function deployToExistingDeployment(
   ctx: Context,
+  deploymentSelection: DeploymentSelection,
   options: {
     verbose?: boolean | undefined;
     dryRun?: boolean | undefined;
@@ -328,17 +407,17 @@ async function deployToExistingDeployment(
     liveComponentSources?: boolean | undefined;
     envFile?: string | undefined;
     skipWorkosCheck?: boolean | undefined;
+    skipLargeIndexesCheck: boolean;
     allowDeletingLargeIndexes: boolean;
+    allowUnstagingSchema: boolean;
+    message: string | null;
   },
 ) {
-  const deploymentSelection = await getDeploymentSelection(ctx, {
-    ...options,
-    implicitProd: true,
-  });
   const deploymentToActOn = await loadSelectedDeploymentCredentials(
     ctx,
     deploymentSelection,
   );
+  announceDeploymentTarget("Deploying code to deployment:", deploymentToActOn);
   const { deploymentFields } = deploymentToActOn;
 
   const configuredDeployment =
@@ -383,7 +462,7 @@ async function deployToExistingDeployment(
     ...(isCloudDeployment
       ? [
           usageStateWarning(ctx, deploymentFields.deploymentName),
-          checkVersion(ctx),
+          checkVersionAndAiFilesStaleness(ctx),
         ]
       : []),
   ]);

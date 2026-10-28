@@ -5,31 +5,41 @@ import { analyzedModule, udfConfig } from "./modules.js";
 import { looseObject } from "./utils.js";
 import { ConvexValidator } from "./validator.js";
 
-export const componentArgumentValidator = looseObject({
+export const componentEnvDependencyValidator = looseObject({
   type: z.literal("value"),
   // Validator serialized to JSON.
   value: z.string(),
+  optional: z.boolean().optional(),
 });
 
 export const componentDefinitionType = z.union([
-  looseObject({ type: z.literal("app") }),
+  looseObject({
+    type: z.literal("app"),
+    httpPrefix: z.string().optional(),
+  }),
   looseObject({
     type: z.literal("childComponent"),
     name: identifier,
-    args: z.array(z.tuple([identifier, componentArgumentValidator])),
   }),
 ]);
 
-export const componentArgument = looseObject({
-  type: z.literal("value"),
-  // Value serialized to JSON.
-  value: z.string(),
-});
+export const componentEnvBinding = z.union([
+  looseObject({
+    type: z.literal("value"),
+    // Value serialized to JSON.
+    value: z.string(),
+  }),
+  looseObject({
+    type: z.literal("envVar"),
+    // Name of a parent-declared env var.
+    name: z.string(),
+  }),
+]);
 
 export const componentInstantiation = looseObject({
   name: identifier,
   path: componentDefinitionPath,
-  args: z.nullable(z.array(z.tuple([identifier, componentArgument]))),
+  env: z.array(z.tuple([identifier, componentEnvBinding])).nullish(),
 });
 
 export type ComponentExports =
@@ -58,6 +68,9 @@ export const componentDefinitionMetadata = looseObject({
     type: z.literal("branch"),
     branch: z.array(z.tuple([identifier, componentExports])),
   }),
+  envVars: z
+    .array(z.tuple([identifier, componentEnvDependencyValidator]))
+    .nullish(),
 });
 
 export const indexSchema = looseObject({

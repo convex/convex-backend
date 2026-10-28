@@ -49,47 +49,6 @@ pub struct ResolvedDocumentId {
     pub developer_id: DeveloperDocumentId,
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for InternalDocumentId {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = Self>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        (any::<TabletId>(), any::<InternalId>()).prop_map(|(t, id)| Self::new(t, id))
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for DeveloperDocumentId {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = Self>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        (any::<TableNumber>(), any::<InternalId>()).prop_map(|(t, id)| Self::new(t, id))
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for ResolvedDocumentId {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = ResolvedDocumentId>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        (any::<TabletId>(), any::<DeveloperDocumentId>()).prop_map(|(tablet_id, developer_id)| {
-            Self {
-                tablet_id,
-                developer_id,
-            }
-        })
-    }
-}
-
 impl InternalDocumentId {
     pub const MAX: InternalDocumentId = InternalDocumentId::new(TabletId::MAX, InternalId::MAX);
     /// Minimum valid [`InternalDocumentId`].
@@ -286,7 +245,6 @@ impl InternalDocumentId {
 ///
 /// 14 bytes of randomness followed by the day encoded in 2 bytes.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct InternalId(pub [u8; 16]);
 
 impl InternalId {
@@ -426,34 +384,5 @@ impl TryFrom<Vec<u8>> for InternalId {
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_from(&value[..])
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use crate::{
-        InternalDocumentId,
-        InternalId,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_document_id_roundtrip(v in any::<InternalDocumentId>()) {
-            let roundtripped = String::from(v).parse().unwrap();
-            assert_eq!(v, roundtripped);
-        }
-
-        #[test]
-        fn test_internal_ids_within_byte_bounds(id in any::<InternalId>()) {
-            let bytes = &id[..];
-            assert!(InternalId::BEFORE_ALL_BYTES < bytes);
-            assert!(InternalId::AFTER_ALL_BYTES > bytes);
-        }
     }
 }

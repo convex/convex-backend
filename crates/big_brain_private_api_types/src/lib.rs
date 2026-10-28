@@ -1,17 +1,20 @@
-#![feature(impl_trait_in_assoc_type)]
 use std::{
     fmt::Display,
     str::FromStr,
 };
 
 use common::types::{
+    AccessTokenId,
     DeploymentClass,
     DeploymentId,
     DeploymentType,
     ProjectId,
     TeamId,
 };
-use keybroker::AdminIdentityPrincipal;
+use keybroker::{
+    AdminIdentityPrincipal,
+    DeploymentOp,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -19,16 +22,24 @@ use serde::{
 use utoipa::ToSchema;
 
 use crate::types::AccessToken;
-pub use crate::types::{
-    CloudBackupId,
-    PartitionId,
-    PlanId,
-    ProjectName,
-    ProjectSlug,
-    SubscriptionId,
-    TeamName,
-    TeamSlug,
+pub use crate::{
+    slugs::{
+        validate_slug,
+        validate_team_slug,
+    },
+    types::{
+        CloudBackupId,
+        PartitionId,
+        PlanId,
+        ProjectName,
+        ProjectSlug,
+        SubscriptionId,
+        TeamName,
+        TeamSlug,
+    },
 };
+
+pub mod slugs;
 
 pub mod types;
 
@@ -91,6 +102,13 @@ pub struct DeploymentAuthResponse {
     pub admin_key: AccessToken,
     pub url: String,
     pub deployment_type: DeploymentType,
+    /// The user-facing reference for this deployment (e.g. `preview/pr-42`),
+    /// usable as the `<ref>` in `team:project:<ref>` selectors. `None` for
+    /// local deployments, which don't have a Big Brain reference.
+    pub reference: Option<String>,
+    /// Whether this is the default deployment for its project (dev: per
+    /// member; prod: per project). Preview/custom/local are always `false`.
+    pub is_default: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -109,6 +127,24 @@ pub struct AccessTokenDeploymentAuthResponse {
     pub is_authorized: bool,
     pub authorized_entity: Option<AdminIdentityPrincipal>,
     pub is_read_only: Option<bool>,
+    #[serde(default)]
+    pub allowed_ops: Option<Vec<DeploymentOp>>,
+    #[serde(default)]
+    pub token_id: Option<AccessTokenId>,
+    #[serde(default)]
+    pub app_client_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MintLocalAiGatewayJwtArgs {
+    pub attribution: common::types::AttributionClaims,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MintLocalAiGatewayJwtResponse {
+    pub token: String,
 }
 
 #[derive(Deserialize, Serialize, ToSchema)]
@@ -158,6 +194,13 @@ pub struct TeamAndProjectForDeploymentResponse {
     pub team_id: TeamId,
     pub project_id: ProjectId,
     pub deployment_id: Option<DeploymentId>,
+    /// The user-facing reference for this deployment (e.g. `preview/pr-42`),
+    /// usable as the `<ref>` in `team:project:<ref>` selectors. `None` for
+    /// local deployments.
+    pub reference: Option<String>,
+    /// Whether this is the default deployment for its project (dev: per
+    /// member; prod: per project). Always `false` for local deployments.
+    pub is_default: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ToSchema)]

@@ -12,6 +12,7 @@ pub enum PersistenceArgs {
         url: Url,
         db_name: String,
         multitenant: bool,
+        require_leader: bool,
     },
     Postgres {
         url: Url,
@@ -25,7 +26,7 @@ pub enum PersistenceArgs {
 /// url should contains credentials to connect to the database, and should not
 /// contain any path or query string.
 pub fn persistence_args_from_cluster_url(
-    instance_name: &str,
+    deployment_name: &str,
     mut cluster_url: Url,
     driver: DbDriverTag,
     require_ssl: bool,
@@ -36,56 +37,33 @@ pub fn persistence_args_from_cluster_url(
         // Don't print the full URL since it might contains password.
         "cluster url username must be set",
     );
+    fn adjust_postgres_url(cluster_url: &mut Url, require_ssl: bool, require_leader: bool) {
+        if require_ssl {
+            cluster_url
+                .query_pairs_mut()
+                .append_pair("sslmode", "require");
+        }
+        if require_leader {
+            cluster_url
+                .query_pairs_mut()
+                .append_pair("target_session_attrs", "read-write");
+        }
+    }
     match driver {
-        DbDriverTag::Postgres(_)
-        | DbDriverTag::PostgresMultiSchema(_)
-        | DbDriverTag::PostgresAwsIam(_)
-        | DbDriverTag::PostgresMultitenant(_) => {
-            let schema = if matches!(driver, DbDriverTag::Postgres(_)) {
-                // selfhosted case
-                let db_name = instance_name.replace('-', "_");
-                anyhow::ensure!(
-                    cluster_url.path() == "" || cluster_url.path() == "/",
-                    "cluster url already contains db name: {}",
-                    cluster_url.path()
-                );
-                cluster_url.set_path(&db_name);
-                None
-            } else if matches!(driver, DbDriverTag::PostgresMultitenant(_)) {
-                let maybe_schema = cluster_url
-                    .query_pairs()
-                    .find(|(k, _)| k == "search_path")
-                    .map(|(_, v)| v.to_string())
-                    .unwrap_or_default();
-                if !maybe_schema.is_empty() {
-                    Some(maybe_schema)
-                } else {
-                    // Default to the `public` schema if not provided.
-                    // Technically we'd work fine with this being empty (we query current_schema()
-                    // when opening a connection to fill in the value, but would prefer to avoid
-                    // doing that on every connection)
-                    Some("public".to_string())
-                }
-            } else {
-                // NOTE: we do not set any database in this case
-                // N.B.: unlike mysql we use the instance name as-is as a schema
-                // name (we don't change - to _)
-                Some(instance_name.to_string())
-            };
-            if require_ssl {
-                cluster_url
-                    .query_pairs_mut()
-                    .append_pair("sslmode", "require");
-            }
-            if require_leader {
-                cluster_url
-                    .query_pairs_mut()
-                    .append_pair("target_session_attrs", "read-write");
-            }
+        DbDriverTag::Postgres(_) => {
+            // selfhosted case
+            let db_name = deployment_name.replace('-', "_");
+            anyhow::ensure!(
+                cluster_url.path() == "" || cluster_url.path() == "/",
+                "cluster url already contains db name: {}",
+                cluster_url.path()
+            );
+            cluster_url.set_path(&db_name);
+            adjust_postgres_url(&mut cluster_url, require_ssl, require_leader);
             Ok(PersistenceArgs::Postgres {
                 url: cluster_url,
-                schema,
-                multitenant: matches!(driver, DbDriverTag::PostgresMultitenant(_)),
+                schema: None,
+                multitenant: false,
             })
         },
         DbDriverTag::MySql(_) => {
@@ -97,26 +75,12 @@ pub fn persistence_args_from_cluster_url(
                     .append_pair("require_ssl", "true")
                     .append_pair("verify_ca", "true");
             }
-            let db_name = instance_name.replace('-', "_");
+            let db_name = deployment_name.replace('-', "_");
             Ok(PersistenceArgs::MySql {
                 url: cluster_url,
                 db_name,
                 multitenant: false,
-            })
-        },
-        DbDriverTag::MySqlAwsIam(_) => {
-            // NOTE: We do not set any database so we can reuse connections between
-            // database. The persistence layer will select the correct database.
-            // always require SSL
-            cluster_url
-                .query_pairs_mut()
-                .append_pair("require_ssl", "true")
-                .append_pair("verify_ca", "false");
-            let db_name = instance_name.replace('-', "_");
-            Ok(PersistenceArgs::MySql {
-                url: cluster_url,
-                db_name,
-                multitenant: false,
+                require_leader,
             })
         },
         DbDriverTag::MySqlMultitenant(_) => {
@@ -136,13 +100,10 @@ pub fn persistence_args_from_cluster_url(
                 db_name: path,
                 url: cluster_url,
                 multitenant: true,
+                require_leader,
             })
         },
         DbDriverTag::Sqlite => anyhow::bail!("no url for sqlite"),
-        #[cfg(any(test, feature = "testing"))]
-        DbDriverTag::TestPersistence => {
-            anyhow::bail!("no url for test persistence")
-        },
     }
 }
 

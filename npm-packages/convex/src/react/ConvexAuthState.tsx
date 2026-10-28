@@ -3,6 +3,7 @@ import React, {
   ReactNode,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import { AuthTokenFetcher } from "../browser/sync/client.js";
@@ -14,6 +15,7 @@ type IConvexReactClient = {
   setAuth(
     fetchToken: AuthTokenFetcher,
     onChange: (isAuthenticated: boolean) => void,
+    onRefreshChange?: (isRefreshing: boolean) => void,
   ): void;
   clearAuth(): void;
 };
@@ -21,11 +23,20 @@ type IConvexReactClient = {
 /**
  * Type representing the state of an auth integration with Convex.
  *
+ * - `isLoading`: the client is still resolving the initial auth state and
+ *   waiting for the server to confirm the current token.
+ * - `isAuthenticated`: the server has confirmed the current token.
+ * - `isRefreshing`: the server rejected a previously-confirmed token and the
+ *   socket is paused while a replacement is fetched. Only ever `true` when
+ *   `isAuthenticated` is also `true`. Routine background token rotation does
+ *   not trigger this state.
+ *
  * @public
  */
 export type ConvexAuthState = {
   isLoading: boolean;
   isAuthenticated: boolean;
+  isRefreshing: boolean;
 };
 
 const ConvexAuthContext = createContext<ConvexAuthState>(undefined as any);
@@ -34,7 +45,7 @@ const ConvexAuthContext = createContext<ConvexAuthState>(undefined as any);
  * Get the {@link ConvexAuthState} within a React component.
  *
  * This relies on a Convex auth integration provider being above in the React
- * component tree.
+ * component tree. See {@link ConvexAuthState} for the meaning of each field.
  *
  * @returns The current {@link ConvexAuthState}.
  *
@@ -43,6 +54,7 @@ const ConvexAuthContext = createContext<ConvexAuthState>(undefined as any);
 export function useConvexAuth(): {
   isLoading: boolean;
   isAuthenticated: boolean;
+  isRefreshing: boolean;
 } {
   const authContext = useContext(ConvexAuthContext);
   if (authContext === undefined) {
@@ -95,6 +107,7 @@ export function ConvexProviderWithAuth({
   const [isConvexAuthenticated, setIsConvexAuthenticated] = useState<
     boolean | null
   >(null);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   // If the useAuth went back to the authProviderLoading state (which is unusual but possible)
   // reset the Convex auth state to null so that we can correctly
@@ -102,6 +115,7 @@ export function ConvexProviderWithAuth({
   // without going through "unauthenticated".
   if (authProviderLoading && isConvexAuthenticated !== null) {
     setIsConvexAuthenticated(null);
+    setIsRefreshing(false);
   }
 
   // If the useAuth goes to not authenticated then isConvexAuthenticated should reflect that.
@@ -111,22 +125,34 @@ export function ConvexProviderWithAuth({
     isConvexAuthenticated !== false
   ) {
     setIsConvexAuthenticated(false);
+    setIsRefreshing(false);
   }
 
+  const isAuthenticated =
+    authProviderAuthenticated && (isConvexAuthenticated ?? false);
+  const isLoading = isConvexAuthenticated === null;
+  const isRefreshingWhileAuthenticated = isRefreshing && isAuthenticated;
+
+  // Stabilize the context value's identity so `useConvexAuth()` consumers
+  // only re-render when the derived auth state actually changes.
+  const authState = useMemo<ConvexAuthState>(
+    () => ({
+      isLoading,
+      isAuthenticated,
+      isRefreshing: isRefreshingWhileAuthenticated,
+    }),
+    [isLoading, isAuthenticated, isRefreshingWhileAuthenticated],
+  );
+
   return (
-    <ConvexAuthContext.Provider
-      value={{
-        isLoading: isConvexAuthenticated === null,
-        isAuthenticated:
-          authProviderAuthenticated && (isConvexAuthenticated ?? false),
-      }}
-    >
+    <ConvexAuthContext.Provider value={authState}>
       <ConvexAuthStateFirstEffect
         authProviderAuthenticated={authProviderAuthenticated}
         fetchAccessToken={fetchAccessToken}
         authProviderLoading={authProviderLoading}
         client={client}
         setIsConvexAuthenticated={setIsConvexAuthenticated}
+        setIsRefreshing={setIsRefreshing}
       />
       <ConvexProvider client={client as any}>{children}</ConvexProvider>
       <ConvexAuthStateLastEffect
@@ -135,6 +161,7 @@ export function ConvexProviderWithAuth({
         authProviderLoading={authProviderLoading}
         client={client}
         setIsConvexAuthenticated={setIsConvexAuthenticated}
+        setIsRefreshing={setIsRefreshing}
       />
     </ConvexAuthContext.Provider>
   );
@@ -148,6 +175,7 @@ function ConvexAuthStateFirstEffect({
   authProviderLoading,
   client,
   setIsConvexAuthenticated,
+  setIsRefreshing,
 }: {
   authProviderAuthenticated: boolean;
   fetchAccessToken: (args: {
@@ -158,23 +186,33 @@ function ConvexAuthStateFirstEffect({
   setIsConvexAuthenticated: React.Dispatch<
     React.SetStateAction<boolean | null>
   >;
+  setIsRefreshing: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
   useEffect(() => {
     let isThisEffectRelevant = true;
     if (authProviderAuthenticated) {
-      client.setAuth(fetchAccessToken, (backendReportsIsAuthenticated) => {
-        if (isThisEffectRelevant) {
-          setIsConvexAuthenticated(() => backendReportsIsAuthenticated);
-        }
-      });
+      client.setAuth(
+        fetchAccessToken,
+        (backendReportsIsAuthenticated) => {
+          if (isThisEffectRelevant) {
+            setIsConvexAuthenticated(() => backendReportsIsAuthenticated);
+          }
+        },
+        (isRefreshing) => {
+          if (isThisEffectRelevant) {
+            setIsRefreshing(isRefreshing);
+          }
+        },
+      );
       return () => {
         isThisEffectRelevant = false;
 
         // If unmounting or something changed before we finished fetching the token
         // we shouldn't transition to a loaded state.
-        setIsConvexAuthenticated((isConvexAuthenticated) =>
+        setIsConvexAuthenticated((isConvexAuthenticated: boolean | null) =>
           isConvexAuthenticated ? false : null,
         );
+        setIsRefreshing(false);
       };
     }
   }, [
@@ -183,6 +221,7 @@ function ConvexAuthStateFirstEffect({
     authProviderLoading,
     client,
     setIsConvexAuthenticated,
+    setIsRefreshing,
   ]);
   return null;
 }
@@ -196,6 +235,7 @@ function ConvexAuthStateLastEffect({
   authProviderLoading,
   client,
   setIsConvexAuthenticated,
+  setIsRefreshing,
 }: {
   authProviderAuthenticated: boolean;
   fetchAccessToken: (args: {
@@ -206,6 +246,7 @@ function ConvexAuthStateLastEffect({
   setIsConvexAuthenticated: React.Dispatch<
     React.SetStateAction<boolean | null>
   >;
+  setIsRefreshing: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
   useEffect(() => {
     // If rendered with authProviderAuthenticated=true then clear that auth on in cleanup.
@@ -219,6 +260,7 @@ function ConvexAuthStateLastEffect({
         // useAuth reports isAuthenticated: false on the next render
         // then this null value will be overridden to false.
         setIsConvexAuthenticated(() => null);
+        setIsRefreshing(false);
       };
     }
   }, [
@@ -227,6 +269,7 @@ function ConvexAuthStateLastEffect({
     authProviderLoading,
     client,
     setIsConvexAuthenticated,
+    setIsRefreshing,
   ]);
   return null;
 }

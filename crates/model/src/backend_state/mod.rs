@@ -1,14 +1,17 @@
-use std::sync::LazyLock;
-
 use common::{
     document::ParsedDocument,
     runtime::Runtime,
+    types::{
+        BackendState,
+        SystemStopState,
+        UsageLimitStopState,
+        UserStopState,
+    },
 };
 use database::{
     SystemMetadataModel,
     Transaction,
 };
-use errors::ErrorMetadata;
 use value::{
     TableName,
     TableNamespace,
@@ -21,23 +24,15 @@ use crate::{
 
 pub mod types;
 
-use types::BackendState;
-
 use self::types::PersistedBackendState;
 
-pub static BACKEND_STATE_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_backend_state"
-        .parse()
-        .expect("Invalid built-in backend_state table")
-});
+pub const BACKEND_STATE_TABLE: TableName = TableName::const_new("_backend_state");
 
 pub struct BackendStateTable;
 impl SystemTable for BackendStateTable {
     type Metadata = PersistedBackendState;
 
-    fn table_name() -> &'static TableName {
-        &BACKEND_STATE_TABLE
-    }
+    const TABLE_NAME: TableName = BACKEND_STATE_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -54,11 +49,15 @@ impl<'a, RT: Runtime> BackendStateModel<'a, RT> {
     }
 
     pub async fn initialize(&mut self) -> anyhow::Result<()> {
-        // Create _backend_state row initialized as running.
         SystemMetadataModel::new_global(self.tx)
             .insert(
                 &BACKEND_STATE_TABLE,
-                PersistedBackendState(BackendState::Running).try_into()?,
+                PersistedBackendState(BackendState {
+                    system: SystemStopState::None,
+                    usage_limit: UsageLimitStopState::None,
+                    user: UserStopState::None,
+                })
+                .try_into()?,
             )
             .await?;
         Ok(())
@@ -77,58 +76,52 @@ impl<'a, RT: Runtime> BackendStateModel<'a, RT> {
         (*backend_state).clone().map(|bs| Ok(bs.0))
     }
 
-    pub async fn toggle_backend_state(&mut self, new_state: BackendState) -> anyhow::Result<()> {
-        let (id, current_state) = self.get_backend_state().await?.into_id_and_value();
-        anyhow::ensure!(
-            current_state != new_state,
-            ErrorMetadata::bad_request(
-                "DeploymentAlreadyInState",
-                format!("Deployment is already {new_state}")
-            )
-        );
+    pub async fn set_user_stop_state(
+        &mut self,
+        new_user_state: UserStopState,
+    ) -> anyhow::Result<Option<BackendState>> {
+        let (id, mut current) = self.get_backend_state().await?.into_id_and_value();
+        if current.user == new_user_state {
+            return Ok(None);
+        }
+        let old = current;
+        current.user = new_user_state;
         SystemMetadataModel::new_global(self.tx)
-            .replace(id, PersistedBackendState(new_state).try_into()?)
+            .replace(id, PersistedBackendState(current).try_into()?)
             .await?;
-        Ok(())
+        Ok(Some(old))
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use database::test_helpers::DbFixtures;
-    use errors::{
-        ErrorCode,
-        ErrorMetadata,
-    };
-    use runtime::testing::TestRuntime;
-
-    use crate::{
-        backend_state::{
-            types::BackendState,
-            BackendStateModel,
-        },
-        test_helpers::DbFixturesWithModel,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_toggle_backend_state(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = DbFixtures::new_with_model(&rt).await?.db;
-        let mut tx = db.begin_system().await?;
-        let mut model = BackendStateModel::new(&mut tx);
-        let starting_state = model.get_backend_state().await?.into_value();
-        assert_eq!(starting_state, BackendState::Running);
-        model.toggle_backend_state(BackendState::Paused).await?;
-        let new_state = model.get_backend_state().await?.into_value();
-        assert_eq!(new_state, BackendState::Paused);
-
-        // Fail to toggle to the same state
-        let err = model
-            .toggle_backend_state(BackendState::Paused)
-            .await
-            .unwrap_err();
-        let err = err.downcast_ref::<ErrorMetadata>().unwrap();
-        assert_eq!(err.short_msg, "DeploymentAlreadyInState");
-        assert_eq!(err.code, ErrorCode::BadRequest);
-        Ok(())
+    pub async fn set_system_stop_state(
+        &mut self,
+        new_system_state: SystemStopState,
+    ) -> anyhow::Result<Option<BackendState>> {
+        let (id, mut current) = self.get_backend_state().await?.into_id_and_value();
+        if current.system == new_system_state {
+            return Ok(None);
+        }
+        let old = current;
+        current.system = new_system_state;
+        SystemMetadataModel::new_global(self.tx)
+            .replace(id, PersistedBackendState(current).try_into()?)
+            .await?;
+        Ok(Some(old))
     }
+
+    pub async fn set_usage_limit_stop_state(
+        &mut self,
+        new_usage_limit_state: UsageLimitStopState,
+    ) -> anyhow::Result<Option<BackendState>> {
+        let (id, mut current) = self.get_backend_state().await?.into_id_and_value();
+        if current.usage_limit == new_usage_limit_state {
+            return Ok(None);
+        }
+        let old = current;
+        current.usage_limit = new_usage_limit_state;
+        SystemMetadataModel::new_global(self.tx)
+            .replace(id, PersistedBackendState(current).try_into()?)
+            .await?;
+        Ok(Some(old))
+    }
+
 }

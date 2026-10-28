@@ -32,19 +32,23 @@ export type AuthTokenFetcher = (args: {
 type AuthConfig = {
   fetchToken: AuthTokenFetcher;
   onAuthChange: (isAuthenticated: boolean) => void;
+  onRefreshChange?: ((isRefreshing: boolean) => void) | undefined;
 };
 
 /**
- * In general we take 3 steps:
- *   1. Fetch a possibly cached token
+ * By default we take 3 steps:
+ *   1. Fetch a possibly cached token and send it to the server
  *   2. Immediately fetch a fresh token without using a cache
  *   3. Repeat step 2 before the end of the fresh token's lifetime
  *
- * When we fetch without using a cache we know when the token
- * will expire, and can schedule refetching it.
+ * When `initialAuthTokenReuse` is enabled, step 2 is skipped: the
+ * cached token is reused and a refetch is scheduled based on its
+ * remaining lifetime (estimated via the server's clock skew). This
+ * avoids a second Authenticate message that would cause the server
+ * to re-execute all authenticated queries.
  *
- * If we get an error before a scheduled refetch, we go back
- * to step 2.
+ * If the server rejects a token before a scheduled refetch, we
+ * immediately fetch a fresh token and retry.
  */
 type AuthState =
   | { state: "noAuth" }
@@ -96,6 +100,9 @@ export class AuthenticationManager {
   private readonly clearAuth: () => void;
   private readonly logger: Logger;
   private readonly refreshTokenLeewaySeconds: number;
+  private readonly initialAuthTokenReuse: boolean;
+  // Track last value to avoid redundant calls
+  private lastRefreshChange: boolean;
   // Number of times we have attempted to confirm the latest token. We retry up
   // to `MAX_TOKEN_CONFIRMATION_ATTEMPTS` times.
   private tokenConfirmationAttempts = 0;
@@ -112,6 +119,7 @@ export class AuthenticationManager {
     config: {
       refreshTokenLeewaySeconds: number;
       logger: Logger;
+      initialAuthTokenReuse: boolean;
     },
   ) {
     this.syncState = syncState;
@@ -123,11 +131,26 @@ export class AuthenticationManager {
     this.clearAuth = callbacks.clearAuth;
     this.logger = config.logger;
     this.refreshTokenLeewaySeconds = config.refreshTokenLeewaySeconds;
+    this.initialAuthTokenReuse = config.initialAuthTokenReuse;
+    this.lastRefreshChange = false;
+  }
+
+  private notifyRefreshChange(isRefreshing: boolean) {
+    if (
+      this.authState.state !== "noAuth" &&
+      this.authState.state !== "initialRefetch" &&
+      this.authState.config.onRefreshChange &&
+      this.lastRefreshChange !== isRefreshing
+    ) {
+      this.lastRefreshChange = isRefreshing;
+      this.authState.config.onRefreshChange(isRefreshing);
+    }
   }
 
   async setConfig(
     fetchToken: AuthTokenFetcher,
     onChange: (isAuthenticated: boolean) => void,
+    onRefreshChange?: (isRefreshing: boolean) => void,
   ) {
     this.resetAuthState();
     this._logVerbose("pausing WS for auth token fetch");
@@ -138,17 +161,22 @@ export class AuthenticationManager {
     if (token.isFromOutdatedConfig) {
       return;
     }
+    const config: AuthConfig = {
+      fetchToken,
+      onAuthChange: onChange,
+      onRefreshChange,
+    };
     if (token.value) {
       this.setAuthState({
         state: "waitingForServerConfirmationOfCachedToken",
-        config: { fetchToken, onAuthChange: onChange },
+        config,
         hasRetried: false,
       });
       this.authenticate(token.value);
     } else {
       this.setAuthState({
         state: "initialRefetch",
-        config: { fetchToken, onAuthChange: onChange },
+        config,
       });
       // Try again with `forceRefreshToken: true`
       await this.refetchToken();
@@ -174,14 +202,28 @@ export class AuthenticationManager {
       return;
     }
 
+    this._logVerbose(
+      `auth state is ${this.authState.state} when handling transition`,
+    );
+
+    // This transition advanced the auth version, which means the token used was valid
+    // and the client and server auth states are in sync.
+    this.syncState.markAuthCompletion();
+
     if (this.authState.state === "waitingForServerConfirmationOfCachedToken") {
       this._logVerbose("server confirmed auth token is valid");
-      void this.refetchToken();
+      const cachedToken = this.syncState.getAuth()?.value;
+      if (this.initialAuthTokenReuse && cachedToken) {
+        this.scheduleTokenRefetch(cachedToken, serverMessage.clientClockSkew);
+      } else {
+        void this.refetchToken();
+      }
       this.authState.config.onAuthChange(true);
       return;
     }
     if (this.authState.state === "waitingForServerConfirmationOfFreshToken") {
       this._logVerbose("server confirmed new auth token is valid");
+      this.notifyRefreshChange(false);
       this.scheduleTokenRefetch(this.authState.token);
       this.tokenConfirmationAttempts = 0;
       if (!this.authState.hadAuth) {
@@ -246,7 +288,12 @@ export class AuthenticationManager {
       );
     }
 
+    this.notifyRefreshChange(true);
     await this.stopSocket();
+    if ((this.authState.state as AuthState["state"]) === "noAuth") {
+      // setConfig() or stop() ran during the await.
+      return;
+    }
     const token = await this.fetchTokenAndGuardAgainstRace(
       this.authState.config.fetchToken,
       {
@@ -325,7 +372,7 @@ export class AuthenticationManager {
     this.tryRestartSocket();
   }
 
-  private scheduleTokenRefetch(token: string) {
+  private scheduleTokenRefetch(token: string, clientClockSkewMs?: number) {
     if (this.authState.state === "noAuth") {
       return;
     }
@@ -348,16 +395,33 @@ export class AuthenticationManager {
       );
       return;
     }
-    // Because the client and server clocks may be out of sync,
-    // we only know that the token will expire after `exp - iat`,
-    // and since we just fetched a fresh one we know when that
-    // will happen.
-    const tokenValiditySeconds = exp - iat;
-    if (tokenValiditySeconds <= 2) {
+    const fullLifetimeSeconds = exp - iat;
+    if (fullLifetimeSeconds <= 2) {
       this.logger.error(
         "Auth token does not live long enough, cannot refetch the token",
       );
       return;
+    }
+    let tokenValiditySeconds: number;
+    if (clientClockSkewMs !== undefined) {
+      // For cached tokens we use the server's clock skew estimate to
+      // compute remaining lifetime. The server computes
+      // clientClockSkew = clientTs - serverReceiveTs, so it's positive
+      // when the client is ahead and negative when behind. To recover
+      // server time: serverNow = Date.now() - clientClockSkew.
+      // Both Date.now() and setTimeout use the same client clock, so
+      // the scheduled delay is accurate regardless of absolute offset.
+      // Connect latency inflates the skew toward "client behind," which
+      // is conservative — we schedule the refetch slightly early.
+      const estimatedServerNowSeconds = (Date.now() - clientClockSkewMs) / 1000;
+      tokenValiditySeconds = exp - estimatedServerNowSeconds;
+      if (tokenValiditySeconds <= 0) {
+        tokenValiditySeconds = 0;
+      }
+    } else {
+      // For freshly-fetched tokens, `exp - iat` is the full lifetime
+      // starting from now.
+      tokenValiditySeconds = fullLifetimeSeconds;
     }
     // Attempt to refresh the token `refreshTokenLeewaySeconds` before it expires,
     // or immediately if the token is already expiring soon.
@@ -424,7 +488,11 @@ export class AuthenticationManager {
     this.resetAuthState();
   }
 
+  // The sole path to `state === "noAuth"`; consumers rely on this firing
+  // `notifyRefreshChange(false)` to pair any in-flight `(true)`. May run
+  // when refresh state is already false.
   private resetAuthState() {
+    this.notifyRefreshChange(false);
     this.setAuthState({ state: "noAuth" });
   }
 
@@ -455,11 +523,8 @@ export class AuthenticationManager {
       }
     }
     if (this.authState.state === "waitingForScheduledRefetch") {
+      // TODO: this side-effect would be better situated with scheduling refetch
       clearTimeout(this.authState.refetchTokenTimeoutId);
-
-      // The waitingForScheduledRefetch state is the most quiesced authed state.
-      // Let the syncState know that auth is in a good state, so it can reset failure backoffs
-      this.syncState.markAuthCompletion();
     }
     this.authState = newAuth;
   }

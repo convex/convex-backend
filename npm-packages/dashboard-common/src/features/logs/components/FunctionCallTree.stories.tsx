@@ -1,13 +1,20 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
 import { functionIdentifierValue } from "@common/lib/functions/generateFileTree";
 import { FunctionCallTree } from "./FunctionCallTree";
+import { Sheet } from "@ui/Sheet";
 
 const meta: Meta<typeof FunctionCallTree> = {
   component: FunctionCallTree,
   parameters: {
-    layout: "padded",
     a11y: { test: "todo" },
   },
+  decorators: [
+    (Story) => (
+      <Sheet>
+        <Story />
+      </Sheet>
+    ),
+  ],
   args: {
     currentLog: {
       id: "1",

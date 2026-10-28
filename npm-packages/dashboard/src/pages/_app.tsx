@@ -26,16 +26,17 @@ import {
   MaybeLaunchDarklyProvider,
 } from "providers/LaunchDarklyProviders";
 import { CommandPalette } from "elements/CommandPalette";
+import { CreateProjectModal } from "hooks/useCreateProjectModal";
+import { CreateTeamModal } from "components/header/CreateTeamModal";
+import { JoinDirectorySyncedTeamModal } from "components/header/JoinDirectorySyncedTeamModal";
 import { Fallback } from "pages/500";
 import { UIProvider } from "@ui/UIContext";
 import Link from "next/link";
 import { RefreshSession } from "components/login/RefreshSession";
 import { AuthProvider } from "providers/AuthProvider";
 import { useSSOLoginRequired } from "api/api";
-import { Sheet } from "@ui/Sheet";
-import { Button } from "@ui/Button";
-import { ExitIcon, LockClosedIcon } from "@radix-ui/react-icons";
 import { useDashboardVersion } from "hooks/useDashboardVersion";
+import { SSOLoginRequired } from "components/login/SSOLoginRequired";
 
 declare global {
   interface Window {
@@ -51,6 +52,7 @@ if (typeof window !== "undefined") {
 const UNAUTHED_ROUTES = [
   "/404",
   "/login",
+  "/login-error",
   "/signup",
   /^\/referral\/[A-Z0-9]+$/,
 ];
@@ -97,6 +99,8 @@ function AppInner({ Component, pageProps }: Omit<AppProps, "router">) {
   const inDeployment = router.pathname.startsWith(
     "/t/[team]/[project]/[deploymentName]",
   );
+  const isSsoLocked =
+    !!ssoLoginRequired && ssoLoginRequired === router.query.team;
 
   const [initialData] = useInitialData();
 
@@ -119,39 +123,22 @@ function AppInner({ Component, pageProps }: Omit<AppProps, "router">) {
               <Component {...pageProps} />
             ) : (
               <div className="flex h-screen flex-col">
-                <CommandPalette />
+                {/* On deployment pages the palette must live inside the
+                    deployment providers so it can query the connected
+                    deployment (e.g. to switch components); elsewhere it renders
+                    here. Exactly one instance mounts, keyed off the branch
+                    taken below. */}
+                {(isSsoLocked || !inDeployment) && <CommandPalette />}
                 <DashboardHeader />
-                {!!ssoLoginRequired &&
-                ssoLoginRequired === router.query.team ? (
-                  <div className="flex h-full w-full items-center justify-center">
-                    <Sheet className="flex max-w-prose flex-col gap-4">
-                      <div className="flex items-center gap-2">
-                        <LockClosedIcon className="size-8" />
-                        <h3>Single Sign-On Login Required</h3>
-                      </div>
-                      <span className="flex flex-col gap-2">
-                        <p>
-                          This team requires you to log in with Single Sign-On
-                          to access it.
-                        </p>
-                        <p>
-                          You may log out and log back in through your Single
-                          Sign-On provider, or switch teams by using the
-                          selector on the top of this page.
-                        </p>
-                      </span>
-                      <Button
-                        className="ml-auto w-fit"
-                        href="/api/auth/logout?returnTo=/api/auth/login"
-                        icon={<ExitIcon />}
-                      >
-                        Log Out
-                      </Button>
-                    </Sheet>
-                  </div>
+                <CreateProjectModal />
+                <CreateTeamModal />
+                <JoinDirectorySyncedTeamModal />
+                {isSsoLocked ? (
+                  <SSOLoginRequired />
                 ) : inDeployment ? (
                   <DeploymentInfoProvider>
                     <MaybeDeploymentApiProvider>
+                      <CommandPalette />
                       <CurrentDeploymentDashboardLayout>
                         <ErrorBoundary
                           fallback={Fallback}

@@ -62,7 +62,7 @@ export function Sidebar({
           {items.map((group) => (
             <div key={group.key} className="flex gap-1 sm:flex-col sm:py-2">
               {group.items.map((item) => (
-                <div className="relative h-[1.875rem]" key={item.key}>
+                <div className="relative h-7.5" key={item.key}>
                   <SidebarLink
                     {...omit(item, "key")}
                     collapsed={collapsed}
@@ -170,7 +170,7 @@ export function SidebarLink({
           aria-hidden
         />
       )}
-      <span className={classNames("select-none flex-1", collapsed && "hidden")}>
+      <span className={classNames("select-none", collapsed && "sm:hidden")}>
         {children}
       </span>
       {proBadge && (

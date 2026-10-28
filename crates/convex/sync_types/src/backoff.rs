@@ -30,6 +30,7 @@ impl Backoff {
         self.num_failures = num_failures;
     }
 
+    #[must_use]
     pub fn fail(&mut self, rng: &mut impl Rng) -> Duration {
         // See https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/
         let p = 2u32.checked_pow(self.num_failures).unwrap_or(u32::MAX);

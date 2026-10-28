@@ -31,35 +31,37 @@ export function NavBar({ items, activeLabel }: NavBarProps) {
     const parentRect = parentRef.current.getBoundingClientRect();
 
     activeIndicatorRef.current.style.width = `100%`;
-    activeIndicatorRef.current.style.top = `${rect.y + rect.height + 4}px`;
     activeIndicatorRef.current.style.transform = `translateX(${rect.x - parentRect.x}px) scaleX(${parentRect.width === 0 ? 0 : rect.width / parentRect.width})`;
   }, [activeLabel]);
 
   return (
-    <div className="relative">
-      <div className="flex gap-1 truncate select-none" ref={parentRef}>
+    <div className="relative h-full">
+      <div className="flex h-full truncate select-none" ref={parentRef}>
         {items.map(({ label, href }) => (
-          <div className="flex flex-col" key={label}>
-            <Link
-              href={href}
-              passHref
-              ref={activeLabel === label ? activeLinkRef : undefined}
+          <Link
+            href={href}
+            passHref
+            ref={activeLabel === label ? activeLinkRef : undefined}
+            className="group flex h-full items-center"
+            key={label}
+          >
+            <div
               className={classNames(
-                "p-2 my-2 mx-1 text-sm",
+                "p-2.5 mx-1 text-sm",
                 "text-content-primary",
-                "hover:bg-background-tertiary rounded-full",
+                "group-hover:bg-background-tertiary rounded-full",
                 {
-                  "decoration-4 font-medium": activeLabel === label,
+                  "font-medium": activeLabel === label,
                 },
               )}
             >
               {label}
-            </Link>
-          </div>
+            </div>
+          </Link>
         ))}
 
         <div
-          className="absolute mt-auto h-1 w-0 origin-top-left bg-content-secondary transition-transform will-change-transform motion-reduce:transition-none"
+          className="absolute bottom-0 h-1 w-0 origin-top-left bg-content-secondary transition-transform will-change-transform motion-reduce:transition-none"
           ref={activeIndicatorRef}
         />
       </div>

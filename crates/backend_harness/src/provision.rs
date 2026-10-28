@@ -25,9 +25,14 @@ use big_brain_private_api_types::{
 };
 use clap::ValueEnum;
 use cmd_util::env::env_config;
+use common::types::MemberId;
 use futures::FutureExt;
 use health_check::wait_for_http_health;
-use keybroker::DEV_SECRET;
+use keybroker::{
+    DeploymentSecret,
+    KeyBroker,
+    DEV_INSTANCE_NAME,
+};
 use log_interleaver::LogInterleaver;
 use serde::Deserialize;
 use tokio::process::{
@@ -50,14 +55,29 @@ static SELF_HOSTED_DOCKER_COMPOSE: LazyLock<PathBuf> =
     LazyLock::new(|| REPO_ROOT.join("self-hosted/docker/docker-compose.yml"));
 
 const PROD_PROVISION_HOST: &str = "https://api.convex.dev";
+const BACKEND_HARNESS_CLIENT_ID: &str = concat!("backend-harness-", env!("CARGO_PKG_VERSION"));
 /// Port usher runs on locally
 const USHER_PORT: u16 = 8002;
+/// Port funrun runs on locally, overriding its default of 40994. Must stay
+/// below the Linux ephemeral range (32768–60999): a port inside it can already
+/// be held by an unrelated outbound connection, so the bind fails with
+/// EADDRINUSE.
+const FUNRUN_PORT: u16 = 8005;
 /// Address of local test backend through usher
 static USHER_INSTANCE_URL: LazyLock<String> =
     LazyLock::new(|| format!("http://carnitas.local.convex.cloud:{USHER_PORT}"));
 
-const ADMIN_KEY: &str = include_str!("../../../crates/keybroker/dev/admin_key.txt");
 const LOCAL_LOG_SINK_FILENAME: &str = "log_sink.jsonl";
+
+/// Ports the open-source `convex-local-backend` binds. Overridable via env so a
+/// second backend stack (e.g. the conductor stack, which uses 8000) can run
+/// concurrently on the same host without a port collision.
+fn open_source_backend_port() -> u16 {
+    env_config("BACKEND_HARNESS_OSS_PORT", 8000)
+}
+fn open_source_site_proxy_port() -> u16 {
+    env_config("BACKEND_HARNESS_OSS_SITE_PROXY_PORT", 8001)
+}
 
 #[cfg(unix)]
 const NPX: &str = "npx";
@@ -172,7 +192,7 @@ impl ProvisionHandle {
                 let url = if _usher_handle.is_some() {
                     USHER_INSTANCE_URL.clone()
                 } else {
-                    "http://127.0.0.1:8000".to_string()
+                    format!("http://127.0.0.1:{}", open_source_backend_port())
                 };
                 Some(url)
             },
@@ -342,17 +362,15 @@ fn start_local_usher(logs: &LogInterleaver, release: bool) -> anyhow::Result<Chi
             .arg("--port")
             .arg(USHER_PORT.to_string())
             .arg("--register-service")
-            .arg("convex-backend-carnitas=127.0.0.1:8000,grpc.port=7999")
+            .arg("convex-conductor-0=127.0.0.1:8000,grpc.port=7999")
+            .arg("--partition-mapping")
+            .arg("carnitas=0")
             .arg("--region=local")
             .kill_on_drop(true),
     )
 }
 
-fn start_local_funrun(
-    logs: &LogInterleaver,
-    release: bool,
-    db_path: &PathBuf,
-) -> anyhow::Result<Child> {
+fn start_local_funrun(logs: &LogInterleaver, release: bool) -> anyhow::Result<Child> {
     let funrun_binary = if release {
         REPO_ROOT.join("target/release/funrun")
     } else {
@@ -361,11 +379,8 @@ fn start_local_funrun(
     logs.spawn_with_prefixed_logs(
         "funrun".into(),
         Command::new(funrun_binary)
-            .arg("--register-database")
-            .arg(format!(
-                "local=sqlite=sqlite://{}",
-                db_path.to_str().expect("Invalid db path")
-            ))
+            .arg("--port")
+            .arg(FUNRUN_PORT.to_string())
             .arg("--metrics-addr")
             .arg("0.0.0.0:9101")
             .kill_on_drop(true),
@@ -379,6 +394,10 @@ async fn provision(
     package_dir: &Path,
     metric_label: StaticMetricLabel,
 ) -> anyhow::Result<Provision> {
+    let local_secret = DeploymentSecret::random();
+    let local_admin_key = KeyBroker::new(DEV_INSTANCE_NAME, local_secret)?
+        .issue_admin_key(MemberId(0))
+        .as_string();
     let (admin_key, handle, deployment_url) = match backend_provisioner {
         BackendProvisioner::Production | BackendProvisioner::LocalBigBrain => {
             let provision_host_credentials = backend_provisioner
@@ -454,13 +473,13 @@ async fn provision(
                 .arg("--convex-site-base")
                 .arg(format!("http://local.convex.site:{USHER_PORT}"))
                 .arg("--instance")
-                .arg(format!("carnitas={DEV_SECRET}"))
+                .arg(format!("carnitas={local_secret}"))
                 .env("UDF_USE_FUNRUN", udf_use_funrun.to_string())
                 .env("CONVEX_RELEASE_VERSION_DEV", "0.0.0-backendharness");
             if udf_use_funrun {
                 run_conductor_cmd
                     .arg("--register-service")
-                    .arg("funrun-default=http://0.0.0.0:40994");
+                    .arg(format!("funrun-default=http://0.0.0.0:{FUNRUN_PORT}"));
             }
             let conductor_handle = logs.spawn_with_prefixed_logs(
                 "conductor".into(),
@@ -468,11 +487,12 @@ async fn provision(
             )?;
             let usher_handle = start_local_usher(logs, release)?;
             let funrun_handle = udf_use_funrun
-                .then(|| start_local_funrun(logs, release, &db_path))
+                .then(|| start_local_funrun(logs, release))
                 .transpose()?;
             // Give it ~15 seconds to start up (5 retries with 500ms exponential backoff)
             wait_for_http_health(
                 &USHER_INSTANCE_URL.parse()?,
+                BACKEND_HARNESS_CLIENT_ID,
                 Some("0.0.0-backendharness"),
                 // We should include a random instance name here, but it would need to match our
                 // admin key. Right now the admin key is static, so either we use a static name
@@ -485,7 +505,7 @@ async fn provision(
             .context("Timed out waiting for backend startup. Might have a second one running?")?;
 
             (
-                ADMIN_KEY.to_string(),
+                local_admin_key.clone(),
                 ProvisionHandle::LocalConductor {
                     _conductor_handle: conductor_handle,
                     _usher_handle: usher_handle,
@@ -521,17 +541,22 @@ async fn provision(
                 Command::new(backend_binary)
                     .arg(db_path)
                     .arg("--port")
-                    .arg("8000")
+                    .arg(open_source_backend_port().to_string())
                     .arg("--site-proxy-port")
-                    .arg("8001")
+                    .arg(open_source_site_proxy_port().to_string())
                     .arg("--disable-beacon")
+                    .arg("--instance-name")
+                    .arg(DEV_INSTANCE_NAME)
+                    .arg("--instance-secret")
+                    .arg(local_secret.to_string())
                     .env("CONVEX_RELEASE_VERSION_DEV", "0.0.0-backendharness")
                     .kill_on_drop(true),
             )?;
-            let backend_url = "http://127.0.0.1:8000".to_string();
+            let backend_url = format!("http://127.0.0.1:{}", open_source_backend_port());
             // Give it ~15 seconds to start up (5 retries with 500ms exponential backoff)
             wait_for_http_health(
                 &backend_url.parse()?,
+                BACKEND_HARNESS_CLIENT_ID,
                 Some("0.0.0-backendharness"),
                 // We should include a random instance name here, but it would need to match our
                 // admin key. Right now the admin key is static, so either we use a static name
@@ -544,7 +569,7 @@ async fn provision(
             .context("Timed out waiting for backend startup. Might have a second one running?")?;
 
             (
-                ADMIN_KEY.to_string(),
+                local_admin_key.clone(),
                 ProvisionHandle::LocalBackend {
                     _backend_handle: backend_handle,
                     _usher_handle: None,
@@ -576,7 +601,7 @@ async fn provision(
                 .env("SITE_PROXY_PORT", "8001")
                 .env("CONVEX_RELEASE_VERSION_DEV", "0.0.0-backendharness")
                 .env("INSTANCE_NAME", "carnitas")
-                .env("INSTANCE_SECRET", DEV_SECRET)
+                .env("INSTANCE_SECRET", local_secret.to_string())
                 .kill_on_drop(true);
             let tempdir_handle = tempfile::tempdir()?;
             let backend_handle =
@@ -585,6 +610,7 @@ async fn provision(
             // Give it ~15 seconds to start up (5 retries with 500ms exponential backoff)
             wait_for_http_health(
                 &backend_url.parse()?,
+                BACKEND_HARNESS_CLIENT_ID,
                 Some("0.0.0-backendharness"),
                 // We should include a random instance name here, but it would need to match our
                 // admin key. Right now the admin key is static, so either we use a static name
@@ -597,7 +623,7 @@ async fn provision(
             .context("Timed out waiting for backend startup. Might have a second one running?")?;
 
             (
-                ADMIN_KEY.to_string(),
+                local_admin_key.clone(),
                 ProvisionHandle::LocalBackend {
                     _backend_handle: backend_handle,
                     _usher_handle: None,
@@ -611,7 +637,7 @@ async fn provision(
 
     match provision_request {
         ProvisionRequest::ExistingProject { .. } | ProvisionRequest::NewProject => {
-            deploy(logs, package_dir, metric_label, &handle).await?;
+            deploy(logs, package_dir, metric_label, &handle, &admin_key).await?;
         },
         ProvisionRequest::Preview { .. } => (),
     };
@@ -740,6 +766,7 @@ async fn deploy(
     package_dir: &Path,
     metric_label: StaticMetricLabel,
     provision_handle: &ProvisionHandle,
+    admin_key: &str,
 ) -> anyhow::Result<()> {
     tracing::info!("{package_dir:?}: npx convex deploy");
     // Retry with exponential backoff because there's a race condition where traefik
@@ -766,7 +793,7 @@ async fn deploy(
                 .arg("--yes")
                 .env("CONVEX_PROVISION_HOST", provision_host)
                 .env("CONVEX_OVERRIDE_ACCESS_TOKEN", access_token),
-            // Only pass the ADMIN_KEY in directly with local backend to bypass dependency on
+            // Only pass the admin key in directly with local backend to bypass dependency on
             // big-brain
             ProvisionHandle::LocalBackend { .. } | ProvisionHandle::LocalConductor { .. } => {
                 let url = provision_handle
@@ -782,7 +809,7 @@ async fn deploy(
                     .arg("--codegen")
                     .arg("enable")
                     .arg("--admin-key")
-                    .arg(ADMIN_KEY)
+                    .arg(admin_key)
                     .arg("--url")
                     .arg(url)
             },

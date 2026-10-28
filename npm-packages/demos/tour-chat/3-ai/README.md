@@ -15,4 +15,16 @@ Jump into any particular step of the tutorial with a branch:
 # To run
 
     $ npm i
+    $ npx convex init
+
+This app declares `TOGETHER_API_KEY` in `convex/convex.config.ts`, so the
+deployment won't accept code until it is set. Get a key at
+[together.ai](https://together.ai/), then run this and paste it at the prompt,
+which keeps it hidden and out of your shell history:
+
+    $ npx convex env set TOGETHER_API_KEY
+
+You can also set it from your [Convex dashboard](https://dashboard.convex.dev/).
+Then start dev:
+
     $ npm run dev

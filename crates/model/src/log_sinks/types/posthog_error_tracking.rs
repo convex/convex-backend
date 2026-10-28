@@ -9,7 +9,6 @@ use serde::{
 use super::posthog_logs::DEFAULT_POSTHOG_HOST;
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct PostHogErrorTrackingConfig {
     pub api_key: PII<String>,
     pub host: Option<String>,

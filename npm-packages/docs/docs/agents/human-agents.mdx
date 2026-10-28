@@ -12,7 +12,7 @@ However, there are cases where you want to generate the reply from a human
 acting as an agent, such as for customer support.
 
 For full code, check out
-[chat/human.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/human.ts)
+[chat/human.ts](https://github.com/convex/agent/blob/main/example/convex/chat/human.ts)
 
 ## Saving a user message without generating a reply
 
@@ -32,7 +32,9 @@ await saveMessage(ctx, components.agent, {
 ## Saving a message from a human as an agent
 
 Similarly, you can save a message from a human as an agent in the same way,
-using the `message` field to specify the role and agent name:
+using `message` for the role and content and `agentName` for attribution. To
+render a standalone operator reply separately from the previous agent turn, pass
+`order: "next"`:
 
 ```ts
 import { saveMessage } from "@convex-dev/agent";
@@ -40,10 +42,15 @@ import { components } from "./_generated/api";
 
 await saveMessage(ctx, components.agent, {
   threadId,
+  order: "next",
   agentName: "Alex",
   message: { role: "assistant", content: "The human reply" },
 });
 ```
+
+`order: "next"` allocates the next order atomically. Passing a number places the
+reply at that exact order. An unused numeric order starts at `stepOrder: 0`; an
+existing order appends at its next `stepOrder`.
 
 ## Storing additional metadata about human agents
 
@@ -51,8 +58,12 @@ You can store additional metadata about human agents by using the `saveMessage`
 function, and adding the `metadata` field.
 
 ```ts
+import { saveMessage } from "@convex-dev/agent";
+import { components } from "./_generated/api";
+
 await saveMessage(ctx, components.agent, {
   threadId,
+  order: "next",
   agentName: "Alex",
   message: { role: "assistant", content: "The human reply" },
   metadata: {
@@ -95,7 +106,7 @@ import { z } from "zod/v3";
 
 const askHuman = tool({
   description: "Ask a human a question",
-  parameters: z.object({
+  inputSchema: z.object({
     question: z.string().describe("The question to ask the human"),
   }),
 });
@@ -112,8 +123,8 @@ export const ask = action({
       },
     );
     const supportRequests = result.toolCalls
-      .filter((tc) => tc.toolName === "askHuman")
-      .map(({ toolCallId, args: { question } }) => ({
+      .filter((tc) => tc.toolName === "askHuman" && !tc.dynamic)
+      .map(({ toolCallId, input: { question } }) => ({
         toolCallId,
         question,
       }));
@@ -144,7 +155,7 @@ export const humanResponseAsToolCall = internalAction({
         content: [
           {
             type: "tool-result",
-            result: args.response,
+            output: { type: "text", value: args.response },
             toolCallId: args.toolCallId,
             toolName: "askHuman",
           },

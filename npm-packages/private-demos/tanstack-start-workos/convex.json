@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/convex/schemas/convex.schema.json",
+  "$schema": "node_modules/convex/schemas/convex.schema.json",
   "authKit": {
     "dev": {
       "configure": {
@@ -15,16 +15,16 @@
     },
     "preview": {
       "configure": {
-        "redirectUris": ["https://${buildEnv.VERCEL_URL}/callback"],
-        "appHomepageUrl": "https://${buildEnv.VERCEL_URL}",
-        "corsOrigins": ["https://${buildEnv.VERCEL_URL}"]
+        "redirectUris": ["https://${buildEnv.VERCEL_BRANCH_URL}/callback"],
+        "appHomepageUrl": "https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}",
+        "corsOrigins": ["https://${buildEnv.VERCEL_BRANCH_URL}"]
       }
     },
     "prod": {
       "configure": {
-        "redirectUris": ["https://${buildEnv.VERCEL_URL}/callback"],
-        "appHomepageUrl": "https://${buildEnv.VERCEL_URL}",
-        "corsOrigins": ["https://${buildEnv.VERCEL_URL}"]
+        "redirectUris": ["https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}/callback"],
+        "appHomepageUrl": "https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}",
+        "corsOrigins": ["https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}"]
       }
     }
   }

@@ -1,8 +1,8 @@
 ---
-title: "Deploy keys"
+title: "Deploy Keys"
 slug: "deploy-key-types"
 sidebar_position: 30
-sidebar_label: "Deploy keys"
+sidebar_label: "Deploy Keys"
 description:
   "Use deploy keys for authentication in production build environments"
 ---
@@ -40,13 +40,13 @@ In either of these cases, there's no reason to set `CONVEX_DEPLOY_KEY`.
 Generally deploys keys are set in a dashboard of the service that needs the key
 but in most shells you can set it right before the command, like
 
-```
+```sh
 CONVEX_DEPLOY_KEY='key goes here' npx convex dev
 ```
 
 or export it before you run the command
 
-```
+```sh
 export CONVEX_DEPLOY_KEY='key goes here'
 npx convex dev
 ```
@@ -78,7 +78,7 @@ A _preview deploy key_ looks like this:
 Use a preview deploy key to change the behavior of a normal `npx convex deploy`
 command to deploy to a preview branch.
 
-Read more about [preview deployments](/production/hosting/preview-deployments).
+Read more about [preview deployments](/production/multiple-deployments#preview).
 
 ### Admin keys
 
@@ -125,3 +125,79 @@ This can help limit the blast radius when developing with an agent.
 
 To give an agent exclusive access to its own dev deployment, see
 [Agent Mode](/cli/background-agents.mdx).
+
+## Creating and deleting deploy keys \{#deployment-token}
+
+You can create and delete deploy keys for any cloud deployment you have access
+to from either the dashboard or the CLI.
+
+### From the dashboard
+
+Open the
+[deployment settings page](https://dashboard.convex.dev/deployment/settings) for
+the deployment you want a key for. In the _Deploy keys_ section, click _Generate
+a deploy key_ to open the deploy key creation panel.
+
+Give the key a memorable name and choose which actions it's allowed to perform.
+For a CI/CD pipeline that runs `npx convex deploy`, enable the
+`deployment:deploy` permission. For CLI usage or AI agents, you may want to
+grant more permissions, such as viewing logs and reading/writing data or
+environment variables. See
+[Role Actions](/team-management/role-actions.mdx#data-plane-and-runtime) for the
+full list.
+
+<Screenshot
+  story="docs/pages/project/deployment/DeploymentSettings#Create Deploy Key"
+  alt="Create Deploy Key panel with the deployment:deploy permission enabled"
+/>
+
+To delete a key, find it in the _Deploy keys_ list and use its delete action.
+
+### From the CLI
+
+You can also mint and revoke deploy keys with `npx convex deployment token`.
+This is useful in setup scripts (e.g. for a coding agent) where you want a
+deploy key scoped to a single deployment without having to click around the
+dashboard.
+
+You must be logged in with a personal access token (`npx convex login`) — these
+commands cannot be invoked with a `CONVEX_DEPLOY_KEY` already in scope.
+
+#### `npx convex deployment token create`
+
+```sh
+npx convex deployment token create <name> [--deployment <ref>] [--save-env [path]]
+```
+
+- `<name>` — required. A human-readable name for the new key (shown in the
+  dashboard's deploy keys list).
+- `--deployment <ref>` — optional. The target deployment. Accepts a deployment
+  name (`joyful-capybara-123`), a reference (`dev/james`, `staging`), or
+  `dev`/`prod`/`local`. Defaults to the currently-selected deployment.
+- `--save-env [path]` — optional. Save the new key as `CONVEX_DEPLOY_KEY` in an
+  env file instead of printing it. Defaults to `.env.local`. Pass an explicit
+  path to write somewhere else.
+
+By default the new deploy key is printed to stdout (status messages go to
+stderr, so you can pipe the key into another command):
+
+```sh
+KEY=$(npx convex deployment token create my-token)
+```
+
+With `--save-env`, the key is written into `.env.local` (or the path you
+provide) as `CONVEX_DEPLOY_KEY`. Subsequent `npx convex` commands run in that
+directory will use it automatically and run only against that deployment.
+
+#### `npx convex deployment token delete`
+
+```sh
+npx convex deployment token delete <nameOrToken> [--deployment <ref>]
+```
+
+- `<nameOrToken>` — required. Either the human-readable name passed to
+  `token create`, or the deploy key value itself (e.g.
+  `'dev:joyful-capybara-123|ey...'`). When passing the value, single-quote it so
+  the shell doesn't consume the `|` and everything after it.
+- `--deployment <ref>` — optional. The deployment the key belongs to. Defaults
+  to the currently-selected deployment.

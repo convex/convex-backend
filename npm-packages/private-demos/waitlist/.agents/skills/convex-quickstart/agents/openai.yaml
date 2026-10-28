@@ -1,0 +1,14 @@
+interface:
+  display_name: "Convex Quickstart"
+  short_description:
+    "Start a new Convex app or add Convex to an existing frontend."
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+  brand_color: "#F97316"
+  default_prompt:
+    "Set up Convex for this project as fast as possible. First decide whether
+    this is a new app or an existing app, then scaffold or integrate Convex and
+    verify the setup works."
+
+policy:
+  allow_implicit_invocation: true

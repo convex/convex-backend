@@ -15,8 +15,8 @@ testing = [
     "keybroker/testing",
     "metrics/testing",
     "model/testing",
-    "shape_inference/testing",
     "storage/testing",
+    "streaming_export/testing",
     "usage_tracking/testing",
     "value/testing",
 ]
@@ -31,16 +31,17 @@ database = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
 futures = { workspace = true }
+humansize = { workspace = true }
 itertools = { workspace = true }
 keybroker = { workspace = true }
-maplit = { workspace = true }
 metrics = { workspace = true }
 mime2ext = { workspace = true }
 model = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-shape_inference = { workspace = true }
 storage = { workspace = true }
+streaming_export = { workspace = true }
+thousands = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
@@ -50,7 +51,7 @@ value = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 file_storage = { workspace = true }
@@ -60,9 +61,9 @@ metrics = { workspace = true, features = ["testing"] }
 model = { workspace = true, features = ["testing"] }
 pretty_assertions = { workspace = true }
 runtime = { workspace = true }
-shape_inference = { workspace = true, features = ["testing"] }
 storage = { workspace = true, features = ["testing"] }
 storage_zip_reader = { workspace = true }
+streaming_export = { workspace = true, features = ["testing"] }
 usage_tracking = { workspace = true, features = ["testing"] }
 value = { workspace = true, features = ["testing"] }
 

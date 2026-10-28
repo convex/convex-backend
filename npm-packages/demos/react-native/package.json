@@ -1,25 +1,27 @@
 {
   "name": "react-native-demo",
   "version": "1.0.0",
-  "main": "node_modules/expo/AppEntry.js",
   "scripts": {
+    "build": "",
+    "dev": "convex dev --start 'npm run ios'",
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"
   },
   "dependencies": {
-    "convex": "^1.31.4",
-    "expo": "^54.0.31",
-    "expo-status-bar": "~3.0.9",
+    "convex": "workspace:*",
+    "expo": "^56.0.12",
+    "expo-splash-screen": "^56.0.10",
+    "expo-status-bar": "^56.0.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-native": "0.81.5",
+    "react-native": "0.85.3",
     "react-native-dotenv": "^3.4.11",
-    "react-native-get-random-values": "~2.0.0"
+    "react-native-get-random-values": "~1.11.0"
   },
   "devDependencies": {
-    "@babel/core": "^7.27.1"
+    "@babel/core": "^7.29.6"
   },
   "private": true
 }

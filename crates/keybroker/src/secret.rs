@@ -15,13 +15,19 @@ impl TryFrom<&str> for Secret {
     type Error = anyhow::Error;
 
     fn try_from(s: &str) -> anyhow::Result<Self> {
-        let key: [u8; 32] = hex::decode(s)
+        let key: [u8; 32] = const_hex::decode(s)
             .context("Couldn't hexdecode key")?
             .try_into()
             .map_err(|e: Vec<u8>| {
                 anyhow::anyhow!("Hex-decoded key was {} bytes, not 32", e.len())
             })?;
         Ok(Self { key })
+    }
+}
+
+impl From<[u8; 32]> for Secret {
+    fn from(key: [u8; 32]) -> Self {
+        Self { key }
     }
 }
 
@@ -50,14 +56,14 @@ impl Secret {
 
 impl fmt::Display for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", hex::encode(self.key))
+        write!(f, "{}", const_hex::encode(self.key))
     }
 }
 
 impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Secret")
-            .field("key", &hex::encode(self.key))
+            .field("key", &const_hex::encode(self.key))
             .finish()
     }
 }
@@ -70,4 +76,4 @@ impl FromStr for Secret {
     }
 }
 
-pub type InstanceSecret = Secret;
+pub type DeploymentSecret = Secret;

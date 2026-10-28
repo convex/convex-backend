@@ -1,9 +1,10 @@
 import { useQuery } from "convex/react";
 import { Value } from "convex/values";
 import { useRouter } from "next/router";
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { api } from "system-udfs/convex/_generated/api";
 import { Id } from "system-udfs/convex/_generated/dataModel";
+import { PermissionsContext } from "@common/lib/deploymentContext";
 
 export const NENT_APP_PLACEHOLDER = "_App";
 
@@ -16,13 +17,25 @@ export type Nent = {
   state?: "active" | "unmounted";
 };
 
+// Using a stable reference to avoid rerenders
+const EMPTY_ARRAY = [] as const;
+
 export function useNents(): {
   nents?: Nent[];
   selectedNent: Nent | null;
   setSelectedNent: (nent?: string) => Promise<void>;
 } {
-  const { query, push } = useRouter();
-  const allComponents = useQuery(api._system.frontend.components.list, {});
+  const { query, pathname, push } = useRouter();
+  // Get canViewDataCached from a special memoized context because useNents is called in a lot of components,
+  // which may have hundreds of instantiations.
+  const { canViewDataCached } = useContext(PermissionsContext);
+  const allComponentsOrSkipped = useQuery(
+    api._system.frontend.components.list,
+    canViewDataCached ? {} : "skip",
+  );
+  const allComponents = canViewDataCached
+    ? allComponentsOrSkipped
+    : EMPTY_ARRAY;
 
   // Ensure the selected component is in the list of all components
   if (allComponents !== undefined && typeof query.component === "string") {
@@ -35,14 +48,13 @@ export function useNents(): {
   const selectedNent = (query.component as string | undefined) ?? null;
 
   const setSelectedNent = async (nent?: string) => {
-    if (!nent) {
-      delete query.component;
-      await push({ query });
-      return;
+    const newQuery = { ...query };
+    if (nent) {
+      newQuery.component = nent;
+    } else {
+      delete newQuery.component;
     }
-    await push({ query: { ...query, component: nent } }, undefined, {
-      shallow: true,
-    });
+    await push({ pathname, query: newQuery }, undefined, { shallow: true });
   };
 
   const nents: Nent[] | undefined = useMemo(

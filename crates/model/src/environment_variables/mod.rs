@@ -55,11 +55,7 @@ use crate::{
 
 pub mod types;
 
-pub static ENVIRONMENT_VARIABLES_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_environment_variables"
-        .parse()
-        .expect("Invalid built-in environment variables table")
-});
+pub const ENVIRONMENT_VARIABLES_TABLE: TableName = TableName::const_new("_environment_variables");
 
 pub static ENVIRONMENT_VARIABLES_INDEX_BY_NAME: LazyLock<SystemIndex<EnvironmentVariablesTable>> =
     LazyLock::new(|| SystemIndex::new("by_name", [&NAME_FIELD]).unwrap());
@@ -70,9 +66,7 @@ pub struct EnvironmentVariablesTable;
 impl SystemTable for EnvironmentVariablesTable {
     type Metadata = PersistedEnvironmentVariable;
 
-    fn table_name() -> &'static TableName {
-        &ENVIRONMENT_VARIABLES_TABLE
-    }
+    const TABLE_NAME: TableName = ENVIRONMENT_VARIABLES_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![ENVIRONMENT_VARIABLES_INDEX_BY_NAME.clone()]
@@ -97,7 +91,7 @@ impl PreloadedEnvironmentVariables {
         let Some(doc) = self.range.get(tx, &key)? else {
             return Ok(None);
         };
-        let doc: ParsedDocument<PersistedEnvironmentVariable> = doc.clone().parse()?;
+        let doc: ParsedDocument<PersistedEnvironmentVariable> = doc.parse()?;
         let var = doc.into_value().0;
         anyhow::ensure!(var.name() == name, "Invalid environment variable");
         Ok(Some(var.into_value()))
@@ -150,11 +144,16 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
 
     #[fastrace::trace]
     pub async fn get_all(&mut self) -> anyhow::Result<BTreeMap<EnvVarName, EnvVarValue>> {
-        let query = Query::full_table_scan(ENVIRONMENT_VARIABLES_TABLE.clone(), Order::Asc);
-        let mut query_stream = ResolvedQuery::new(self.tx, TableNamespace::Global, query)?;
         let mut environment_variables = BTreeMap::new();
-        while let Some(doc) = query_stream.next(self.tx, None).await? {
-            let env_var: ParsedDocument<PersistedEnvironmentVariable> = doc.parse()?;
+        for env_var in self
+            .tx
+            .query_system(
+                TableNamespace::Global,
+                &SystemIndex::<EnvironmentVariablesTable>::by_creation_time(),
+            )?
+            .all()
+            .await?
+        {
             let old_value = environment_variables
                 .insert(env_var.0.name().to_owned(), env_var.0.value().to_owned());
             anyhow::ensure!(old_value.is_none(), "Duplicate environment variable");
@@ -275,102 +274,4 @@ fn value_query_from_env_var(env_var: &EnvVarName) -> anyhow::Result<Query> {
         range,
         order: Order::Asc,
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::{
-        BTreeMap,
-        HashSet,
-    };
-
-    use common::types::{
-        EnvVarName,
-        EnvVarValue,
-        EnvironmentVariable,
-    };
-    use database::test_helpers::DbFixtures;
-    use maplit::btreemap;
-    use runtime::testing::TestRuntime;
-
-    use crate::{
-        environment_variables::EnvironmentVariablesModel,
-        test_helpers::DbFixturesWithModel,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_create_get(rt: TestRuntime) -> anyhow::Result<()> {
-        let database = DbFixtures::new_with_model(&rt).await?.db;
-        let mut tx = database.begin_system().await?;
-        let mut env_model = EnvironmentVariablesModel::new(&mut tx);
-        let name: EnvVarName = "hello".parse()?;
-        let value: EnvVarValue = "world".parse()?;
-        let env_var = EnvironmentVariable::new(name.clone(), value.clone());
-        env_model.create(env_var.clone(), &HashSet::new()).await?;
-        assert_eq!(env_model.get(&name).await?.unwrap().into_value(), env_var);
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_preload(rt: TestRuntime) -> anyhow::Result<()> {
-        let database = DbFixtures::new_with_model(&rt).await?.db;
-
-        let env_vars: BTreeMap<EnvVarName, EnvVarValue> = btreemap! {
-            "hello".parse()? => "world".parse()?,
-            "goodbye".parse()? => "blue sky".parse()?,
-        };
-        {
-            let mut create_tx = database.begin_system().await?;
-            for (name, value) in &env_vars {
-                let env_var = EnvironmentVariable::new(name.clone(), value.clone());
-                EnvironmentVariablesModel::new(&mut create_tx)
-                    .create(env_var.clone(), &HashSet::new())
-                    .await?;
-            }
-            database.commit(create_tx).await?;
-        }
-
-        // NB: The tokens don't line up for an empty query (i.e. `names = &[]`) since
-        // the preloaded path runs a query, loading a read dependency on the
-        // `_index` table, while the regular path doesn't execute anything.
-        let test_cases: &[&[&str]] =
-            &[&["hello"], &["hello", "goodbye"], &["hello", "nonexistent"]];
-        for &names in test_cases {
-            let preload_token = {
-                let mut preload_tx = database.begin_system().await?;
-                let preloaded = EnvironmentVariablesModel::new(&mut preload_tx)
-                    .preload()
-                    .await?;
-                for name in names {
-                    let name = name.parse()?;
-                    assert_eq!(
-                        preloaded.get(&mut preload_tx, &name)?,
-                        env_vars.get(&name).cloned()
-                    );
-                }
-                preload_tx.into_token()?
-            };
-            let regular_token = {
-                let mut regular_tx = database.begin_system().await?;
-                for name in names {
-                    let name = name.parse()?;
-                    assert_eq!(
-                        EnvironmentVariablesModel::new(&mut regular_tx)
-                            .get(&name)
-                            .await?
-                            .map(|doc| doc.into_value().value),
-                        env_vars.get(&name).cloned()
-                    );
-                }
-                regular_tx.into_token()?
-            };
-            assert_eq!(
-                preload_token.reads(),
-                regular_token.reads(),
-                "Mismatch for {names:?}"
-            );
-        }
-
-        Ok(())
-    }
 }

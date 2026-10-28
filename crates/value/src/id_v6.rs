@@ -8,7 +8,14 @@
 //! ```text
 //! footer = fletcher16( [ VInt(table_number) ] [ internal ID ] ) ^ version
 //! ```
-use std::str::FromStr;
+use std::{
+    array::from_fn,
+    simd::{
+        num::SimdUint as _,
+        u8x16,
+    },
+    str::FromStr,
+};
 
 use thiserror::Error;
 
@@ -62,22 +69,24 @@ impl DeveloperDocumentId {
     }
 
     pub fn encode_into<'a>(&self, out: &'a mut EncodedDocumentIdBuffer) -> &'a str {
-        let mut buf = [0; MAX_BINARY_LEN];
+        let mut buf = [0; 28];
 
         let mut pos = 0;
 
         pos += vint_encode(self.table().into(), &mut buf[pos..]);
+        let f1 = fletcher16(&buf[..pos]);
 
         buf[pos..(pos + 16)].copy_from_slice(&self.internal_id());
+        let f2 = fletcher16_simd(&self.internal_id().0);
         pos += 16;
 
-        let footer = fletcher16(&buf[..pos]) ^ VERSION;
+        let footer = fletcher16_combine(f1, f2, 16) ^ VERSION;
         buf[pos..(pos + 2)].copy_from_slice(&footer.to_le_bytes());
         pos += 2;
 
-        base32::encode_into(&mut out.0, &buf[..pos]);
+        base32::encode_into::<true>(&mut out.0, &buf, pos);
 
-        std::str::from_utf8(&out.0[..base32::encoded_len(pos)]).expect("base32 wasn't valid UTF8?")
+        unsafe { std::str::from_utf8_unchecked(&out.0[..base32::encoded_len(pos)]) }
     }
 
     pub fn encode(&self) -> String {
@@ -141,7 +150,7 @@ impl DeveloperDocumentId {
         // TODO: Checking base32 decoding above alone isn't sufficient, see
         // `test_id_decoding_one_to_one` below for a counterexample if we only check
         // that `base32::decode` is one-to-one.
-        if id.encode() != s {
+        if id.encode_into(&mut Default::default()) != s {
             return Err(IdDecodeError::InvalidLength(s.len()));
         }
 
@@ -266,103 +275,22 @@ fn fletcher16(buf: &[u8]) -> u16 {
     }
     ((c1 as u16) << 8) | (c0 as u16)
 }
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use crate::{
-        id_v6::{
-            vint_decode,
-            vint_encode,
-            vint_len,
-        },
-        DeveloperDocumentId,
-        InternalId,
-    };
-
-    #[test]
-    fn test_document_id_stability() {
-        let mut internal_id = [251u8; 16];
-        for i in 1..16 {
-            internal_id[i] = internal_id[i - 1].wrapping_mul(251);
-        }
-        let document_id =
-            DeveloperDocumentId::new(1017.try_into().unwrap(), InternalId::from(internal_id));
-        assert_eq!(
-            document_id.encode(),
-            "z43zp6c3e75gkmz1kfwj6mbbx5sw281h".to_string()
-        );
-    }
-
-    #[test]
-    fn test_invalid_table_code() {
-        // This string happens to look like an ID with a one byte table code, but the
-        // table code ends up taking two bytes, which then causes parsing to
-        // fail downstream. This is a regression test where we used to panic in
-        // this condition.
-        let _ = DeveloperDocumentId::decode("sssswsgggggggggsgcsssfafffsffks");
-    }
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_vint_encode(n in any::<u32>()) {
-            let mut buf = [0; 6];
-            let written = vint_encode(n, &mut buf);
-            assert_eq!(written, vint_len(n));
-
-            let (parsed, read) = vint_decode(&buf).unwrap();
-            assert_eq!(read, written);
-            assert_eq!(parsed, n);
-        }
-
-        #[test]
-        fn test_vint_decode(buf in any::<Vec<u8>>()) {
-            // Check that decoding never panics.
-            let _ = vint_decode(&buf);
-        }
-
-        #[test]
-        fn proptest_document_idv6(id in any::<DeveloperDocumentId>()) {
-            assert_eq!(DeveloperDocumentId::decode(&id.encode()).unwrap(), id);
-        }
-
-        #[test]
-        fn proptest_encoded_len(id in any::<DeveloperDocumentId>()) {
-            assert_eq!(id.encode().len(), id.encoded_len());
-        }
-
-        #[test]
-        fn proptest_decode_invalid_string(s in any::<String>()) {
-            // Check that we don't panic on any input string.
-            let _ = DeveloperDocumentId::decode(&s);
-        }
-
-        #[test]
-        fn proptest_decode_invalid_bytes(bytes in prop::collection::vec(any::<u8>(), 19..=23)) {
-            // Generate bytestrings that pass the first few checks in decode to get more code
-            // coverage for later panics.
-            let _ = DeveloperDocumentId::decode(&crate::base32::encode(&bytes));
-        }
-
-        #[test]
-        fn proptest_id_decoding_one_to_one(
-            s in "[0123456789abcdefghjkmnpqrstvwxyz]{31,37}"
-        ) {
-            if let Ok(id) = DeveloperDocumentId::decode(&s) {
-                assert_eq!(id.encode(), s);
-            }
-        }
-    }
-
-    #[test]
-    fn test_id_decoding_one_to_one() {
-        let s = "mz1xn7tymdnktmmzqy5xxhn7tjs2nkkfmtjjr";
-        DeveloperDocumentId::decode(s).unwrap_err();
-    }
+// Specialized version of fletcher16
+fn fletcher16_simd(buf: &[u8; 16]) -> u16 {
+    let data = u8x16::from_array(*buf);
+    let c0 = data.reduce_sum();
+    let c1 = (data * u8x16::from_array(from_fn(|i| 16 - i as u8))).reduce_sum();
+    ((c1 as u16) << 8) | (c0 as u16)
+}
+// Combine two fletcher16 checksums:
+// `fletcher16_combine(fletcher16(buf1), fletcher16(buf2), buf2.len())`
+// equals `fletcher16([buf1, buf2].concat())`.
+fn fletcher16_combine(b1: u16, b2: u16, b2len: usize) -> u16 {
+    let [b10, b11] = b1.to_le_bytes();
+    let [b20, b21] = b2.to_le_bytes();
+    u16::from_le_bytes([
+        b10.wrapping_add(b20),
+        b11.wrapping_add(b21)
+            .wrapping_add(b10.wrapping_mul(b2len as u8)),
+    ])
 }

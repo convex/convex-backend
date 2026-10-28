@@ -77,11 +77,5 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  counterComponent: {
-    public: {
-      increment: FunctionReference<"mutation", "internal", any, any>;
-      load: FunctionReference<"query", "internal", any, any>;
-      reset: FunctionReference<"action", "internal", { count: number }, any>;
-    };
-  };
+  counterComponent: import("../../counterComponent/_generated/component.js").ComponentApi<"counterComponent">;
 };

@@ -8,12 +8,11 @@
   },
   "dependencies": {
     "convex": "workspace:*",
-    "convex-helpers": "^0.1.105",
+    "convex-helpers": "^0.1.129",
     "@convex-dev/ratelimiter": "workspace:*",
     "@convex-dev/triggers": "workspace:*"
   },
   "devDependencies": {
-    "prettier": "^3.8.0",
     "@types/node": "^18.17.0",
     "typescript": "~5.0.3"
   }

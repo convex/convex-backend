@@ -1,13 +1,13 @@
 [package]
 name = "convex_sync_types"
 description = "Sync types for the Convex Websocket protocol (convex.dev)"
-version = "0.10.3"
+version = "0.10.4"
 authors = [ "Convex, Inc. <no-reply@convex.dev>" ]
 edition = "2021"
-rust-version = "1.80.1"
+rust-version = "1.85"
 resolver = "2"
 license = "Apache-2.0"
-repository = "https://github.com/get-convex/convex-rs"
+repository = "https://github.com/convex/convex-rs"
 homepage = "https://www.convex.dev/"
 
 [features]
@@ -16,7 +16,6 @@ testing = [ "proptest", "proptest-derive", "pretty_assertions" ]
 [dependencies]
 anyhow = { version = "1" }
 base64 = { version = "0.13" }
-bytes = { version = "1.6.0" }
 derive_more = { version = "2", features = [ "full" ] }
 headers = { version = "0.4" }
 pretty_assertions = { optional = true, version = "1" }
@@ -25,7 +24,8 @@ proptest-derive = { optional = true, version = "0.5.0" }
 rand = { version = "0.9" }
 serde = { features = [ "derive" ], version = "1" }
 serde_json = { features = [ "float_roundtrip", "preserve_order", "raw_value" ], version = "1" }
-strum = { version = "0.27", features = [ "derive" ] }
+strum = { version = "0.28", features = [ "derive" ] }
+thiserror = { version = "2" }
 uuid = { features = [ "serde", "v4" ], version = "1.6" }
 
 [dev-dependencies]
@@ -35,6 +35,8 @@ proptest-derive = { version = "0.5.0" }
 
 [lints.rust]
 unused_extern_crates = "warn"
+unused_features = "allow"
+unexpected_cfgs = { level = "warn", check-cfg = [ "cfg(rust_analyzer)" ] }
 
 [lints.clippy]
 await_holding_lock = "warn"
@@ -50,5 +52,6 @@ single_match = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 upper_case_acronyms = "allow"
-useless_format = "allow"
 useless_vec = "allow"
+collapsible_match = "allow"
+chunks_exact_to_as_chunks = "allow"

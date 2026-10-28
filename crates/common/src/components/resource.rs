@@ -22,23 +22,6 @@ pub enum Resource {
     ResolvedSystemUdf(ResolvedComponentFunctionPath),
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::prelude::Arbitrary for Resource {
-    type Parameters = ();
-    type Strategy = proptest::strategy::BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        use value::ConvexValue;
-
-        prop_oneof![
-            ConvexValue::arbitrary().prop_map(Resource::Value),
-            CanonicalizedComponentFunctionPath::arbitrary().prop_map(Resource::Function),
-        ]
-        .boxed()
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SerializedResource {

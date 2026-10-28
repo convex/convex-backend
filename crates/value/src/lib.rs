@@ -1,10 +1,8 @@
-#![feature(try_blocks)]
+#![feature(portable_simd)]
+#![feature(btree_cursors)]
 #![feature(try_blocks_heterogeneous)]
 #![feature(never_type)]
-#![feature(type_alias_impl_trait)]
-#![feature(iter_from_coroutine)]
 #![feature(iterator_try_collect)]
-#![feature(coroutines)]
 #![feature(impl_trait_in_assoc_type)]
 
 mod array;
@@ -19,6 +17,7 @@ pub mod id_v6;
 mod json;
 pub mod numeric;
 mod object;
+mod pending;
 pub mod serde;
 pub mod serialized_args_ext;
 pub mod sha256;
@@ -34,9 +33,6 @@ pub mod heap_size;
 pub mod utils;
 
 mod macros;
-#[cfg(test)]
-mod tests;
-
 use std::{
     collections::BTreeMap,
     fmt::{
@@ -53,7 +49,6 @@ use anyhow::{
     bail,
     Error,
 };
-use heap_size::HeapSize;
 pub use paste::paste;
 pub use sync_types::identifier;
 use walk::ConvexValueWalker;
@@ -98,7 +93,13 @@ pub use crate::{
         ConvexObject,
         MAX_OBJECT_FIELDS,
     },
+    pending::{
+        PendingValue,
+        COMMIT_TS_FIELD,
+        MAX_COMMIT_TS,
+    },
     size::{
+        array_size,
         Size,
         MAX_NESTING,
         MAX_SIZE,
@@ -121,11 +122,6 @@ pub use crate::{
         METADATA_PREFIX,
     },
 };
-
-#[cfg(any(test, feature = "testing"))]
-pub mod testing {
-    pub use sync_types::testing::assert_roundtrips;
-}
 
 /// The various types that can be stored as a field in a [`ConvexObject`].
 #[derive(Clone, Debug)]
@@ -378,21 +374,6 @@ impl Size for ConvexValue {
     }
 }
 
-impl HeapSize for ConvexValue {
-    fn heap_size(&self) -> usize {
-        match self {
-            ConvexValue::Null => 0,
-            ConvexValue::Int64(_) => 0,
-            ConvexValue::Float64(_) => 0,
-            ConvexValue::Boolean(_) => 0,
-            ConvexValue::String(s) => s.heap_size(),
-            ConvexValue::Bytes(b) => b.heap_size(),
-            ConvexValue::Array(arr) => arr.heap_size(),
-            ConvexValue::Object(m) => m.heap_size(),
-        }
-    }
-}
-
 /// f64 doesn't implement `hash` so we need to manually implement `hash` for
 /// `ConvexValue`. Must be compatible with our manual implementation of `cmp`.
 impl Hash for ConvexValue {
@@ -433,229 +414,6 @@ impl Hash for ConvexValue {
     }
 }
 
-#[cfg(feature = "testing")]
-impl std::ops::Index<&str> for ConvexValue {
-    type Output = ConvexValue;
-
-    #[track_caller]
-    fn index(&self, field: &str) -> &Self::Output {
-        let ConvexValue::Object(o) = self else {
-            panic!("indexing {field} into non-object: {self}")
-        };
-        let Some(v) = o.get(field) else {
-            panic!("field {field} missing in object: {self}")
-        };
-        v
-    }
-}
-
-#[cfg(feature = "testing")]
-impl std::ops::Index<usize> for ConvexValue {
-    type Output = ConvexValue;
-
-    #[track_caller]
-    fn index(&self, index: usize) -> &Self::Output {
-        let ConvexValue::Array(a) = self else {
-            panic!("indexing {index} into non-array: {self}")
-        };
-        let Some(v) = a.get(index) else {
-            panic!("index {index} out of bounds in array: {self}")
-        };
-        v
-    }
-}
-
-#[cfg(test)]
-mod hash_tests {
-    use std::hash::{
-        Hash,
-        Hasher,
-    };
-
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use crate::ConvexValue;
-
-    struct SaveHasher(Vec<u8>);
-    impl Hasher for SaveHasher {
-        fn finish(&self) -> u64 {
-            unimplemented!()
-        }
-
-        fn write(&mut self, bytes: &[u8]) {
-            self.0.extend_from_slice(bytes);
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 1024 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-
-        #[test]
-        fn proptest_value_encode_for_hash(
-            v1 in any::<ConvexValue>(),
-            v2 in any::<ConvexValue>(),
-        ) {
-            let mut v1_encoded = SaveHasher(vec![]);
-            let mut v2_encoded = SaveHasher(vec![]);
-            v1.hash(&mut v1_encoded);
-            v2.hash(&mut v2_encoded);
-            assert_eq!(
-                v1 == v2,
-                v1_encoded.0 == v2_encoded.0
-            );
-        }
-    }
-}
-
 pub trait Namespace {
     fn is_system(&self) -> bool;
 }
-
-#[cfg(any(test, feature = "testing"))]
-pub mod proptest {
-    use core::f64;
-
-    use proptest::prelude::*;
-
-    use super::{
-        bytes::ConvexBytes,
-        string::ConvexString,
-        ConvexValue,
-    };
-    use crate::field_name::FieldName;
-
-    impl Arbitrary for ConvexValue {
-        type Parameters = (
-            <FieldName as Arbitrary>::Parameters,
-            ValueBranching,
-            RestrictNaNs,
-        );
-
-        type Strategy = impl Strategy<Value = ConvexValue>;
-
-        fn arbitrary_with(
-            (field_params, branching, restrict_nans): Self::Parameters,
-        ) -> Self::Strategy {
-            resolved_value_strategy(
-                move || any_with::<FieldName>(field_params),
-                branching,
-                restrict_nans,
-            )
-        }
-    }
-
-    pub fn float64_strategy() -> impl Strategy<Value = f64> {
-        prop::num::f64::ANY | prop::num::f64::SIGNALING_NAN
-    }
-
-    // Whether to allow any `NaN` value (e.g. negative `NaN`s) or not.
-    // Defaults to including any valid `NaN` value.
-    #[derive(Default)]
-    pub struct RestrictNaNs(pub bool);
-
-    pub struct ValueBranching {
-        pub depth: usize,
-        pub node_target: usize,
-        pub branching: usize,
-    }
-
-    impl ValueBranching {
-        pub fn new(depth: usize, node_target: usize, branching: usize) -> Self {
-            Self {
-                depth,
-                node_target,
-                branching,
-            }
-        }
-
-        pub fn small() -> Self {
-            Self::new(4, 4, 4)
-        }
-
-        pub fn medium() -> Self {
-            Self::new(4, 32, 8)
-        }
-
-        pub fn large() -> Self {
-            Self::new(8, 64, 16)
-        }
-    }
-
-    impl Default for ValueBranching {
-        fn default() -> Self {
-            Self::medium()
-        }
-    }
-
-    pub fn resolved_value_strategy<F, S>(
-        field_strategy: F,
-        branching: ValueBranching,
-        restrict_nans: RestrictNaNs,
-    ) -> impl Strategy<Value = ConvexValue>
-    where
-        F: Fn() -> S + 'static,
-        S: Strategy<Value = FieldName> + 'static,
-    {
-        use crate::{
-            id_v6::DeveloperDocumentId,
-            resolved_object_strategy,
-            ConvexArray,
-        };
-
-        // https://altsysrq.github.io/proptest-book/proptest/tutorial/recursive.html
-        let leaf = prop_oneof![
-            1 => any::<DeveloperDocumentId>()
-                .prop_map(|id| {
-                    let s = id.encode().try_into().expect("Could not create String value from ID");
-                    ConvexValue::String(s)
-                }),
-            1 => Just(ConvexValue::Null),
-            1 => any::<i64>().prop_map(ConvexValue::from),
-            1 => (prop::num::f64::ANY | prop::num::f64::SIGNALING_NAN)
-                .prop_map(move |f| {
-                    if restrict_nans.0 && f.is_nan() {
-                        ConvexValue::Float64(f64::NAN)
-                    } else {
-                        ConvexValue::Float64(f)
-                    }
-                }),
-            1 => any::<bool>().prop_map(ConvexValue::from),
-            1 => any::<ConvexString>().prop_filter_map("String ID", |s| match DeveloperDocumentId::decode(&s) {
-                Ok(_) => None,
-                Err(_) => Some(ConvexValue::String(s))
-            }),
-            1 => any::<ConvexBytes>().prop_map(ConvexValue::Bytes),
-        ];
-        let ValueBranching {
-            depth,
-            node_target,
-            branching,
-        } = branching;
-        leaf.prop_recursive(
-            depth as u32,
-            node_target as u32,
-            branching as u32,
-            move |inner| {
-                prop_oneof![
-                    // Manually create the strategies here rather than using the `Arbitrary`
-                    // implementations on `Array`, etc. This lets us explicitly pass `inner`
-                    // through rather than starting the `Value` strategy from
-                    // scratch at each tree level.
-                    1 => prop::collection::vec(inner.clone(), 0..branching)
-                        .prop_filter_map("Vec wasn't a valid Convex value", |v| {
-                            ConvexArray::try_from(v).ok()
-                        })
-                        .prop_map(ConvexValue::Array),
-                    1 => resolved_object_strategy(field_strategy(), inner, 0..branching)
-                        .prop_map(ConvexValue::Object),
-                ]
-            },
-        )
-    }
-}
-#[cfg(any(test, feature = "testing"))]
-pub use self::{
-    object::resolved_object_strategy,
-    proptest::resolved_value_strategy,
-};

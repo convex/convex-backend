@@ -5,9 +5,6 @@ authors = ["Convex, Inc. <no-reply@convex.dev>"]
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
-[package.metadata.cargo-machete]
-ignored = ["vergen"]
-
 [lib]
 doctest = false
 
@@ -22,6 +19,7 @@ parking_lot = { workspace = true }
 paste = { workspace = true }
 prometheus = { workspace = true }
 sentry = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 [lints]

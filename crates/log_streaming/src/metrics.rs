@@ -48,6 +48,36 @@ pub fn webhook_sink_logs_sent(count: usize) {
 }
 
 register_convex_counter!(
+    LOG_SINK_EGRESS_FAILURES_TOTAL,
+    "Number of log sink requests a customer endpoint refused or failed to answer",
+    &["sink_type", "outcome", "phase"],
+);
+/// `sink_type` comes from `SinkType::as_str` and `outcome` from
+/// `SinkEgressFailure::outcome_label`; both are fixed sets. Never label by
+/// deployment or instance.
+fn log_sink_egress_failure_in(sink_type: &'static str, outcome: &'static str, phase: &'static str) {
+    log_counter_with_labels(
+        &LOG_SINK_EGRESS_FAILURES_TOTAL,
+        1,
+        vec![
+            StaticMetricLabel::new("sink_type", sink_type),
+            StaticMetricLabel::new("outcome", outcome),
+            StaticMetricLabel::new("phase", phase),
+        ],
+    );
+}
+
+/// A batch an already-running sink failed to deliver.
+pub fn log_sink_egress_failure(sink_type: &'static str, outcome: &'static str) {
+    log_sink_egress_failure_in(sink_type, outcome, "runtime")
+}
+
+/// A credential check that failed while starting a sink.
+pub fn log_sink_verification_failure(sink_type: &'static str, outcome: &'static str) {
+    log_sink_egress_failure_in(sink_type, outcome, "startup")
+}
+
+register_convex_counter!(
     LOG_MANAGER_LOGS_RECEIVED_TOTAL,
     "Number of logs received by log manager",
 );

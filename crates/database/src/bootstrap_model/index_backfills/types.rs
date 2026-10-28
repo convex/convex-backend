@@ -10,8 +10,8 @@ use value::{
 
 /// Cursor for a database index that has an in-progress backfill
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct BackfillCursor {
+    /// Snapshot used by the current scan, refreshed on resume for diagnostics.
     pub snapshot_ts: Timestamp,
     pub cursor: Option<DeveloperDocumentId>,
 }
@@ -26,7 +26,6 @@ pub struct BackfillCursor {
 /// but number of documents and bytes is not possible to track because we walk
 /// the revision stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct IndexBackfillMetadata {
     /// The ID of the index being backfilled. Should correspond to a document in
     /// the index table in `Backfilling` state.

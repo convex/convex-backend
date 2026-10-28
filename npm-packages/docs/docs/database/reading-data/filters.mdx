@@ -23,7 +23,7 @@ If you need to filter to documents containing some keywords, use a
   This can be slow or cause your function to hit a
   [limit](/production/state/limits.mdx) when your table has thousands of rows.
   For faster more database efficient queries use [indexes
-  instead](/database/reading-data/indexes/indexes.md).
+  instead](/database/reading-data/indexes/indexes.mdx).
 </Admonition>
 
 ### Equality conditions
@@ -131,9 +131,8 @@ const usersNamedAlexOrEmma = await ctx.db
 
 ## Advanced filtering techniques
 
-Sometimes the filter syntax is is not expressive enough. For example you may
-want to collect all posts that have a tag. Your schema for the posts looks like
-this:
+Sometimes the filter syntax is not expressive enough. For example you may want
+to collect all posts that have a tag. Your schema for the posts looks like this:
 
 ```ts
 export default defineSchema({
@@ -144,7 +143,7 @@ export default defineSchema({
 });
 ```
 
-One way to solve is by applying the filter on the result of the `collect()`
+One way to solve this is by applying the filter on the result of the `collect()`
 call. This is just filtering a JavaScript array:
 
 ```ts
@@ -211,7 +210,7 @@ might need to walk over every single document in the `"tasks"` table just to
 find the first one with `isCompleted: true`.
 
 If a table has more than a few thousand documents, you should use
-[indexes](/database/reading-data/indexes/indexes.md) to improve your document
+[indexes](/database/reading-data/indexes/indexes.mdx) to improve your document
 query performance. Otherwise, you may run into our enforced limits, detailed in
 [Read/write limit errors](/functions/error-handling/error-handling.mdx#readwrite-limit-errors).
 

@@ -54,10 +54,4 @@ impl ShutdownSignal {
         Self { mode: Mode::Panic }
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn no_op() -> Self {
-        Self {
-            mode: Mode::Notify(Arc::new(Mutex::new(None))),
-        }
-    }
 }

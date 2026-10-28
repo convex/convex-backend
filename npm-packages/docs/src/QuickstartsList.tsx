@@ -19,10 +19,63 @@ import NuxtLogo from "@site/static/img/nuxt-logo.svg";
 import AndroidLogo from "@site/static/img/android-logo.svg";
 import SwiftLogo from "@site/static/img/swift-logo.svg";
 import TanStackLogo from "@site/static/img/tanstack-logo.svg";
+import ClaudeCodeLogo from "@site/static/img/claude-code-logo.svg";
+import CursorLogo from "@site/static/img/cursor-logo.svg";
+import GitHubCopilotLogo from "@site/static/img/github-copilot-logo.svg";
+import CodexLogo from "@site/static/img/codex-logo.svg";
+import conductorLogoUrl from "@site/static/img/conductor-logo.png";
 import React from "react";
 import Link from "@docusaurus/Link";
 import { ReactNode } from "@mdx-js/react/lib";
 import Heading from "@theme/Heading";
+
+function ConductorLogo({ height = 40 }: { height?: number }) {
+  return (
+    <img src={conductorLogoUrl} height={height} alt="" aria-hidden="true" />
+  );
+}
+
+// An inline "Claude Code" reference (icon + name) for use in a sentence,
+// e.g. "<ClaudeCodeInlineMention /> gets these rules from the plugin instead."
+export function ClaudeCodeInlineMention() {
+  return (
+    <span className="inline-flex items-baseline">
+      <ClaudeCodeLogo
+        aria-hidden="true"
+        className="size-[1em] shrink-0 self-center"
+      />
+      &nbsp;<span className="font-semibold">Claude Code</span>
+    </span>
+  );
+}
+
+// An inline "Cursor" reference (icon + name) for use in a sentence,
+// e.g. "<CursorInlineMention /> gets these rules from the plugin instead."
+export function CursorInlineMention() {
+  return (
+    <span className="inline-flex items-baseline">
+      <CursorLogo
+        aria-hidden="true"
+        className="size-[1em] shrink-0 self-center"
+      />
+      &nbsp;<span className="font-semibold">Cursor</span>
+    </span>
+  );
+}
+
+// An inline "Codex" reference (icon + name) for use in a sentence,
+// e.g. "<CodexInlineMention /> gets these rules from the plugin instead."
+export function CodexInlineMention() {
+  return (
+    <span className="inline-flex items-baseline">
+      <CodexLogo
+        aria-hidden="true"
+        className="size-[1em] shrink-0 self-center"
+      />
+      &nbsp;<span className="font-semibold">Codex</span>
+    </span>
+  );
+}
 
 // This is a variant of DocsCardList.tsx specifically for the Quickstarts page.
 type Item = {
@@ -43,11 +96,13 @@ type LargeCardItem = {
 export function DocCardList(props: { items: Item[] }) {
   const { items } = props;
   return (
-    <div className="qs-cards">
+    <ul className="qs-cards">
       {items.map((item, index) => (
-        <CardLink key={index} item={item} />
+        <li key={index}>
+          <CardLink item={item} />
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -71,9 +126,9 @@ export function CardLink({
     >
       {icon}
       <div>
-        <Heading as="h2" className="text--truncate" title={item.label}>
+        <div className="card__title text--truncate" title={item.label}>
           {item.label}
-        </Heading>
+        </div>
       </div>
     </Link>
   );
@@ -82,14 +137,16 @@ export function CardLink({
 // Add this new component before Quick*List
 export function LargeCardList(props: { items: LargeCardItem[] }) {
   return (
-    <div className="large-cards">
+    <ul className="large-cards">
       {props.items.map((item, index) => (
-        <Link key={index} href={item.href} className="large-card">
-          <Heading as="h2">{item.title}</Heading>
-          <p>{item.description}</p>
-        </Link>
+        <li key={index}>
+          <Link href={item.href} className="large-card">
+            <Heading as="h2">{item.title}</Heading>
+            <p>{item.description}</p>
+          </Link>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -120,7 +177,8 @@ export function QuickFrameworksList() {
           label: "Remix",
         },
         {
-          icon: <TanStackLogo height={40} width={40} />,
+          icon: <TanStackLogo height={40} />,
+          invertIcon: true,
           href: "/quickstart/tanstack-start",
           docId: "quickstart/tanstack-start",
           label: "TanStack Start",
@@ -173,13 +231,127 @@ export function QuickFrameworksList() {
   );
 }
 
+export function QuickHarnessesList() {
+  return (
+    <DocCardList
+      items={[
+        {
+          icon: <ClaudeCodeLogo height={40} />,
+          href: "/ai/using-claude-code",
+          docId: "ai/using-claude-code",
+          label: "Claude Code",
+        },
+        {
+          icon: <CodexLogo height={40} />,
+          href: "/ai/using-codex",
+          docId: "ai/using-codex",
+          label: "Codex",
+        },
+        {
+          icon: <CursorLogo height={40} />,
+          href: "/ai/using-cursor",
+          docId: "ai/using-cursor",
+          label: "Cursor",
+        },
+        {
+          icon: <GitHubCopilotLogo height={40} />,
+          href: "/ai/using-github-copilot",
+          docId: "ai/using-github-copilot",
+          label: "GitHub Copilot",
+        },
+        {
+          icon: <ConductorLogo height={40} />,
+          href: "/ai/using-conductor",
+          docId: "ai/using-conductor",
+          label: "Conductor",
+        },
+      ]}
+    />
+  );
+}
+
+export function AgentPluginsList() {
+  return (
+    <DocCardList
+      items={[
+        {
+          icon: <ClaudeCodeLogo height={40} />,
+          href: "/ai/using-claude-code#install-the-convex-plugin-in-claude-code",
+          docId: "ai/using-claude-code",
+          label: "Claude Code",
+        },
+        {
+          icon: <CodexLogo height={40} />,
+          href: "/ai/using-codex#install-the-convex-plugin",
+          docId: "ai/using-codex",
+          label: "Codex",
+        },
+        {
+          icon: <CursorLogo height={40} />,
+          href: "/ai/using-cursor#install-the-convex-plugin-in-cursor",
+          docId: "ai/using-cursor",
+          label: "Cursor",
+        },
+      ]}
+    />
+  );
+}
+
+export function RulesHarnessesList() {
+  return (
+    <DocCardList
+      items={[
+        {
+          icon: <GitHubCopilotLogo height={40} />,
+          href: "/ai/using-github-copilot",
+          docId: "ai/using-github-copilot",
+          label: "GitHub Copilot",
+        },
+        {
+          icon: <ConductorLogo height={40} />,
+          href: "/ai/using-conductor",
+          docId: "ai/using-conductor",
+          label: "Conductor",
+        },
+      ]}
+    />
+  );
+}
+
+export function McpHarnessesList() {
+  return (
+    <DocCardList
+      items={[
+        {
+          icon: <CodexLogo height={40} />,
+          href: "/ai/using-codex#setup-the-convex-mcp-server",
+          docId: "ai/using-codex",
+          label: "Codex",
+        },
+        {
+          icon: <GitHubCopilotLogo height={40} />,
+          href: "/ai/using-github-copilot#setup-the-convex-mcp-server",
+          docId: "ai/using-github-copilot",
+          label: "GitHub Copilot",
+        },
+        {
+          icon: <ConductorLogo height={40} />,
+          href: "/ai/using-conductor#setup-the-convex-mcp-server",
+          docId: "ai/using-conductor",
+          label: "Conductor",
+        },
+      ]}
+    />
+  );
+}
+
 export function QuickLanguagesList() {
   return (
     <DocCardList
       items={[
         {
           icon: <JsLogo height={40} />,
-          href: "/client/javascript",
+          href: "/client/javascript/overview",
           docId: "client/javascript",
           label: "JavaScript",
         },

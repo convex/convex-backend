@@ -19,7 +19,6 @@ use crate::query::Cursor;
 /// Because this journal is synced to the client, keep its size small!
 /// The serialized size is tested in `broker.rs:test_query_journal_size`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct QueryJournal {
     /// If this query function ran a paginated database query, store a cursor
     /// for the end of the query so we can continue to sync to the same point

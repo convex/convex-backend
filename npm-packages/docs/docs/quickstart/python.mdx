@@ -7,7 +7,7 @@ sidebar_position: 500
 ---
 
 import sampleData from "!!raw-loader!@site/../demos/python-quickstart/sampleData.jsonl";
-import tasks from "!!raw-loader!@site/../demos/python-quickstart/convex/tasks.js";
+import tasks from "!!raw-loader!@site/../demos/python-quickstart/convex/tasks.ts";
 import main from "!!raw-loader!@site/../demos/python-quickstart/main.py";
 
 Learn how to query data from Convex in a Python app.
@@ -68,14 +68,14 @@ Learn how to query data from Convex in a Python app.
     with the sample data into your Convex database with
     the `import` command.
 
-    ```
+    ```sh
     npx convex import --table tasks sampleData.jsonl
     ```
 
   </Step>
 
   <Step title="Expose a database query">
-    Add a new file `tasks.js` in the `convex/` folder
+    Add a new file `tasks.ts` in the `convex/` folder
     with a query function that loads the data.
 
     Exporting a query function from this file
@@ -84,7 +84,7 @@ Learn how to query data from Convex in a Python app.
 
     <Snippet
       source={tasks}
-      title="convex/tasks.js"
+      title="convex/tasks.ts"
     />
 
   </Step>
@@ -92,7 +92,7 @@ Learn how to query data from Convex in a Python app.
   <Step title="Create a script to load data from Convex">
     In a new file `main.py`, create a `ConvexClient` and use it
     to fetch from your `"tasks:get"` API.
-    
+
     <Snippet
       source={main}
       title="main.py"
@@ -101,7 +101,7 @@ Learn how to query data from Convex in a Python app.
   </Step>
 
   <Step title="Run the script">
-      Run the script 
+      Run the script
       and see the serialized list of tasks.
 
       ```sh

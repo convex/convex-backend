@@ -7,7 +7,6 @@ use super::indexed_fields::IndexedFields;
 use crate::paths::FieldPath;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct DatabaseIndexSpec {
     /// Ordered field(s) to index. The "unindexed" primary key ordering of
     /// documents by [`DocumentId`] is represented by an empty vector.
@@ -16,7 +15,6 @@ pub struct DatabaseIndexSpec {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SerializedDatabaseIndexSpec {
     fields: Vec<String>,
 }

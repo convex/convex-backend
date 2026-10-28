@@ -1,9 +1,8 @@
 import { Command } from "@commander-js/extra-typings";
-import { oneoffContext } from "../bundler/context.js";
-import { logVerbose } from "../bundler/log.js";
+import { installSigintHandler, oneoffContext } from "../bundler/context.js";
 import { deploymentCredentialsOrConfigure } from "./configure.js";
 import { getDeploymentSelection } from "./lib/deploymentSelection.js";
-import { checkVersion } from "./lib/updates.js";
+import { checkVersionAndAiFilesStaleness } from "./lib/updates.js";
 import { usageStateWarning } from "./lib/usage.js";
 
 // Equivalent to `npx convex dev --once --skip-push`.
@@ -21,23 +20,29 @@ export const init = new Command("init")
       adminKey: undefined,
       envFile: undefined,
     });
-    process.on("SIGINT", async () => {
-      logVerbose("Received SIGINT, cleaning up...");
-      await ctx.flushAndExit(-2);
-    });
+    installSigintHandler(ctx);
 
     const deploymentSelection = await getDeploymentSelection(ctx, {});
     const credentials = await deploymentCredentialsOrConfigure(
       ctx,
       deploymentSelection,
       null,
-      { prod: false, localOptions: { forceUpgrade: false } },
+      {
+        prod: false,
+        localOptions: {
+          ports: {
+            cloud: undefined,
+            site: undefined,
+          },
+          forceUpgrade: false,
+        },
+      },
     );
 
     if (credentials.deploymentFields !== null) {
       await Promise.all([
         usageStateWarning(ctx, credentials.deploymentFields.deploymentName),
-        checkVersion(ctx),
+        checkVersionAndAiFilesStaleness(ctx),
       ]);
     }
 

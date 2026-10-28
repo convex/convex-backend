@@ -5,15 +5,17 @@ use std::{
 
 use derive_more::Deref;
 use value::{
+    heap_size::HeapSize,
     id_v6::DeveloperDocumentId,
+    sha256::Sha256,
+    sorting::write_sort_key_or_undefined,
     ConvexValue,
-    InternalId,
     Size,
 };
 
-use crate::{
-    types::Timestamp,
-    value::values_to_bytes,
+use crate::types::{
+    IndexId,
+    Timestamp,
 };
 
 // Splits a key into a prefix and suffix, where the prefix is the maximum
@@ -45,7 +47,7 @@ impl SplitKey {
 pub struct IndexEntry {
     // Ordering these fields is important for derived Ord.
     // The first four fields are the primary key in `indexes` table.
-    pub index_id: InternalId,
+    pub index_id: IndexId,
     pub key_prefix: Vec<u8>,
     pub key_sha256: Vec<u8>,
     pub ts: Timestamp,
@@ -54,16 +56,41 @@ pub struct IndexEntry {
     pub deleted: bool,
 }
 
+impl IndexEntry {
+    pub fn from_index_key(
+        index_key: IndexKeyBytes,
+        index_id: IndexId,
+        ts: Timestamp,
+        deleted: bool,
+    ) -> Self {
+        let key_sha256 = Sha256::hash(&index_key);
+        let key = SplitKey::new(index_key.0);
+        IndexEntry {
+            index_id,
+            key_prefix: key.prefix,
+            key_suffix: key.suffix,
+            key_sha256: key_sha256.to_vec(),
+            ts,
+            deleted,
+        }
+    }
+}
+
 /// An encoded IndexKey, with the same ordering.
 /// We don't parse these because we don't need to, it's inefficient, and that
 /// would require knowing the encoding format which may depend on DbDriverTag.
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Deref)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct IndexKeyBytes(pub Vec<u8>);
 
 impl Borrow<[u8]> for IndexKeyBytes {
     fn borrow(&self) -> &[u8] {
         self
+    }
+}
+
+impl HeapSize for IndexKeyBytes {
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
     }
 }
 
@@ -103,7 +130,18 @@ impl IndexKey {
     }
 
     pub fn to_bytes(&self) -> IndexKeyBytes {
-        IndexKeyBytes(values_to_bytes::<false>(&self.values_with_id))
+        let mut out = vec![];
+        if let Some((id, values)) = self.values_with_id.split_last() {
+            for value in values {
+                let Ok(()) = write_sort_key_or_undefined(value.as_ref(), &mut out);
+            }
+            if let Some(ConvexValue::String(id)) = id {
+                // use `reserve_exact` for memory efficiency
+                out.reserve_exact(id.len() + 2);
+            }
+            let Ok(()) = write_sort_key_or_undefined(id.as_ref(), &mut out);
+        }
+        IndexKeyBytes(out)
     }
 
     pub fn size(&self) -> usize {
@@ -131,49 +169,5 @@ impl Ord for IndexKey {
 impl PartialOrd for IndexKey {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-mod proptest {
-    use proptest::prelude::*;
-    use value::{
-        id_v6::DeveloperDocumentId,
-        ConvexValue,
-    };
-
-    use super::IndexKey;
-
-    impl Arbitrary for IndexKey {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = IndexKey>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            any::<(Vec<Option<ConvexValue>>, DeveloperDocumentId)>()
-                .prop_map(|(values, id)| IndexKey::new_allow_missing(values, id))
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-pub mod test_helpers {
-    use crate::types::{
-        IndexDescriptor,
-        IndexName,
-    };
-
-    pub fn new_index_name(table_name: &str, index_name: &str) -> anyhow::Result<IndexName> {
-        IndexName::new(
-            str::parse(table_name)?,
-            IndexDescriptor::new(index_name.to_string())?,
-        )
-    }
-
-    pub fn new_index_descriptor(
-        table_name: &str,
-        index_name: &str,
-    ) -> anyhow::Result<IndexDescriptor> {
-        new_index_name(table_name, index_name).map(|name| name.descriptor().clone())
     }
 }

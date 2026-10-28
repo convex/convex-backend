@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use serde::{
     Deserialize,
     Serialize,
@@ -10,19 +8,11 @@ use value::{
     TableNumber,
 };
 
-use crate::types::{
-    FieldName,
-    TableName,
-};
+use crate::types::TableName;
 
-pub static TABLES_TABLE: LazyLock<TableName> =
-    LazyLock::new(|| "_tables".parse().expect("Invalid built-in tables table"));
-
-pub static NAME_FIELD: LazyLock<FieldName> =
-    LazyLock::new(|| "name".parse().expect("Invalid name field"));
+pub const TABLES_TABLE: TableName = TableName::const_new("_tables");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum TableState {
     /// The table exists. It was created and has not been deleted.
     Active,
@@ -44,16 +34,10 @@ pub enum TableState {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct TableMetadata {
     pub name: TableName,
     pub number: TableNumber,
     pub state: TableState,
-    // TODO(lee) allow any TableNamespace once they are supported in tests.
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(value = "TableNamespace::Global")
-    )]
     pub namespace: TableNamespace,
 }
 
@@ -135,7 +119,6 @@ impl TryFrom<SerializedTableMetadata> for TableMetadata {
 codegen_convex_serialization!(TableMetadata, SerializedTableMetadata);
 
 #[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SerializedTableNamespace {
     ByComponent { id: String },
@@ -160,58 +143,5 @@ pub fn table_namespace_to_serialized(
         TableNamespace::ByComponent(id) => Ok(Some(SerializedTableNamespace::ByComponent {
             id: id.to_string(),
         })),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use value::{
-        assert_obj,
-        obj,
-        ConvexObject,
-        TableNamespace,
-    };
-
-    use super::TableMetadata;
-    use crate::bootstrap_model::tables::TableState;
-
-    #[test]
-    fn test_backwards_compatibility() -> anyhow::Result<()> {
-        let serialized = obj!(
-            "name" => "foo",
-            "state" => "hidden",
-            "number" => 1017,
-        )?;
-        let deserialized: TableMetadata = serialized.try_into().unwrap();
-        assert_eq!(
-            deserialized,
-            TableMetadata {
-                name: "foo".parse()?,
-                number: 1017.try_into()?,
-                state: TableState::Hidden,
-                namespace: TableNamespace::Global,
-            }
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_global_namespace() -> anyhow::Result<()> {
-        let table = TableMetadata {
-            name: "foo".parse()?,
-            number: 1017.try_into()?,
-            state: TableState::Active,
-            namespace: TableNamespace::Global,
-        };
-        let serialized: ConvexObject = table.try_into()?;
-        assert_eq!(
-            serialized,
-            assert_obj!(
-                "name" => "foo",
-                "state" => "active",
-                "number" => 1017,
-            ),
-        );
-        Ok(())
     }
 }

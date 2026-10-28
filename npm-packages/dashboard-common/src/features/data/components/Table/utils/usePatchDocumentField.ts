@@ -11,7 +11,7 @@ import { isFilterValidationError } from "system-udfs/convex/_system/frontend/lib
 import { UNDEFINED_PLACEHOLDER } from "system-udfs/convex/_system/frontend/lib/values";
 import { useNents } from "@common/lib/useNents";
 import { toast } from "@common/lib/utils";
-import { useInvalidateShapes } from "@common/features/data/lib/api";
+import { filterParamForQuery } from "@common/features/data/lib/useTableFilters";
 
 export function usePatchDocumentField(tableName: string) {
   const router = useRouter();
@@ -34,7 +34,9 @@ export function usePatchDocumentField(tableName: string) {
       {
         componentId: selectedNent?.id ?? null,
         table: tableName,
-        filters: (router.query.filters as string) || null,
+        // Must match the sanitized param `useQueryFilteredTable` subscribes
+        // with, or the optimistic update misses the cached paginated query.
+        filters: filterParamForQuery((router.query.filters as string) || null),
       },
       (currentValue) => {
         if (
@@ -55,7 +57,6 @@ export function usePatchDocumentField(tableName: string) {
       },
     );
   });
-  const invalidateShapes = useInvalidateShapes();
 
   return useCallback(
     async (
@@ -78,8 +79,7 @@ export function usePatchDocumentField(tableName: string) {
           throw error;
         }
       }
-      await invalidateShapes();
     },
-    [invalidateShapes, patchDocument, selectedNent],
+    [patchDocument, selectedNent],
   );
 }

@@ -23,7 +23,6 @@ use value::{
 // the root app component may have a waitlist component identified by
 // "chatWaitlist".
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct ComponentName(Identifier);
 
 impl ComponentName {
@@ -77,7 +76,6 @@ impl HeapSize for ComponentName {
 // we should resolve this path to a `ComponentId` within a transaction
 // as soon as possible.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct ComponentPath {
     path: WithHeapSize<Vec<ComponentName>>,
 }
@@ -91,14 +89,6 @@ impl ComponentPath {
 
     pub fn is_root(&self) -> bool {
         self.path.is_empty()
-    }
-
-    /// Component path to use in tests, representing a user-space component.
-    /// Ideally this could be changed to an arbitrary path and the tests would
-    /// still pass.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn test_user() -> Self {
-        Self::root()
     }
 
     pub fn parent(&self) -> Option<(Self, ComponentName)> {

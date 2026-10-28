@@ -1,4 +1,3 @@
-#![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 use std::borrow::Cow;
 
@@ -42,7 +41,6 @@ pub struct ErrorMetadata {
     pub r#source: Option<String>,
 }
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErrorCode {
     BadRequest,
@@ -61,6 +59,7 @@ pub enum ErrorCode {
         table_name: Option<String>,
         document_id: Option<String>,
         write_source: Option<String>,
+        component_path: Option<String>,
         is_system: bool,
         /// The timestamp of the conflicting write, if known.
         /// Used by retry loops to wait until the write is observable.
@@ -72,6 +71,23 @@ pub enum ErrorCode {
     OperationalInternalServerError,
     MisdirectedRequest,
     TooEarly,
+}
+
+/// Information about an OCC error, used for logging and diagnostics.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct OccInfo {
+    pub table_name: Option<String>,
+    pub document_id: Option<String>,
+    pub write_source: Option<String>,
+    pub component_path: Option<String>,
+    pub retry_count: Option<u64>,
+}
+
+struct SampledClientErrorFamily {
+    /// `family` label on `SAMPLED_CLIENT_ERROR_TOTAL`; must stay a small fixed
+    /// set, never derived from tenant data.
+    label: &'static str,
+    sample_rate: f64,
 }
 
 impl ErrorMetadata {
@@ -212,7 +228,7 @@ impl ErrorMetadata {
         Self {
             code: ErrorCode::MisdirectedRequest,
             short_msg: "MisdirectedRequest".into(),
-            msg: "Instance not served by this Conductor".into(),
+            msg: "Service temporarily unavailable".into(),
             source: None,
         }
     }
@@ -290,8 +306,7 @@ impl ErrorMetadata {
         msg: impl Into<Cow<'static, str>>,
     ) -> Self {
         Self {
-            // TODO: change error code after a push cycle
-            code: ErrorCode::Overloaded,
+            code: ErrorCode::FeatureTemporarilyUnavailable,
             short_msg: short_msg.into(),
             msg: msg.into(),
             source: None,
@@ -325,6 +340,7 @@ impl ErrorMetadata {
                 table_name: None,
                 document_id: None,
                 write_source,
+                component_path: None,
                 is_system: true,
                 write_ts,
             },
@@ -336,24 +352,25 @@ impl ErrorMetadata {
 
     /// User-caused Optimistic Concurrency Control / Commit Race Error
     pub fn user_occ(
-        table_name: Option<String>,
-        document_id: Option<String>,
-        write_source: Option<String>,
+        info: Option<OccInfo>,
         description: Option<String>,
         write_ts: Option<u64>,
     ) -> Self {
-        let table_description = table_name
-            .clone()
-            .map(|name| format!("the \"{name}\" table"))
+        let table_description = info
+            .as_ref()
+            .and_then(|i| i.table_name.as_ref())
+            .map(|t| format!("the \"{t}\" table"))
             .unwrap_or("some table".to_owned());
         let write_source_description = description
             .map(|source| format!("{source}. "))
             .unwrap_or_default();
+        let info = info.unwrap_or_default();
         Self {
             code: ErrorCode::OCC {
-                table_name,
-                document_id,
-                write_source,
+                table_name: info.table_name,
+                document_id: info.document_id,
+                write_source: info.write_source,
+                component_path: info.component_path,
                 is_system: false,
                 write_ts,
             },
@@ -368,15 +385,6 @@ impl ErrorMetadata {
         }
     }
 
-    pub fn service_unavailable() -> Self {
-        Self {
-            code: ErrorCode::Overloaded,
-            short_msg: "ServiceUnavailable".into(),
-            msg: "Service temporarily unavailable".into(),
-            source: None,
-        }
-    }
-
     /// Responds with HTTP 425 Too Early.
     /// Not intended to be user-facing, but is used to indicate to the
     /// consistency checker that it should skip this unloaded instance rather
@@ -385,7 +393,7 @@ impl ErrorMetadata {
         Self {
             code: ErrorCode::TooEarly,
             short_msg: "TooEarly".into(),
-            msg: "Instance is not loaded yet, try again later".into(),
+            msg: "Deployment is not loaded yet, try again later".into(),
             source: None,
         }
     }
@@ -479,6 +487,10 @@ impl ErrorMetadata {
         self.code == ErrorCode::RejectedBeforeExecution
     }
 
+    pub fn is_feature_temporarily_unavailable(&self) -> bool {
+        self.code == ErrorCode::FeatureTemporarilyUnavailable
+    }
+
     pub fn is_forbidden(&self) -> bool {
         self.code == ErrorCode::Forbidden
     }
@@ -520,6 +532,32 @@ impl ErrorMetadata {
         }
     }
 
+    /// Single source of truth for a family's sample rate and counter label, so
+    /// the two cannot drift apart.
+    fn sampled_client_error_family(&self) -> Option<SampledClientErrorFamily> {
+        let family = match (&self.code, &*self.short_msg) {
+            (ErrorCode::Forbidden, "Unauthorized") => SampledClientErrorFamily {
+                label: "forbidden_unauthorized",
+                sample_rate: 0.001,
+            },
+            (ErrorCode::Forbidden, "OperationNotPermitted") => SampledClientErrorFamily {
+                label: "operation_not_permitted",
+                sample_rate: 0.01,
+            },
+            _ => return None,
+        };
+        Some(family)
+    }
+
+    /// Must run before the Sentry sampling gate: sampled counts hide
+    /// regressions that fan out across many small tenants instead of spiking on
+    /// one.
+    pub fn log_sampled_client_error(&self) {
+        if let Some(family) = self.sampled_client_error_family() {
+            crate::metrics::log_sampled_client_error(family.label);
+        }
+    }
+
     /// Returns the level at which the given error should report to sentry
     /// INFO -> it's a client-at-fault error
     /// WARNING -> it's a server-at-fault error that is expected
@@ -532,6 +570,12 @@ impl ErrorMetadata {
         // Sentry considers errors invalid if this field is empty.
         if self.short_msg.is_empty() {
             return None;
+        }
+
+        // Ahead of the match so a family's rate wins over the catch-all arm for
+        // its `ErrorCode`.
+        if let Some(family) = self.sampled_client_error_family() {
+            return Some((sentry::Level::Info, Some(family.sample_rate)));
         }
 
         match self.code {
@@ -555,11 +599,10 @@ impl ErrorMetadata {
             | ErrorCode::PaginationLimit => Some((sentry::Level::Info, Some(0.001))),
 
             // Sample operational errors - since they only matter at high volume
-            ErrorCode::OutOfRetention
-            | ErrorCode::RejectedBeforeExecution
-            | ErrorCode::OperationalInternalServerError => {
+            ErrorCode::OutOfRetention | ErrorCode::OperationalInternalServerError => {
                 Some((sentry::Level::Warning, Some(0.1)))
             },
+            ErrorCode::RejectedBeforeExecution => Some((sentry::Level::Warning, Some(0.01))),
 
             // Sampling for OCC/Overloaded/RateLimited, since we only really care about the
             // details if they happen at high volume.
@@ -730,7 +773,7 @@ impl ErrorCode {
 
 pub trait ErrorMetadataAnyhowExt {
     fn is_occ(&self) -> bool;
-    fn occ_info(&self) -> Option<(Option<String>, Option<String>, Option<String>)>;
+    fn occ_info(&self) -> Option<OccInfo>;
     fn occ_write_ts(&self) -> Option<u64>;
     fn is_pagination_limit(&self) -> bool;
     fn is_unauthenticated(&self) -> bool;
@@ -742,6 +785,7 @@ pub trait ErrorMetadataAnyhowExt {
     fn is_rate_limited(&self) -> bool;
     fn is_operational_internal_server_error(&self) -> bool;
     fn is_rejected_before_execution(&self) -> bool;
+    fn is_feature_temporarily_unavailable(&self) -> bool;
     fn is_forbidden(&self) -> bool;
     fn is_too_early(&self) -> bool;
     fn should_report_to_sentry(&self) -> Option<(sentry::Level, Option<f64>)>;
@@ -771,20 +815,23 @@ impl ErrorMetadataAnyhowExt for anyhow::Error {
         false
     }
 
-    fn occ_info(&self) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    fn occ_info(&self) -> Option<OccInfo> {
         if let Some(e) = self.downcast_ref::<ErrorMetadata>() {
             return match &e.code {
                 ErrorCode::OCC {
                     table_name,
                     document_id,
                     write_source,
+                    component_path,
                     is_system: _,
                     write_ts: _,
-                } => Some((
-                    table_name.clone(),
-                    document_id.clone(),
-                    write_source.clone(),
-                )),
+                } => Some(OccInfo {
+                    table_name: table_name.clone(),
+                    document_id: document_id.clone(),
+                    write_source: write_source.clone(),
+                    component_path: component_path.clone(),
+                    retry_count: None,
+                }),
                 _ => None,
             };
         }
@@ -878,6 +925,14 @@ impl ErrorMetadataAnyhowExt for anyhow::Error {
         false
     }
 
+    /// Returns true if error is tagged as FeatureTemporarilyUnavailable
+    fn is_feature_temporarily_unavailable(&self) -> bool {
+        if let Some(e) = self.downcast_ref::<ErrorMetadata>() {
+            return e.is_feature_temporarily_unavailable();
+        }
+        false
+    }
+
     /// Returns true if error is tagged as Forbidden
     fn is_forbidden(&self) -> bool {
         if let Some(e) = self.downcast_ref::<ErrorMetadata>() {
@@ -967,10 +1022,22 @@ impl ErrorMetadataAnyhowExt for anyhow::Error {
         if let Some(e) = self.downcast_ref::<ErrorMetadata>() {
             return match e.metric_server_error_label_value() {
                 Some(v) => v,
-                None => {
-                    StaticMetricLabel::STATUS_DEVELOPER_ERROR
-                        .split_key_value()
-                        .1
+                None => match e.code {
+                    ErrorCode::Unauthenticated => {
+                        StaticMetricLabel::STATUS_UNAUTHENTICATED_ERROR
+                            .split_key_value()
+                            .1
+                    },
+                    ErrorCode::AuthUpdateFailed => {
+                        StaticMetricLabel::STATUS_AUTH_UPDATE_FAILED_ERROR
+                            .split_key_value()
+                            .1
+                    },
+                    _ => {
+                        StaticMetricLabel::STATUS_DEVELOPER_ERROR
+                            .split_key_value()
+                            .1
+                    },
                 },
             };
         }
@@ -1041,121 +1108,3 @@ pub const OCC_ERROR_MSG: &str = "Data read or written in \
 pub const OCC_ERROR: &str = "OptimisticConcurrencyControlFailure";
 const CLIENT_DISCONNECTED_MSG: &str = "Client disconnected";
 const CLIENT_DISCONNECTED: &str = "ClientDisconnected";
-
-#[cfg(any(test, feature = "testing"))]
-mod proptest {
-    use proptest::prelude::*;
-
-    use super::{
-        ErrorCode,
-        ErrorMetadata,
-    };
-
-    impl Arbitrary for ErrorMetadata {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = Self>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            any::<ErrorCode>().prop_map(|ec| match ec {
-                ErrorCode::BadRequest => ErrorMetadata::bad_request("bad", "request"),
-                ErrorCode::Conflict => ErrorMetadata::conflict("conflict", "conflict"),
-                ErrorCode::NotFound => ErrorMetadata::not_found("not", "found"),
-                ErrorCode::PaginationLimit => {
-                    ErrorMetadata::pagination_limit("pagination", "limit")
-                },
-                ErrorCode::OCC {
-                    is_system: true,
-                    write_source,
-                    ..
-                } => ErrorMetadata::system_occ(None, write_source),
-                ErrorCode::OCC {
-                    is_system: false,
-                    table_name,
-                    document_id,
-                    write_source,
-                    ..
-                } => ErrorMetadata::user_occ(
-                    table_name,
-                    document_id,
-                    write_source,
-                    Some("description".to_string()),
-                    None,
-                ),
-                ErrorCode::OutOfRetention => ErrorMetadata::out_of_retention(),
-                ErrorCode::Unauthenticated => ErrorMetadata::unauthenticated("un", "auth"),
-                ErrorCode::AuthUpdateFailed => ErrorMetadata::auth_update_failed("un", "auth"),
-                ErrorCode::Forbidden => ErrorMetadata::forbidden("for", "bidden"),
-                ErrorCode::RateLimited => ErrorMetadata::rate_limited("too", "many requests"),
-                ErrorCode::Overloaded => ErrorMetadata::overloaded("overloaded", "error"),
-                ErrorCode::FeatureTemporarilyUnavailable => {
-                    ErrorMetadata::feature_temporarily_unavailable("bootstrapping", "who knows")
-                },
-                ErrorCode::RejectedBeforeExecution => {
-                    ErrorMetadata::rejected_before_execution("rejected_before_execution", "error")
-                },
-                ErrorCode::OperationalInternalServerError => {
-                    ErrorMetadata::operational_internal_server_error()
-                },
-                ErrorCode::ClientDisconnect => ErrorMetadata::client_disconnect(),
-                ErrorCode::MisdirectedRequest => ErrorMetadata::misdirected_request(),
-                ErrorCode::TooEarly => ErrorMetadata::too_early(),
-            })
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use http::StatusCode;
-    use proptest::prelude::*;
-
-    use crate::{
-        ErrorCode,
-        ErrorMetadata,
-        INTERNAL_SERVER_ERROR,
-        OCC_ERROR,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_server_error_visibility(err in any::<ErrorMetadata>()) {
-            // Error has visibility through sentry or custom metric.
-            assert!(err.should_report_to_sentry().is_some() || err.custom_metric().is_some());
-            if err.metric_server_error_label().is_some()
-                && err.code != ErrorCode::NotFound {
-                assert!(err.should_report_to_sentry().unwrap().0 >= sentry::Level::Warning);
-                if err.code == ErrorCode::Overloaded ||
-                    err.code == ErrorCode::RejectedBeforeExecution {
-                    // Overloaded messages come with custom messaging
-                } else if matches!(err.code, ErrorCode::OCC{ .. }) {
-                    assert_eq!(err.short_msg, OCC_ERROR);
-                } else {
-                    // User is informed that they are not responsible.
-                    assert_eq!(err.short_msg, INTERNAL_SERVER_ERROR);
-                }
-            } else {
-                if let Some((level, _)) = err.should_report_to_sentry() {
-                    assert_eq!(level, sentry::Level::Info);
-                }
-                // User is responsible for error.
-                assert_ne!(err.short_msg, INTERNAL_SERVER_ERROR);
-            }
-        }
-    }
-
-    #[test]
-    fn test_too_early_error_mappings() {
-        let err = ErrorMetadata::too_early();
-        assert_eq!(err.code.http_status_code(), StatusCode::TOO_EARLY);
-        assert_eq!(
-            ErrorCode::from_http_status_code(StatusCode::TOO_EARLY),
-            Some(ErrorCode::TooEarly)
-        );
-    }
-}

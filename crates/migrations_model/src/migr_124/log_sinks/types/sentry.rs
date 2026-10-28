@@ -15,17 +15,8 @@ use serde::{
 };
 use value::FieldName;
 
-#[cfg(any(test, feature = "testing"))]
-pub const TEST_DSN: &str =
-    "https://ef1d32d342354c87869ab2db8b490b2c@o1192621.ingest.sentry.io/6333191";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SentryConfig {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(value = "(TEST_DSN.parse::<Dsn>().unwrap()).into()")
-    )]
     pub dsn: PII<Dsn>,
     pub tags: Option<BTreeMap<FieldName, String>>,
     pub version: ExceptionFormatVersion,
@@ -74,13 +65,8 @@ impl fmt::Display for SentryConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, Default)
-)]
 pub enum ExceptionFormatVersion {
     V1,
-    #[cfg_attr(any(test, feature = "testing"), default)]
     V2,
 }
 

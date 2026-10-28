@@ -1,26 +1,30 @@
 use std::{
     collections::BTreeMap,
     str::FromStr,
-    sync::LazyLock,
 };
 
 use common::{
     bootstrap_model::index::IndexMetadata,
     components::ComponentPath,
+    document::ResolvedDocument,
     http::RequestDestination,
     log_streaming::{
         LogEvent,
         StructuredLogEvent,
     },
+    pii::PII,
     runtime::UnixTimestamp,
     types::{
+        AccessTokenId,
         GenericIndexName,
         IndexDiff,
         IndexName,
+        MemberId,
+        SystemStopState,
+        UsageLimitStopState,
     },
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
+use errors::ErrorMetadata;
 use serde::{
     Deserialize,
     Serialize,
@@ -38,12 +42,17 @@ use value::{
     val,
     ConvexObject,
     ConvexValue,
+    FieldName,
     TableName,
 };
 
+use super::integration_config::{
+    IntegrationAuditConfig,
+    IntegrationAuditCredentialChanges,
+};
 use crate::{
     auth::types::AuthDiff,
-    backend_state::types::BackendState,
+    backend_state::types::OldBackendState,
     components::config::{
         ComponentDiff,
         SerializedComponentDiff,
@@ -60,44 +69,35 @@ use crate::{
         ImportMode,
         ImportRequestor,
     },
+    source_packages::types::{
+        NodeVersionDiff,
+        SerializedNodeVersionDiff,
+    },
+    usage_limits::types::UsageLimitConfig,
 };
 
-pub static DEPLOYMENT_AUDIT_LOG_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_deployment_audit_log"
-        .parse()
-        .expect("Invalid deployment audit log table")
-});
+pub const DEPLOYMENT_AUDIT_LOG_TABLE: TableName = TableName::const_new("_deployment_audit_log");
+
+#[derive(Default, Serialize, Deserialize)]
+struct IntegrationAuditMetadata {
+    id: String,
+    #[serde(rename = "type")]
+    r#type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config: Option<IntegrationAuditConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous: Option<IntegrationAuditConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current: Option<IntegrationAuditConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credential_changes: Option<IntegrationAuditCredentialChanges>,
+}
 
 #[derive(Debug, Clone, PartialEq, Default)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AuditLogIndexDiff {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any::<(IndexName, DeveloperIndexConfig)>(), 0..4)"
-        )
-    )]
     pub added_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any::<(IndexName, DeveloperIndexConfig)>(), 0..4)"
-        )
-    )]
     pub removed_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any::<(IndexName, DeveloperIndexConfig)>(), 0..4)"
-        )
-    )]
     pub enabled_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any::<(IndexName, DeveloperIndexConfig)>(), 0..4)"
-        )
-    )]
     pub disabled_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
 }
 
@@ -132,10 +132,11 @@ impl From<IndexDiff> for AuditLogIndexDiff {
     }
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
+#[derive(Debug, Clone, strum::EnumDiscriminants)]
+#[strum_discriminants(
+    name(DeploymentAuditLogEventKind),
+    derive(strum::EnumIter, strum::IntoStaticStr),
+    strum(serialize_all = "snake_case")
 )]
 pub enum DeploymentAuditLogEvent {
     CreateEnvironmentVariable {
@@ -146,6 +147,34 @@ pub enum DeploymentAuditLogEvent {
     },
     DeleteEnvironmentVariable {
         name: EnvVarName,
+    },
+    // The config fields are pinned to fixed values in proptests: generating
+    // nested arbitrary `UsageLimitConfig`s inside this large derived enum
+    // strategy overflows the test thread's stack.
+    CreateUsageLimit {
+        id: String,
+        config: UsageLimitConfig,
+    },
+    UpdateUsageLimit {
+        id: String,
+        previous: UsageLimitConfig,
+        current: UsageLimitConfig,
+    },
+    DeleteUsageLimit {
+        id: String,
+        config: UsageLimitConfig,
+    },
+    UsageLimitExceeded {
+        id: String,
+        config: UsageLimitConfig,
+    },
+    /// The deployment's usage-limit stop state changed: it was disabled by
+    /// crossing a `Disable` limit, or re-enabled after coming back under
+    /// every enabled `Disable` limit. Deployment-level, unlike the per-limit
+    /// `UsageLimitExceeded`.
+    ChangeUsageLimitStopState {
+        old_state: UsageLimitStopState,
+        new_state: UsageLimitStopState,
     },
     ReplaceEnvironmentVariable {
         previous_name: EnvVarName,
@@ -165,22 +194,19 @@ pub enum DeploymentAuditLogEvent {
         diffs: PushComponentDiffs,
     },
     BuildIndexes {
-        #[cfg_attr(
-            any(test, feature = "testing"),
-            proptest(strategy = "prop::collection::vec(any::<(IndexName, \
-                                 DeveloperIndexConfig)>(), 0..4)")
-        )]
         added_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
-        #[cfg_attr(
-            any(test, feature = "testing"),
-            proptest(strategy = "prop::collection::vec(any::<(IndexName, \
-                                 DeveloperIndexConfig)>(), 0..4)")
-        )]
         removed_indexes: Vec<(IndexName, DeveloperIndexConfig)>,
     },
+    // Deprecated: replaced by ChangeUserStopState / ChangeSystemStopState
     ChangeDeploymentState {
-        old_state: BackendState,
-        new_state: BackendState,
+        old_state: OldBackendState,
+        new_state: OldBackendState,
+    },
+    PauseDeployment,
+    UnpauseDeployment,
+    ChangeSystemStopState {
+        old_state: SystemStopState,
+        new_state: SystemStopState,
     },
     // TODO: consider adding table names once this is logged for more places
     // and we have a story about limiting size.
@@ -195,7 +221,101 @@ pub enum DeploymentAuditLogEvent {
         table_count_deleted: u64,
     },
     DeleteScheduledJobsTable {
+        component_id: Option<String>,
         component: ComponentPath,
+    },
+    DeleteTables {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table_names: Vec<TableName>,
+    },
+    DeleteComponent {
+        component_id: Option<String>,
+        component: ComponentPath,
+    },
+    CancelAllScheduledFunctions {
+        component_id: Option<String>,
+        component: ComponentPath,
+    },
+    CancelScheduledFunction {
+        component_id: Option<String>,
+        component: ComponentPath,
+        scheduled_function_id: String,
+        function_path: Option<String>,
+    },
+    RequestExport {
+        id: String,
+        component_id: Option<String>,
+        component: ComponentPath,
+        format: String,
+        requestor: String,
+    },
+    DownloadExport {
+        id: String,
+        component_id: Option<String>,
+        component: ComponentPath,
+        format: String,
+        requestor: String,
+    },
+    CancelExport {
+        id: String,
+    },
+    SetExportExpiration {
+        id: String,
+        expiration_ts_ms: i64,
+    },
+    CreateIntegration {
+        id: String,
+        r#type: String,
+        config: Option<IntegrationAuditConfig>,
+    },
+    UpdateIntegration {
+        id: String,
+        r#type: String,
+        previous: Option<IntegrationAuditConfig>,
+        current: Option<IntegrationAuditConfig>,
+        credential_changes: Option<IntegrationAuditCredentialChanges>,
+    },
+    DeleteIntegration {
+        id: String,
+        r#type: String,
+        config: Option<IntegrationAuditConfig>,
+    },
+    // System UDF audit events (from dashboard mutations)
+    AddDocuments {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table: String,
+        document_ids: Vec<String>,
+    },
+    DeleteDocuments {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table: String,
+        document_ids: Vec<String>,
+    },
+    UpdateDocuments {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table: String,
+        document_ids: Vec<String>,
+    },
+    CreateTable {
+        component_id: Option<String>,
+        component: ComponentPath,
+        table: String,
+    },
+    DeleteFiles {
+        component_id: Option<String>,
+        component: ComponentPath,
+        storage_ids: Vec<String>,
+    },
+    GenerateUploadUrl {
+        component_id: Option<String>,
+        component: ComponentPath,
+    },
+    CreateDataSync {
+        sync_id: String,
     },
 }
 
@@ -225,43 +345,47 @@ impl From<IndexDiff> for DeploymentAuditLogEvent {
     }
 }
 
-impl DeploymentAuditLogEvent {
-    pub fn action(&self) -> &'static str {
-        match self {
-            DeploymentAuditLogEvent::CreateEnvironmentVariable { .. } => {
-                "create_environment_variable"
-            },
-            DeploymentAuditLogEvent::UpdateEnvironmentVariable { .. } => {
-                "update_environment_variable"
-            },
-            DeploymentAuditLogEvent::DeleteEnvironmentVariable { .. } => {
-                "delete_environment_variable"
-            },
-            DeploymentAuditLogEvent::ReplaceEnvironmentVariable { .. } => {
-                "replace_environment_variable"
-            },
-            DeploymentAuditLogEvent::UpdateCanonicalUrl { .. } => "update_canonical_url",
-            DeploymentAuditLogEvent::DeleteCanonicalUrl { .. } => "delete_canonical_url",
-            DeploymentAuditLogEvent::PushConfig { .. } => "push_config",
-            DeploymentAuditLogEvent::PushConfigWithComponents { .. } => {
-                "push_config_with_components"
-            },
-            DeploymentAuditLogEvent::BuildIndexes { .. } => "build_indexes",
-            DeploymentAuditLogEvent::ChangeDeploymentState { .. } => "change_deployment_state",
-            DeploymentAuditLogEvent::SnapshotImport { .. } => "snapshot_import",
-            DeploymentAuditLogEvent::ClearTables => "clear_tables",
-            DeploymentAuditLogEvent::DeleteScheduledJobsTable { .. } => {
-                "delete_scheduled_jobs_table"
-            },
-        }
+impl DeploymentAuditLogEventKind {
+    pub fn action(self) -> &'static str {
+        self.into()
     }
 
-    fn metadata(self) -> anyhow::Result<ConvexObject> {
+    pub fn actions() -> impl Iterator<Item = &'static str> {
+        use strum::IntoEnumIterator;
+        Self::iter().map(Self::action)
+    }
+}
+
+impl DeploymentAuditLogEvent {
+    pub fn action(&self) -> &'static str {
+        DeploymentAuditLogEventKind::from(self).action()
+    }
+
+    pub fn metadata(self) -> anyhow::Result<ConvexObject> {
         match self {
             DeploymentAuditLogEvent::CreateEnvironmentVariable { name }
             | DeploymentAuditLogEvent::UpdateEnvironmentVariable { name }
             | DeploymentAuditLogEvent::DeleteEnvironmentVariable { name } => {
                 obj!("variable_name" => name.to_string())
+            },
+            DeploymentAuditLogEvent::CreateUsageLimit { id, config }
+            | DeploymentAuditLogEvent::DeleteUsageLimit { id, config }
+            | DeploymentAuditLogEvent::UsageLimitExceeded { id, config } => {
+                obj!(
+                    "id" => id,
+                    "config" => ConvexValue::try_from(config)?,
+                )
+            },
+            DeploymentAuditLogEvent::UpdateUsageLimit {
+                id,
+                previous,
+                current,
+            } => {
+                obj!(
+                    "id" => id,
+                    "previous" => ConvexValue::try_from(previous)?,
+                    "current" => ConvexValue::try_from(current)?,
+                )
             },
             DeploymentAuditLogEvent::ReplaceEnvironmentVariable {
                 previous_name,
@@ -294,9 +418,9 @@ impl DeploymentAuditLogEvent {
                         let config_value = ConvexValue::try_from(config)?;
                         let name_value = ConvexValue::try_from(name.to_string())?;
                         let metadata_value = match config_value {
-                            ConvexValue::Object(o) => {
-                                ConvexValue::Object(o.shallow_merge(obj!("name" => name_value)?)?)
-                            },
+                            ConvexValue::Object(o) => ConvexValue::Object(
+                                o.insert(const { FieldName::const_new("name") }, name_value)?,
+                            ),
                             _ => anyhow::bail!("Expected config value to be an object"),
                         };
                         Ok(metadata_value)
@@ -309,9 +433,9 @@ impl DeploymentAuditLogEvent {
                         let config_value = ConvexValue::try_from(config)?;
                         let name_value = ConvexValue::try_from(name.to_string())?;
                         let metadata_value = match config_value {
-                            ConvexValue::Object(o) => {
-                                ConvexValue::Object(o.shallow_merge(obj!("name" => name_value)?)?)
-                            },
+                            ConvexValue::Object(o) => ConvexValue::Object(
+                                o.insert(const { FieldName::const_new("name") }, name_value)?,
+                            ),
                             _ => anyhow::bail!("Expected config value to be an object"),
                         };
                         Ok(metadata_value)
@@ -324,6 +448,20 @@ impl DeploymentAuditLogEvent {
                 )
             },
             DeploymentAuditLogEvent::ChangeDeploymentState {
+                old_state,
+                new_state,
+            } => {
+                obj!("old_state" => old_state.to_string(), "new_state" => new_state.to_string())
+            },
+            DeploymentAuditLogEvent::PauseDeployment => obj!(),
+            DeploymentAuditLogEvent::UnpauseDeployment => obj!(),
+            DeploymentAuditLogEvent::ChangeUsageLimitStopState {
+                old_state,
+                new_state,
+            } => {
+                obj!("old_state" => old_state.to_string(), "new_state" => new_state.to_string())
+            },
+            DeploymentAuditLogEvent::ChangeSystemStopState {
                 old_state,
                 new_state,
             } => {
@@ -381,13 +519,226 @@ impl DeploymentAuditLogEvent {
                 )
             },
             DeploymentAuditLogEvent::ClearTables => obj!(),
-            DeploymentAuditLogEvent::DeleteScheduledJobsTable { component } => {
-                let component = component.serialize();
+            DeploymentAuditLogEvent::DeleteScheduledJobsTable {
+                component_id,
+                component,
+            } => {
                 obj!(
-                    "component" => component
+                    "component_id" => component_id,
+                    "component" => component.serialize()
                 )
             },
+            DeploymentAuditLogEvent::DeleteTables {
+                component_id,
+                component,
+                table_names,
+            } => {
+                let table_names: Vec<ConvexValue> = table_names
+                    .into_iter()
+                    .map(|name| anyhow::Ok(ConvexValue::String(name.to_string().try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table_names" => table_names
+                )
+            },
+            DeploymentAuditLogEvent::DeleteComponent {
+                component_id,
+                component,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize()
+                )
+            },
+            DeploymentAuditLogEvent::CancelAllScheduledFunctions {
+                component_id,
+                component,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize()
+                )
+            },
+            DeploymentAuditLogEvent::CancelScheduledFunction {
+                component_id,
+                component,
+                scheduled_function_id,
+                function_path,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "scheduled_function_id" => scheduled_function_id,
+                    "function_path" => function_path
+                )
+            },
+            DeploymentAuditLogEvent::RequestExport {
+                id,
+                component_id,
+                component,
+                format,
+                requestor,
+            }
+            | DeploymentAuditLogEvent::DownloadExport {
+                id,
+                component_id,
+                component,
+                format,
+                requestor,
+            } => {
+                obj!(
+                    "id" => id,
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "format" => format,
+                    "requestor" => requestor
+                )
+            },
+            DeploymentAuditLogEvent::CancelExport { id } => {
+                obj!("id" => id)
+            },
+            DeploymentAuditLogEvent::SetExportExpiration {
+                id,
+                expiration_ts_ms,
+            } => {
+                obj!("id" => id, "expiration_ts_ms" => expiration_ts_ms)
+            },
+            DeploymentAuditLogEvent::CreateIntegration { id, r#type, config }
+            | DeploymentAuditLogEvent::DeleteIntegration { id, r#type, config } => {
+                value::serde::to_object(IntegrationAuditMetadata {
+                    id: id.clone(),
+                    r#type: r#type.clone(),
+                    config: config.clone(),
+                    ..Default::default()
+                })
+            },
+            DeploymentAuditLogEvent::UpdateIntegration {
+                id,
+                r#type,
+                previous,
+                current,
+                credential_changes,
+            } => value::serde::to_object(IntegrationAuditMetadata {
+                id: id.clone(),
+                r#type: r#type.clone(),
+                previous: previous.clone(),
+                current: current.clone(),
+                credential_changes: credential_changes.clone(),
+                ..Default::default()
+            }),
+            DeploymentAuditLogEvent::AddDocuments {
+                component_id,
+                component,
+                table,
+                document_ids,
+            } => {
+                let ids: Vec<ConvexValue> = document_ids
+                    .into_iter()
+                    .map(|id| anyhow::Ok(ConvexValue::String(id.try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table" => table,
+                    "document_ids" => ids
+                )
+            },
+            DeploymentAuditLogEvent::DeleteDocuments {
+                component_id,
+                component,
+                table,
+                document_ids,
+            } => {
+                let ids: Vec<ConvexValue> = document_ids
+                    .into_iter()
+                    .map(|id| anyhow::Ok(ConvexValue::String(id.try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table" => table,
+                    "document_ids" => ids
+                )
+            },
+            DeploymentAuditLogEvent::UpdateDocuments {
+                component_id,
+                component,
+                table,
+                document_ids,
+            } => {
+                let ids: Vec<ConvexValue> = document_ids
+                    .into_iter()
+                    .map(|id| anyhow::Ok(ConvexValue::String(id.try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table" => table,
+                    "document_ids" => ids,
+                )
+            },
+            DeploymentAuditLogEvent::CreateTable {
+                component_id,
+                component,
+                table,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "table" => table
+                )
+            },
+            DeploymentAuditLogEvent::DeleteFiles {
+                component_id,
+                component,
+                storage_ids,
+            } => {
+                let ids: Vec<ConvexValue> = storage_ids
+                    .into_iter()
+                    .map(|id| anyhow::Ok(ConvexValue::String(id.try_into()?)))
+                    .try_collect()?;
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize(),
+                    "storage_ids" => ids
+                )
+            },
+            DeploymentAuditLogEvent::GenerateUploadUrl {
+                component_id,
+                component,
+            } => {
+                obj!(
+                    "component_id" => component_id,
+                    "component" => component.serialize()
+                )
+            },
+            DeploymentAuditLogEvent::CreateDataSync { sync_id } => {
+                obj!("sync_id" => sync_id)
+            },
         }
+    }
+
+    pub fn into_audit_log_object(
+        self,
+        member_id: Option<i64>,
+        token_id: Option<i64>,
+        app_client_id: Option<&str>,
+        client_ip: Option<&str>,
+        client_user_agent: Option<&str>,
+    ) -> anyhow::Result<ConvexObject> {
+        let action = self.action().to_string();
+        let metadata = self.metadata()?;
+        value::serde::to_object(SerializedDeploymentAuditLogEntry {
+            action,
+            metadata,
+            member_id,
+            token_id,
+            app_client_id: app_client_id.map(str::to_string),
+            client_ip: client_ip.map(str::to_string),
+            client_user_agent: client_user_agent.map(str::to_string),
+        })
     }
 
     pub fn to_log_event(
@@ -413,6 +764,92 @@ impl TryFrom<DeploymentAuditLogEvent> for ConvexObject {
 
     fn try_from(value: DeploymentAuditLogEvent) -> anyhow::Result<Self> {
         obj!("action" => value.action(), "metadata" => value.metadata()?)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum DeploymentAuditLogActor {
+    Token {
+        member_id: Option<MemberId>,
+        token_id: AccessTokenId,
+        client_id: Option<String>,
+    },
+    Member {
+        member_id: MemberId,
+    },
+    System,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SerializedDeploymentAuditLogEntry {
+    action: String,
+    metadata: ConvexObject,
+    member_id: Option<i64>,
+    token_id: Option<i64>,
+    app_client_id: Option<String>,
+    client_ip: Option<String>,
+    client_user_agent: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DeploymentAuditLogEntry {
+    pub client_ip: Option<String>,
+    pub client_user_agent: Option<String>,
+    pub create_time: i64,
+    pub actor: DeploymentAuditLogActor,
+    pub action: DeploymentAuditLogEvent,
+}
+
+impl DeploymentAuditLogEntry {
+    pub fn from_audit_log_object(object: ConvexObject, create_time: i64) -> anyhow::Result<Self> {
+        let SerializedDeploymentAuditLogEntry {
+            action,
+            metadata,
+            member_id,
+            token_id,
+            app_client_id,
+            client_ip,
+            client_user_agent,
+        } = value::serde::from_object(object)?;
+
+        let member_id = member_id
+            .map(|id| anyhow::Ok(MemberId(u64::try_from(id)?)))
+            .transpose()?;
+        let actor = match token_id {
+            Some(token_id) => DeploymentAuditLogActor::Token {
+                member_id,
+                token_id: u64::try_from(token_id)
+                    .map(AccessTokenId)
+                    .unwrap_or_else(|_| AccessTokenId::unknown()),
+                client_id: app_client_id,
+            },
+            None => match member_id {
+                Some(member_id) => DeploymentAuditLogActor::Member { member_id },
+                None => DeploymentAuditLogActor::System,
+            },
+        };
+
+        let action = DeploymentAuditLogEvent::try_from(obj!(
+            "action" => action,
+            "metadata" => metadata,
+        )?)?;
+        Ok(Self {
+            client_ip,
+            client_user_agent,
+            create_time,
+            actor,
+            action,
+        })
+    }
+}
+
+impl TryFrom<ResolvedDocument> for DeploymentAuditLogEntry {
+    type Error = anyhow::Error;
+
+    fn try_from(document: ResolvedDocument) -> anyhow::Result<Self> {
+        let create_time = f64::from(document.creation_time()) as i64;
+        let object: ConvexObject = document.into_value().into_value();
+        Self::from_audit_log_object(object, create_time)
     }
 }
 
@@ -444,6 +881,27 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
             },
             "update_environment_variable" => DeploymentAuditLogEvent::UpdateEnvironmentVariable {
                 name: remove_string(&mut fields, "variable_name")?.parse()?,
+            },
+            "create_usage_limit" => DeploymentAuditLogEvent::CreateUsageLimit {
+                id: remove_string(&mut fields, "id")?,
+                config: remove_object(&mut fields, "config")?,
+            },
+            "update_usage_limit" => DeploymentAuditLogEvent::UpdateUsageLimit {
+                id: remove_string(&mut fields, "id")?,
+                previous: remove_object(&mut fields, "previous")?,
+                current: remove_object(&mut fields, "current")?,
+            },
+            "delete_usage_limit" => DeploymentAuditLogEvent::DeleteUsageLimit {
+                id: remove_string(&mut fields, "id")?,
+                config: remove_object(&mut fields, "config")?,
+            },
+            "usage_limit_exceeded" => DeploymentAuditLogEvent::UsageLimitExceeded {
+                id: remove_string(&mut fields, "id")?,
+                config: remove_object(&mut fields, "config")?,
+            },
+            "change_usage_limit_stop_state" => DeploymentAuditLogEvent::ChangeUsageLimitStopState {
+                old_state: remove_string(&mut fields, "old_state")?.parse()?,
+                new_state: remove_string(&mut fields, "new_state")?.parse()?,
             },
             "replace_environment_variable" => DeploymentAuditLogEvent::ReplaceEnvironmentVariable {
                 previous_name: remove_string(&mut fields, "previous_variable_name")?.parse()?,
@@ -477,6 +935,12 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
                 }
             },
             "change_deployment_state" => DeploymentAuditLogEvent::ChangeDeploymentState {
+                old_state: remove_string(&mut fields, "old_state")?.parse()?,
+                new_state: remove_string(&mut fields, "new_state")?.parse()?,
+            },
+            "pause_deployment" => DeploymentAuditLogEvent::PauseDeployment,
+            "unpause_deployment" => DeploymentAuditLogEvent::UnpauseDeployment,
+            "change_system_stop_state" => DeploymentAuditLogEvent::ChangeSystemStopState {
                 old_state: remove_string(&mut fields, "old_state")?.parse()?,
                 new_state: remove_string(&mut fields, "new_state")?.parse()?,
             },
@@ -526,10 +990,216 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
                 }
             },
             "delete_scheduled_jobs_table" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
                 let component = ComponentPath::deserialize(
                     remove_nullable_string(&mut fields, "component")?.as_deref(),
                 )?;
-                DeploymentAuditLogEvent::DeleteScheduledJobsTable { component }
+                DeploymentAuditLogEvent::DeleteScheduledJobsTable {
+                    component_id,
+                    component,
+                }
+            },
+            "delete_tables" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table_names: Vec<TableName> =
+                    remove_vec_of_strings(&mut fields, "table_names")?
+                        .iter()
+                        .map(|s| TableName::from_str(s))
+                        .try_collect()?;
+                DeploymentAuditLogEvent::DeleteTables {
+                    component_id,
+                    component,
+                    table_names,
+                }
+            },
+            "delete_component" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                DeploymentAuditLogEvent::DeleteComponent {
+                    component_id,
+                    component,
+                }
+            },
+            "cancel_all_scheduled_functions" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                DeploymentAuditLogEvent::CancelAllScheduledFunctions {
+                    component_id,
+                    component,
+                }
+            },
+            "cancel_scheduled_function" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let scheduled_function_id = remove_string(&mut fields, "scheduled_function_id")?;
+                let function_path = remove_nullable_string(&mut fields, "function_path")?;
+                DeploymentAuditLogEvent::CancelScheduledFunction {
+                    component_id,
+                    component,
+                    scheduled_function_id,
+                    function_path,
+                }
+            },
+            "request_export" => {
+                let id = remove_string(&mut fields, "id")?;
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let format = remove_string(&mut fields, "format")?;
+                let requestor = remove_string(&mut fields, "requestor")?;
+                DeploymentAuditLogEvent::RequestExport {
+                    id,
+                    component_id,
+                    component,
+                    format,
+                    requestor,
+                }
+            },
+            "download_export" => {
+                let id = remove_string(&mut fields, "id")?;
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let format = remove_string(&mut fields, "format")?;
+                let requestor = remove_string(&mut fields, "requestor")?;
+                DeploymentAuditLogEvent::DownloadExport {
+                    id,
+                    component_id,
+                    component,
+                    format,
+                    requestor,
+                }
+            },
+            "cancel_export" => {
+                let id = remove_string(&mut fields, "id")?;
+                DeploymentAuditLogEvent::CancelExport { id }
+            },
+            "set_export_expiration" => {
+                let id = remove_string(&mut fields, "id")?;
+                let expiration_ts_ms = remove_int64(&mut fields, "expiration_ts_ms")?;
+                DeploymentAuditLogEvent::SetExportExpiration {
+                    id,
+                    expiration_ts_ms,
+                }
+            },
+            "create_integration" => {
+                let metadata: IntegrationAuditMetadata =
+                    value::serde::from_object(fields.try_into()?)?;
+                DeploymentAuditLogEvent::CreateIntegration {
+                    id: metadata.id,
+                    r#type: metadata.r#type,
+                    config: metadata.config,
+                }
+            },
+            "update_integration" => {
+                let metadata: IntegrationAuditMetadata =
+                    value::serde::from_object(fields.try_into()?)?;
+                DeploymentAuditLogEvent::UpdateIntegration {
+                    id: metadata.id,
+                    r#type: metadata.r#type,
+                    previous: metadata.previous,
+                    current: metadata.current,
+                    credential_changes: metadata.credential_changes,
+                }
+            },
+            "delete_integration" => {
+                let metadata: IntegrationAuditMetadata =
+                    value::serde::from_object(fields.try_into()?)?;
+                DeploymentAuditLogEvent::DeleteIntegration {
+                    id: metadata.id,
+                    r#type: metadata.r#type,
+                    config: metadata.config,
+                }
+            },
+            "add_documents" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table = remove_string(&mut fields, "table")?;
+                let document_ids = remove_vec_of_strings(&mut fields, "document_ids")?;
+                DeploymentAuditLogEvent::AddDocuments {
+                    component_id,
+                    component,
+                    table,
+                    document_ids,
+                }
+            },
+            "delete_documents" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table = remove_string(&mut fields, "table")?;
+                let document_ids = remove_vec_of_strings(&mut fields, "document_ids")?;
+                DeploymentAuditLogEvent::DeleteDocuments {
+                    component_id,
+                    component,
+                    table,
+                    document_ids,
+                }
+            },
+            "update_documents" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table = remove_string(&mut fields, "table")?;
+                let document_ids = remove_vec_of_strings(&mut fields, "document_ids")?;
+                DeploymentAuditLogEvent::UpdateDocuments {
+                    component_id,
+                    component,
+                    table,
+                    document_ids,
+                }
+            },
+            "create_table" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let table = remove_string(&mut fields, "table")?;
+                DeploymentAuditLogEvent::CreateTable {
+                    component_id,
+                    component,
+                    table,
+                }
+            },
+            "delete_files" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let storage_ids = remove_vec_of_strings(&mut fields, "storage_ids")?;
+                DeploymentAuditLogEvent::DeleteFiles {
+                    component_id,
+                    component,
+                    storage_ids,
+                }
+            },
+            "generate_upload_url" => {
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                DeploymentAuditLogEvent::GenerateUploadUrl {
+                    component_id,
+                    component,
+                }
+            },
+            "create_data_sync" => DeploymentAuditLogEvent::CreateDataSync {
+                sync_id: remove_string(&mut fields, "sync_id")?,
             },
             _ => anyhow::bail!("action {action} unrecognized"),
         };
@@ -555,32 +1225,11 @@ impl TryFrom<DeploymentAuditLogEvent> for serde_json::Map<String, JsonValue> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SerializedIndexDiff {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::vec(any::<
-                             SerializedNamedDeveloperIndexConfig>(), 0..4)")
-    )]
     pub added_indexes: Vec<SerializedNamedDeveloperIndexConfig>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::vec(any::<
-                             SerializedNamedDeveloperIndexConfig>(), 0..4)")
-    )]
     pub removed_indexes: Vec<SerializedNamedDeveloperIndexConfig>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::vec(any::<
-                             SerializedNamedDeveloperIndexConfig>(), 0..4)")
-    )]
     #[serde(default)]
     pub disabled_indexes: Vec<SerializedNamedDeveloperIndexConfig>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::vec(any::<
-                             SerializedNamedDeveloperIndexConfig>(), 0..4)")
-    )]
     #[serde(default)]
     pub enabled_indexes: Vec<SerializedNamedDeveloperIndexConfig>,
 }
@@ -637,19 +1286,38 @@ impl TryFrom<SerializedIndexDiff> for AuditLogIndexDiff {
         })
     }
 }
+
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct PushComponentDiffs {
     pub auth_diff: AuthDiff,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::btree_map(any::<ComponentPath>(), \
-                             any::<ComponentDiff>(), 0..4)")
-    )]
     pub component_diffs: BTreeMap<ComponentPath, ComponentDiff>,
+    pub message: Option<PushMessage>,
+    pub node_version_diff: Option<NodeVersionDiff>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PushMessage(PII<String>);
+
+impl PushMessage {
+    const MAX_LENGTH: usize = 1024;
+}
+
+impl TryFrom<String> for PushMessage {
+    type Error = anyhow::Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.len() > PushMessage::MAX_LENGTH {
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "PushMessageTooLong",
+                format!(
+                    "Push messages can be at most {} bytes long",
+                    PushMessage::MAX_LENGTH
+                ),
+            ))
+        }
+
+        Ok(PushMessage(value.into()))
+    }
 }
 
 impl TryFrom<SerializedPushComponentDiffs> for PushComponentDiffs {
@@ -673,6 +1341,11 @@ impl TryFrom<SerializedPushComponentDiffs> for PushComponentDiffs {
         Ok(PushComponentDiffs {
             auth_diff: value.auth_diff.unwrap_or_default(),
             component_diffs,
+            message: value.message.map(PushMessage::try_from).transpose()?,
+            node_version_diff: value
+                .node_version_diff
+                .map(NodeVersionDiff::try_from)
+                .transpose()?,
         })
     }
 }
@@ -686,6 +1359,9 @@ struct ComponentPathAndDiff {
 pub struct SerializedPushComponentDiffs {
     auth_diff: Option<AuthDiff>,
     component_diffs: Vec<ComponentPathAndDiff>,
+    message: Option<String>,
+    #[serde(default)]
+    node_version_diff: Option<SerializedNodeVersionDiff>,
 }
 
 impl TryFrom<PushComponentDiffs> for SerializedPushComponentDiffs {
@@ -705,82 +1381,17 @@ impl TryFrom<PushComponentDiffs> for SerializedPushComponentDiffs {
                 })
             })
             .collect::<anyhow::Result<Vec<ComponentPathAndDiff>>>()?;
+        let node_version_diff = value
+            .node_version_diff
+            .map(SerializedNodeVersionDiff::try_from)
+            .transpose()?;
         Ok(SerializedPushComponentDiffs {
             auth_diff: Some(auth_diff),
             component_diffs,
+            message: value.message.map(|m| (m.0).0),
+            node_version_diff,
         })
     }
 }
 
 codegen_convex_serialization!(PushComponentDiffs, SerializedPushComponentDiffs);
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use common::{
-        log_streaming::LogEventFormatVersion,
-        runtime::UnixTimestamp,
-    };
-    use proptest::prelude::*;
-    use serde_json::json;
-    use value::ConvexObject;
-
-    use super::DeploymentAuditLogEvent;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 64 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_try_from(e in any::<DeploymentAuditLogEvent>()) {
-            ConvexObject::try_from(e).unwrap();
-        }
-
-        #[test]
-        fn test_json(e in any::<DeploymentAuditLogEvent>()) {
-            serde_json::Map::try_from(e).unwrap();
-        }
-    }
-
-    #[test]
-    fn test_serialization_of_audit_log_event() -> anyhow::Result<()> {
-        let event = DeploymentAuditLogEvent::to_log_event(
-            DeploymentAuditLogEvent::CreateEnvironmentVariable {
-                name: "test_env_variable".parse()?,
-            },
-            UnixTimestamp::from_millis(0),
-        )?;
-        let event_json = event.to_json_map(LogEventFormatVersion::default())?;
-        let value = serde_json::to_value(&event_json)?;
-        assert_eq!(
-            value,
-            json!({
-                "topic": "audit_log",
-                "timestamp": 0,
-                "audit_log_action": "create_environment_variable",
-                "audit_log_metadata": "{\"variable_name\":\"test_env_variable\"}",
-            })
-        );
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod proptests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use value::{
-        testing::assert_roundtrips,
-        ConvexObject,
-    };
-
-    use crate::deployment_audit_log::types::DeploymentAuditLogEvent;
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 16 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-        #[test]
-        fn test_deployment_audit_log_roundtrip(v in any::<DeploymentAuditLogEvent>()) {
-            assert_roundtrips::<DeploymentAuditLogEvent, ConvexObject>(v);
-        }
-    }
-}

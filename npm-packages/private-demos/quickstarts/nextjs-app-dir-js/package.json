@@ -1,22 +1,23 @@
 {
-  "name": "my-next-app",
+  "name": "quickstart-nextjs-app-dir-js",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
-    "@tailwindcss/postcss": "4.1.18",
-    "convex": "^1.27.4",
-    "eslint": "8.57.1",
-    "eslint-config-next": "14.2.25",
-    "next": "^16.0.0",
-    "postcss": "^8.4.19",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "tailwindcss": "4.1.18"
+    "@tailwindcss/postcss": "^4.3.3",
+    "convex": "workspace:*",
+    "@eslint/eslintrc": "^3",
+    "eslint": "^9.37.0",
+    "eslint-config-next": "^15.5.4",
+    "next": "^15.5.28",
+    "postcss": "^8.5.18",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "tailwindcss": "^4.3.3"
   }
 }

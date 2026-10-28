@@ -2,20 +2,24 @@ use axum::{
     extract::FromRef,
     response::IntoResponse,
 };
-use common::http::{
-    extract::MtState,
-    HttpResponseError,
+use common::{
+    http::{
+        extract::MtState,
+        ExtractRequestMetadata,
+        HttpResponseError,
+    },
+    types::{
+        SystemStopState,
+        UserStopState,
+    },
 };
 use errors::ErrorMetadata;
 use http::StatusCode;
-use model::backend_state::{
-    types::BackendState,
-    BackendStateModel,
-};
+use model::backend_state::BackendStateModel;
+use roles::RequireDeploymentOp;
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
-    admin::must_be_admin_with_write_access,
     authentication::ExtractIdentity,
     LocalAppState,
 };
@@ -31,6 +35,7 @@ use crate::{
 #[utoipa::path(
     post,
     path = "/pause_deployment",
+    tag = "Pause/Unpause",
     responses((status = 200)),
     security(
         ("Deploy Key" = []),
@@ -42,15 +47,16 @@ use crate::{
 pub async fn pause_deployment(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::PauseDeployment)?;
 
     let mut tx = st.application.begin(identity.clone()).await?;
     let current_state = BackendStateModel::new(&mut tx)
         .get_backend_state()
         .await?
         .into_value();
-    if current_state == BackendState::Disabled || current_state == BackendState::Suspended {
+    if current_state.system != SystemStopState::None {
         return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
             "PauseDeploymentFailed",
             "Deployment is currently disabled or suspended by Convex and cannot be paused."
@@ -59,7 +65,7 @@ pub async fn pause_deployment(
     }
 
     st.application
-        .change_deployment_state(identity, BackendState::Paused)
+        .set_user_stop_state(identity, request_metadata, UserStopState::Paused)
         .await?;
 
     Ok(StatusCode::OK)
@@ -73,6 +79,7 @@ pub async fn pause_deployment(
 #[utoipa::path(
     post,
     path = "/unpause_deployment",
+    tag = "Pause/Unpause",
     responses((status = 200)),
     security(
         ("Deploy Key" = []),
@@ -84,15 +91,23 @@ pub async fn pause_deployment(
 pub async fn unpause_deployment(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::UnpauseDeployment)?;
 
     let mut tx = st.application.begin(identity.clone()).await?;
     let current_state = BackendStateModel::new(&mut tx)
         .get_backend_state()
         .await?
         .into_value();
-    if current_state != BackendState::Paused {
+    if current_state.system != SystemStopState::None {
+        return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
+            "UnpauseDeploymentFailed",
+            "Deployment is currently disabled or suspended by Convex and cannot be unpaused."
+        ))
+        .into());
+    }
+    if current_state.user != UserStopState::Paused {
         return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
             "UnpauseDeploymentFailed",
             "Deployment is not currently paused."
@@ -101,7 +116,7 @@ pub async fn unpause_deployment(
     }
 
     st.application
-        .change_deployment_state(identity, BackendState::Running)
+        .set_user_stop_state(identity, request_metadata, UserStopState::None)
         .await?;
 
     Ok(StatusCode::OK)

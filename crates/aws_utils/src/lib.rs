@@ -6,14 +6,19 @@ use std::{
 };
 
 use aws_config::{
-    default_provider::credentials::DefaultCredentialsChain,
+    identity::IdentityCache,
     BehaviorVersion,
     ConfigLoader,
 };
-use aws_credential_types::provider::ProvideCredentials;
+use aws_credential_types::provider::{
+    ProvideCredentials,
+    SharedCredentialsProvider,
+};
 use aws_sdk_s3::config::Builder as S3ConfigBuilder;
 use aws_types::region::Region;
 
+mod credentials;
+pub mod firehose;
 pub mod s3;
 
 static S3_ENDPOINT_URL: LazyLock<Option<String>> =
@@ -42,9 +47,17 @@ static AWS_S3_DISABLE_CHECKSUMS: LazyLock<bool> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
-/// Similar aws_config::from_env but returns an error if credentials or
-/// region is are not. It also doesn't spew out log lines every time
-/// credentials are accessed.
+static AWS_S3_DISABLE_RANGE_PREFETCH: LazyLock<bool> = LazyLock::new(|| {
+    env::var("AWS_S3_DISABLE_RANGE_PREFETCH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_default()
+});
+
+/// Initializes an AWS config from environment variables, but returns an error
+/// if credentials or region are not set. It also doesn't spew out log lines
+/// every time credentials are accessed. The returned config uses a process-wide
+/// cached credential provider with a process-wide cache.
 pub async fn must_config_from_env() -> anyhow::Result<ConfigLoader> {
     let Some(region) = AWS_REGION.clone() else {
         anyhow::bail!("AWS_REGION env variable must be set");
@@ -54,7 +67,17 @@ pub async fn must_config_from_env() -> anyhow::Result<ConfigLoader> {
     // Check for credentials using the default provider chain
     let _creds = preflight_credentials().await?;
 
-    Ok(aws_config::defaults(BehaviorVersion::v2025_08_07()).region(region))
+    Ok(config_with_credentials(
+        region,
+        credentials::shared_credentials().await,
+    ))
+}
+
+fn config_with_credentials(region: Region, credentials: SharedCredentialsProvider) -> ConfigLoader {
+    aws_config::defaults(BehaviorVersion::v2026_01_12())
+        .region(region)
+        .credentials_provider(credentials)
+        .identity_cache(IdentityCache::no_cache())
 }
 
 pub async fn must_s3_config_from_env() -> anyhow::Result<S3ConfigBuilder> {
@@ -70,11 +93,14 @@ pub async fn must_s3_config_from_env() -> anyhow::Result<S3ConfigBuilder> {
 /// Attempts to resolve credentials using the default chain:
 /// env vars -> shared config/credentials (incl. SSO) -> web identity ->
 /// container creds -> EC2 IMDSv2. Returns early with a helpful error if nothing
-/// is available.
+/// is available. Resolves through the cache shared with
+/// [`must_config_from_env`], so this is free once credentials are cached.
 pub async fn preflight_credentials() -> anyhow::Result<aws_credential_types::Credentials> {
-    let chain = DefaultCredentialsChain::builder().build().await;
-
-    match chain.provide_credentials().await {
+    match credentials::shared_credentials()
+        .await
+        .provide_credentials()
+        .await
+    {
         Ok(creds) => Ok(creds),
         Err(err) => {
             // Give actionable hints based on common setups.
@@ -133,4 +159,12 @@ pub fn is_sse_disabled() -> bool {
 /// Returns true if checksum headers should be disabled
 pub fn are_checksums_disabled() -> bool {
     *AWS_S3_DISABLE_CHECKSUMS
+}
+
+/// Returns true if object sizes should not be discovered via ranged GETs.
+/// S3-compatible storage providers that don't match S3's `Content-Range`,
+/// `InvalidRange`, or `NoSuchKey` behavior on ranged GetObject requests can
+/// set this to fall back to fetching object attributes before downloading.
+pub fn is_range_prefetch_disabled() -> bool {
+    *AWS_S3_DISABLE_RANGE_PREFETCH
 }

@@ -4,6 +4,7 @@ use common::types::{
     DeploymentType,
     ProjectId,
     TeamId,
+    UdfRuntime,
     DEFAULT_PROVISION_CONCURRENCY,
 };
 use serde::{
@@ -14,14 +15,15 @@ use value::codegen_convex_serialization;
 
 /// Information and configuration about the backend.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct BackendInfoPersisted {
     pub team: TeamId,
     pub project: ProjectId,
     pub deployment: DeploymentId,
     pub deployment_type: DeploymentType,
+    pub deployment_ref: Option<String>,
     pub project_name: Option<String>,
     pub project_slug: Option<String>,
+    pub default_udf_runtime: Option<UdfRuntime>,
 
     // Entitlements
     pub streaming_export_enabled: bool,
@@ -29,6 +31,8 @@ pub struct BackendInfoPersisted {
     pub log_streaming_enabled: bool,
     pub audit_log_retention_days: i64,
     pub send_logs_to_client: Option<bool>,
+    pub custom_audit_logs_in_log_streams_config_enabled: Option<bool>,
+    pub ai_gateway_disabled: Option<bool>,
 }
 
 impl From<BackendInfoPersisted> for BackendInfo {
@@ -38,13 +42,18 @@ impl From<BackendInfoPersisted> for BackendInfo {
             project_id: bi.project,
             deployment_id: bi.deployment,
             deployment_type: bi.deployment_type,
+            deployment_ref: bi.deployment_ref,
             project_name: bi.project_name,
             project_slug: bi.project_slug,
+            default_udf_runtime: bi.default_udf_runtime,
             streaming_export_enabled: Some(bi.streaming_export_enabled),
             provision_concurrency: Some(bi.provision_concurrency),
             log_streaming_enabled: Some(bi.log_streaming_enabled),
             audit_log_retention_days: Some(bi.audit_log_retention_days),
             send_logs_to_client: bi.send_logs_to_client,
+            custom_audit_logs_in_log_streams_config_enabled: bi
+                .custom_audit_logs_in_log_streams_config_enabled,
+            ai_gateway_disabled: bi.ai_gateway_disabled,
         }
     }
 }
@@ -57,6 +66,8 @@ impl From<BackendInfo> for BackendInfoPersisted {
             deployment: bi.deployment_id,
             project_name: bi.project_name,
             project_slug: bi.project_slug,
+            default_udf_runtime: bi.default_udf_runtime,
+            deployment_ref: bi.deployment_ref,
             streaming_export_enabled: bi.streaming_export_enabled.unwrap_or_default(),
             deployment_type: bi.deployment_type,
             provision_concurrency: bi
@@ -65,14 +76,10 @@ impl From<BackendInfo> for BackendInfoPersisted {
             log_streaming_enabled: bi.log_streaming_enabled.unwrap_or_default(),
             audit_log_retention_days: bi.audit_log_retention_days.unwrap_or_default(),
             send_logs_to_client: bi.send_logs_to_client,
+            custom_audit_logs_in_log_streams_config_enabled: bi
+                .custom_audit_logs_in_log_streams_config_enabled,
+            ai_gateway_disabled: bi.ai_gateway_disabled,
         }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Default for BackendInfoPersisted {
-    fn default() -> Self {
-        BackendInfo::default().into()
     }
 }
 
@@ -83,6 +90,8 @@ pub struct SerializedBackendInfo {
     project: i64,
     instance: i64,
     deployment_type: String,
+    #[serde(default)]
+    deployment_ref: Option<String>,
     #[serde(default)]
     streaming_export_enabled: bool,
     #[serde(default)]
@@ -95,6 +104,12 @@ pub struct SerializedBackendInfo {
     audit_log_retention_days: i64,
     #[serde(default)]
     send_logs_to_client: Option<bool>,
+    #[serde(default)]
+    custom_audit_logs_in_log_streams_config_enabled: Option<bool>,
+    #[serde(default)]
+    ai_gateway_disabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_udf_runtime: Option<String>,
 }
 
 impl From<BackendInfoPersisted> for SerializedBackendInfo {
@@ -109,6 +124,7 @@ impl From<BackendInfoPersisted> for SerializedBackendInfo {
             project: (project as i64),
             instance: (deployment as i64),
             deployment_type,
+            deployment_ref: b.deployment_ref,
             streaming_export_enabled: b.streaming_export_enabled,
             provision_concurrency: Some(b.provision_concurrency as i64),
             log_streaming_enabled: b.log_streaming_enabled,
@@ -116,6 +132,10 @@ impl From<BackendInfoPersisted> for SerializedBackendInfo {
             project_slug: b.project_slug,
             audit_log_retention_days: b.audit_log_retention_days,
             send_logs_to_client: b.send_logs_to_client,
+            custom_audit_logs_in_log_streams_config_enabled: b
+                .custom_audit_logs_in_log_streams_config_enabled,
+            ai_gateway_disabled: b.ai_gateway_disabled,
+            default_udf_runtime: b.default_udf_runtime.map(|runtime| runtime.to_string()),
         }
     }
 }
@@ -128,6 +148,7 @@ impl TryFrom<SerializedBackendInfo> for BackendInfoPersisted {
         let project = ProjectId(o.project as u64);
         let deployment = DeploymentId(o.instance as u64);
         let deployment_type: DeploymentType = o.deployment_type.parse()?;
+        let deployment_ref = o.deployment_ref;
         let streaming_export_enabled = o.streaming_export_enabled;
         let provision_concurrency = o
             .provision_concurrency
@@ -137,12 +158,16 @@ impl TryFrom<SerializedBackendInfo> for BackendInfoPersisted {
         let project_slug = o.project_slug;
         let audit_log_retention_days = o.audit_log_retention_days;
         let send_logs_to_client = o.send_logs_to_client;
+        let custom_audit_logs_in_log_streams_config_enabled =
+            o.custom_audit_logs_in_log_streams_config_enabled;
+        let ai_gateway_disabled = o.ai_gateway_disabled;
 
         Ok(Self {
             team,
             project,
             deployment,
             deployment_type,
+            deployment_ref,
             project_name,
             project_slug,
             streaming_export_enabled,
@@ -150,52 +175,11 @@ impl TryFrom<SerializedBackendInfo> for BackendInfoPersisted {
             log_streaming_enabled,
             audit_log_retention_days,
             send_logs_to_client,
+            custom_audit_logs_in_log_streams_config_enabled,
+            ai_gateway_disabled,
+            default_udf_runtime: o.default_udf_runtime.map(|s| s.parse()).transpose()?,
         })
     }
 }
 
 codegen_convex_serialization!(BackendInfoPersisted, SerializedBackendInfo);
-
-#[cfg(test)]
-mod tests {
-    use common::types::{
-        DeploymentId,
-        DeploymentType,
-        ProjectId,
-        TeamId,
-    };
-    use value::assert_obj;
-
-    use super::BackendInfoPersisted;
-
-    #[test]
-    fn test_frozen_obj() {
-        assert_eq!(
-            BackendInfoPersisted::try_from(assert_obj! {
-                "deploymentType" => "prod",
-                "instance" => 1926612683017131100i64,
-                "logStreamingEnabled" => true,
-                "org" => -667731666772323580i64,
-                "project" => 6688466498098154475i64,
-                "projectName" => null,
-                "projectSlug" => "ayaya",
-                "provisionConcurrency" => 1740011963i64,
-                "streamingExportEnabled" => false,
-            })
-            .unwrap(),
-            BackendInfoPersisted {
-                team: TeamId(17779012406937228036),
-                project: ProjectId(6688466498098154475),
-                deployment: DeploymentId(1926612683017131100),
-                deployment_type: DeploymentType::Prod,
-                project_name: None,
-                project_slug: Some("ayaya".to_string()),
-                streaming_export_enabled: false,
-                provision_concurrency: 1740011963,
-                log_streaming_enabled: true,
-                audit_log_retention_days: 0,
-                send_logs_to_client: None,
-            }
-        );
-    }
-}

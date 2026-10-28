@@ -29,7 +29,7 @@ export function DeploymentCredentialsForm({
   const [showKey, setShowKey] = useState(false);
   return (
     <form
-      className="flex w-[30rem] flex-col gap-2"
+      className="flex w-120 flex-col gap-2"
       onSubmit={(e) => {
         e.preventDefault();
         void onSubmit({

@@ -12,8 +12,12 @@ import { Nent } from "@common/lib/useNents";
 import { Button } from "@ui/Button";
 import { ExternalLinkIcon } from "@radix-ui/react-icons";
 import { useRouter } from "next/router";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 import { MultiSelectValue } from "@ui/MultiSelectCombobox";
+import { NoPermissionMessage } from "@common/elements/NoPermissionMessage";
 
 type LogLevel = "success" | "failure" | "DEBUG" | "INFO" | "WARN" | "ERROR";
 
@@ -102,6 +106,7 @@ export function FunctionLogs({
   const logsConnectivityCallbacks = {
     onReconnected: () => {},
     onDisconnected: () => {},
+    onPermissionDenied: () => {},
   };
 
   const receiveLogs = (entries: UdfLog[], isPaused: boolean) => {
@@ -140,9 +145,20 @@ export function FunctionLogs({
 
   const router = useRouter();
   const { deploymentsURI } = useContext(DeploymentInfoContext);
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewLogs = useIsOperationAllowed("ViewLogs");
+
+  if (!canViewLogs) {
+    return (
+      <NoPermissionMessage
+        message="You do not have permission to view logs in this deployment."
+        missingPermission="deployment:logs:view"
+      />
+    );
+  }
 
   return (
-    <div className="flex h-full w-full max-w-full min-w-0 grow flex-col gap-2 overflow-hidden">
+    <div className="flex size-full max-w-full min-w-0 grow flex-col gap-2 overflow-hidden">
       <div className="flex min-w-0 shrink-0">
         <LogToolbar
           functions={[functionId]}

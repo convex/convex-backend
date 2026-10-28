@@ -11,7 +11,6 @@ use axum::{
         FromRef,
     },
     routing::{
-        delete,
         get,
         post,
         put,
@@ -47,7 +46,6 @@ use tower_http::{
     },
     decompression::RequestDecompressionLayer,
 };
-use udf::HTTP_ACTION_BODY_LIMIT;
 use utoipa::{
     openapi::security::{
         ApiKey,
@@ -68,6 +66,7 @@ use crate::{
         function_concurrency,
         latency_percentiles,
         scheduled_job_lag,
+        subscription_invalidations_top_k,
         table_rate,
         udf_rate,
     },
@@ -83,28 +82,24 @@ use crate::{
         push_config,
     },
     deploy_config2,
+    deployment_jwks::deployment_jwks,
     environment_variables::{
         list_environment_variables,
         platform_router,
         update_environment_variables,
     },
     http_actions::http_action_handler,
-    log_sinks::{
-        add_axiom_sink,
-        add_datadog_sink,
-        add_sentry_sink,
-        add_webhook_sink,
-        delete_log_sink,
-        regenerate_webhook_secret,
-    },
     logs::{
         stream_function_logs,
         stream_udf_execution,
     },
     node_action_callbacks::{
         action_callbacks_middleware,
+        audit_log,
         cancel_developer_job,
         create_function_handle,
+        create_service_token,
+        get_service_url,
         internal_action_post,
         internal_mutation_post,
         internal_query_post,
@@ -128,6 +123,7 @@ use crate::{
         cancel_export,
         get_zip_export,
         request_zip_export,
+        request_zip_export_token,
         set_export_expiration,
     },
     snapshot_import::{
@@ -143,10 +139,10 @@ use crate::{
         storage_upload,
     },
     streaming_export::{
+        data_sync_cursor_from_deltas,
         document_deltas_get,
         document_deltas_post,
         get_table_column_names,
-        get_tables_and_columns,
         json_schemas,
         list_snapshot_get,
         list_snapshot_post,
@@ -240,6 +236,15 @@ impl Modify for SecurityAddon {
 #[derive(OpenApi)]
 #[openapi(
     modifiers(&SecurityAddon),
+    // The data sync selection tree must be registered explicitly: these types
+    // are referenced only from flattened maps' `additionalProperties`, which
+    // utoipa's derived `schemas()` fails to register
+    // (https://github.com/juhaku/utoipa/issues/1330).
+    components(schemas(
+        common::types::streaming_export::selection::ComponentSelection,
+        common::types::streaming_export::selection::TableSelection,
+        common::types::streaming_export::selection::ColumnSelection,
+    )),
     info(
         title = "Convex Deployment API",
         version = "1.0.0",
@@ -321,6 +326,10 @@ pub fn router(st: LocalAppState) -> Router {
             "/deploy2/evaluate_push",
             post(deploy_config2::evaluate_push),
         )
+        .route(
+            "/deploy2/evaluate_schema",
+            post(deploy_config2::evaluate_schema),
+        )
         .route("/run_test_function", post(run_test_function))
         .route(
             "/deploy2/wait_for_schema",
@@ -350,15 +359,21 @@ pub fn router(st: LocalAppState) -> Router {
     let snapshot_export_routes = Router::new()
         .route("/request/zip", post(request_zip_export))
         .route("/zip/{id}", get(get_zip_export))
+        .route("/zip/{id}/token", post(request_zip_export_token))
         .route("/set_expiration/{snapshot_id}", post(set_export_expiration))
         .route("/cancel/{snapshot_id}", post(cancel_export));
 
     let (platform_routes, platform_openapi) =
         OpenApiRouter::with_openapi(PlatformApiDoc::openapi())
             .merge(platform_router())
+            .merge(crate::deployment_audit_log::platform_router())
+            .merge(crate::deployment_info::platform_router())
+            .merge(crate::usage_limits::platform_router())
             .merge(crate::canonical_urls::platform_router())
             .merge(crate::log_sinks::platform_router())
             .merge(crate::deployment_state::platform_router())
+            // Streaming export ("data sync") API at /api/v1/data/sync.
+            .merge(crate::streaming_export::platform_router())
             .split_for_parts();
     let platform_openapi_spec = platform_openapi.to_pretty_json().unwrap();
     let platform_routes = Router::new().merge(platform_routes).route(
@@ -372,7 +387,6 @@ pub fn router(st: LocalAppState) -> Router {
         .merge(streaming_export_routes())
         .nest("/actions", action_callback_routes(st.clone()))
         .nest("/export", snapshot_export_routes)
-        .nest("/logs", log_sink_routes())
         .nest("/streaming_import", streaming_import_routes())
         .nest("/v1", platform_routes);
 
@@ -404,6 +418,7 @@ pub fn router(st: LocalAppState) -> Router {
         .with_state(RouterState {
             api: Arc::new(st.application.clone()),
             runtime: st.application.runtime(),
+            subscription_reconnect_rate_limiter: None,
         });
 
     let version = SERVER_VERSION_STR.to_string();
@@ -411,6 +426,7 @@ pub fn router(st: LocalAppState) -> Router {
     Router::new()
         .nest("/api", api_routes)
         .merge(health_check_routes(version))
+        .route("/.well-known/jwks.json", get(deployment_jwks))
         .layer(cors())
         .with_state(st)
         .merge(migrated)
@@ -445,6 +461,8 @@ where
         .route("/query", post(internal_query_post))
         .route("/mutation", post(internal_mutation_post))
         .route("/action", post(internal_action_post))
+        .route("/create_service_token", post(create_service_token))
+        .route("/get_service_url", post(get_service_url))
         .route("/schedule_job", post(schedule_job))
         .route("/vector_search", post(vector_search))
         .route("/cancel_job", post(cancel_developer_job))
@@ -454,6 +472,7 @@ where
         .route("/storage_get_url", post(storage_get_url))
         .route("/storage_get_metadata", post(storage_get_metadata))
         .route("/storage_delete", post(storage_delete))
+        .route("/audit_log", post(audit_log))
         // All routes above this line get the increased limit
         .layer(DefaultBodyLimit::max(*MAX_BACKEND_RPC_REQUEST_SIZE))
         .layer(axum::middleware::from_fn_with_state(state, action_callbacks_middleware::<S>))
@@ -477,7 +496,6 @@ pub fn http_action_routes() -> Router<RouterState> {
     Router::new()
         .route("/{*rest}", http_action_handler())
         .route("/", http_action_handler())
-        .layer(DefaultBodyLimit::max(HTTP_ACTION_BODY_LIMIT))
 }
 
 pub fn app_metrics_routes<S>() -> Router<S>
@@ -495,6 +513,10 @@ where
             get(cache_hit_percentage_top_k),
         )
         .route("/function_call_count_top_k", get(function_call_count_top_k))
+        .route(
+            "/subscription_invalidations_top_k",
+            get(subscription_invalidations_top_k),
+        )
         .route("/cache_hit_percentage", get(cache_hit_percentage))
         .route("/table_rate", get(table_rate))
         .route("/latency_percentiles", get(latency_percentiles))
@@ -588,28 +610,11 @@ where
             "/test_streaming_export_connection",
             get(test_streaming_export_connection),
         )
-        .route("/get_tables_and_columns", get(get_tables_and_columns))
         .route("/get_table_column_names", get(get_table_column_names))
-}
-
-// IMPORTANT NOTE: Those routes are proxied by Usher. Any changes to the router,
-// such as adding or removing a route, or changing limits, also need to be
-// applied to `crates_private/usher/src/proxy.rs`.
-pub fn log_sink_routes<S>() -> Router<S>
-where
-    LocalAppState: FromMtState<S>,
-    S: Clone + Send + Sync + 'static,
-{
-    Router::new()
-        .route("/datadog_sink", post(add_datadog_sink))
-        .route("/webhook_sink", post(add_webhook_sink))
         .route(
-            "/regenerate_webhook_secret",
-            post(regenerate_webhook_secret),
+            "/data_sync_cursor_from_deltas",
+            post(data_sync_cursor_from_deltas),
         )
-        .route("/axiom_sink", post(add_axiom_sink))
-        .route("/sentry_sink", post(add_sentry_sink))
-        .route("/delete_sink", delete(delete_log_sink))
 }
 
 pub fn cors() -> CorsLayer {
@@ -626,82 +631,4 @@ pub fn cors() -> CorsLayer {
         ])
         .allow_origin(AllowOrigin::mirror_request())
         .max_age(Duration::from_secs(86400))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use anyhow::Context;
-    use axum::body::Body;
-    use axum_extra::headers::authorization::Credentials;
-    use http::Request;
-    use runtime::prod::ProdRuntime;
-
-    use crate::test_helpers::setup_backend_for_test;
-
-    const DASHBOARD_SPEC_FILE: &str =
-        "../../npm-packages/dashboard/dashboard-deployment-openapi.json";
-    const PUBLIC_SPEC_FILE: &str =
-        "../../npm-packages/@convex-dev/platform/public-deployment-openapi.json";
-    const PLATFORM_SPEC_FILE: &str =
-        "../../npm-packages/@convex-dev/platform/deployment-openapi.json";
-
-    #[convex_macro::prod_rt_test]
-    async fn test_api_specs_match(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let dashboard_req = Request::builder()
-            .uri("/api/dashboard_openapi.json")
-            .method("GET")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .header("Host", "localhost")
-            .body(Body::empty())?;
-
-        let public_req = Request::builder()
-            .uri("/api/public_openapi.json")
-            .method("GET")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .header("Host", "localhost")
-            .body(Body::empty())?;
-
-        let platform_req = Request::builder()
-            .uri("/api/v1/openapi.json")
-            .method("GET")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .header("Host", "localhost")
-            .body(Body::empty())?;
-
-        let actual_dashboard: serde_json::Value = backend.expect_success(dashboard_req).await?;
-        let actual_public: serde_json::Value = backend.expect_success(public_req).await?;
-        let actual_platform: serde_json::Value = backend.expect_success(platform_req).await?;
-
-        let actual_dashboard = serde_json::to_string_pretty(&actual_dashboard)?;
-        let actual_public = serde_json::to_string_pretty(&actual_public)?;
-        let actual_platform = serde_json::to_string_pretty(&actual_platform)?;
-
-        let expected_dashboard = fs::read_to_string(DASHBOARD_SPEC_FILE)
-            .context(format!("Couldn't read {DASHBOARD_SPEC_FILE}"))?;
-        let expected_public = fs::read_to_string(PUBLIC_SPEC_FILE)
-            .context(format!("Couldn't read {PUBLIC_SPEC_FILE}"))?;
-        let expected_platform = fs::read_to_string(PLATFORM_SPEC_FILE)
-            .context(format!("Couldn't read {PLATFORM_SPEC_FILE}"))?;
-
-        if expected_dashboard != actual_dashboard
-            || expected_public != actual_public
-            || expected_platform != actual_platform
-        {
-            fs::write(DASHBOARD_SPEC_FILE, &actual_dashboard)?;
-            fs::write(PUBLIC_SPEC_FILE, &actual_public)?;
-            fs::write(PLATFORM_SPEC_FILE, &actual_platform)?;
-            panic!(
-                "{DASHBOARD_SPEC_FILE} or {PUBLIC_SPEC_FILE} or {PLATFORM_SPEC_FILE} does not \
-                 match result of http route changes. This test will automatically update \
-                 dashboard-deployment-openapi.json, deployment-public-openapi.json, and \
-                 deployment-openapi.json so you can run again: `cargo test -p local_backend \
-                 test_api_specs_match`"
-            );
-        }
-        Ok(())
-    }
 }

@@ -5,9 +5,6 @@ authors = ["Convex, Inc. <no-reply@convex.dev>"]
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
-[package.metadata.cargo-udeps.ignore]
-development = ["criterion"]
-
 [lib]
 doctest = false
 
@@ -22,22 +19,26 @@ testing = [
     "metrics/testing",
     "proptest",
     "proptest-derive",
+    "roles/testing",
     "runtime/testing",
     "search/testing",
     "storage/testing",
     "shape_inference/testing",
+    "table_iteration/testing",
     "usage_tracking/testing",
     "value/testing",
     "vector/testing",
+    "convex_macro/testing",
 ]
 
 [dependencies]
 ahash = { workspace = true }
 anyhow = { workspace = true }
-async-broadcast = { workspace = true }
+arc-swap = { workspace = true }
 async-recursion = { workspace = true }
 async-trait = { workspace = true }
 async_lru = { workspace = true }
+bytes = { workspace = true }
 cmd_util = { workspace = true }
 common = { workspace = true }
 convex_macro = { workspace = true }
@@ -45,7 +46,6 @@ derive_more = { workspace = true }
 errors = { workspace = true }
 events = { workspace = true }
 fastrace = { workspace = true }
-fivetran_source = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
 governor = { workspace = true }
@@ -62,9 +62,9 @@ pb = { workspace = true }
 prometheus = { workspace = true }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
-qdrant_segment = { workspace = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
+roles = { workspace = true }
 runtime = { workspace = true }
 search = { workspace = true }
 serde = { workspace = true }
@@ -73,8 +73,9 @@ shape_inference = { workspace = true }
 short_future = { workspace = true }
 slab = { workspace = true }
 storage = { workspace = true }
+strum = { workspace = true }
 sync_types = { workspace = true }
-tempfile = { workspace = true }
+table_iteration = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
@@ -87,6 +88,7 @@ vector = { workspace = true }
 async-channel = { workspace = true }
 common = { workspace = true, features = ["testing"] }
 compact_str = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 criterion = { workspace = true, features = ["async_tokio"] }
 errors = { workspace = true, features = ["testing"] }
 events = { workspace = true, features = ["testing"] }
@@ -98,10 +100,12 @@ must-let = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
+roles = { workspace = true, features = ["testing"] }
 runtime = { workspace = true, features = ["testing"] }
 search = { workspace = true, features = ["testing"] }
 shape_inference = { workspace = true, features = ["testing"] }
 storage = { workspace = true, features = ["testing"] }
+table_iteration = { workspace = true, features = ["testing"] }
 usage_tracking = { workspace = true, features = ["testing"] }
 value = { workspace = true, features = ["testing"] }
 vector = { workspace = true, features = ["testing"] }

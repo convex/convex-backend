@@ -1,0 +1,14 @@
+interface:
+  display_name: "Convex Create Component"
+  short_description:
+    "Design and build reusable Convex components with clear boundaries."
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+  brand_color: "#14B8A6"
+  default_prompt:
+    "Help me create a Convex component for this feature. First check that a
+    component is actually justified, then design the tables, API surface, and
+    app-facing wrappers before implementing it."
+
+policy:
+  allow_implicit_invocation: true

@@ -92,8 +92,9 @@ pub fn log_outstanding_functions(
 
 register_convex_histogram!(
     APPLICATION_FUNCTION_RUNNER_TOTAL_SECONDS,
-    "The total time it took to execute a function. This includes wait time and run time. The \
-     metric is also logged for isolate client code path so we can compare apples to apples.",
+    "Function execution time, including permit waits for actions. Query and mutation permit waits \
+     are measured separately by APPLICATION_FUNCTION_RUNNER_WAIT_SECONDS. Also logged for the \
+     isolate client code path.",
     &[STATUS_LABEL[0], "udf_type", "env_type"]
 );
 pub fn function_total_timer(env: ModuleEnvironment, udf_type: UdfType) -> StatusTimer {

@@ -1,7 +1,8 @@
 import { throwNotImplementedMethodError } from "./helpers.js";
-import { Blob, isSupportedBlobPart } from "./09_file.js";
+import { Blob } from "./09_file.js";
+import { BodyInit, convertBodyInit, extractBody } from "./22_body.js";
 import inspect from "object-inspect";
-import { parseFormData, FormData, formDataToBlob } from "./21_formdata.js";
+import { parseFormData, FormData } from "./21_formdata.js";
 import {
   constructStreamId,
   extractStream,
@@ -26,15 +27,7 @@ export interface RequestInit {
   /** A Headers object, an object literal, or an array of two-item arrays to set request's headers. */
   headers?: HeadersInit;
   /** A BodyInit object or null to set request's body. */
-  body?:
-    | string
-    | ArrayBuffer
-    | ArrayBufferView
-    | null
-    | Blob
-    | FormData
-    | URLSearchParams
-    | ReadableStream; // DataView
+  body?: BodyInit | null;
   /** A string to indicate whether the request will use CORS, or will be restricted to same-origin URLs. Sets request's mode. */
   //mode?: RequestMode;
   /** A string indicating whether credentials will be sent with the request always, never, or only when sent to a same-origin URL. Sets request's credentials. */
@@ -73,7 +66,7 @@ export class Request {
   private readonly _headers: Headers;
   private readonly _url: string;
   private readonly _method: string;
-  private _bodyStream: ReadableStream | null;
+  private _bodyStream: ReadableStream | null = null;
   private _bodyUsed = false;
   private _signal: AbortSignal;
   [_contentLength]: number | null;
@@ -82,6 +75,15 @@ export class Request {
     if (input === undefined) {
       throw new TypeError("Request URL is undefined");
     }
+    // WebIDL converts the arguments before any constructor steps run: `input`
+    // (a USVString unless it's a Request), then `init.body`.
+    const inputUrl = input instanceof Request ? null : `${input}`;
+    const rawBody = options?.body;
+    const initBody =
+      rawBody === undefined || rawBody === null
+        ? null
+        : convertBodyInit(rawBody);
+
     this[_contentLength] = null;
     // By default, the signal never aborts.
     this._signal = new AbortSignal();
@@ -94,14 +96,11 @@ export class Request {
       // TODO(presley): https://developer.mozilla.org/en-US/docs/Web/API/Request/Request
       // * If this object exists on another origin to the constructor call, the Request.referrer is stripped out.
       // * If this object has a Request.mode of navigate, the mode value is converted to same-origin.
-    } else if (input instanceof URL || typeof input === "string") {
-      const href = input instanceof URL ? input.href : input;
-      this._url = validateURL(href);
+    } else {
+      this._url = validateURL(inputUrl!);
       // Use default values.
       this._method = "GET";
       this._headers = new Headers([]);
-    } else {
-      throw new TypeError("Failed to parse URL from " + input);
     }
 
     if (typeof options?.method === "string") {
@@ -118,52 +117,23 @@ export class Request {
       this._signal = options.signal;
     }
 
-    if (options?.body !== null && options?.body !== undefined) {
+    if (initBody !== null) {
       if (this._method === "GET" || this._method === "HEAD") {
         throw new TypeError(
           "Failed to construct 'Request': Request with GET/HEAD method cannot have body.",
         );
       }
 
-      let body = options.body;
-      let contentType: string | null = null;
-
-      if (typeof body === "string") {
-        contentType = "text/plain;charset=UTF-8";
-      } else if (body instanceof Blob && body.type !== "") {
-        contentType = body.type;
-      } else if (body instanceof URLSearchParams) {
-        contentType = "application/x-www-form-urlencoded;charset=UTF-8";
-        body = body.toString();
-      }
-
-      // Fill in a content type if none was provided and the body is a string
+      const { stream, contentType, contentLength } = extractBody(initBody);
       if (this._headers.get("content-type") === null && contentType !== null) {
         this._headers.set("content-type", contentType);
       }
-      if (this._headers.get("content-length") !== null) {
+      if (contentLength !== null) {
+        this[_contentLength] = contentLength;
+      } else if (this._headers.get("content-length") !== null) {
         this[_contentLength] = Number(this._headers.get("content-length"));
       }
-
-      if (body instanceof FormData) {
-        const bodyBlob = formDataToBlob(body);
-        this[_contentLength] = bodyBlob.size;
-        this._headers.set("content-type", bodyBlob.type);
-        this._bodyStream = bodyBlob.stream();
-      } else if (body instanceof ReadableStream) {
-        this._bodyStream = body;
-      } else if (isSupportedBlobPart(body)) {
-        const bodyBlob = new Blob([body], {
-          type: this._headers.get("content-type") ?? undefined,
-        });
-        this[_contentLength] = bodyBlob.size;
-        this._bodyStream = bodyBlob.stream();
-      } else {
-        return throwNotImplementedMethodError(
-          "constructor with body type other than string | ArrayBuffer | Blob | FormData | ReadableStream | null",
-          "Request",
-        );
-      }
+      this._bodyStream = stream;
     } else if (input instanceof Request) {
       // We don't consume the body in the input, if there are overrides.
       this._bodyStream = input._bodyStream;
@@ -275,10 +245,6 @@ export class Request {
     return clonedRequest;
   }
 
-  get [Symbol.toStringTag]() {
-    return "Request";
-  }
-
   inspect() {
     const properties = {
       bodyUsed: this._bodyUsed,
@@ -350,11 +316,18 @@ export class Request {
   }
 }
 
+Object.defineProperty(Request.prototype, Symbol.toStringTag, {
+  value: "Request",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
+
 // Stream in Rust -> AbortSignal in JS
 function extractAbortSignal(signalId: string) {
   const abortController = new AbortController();
   const stream = extractStream(signalId);
-  stream
+  void stream
     .getReader()
     .read()
     .then(() => abortController.abort());
@@ -391,12 +364,21 @@ function constructAbortSignalStreamId(signal: AbortSignal): string {
 
 export const convexV8ObjectFromRequest = async (request: Request) => {
   const streamId = request.body ? constructStreamId(request.body) : null;
-  const headerPairs = [...request.headers.entries()];
+  let headerPairs = [...request.headers.entries()];
+  // Per https://fetch.spec.whatwg.org/#http-network-or-cache-fetch:
+  // If httpRequest's body is null and httpRequest's method is `POST` or `PUT`, then set contentLengthHeaderValue to `0`.
+  const bodylessPostOrPut =
+    request.body === null &&
+    (request.method === "POST" || request.method === "PUT");
+  const contentLength = bodylessPostOrPut ? 0 : request[_contentLength];
+  if (bodylessPostOrPut) {
+    headerPairs = headerPairs.filter(([name]) => name !== "content-length");
+  }
   if (
-    request[_contentLength] !== null &&
-    !request.headers.has("content-length")
+    contentLength !== null &&
+    (bodylessPostOrPut || !request.headers.has("content-length"))
   ) {
-    headerPairs.push(["content-length", String(request[_contentLength])]);
+    headerPairs.push(["content-length", String(contentLength)]);
   }
   const signal = constructAbortSignalStreamId(request.signal);
   return {

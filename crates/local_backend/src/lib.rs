@@ -14,12 +14,14 @@ use ::authentication::{
     access_token_auth::NullAccessTokenAuth,
     application_auth::ApplicationAuth,
 };
+use ::usage_limits::NoopUsageLimitNotifier;
 use application::{
     self,
     api::ApplicationApi,
     log_visibility::RedactLogsToClient,
     Application,
     QueryCache,
+    SourceMapCache,
 };
 use common::{
     self,
@@ -28,8 +30,9 @@ use common::{
         RouteMapper,
     },
     knobs::{
-        ACTION_USER_TIMEOUT,
         DOCUMENT_RETENTION_RATE_LIMIT,
+        INDEX_CACHE_SIZE,
+        NODE_ACTION_USER_TIMEOUT,
         UDF_CACHE_MAX_SIZE,
     },
     persistence::Persistence,
@@ -37,10 +40,13 @@ use common::{
         new_rate_limiter,
         Runtime,
     },
+    sentry::proxied_sentry_transport_factory,
     shutdown::ShutdownSignal,
     types::{
         ConvexOrigin,
         ConvexSite,
+        DeploymentClass,
+        DeploymentMetadata,
         TEST_REGION_NAME,
     },
 };
@@ -59,14 +65,14 @@ use function_runner::{
 };
 use governor::Quota;
 use http_client::CachedHttpClient;
+use indexing::index_cache::IndexCache;
 use model::{
     initialize_application_system_tables,
     virtual_system_mapping,
-    REFRESHABLE_APP_TABLES,
 };
 use node_executor::{
     local::LocalNodeExecutor,
-    Actions,
+    NodeActions,
 };
 use runtime::prod::ProdRuntime;
 use search::{
@@ -75,8 +81,10 @@ use search::{
     SegmentTermMetadataFetcher,
 };
 use serde::Serialize;
+pub use sync::subscription_reconnect::SubscriptionReconnectRateLimiter;
 
 pub mod admin;
+mod ai_gateway;
 mod app_metrics;
 mod args_structs;
 pub mod authentication;
@@ -87,6 +95,9 @@ pub mod custom_headers;
 pub mod dashboard;
 pub mod deploy_config;
 pub mod deploy_config2;
+pub mod deployment_audit_log;
+pub mod deployment_info;
+pub mod deployment_jwks;
 pub mod deployment_state;
 pub mod environment_variables;
 pub mod http_actions;
@@ -105,8 +116,7 @@ pub mod storage;
 pub mod streaming_export;
 pub mod streaming_import;
 pub mod subs;
-#[cfg(test)]
-mod test_helpers;
+pub mod usage_limits;
 
 pub const MAX_CONCURRENT_REQUESTS: usize = 128;
 
@@ -137,6 +147,7 @@ impl LocalAppState {
 pub struct RouterState {
     pub api: Arc<dyn ApplicationApi>,
     pub runtime: ProdRuntime,
+    pub subscription_reconnect_rate_limiter: Option<Arc<SubscriptionReconnectRateLimiter>>,
 }
 
 #[derive(Serialize)]
@@ -162,12 +173,13 @@ pub async fn make_app(
         searcher.clone(),
         preempt_tx.clone(),
         virtual_system_mapping().clone(),
-        REFRESHABLE_APP_TABLES.clone(),
+        IndexCache::new(*INDEX_CACHE_SIZE).new_handle(),
         Arc::new(new_rate_limiter(
             runtime.clone(),
             Quota::per_second(*DOCUMENT_RETENTION_RATE_LIMIT),
         )),
         deleted_tablet_sender,
+        config.name(),
     )
     .await?;
     initialize_application_system_tables(&database).await?;
@@ -188,13 +200,19 @@ pub async fn make_app(
         database: database.clone(),
     };
 
-    let node_process_timeout = *ACTION_USER_TIMEOUT + Duration::from_secs(5);
+    let deployment = DeploymentMetadata {
+        name: config.name(),
+        region: None,
+        class: DeploymentClass::S16,
+    };
+    let node_process_timeout = *NODE_ACTION_USER_TIMEOUT + Duration::from_secs(5);
     let node_executor = Arc::new(LocalNodeExecutor::new(node_process_timeout).await?);
-    let actions = Actions::new(
+    let node_actions = NodeActions::new(
         node_executor,
         config.convex_origin_url()?,
-        *ACTION_USER_TIMEOUT,
+        *NODE_ACTION_USER_TIMEOUT,
         runtime.clone(),
+        deployment.clone(),
     );
 
     #[cfg(not(debug_assertions))]
@@ -215,7 +233,7 @@ pub async fn make_app(
     );
     let function_runner: Arc<dyn FunctionRunner<ProdRuntime>> =
         Arc::new(InProcessFunctionRunner::new(
-            config.name().clone(),
+            deployment,
             key_broker.function_runner_keybroker(),
             config.convex_origin_url()?,
             runtime.clone(),
@@ -234,28 +252,39 @@ pub async fn make_app(
         file_storage.clone(),
         application_storage,
         usage_event_logger,
+        Arc::new(NoopUsageLimitNotifier),
         key_broker.clone(),
-        config.name(),
-        Some(TEST_REGION_NAME.clone()),
+        DeploymentMetadata {
+            name: config.name(),
+            region: Some(TEST_REGION_NAME.clone()),
+            class: DeploymentClass::S16,
+        },
         function_runner,
         config.convex_origin_url()?,
         config.convex_site_url()?,
         searcher.clone(),
         segment_metadata_fetcher,
         persistence,
-        actions,
+        node_actions,
         Arc::new(RedactLogsToClient::new(config.redact_logs_to_client)),
         Arc::new(ApplicationAuth::new(
             key_broker.clone(),
             Arc::new(NullAccessTokenAuth),
+            runtime.clone(),
         )),
         QueryCache::new(*UDF_CACHE_MAX_SIZE),
         fetch_client,
+        proxied_sentry_transport_factory(config.convex_http_proxy.clone(), config.name()),
         config.local_log_sink.clone(),
         preempt_tx.clone(),
         Arc::new(InProcessExportProvider),
         deleted_tablet_receiver,
         oidc_http_client,
+        Some(Arc::new(ai_gateway::LocalAiGatewayTokenMinter::new(
+            config.control_plane_url.clone(),
+            config.control_plane_access_token.clone(),
+        ))),
+        SourceMapCache::new(runtime.clone()),
     )
     .await?;
 

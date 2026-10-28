@@ -126,7 +126,6 @@ impl VirtualSystemDocMapper for ScheduledJobsDocMapper {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct PublicScheduledJob {
     pub name: CanonicalizedUdfPath,
     pub args: ConvexArray,
@@ -222,27 +221,5 @@ impl TryFrom<ConvexObject> for PublicScheduledJob {
             scheduled_time,
             completed_time,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use value::{
-        testing::assert_roundtrips,
-        ConvexObject,
-    };
-
-    use crate::scheduled_jobs::virtual_table::PublicScheduledJob;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_public_scheduled_job_roundtrips(v in any::<PublicScheduledJob>()) {
-            assert_roundtrips::<PublicScheduledJob, ConvexObject>(v);
-        }
     }
 }

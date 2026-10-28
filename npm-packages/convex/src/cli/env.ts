@@ -1,4 +1,4 @@
-import { Command } from "@commander-js/extra-typings";
+import { Command, Option } from "@commander-js/extra-typings";
 import { chalkStderr } from "chalk";
 import { Context, oneoffContext } from "../bundler/context.js";
 import {
@@ -9,28 +9,42 @@ import {
 import { actionDescription } from "./lib/command.js";
 import { ensureHasConvexDependency } from "./lib/utils/utils.js";
 import {
-  envGetInDeploymentAction,
-  envListInDeployment,
-  envRemoveInDeployment,
-  envSetInDeployment,
+  deploymentEnvBackend,
+  envGet,
+  envList,
+  envRemove,
+  envSet,
 } from "./lib/env.js";
 import { getDeploymentSelection } from "./lib/deploymentSelection.js";
 import { withRunningBackend } from "./lib/localDeployment/run.js";
+import { envDefault } from "./envDefault.js";
 
-const envSet = new Command("set")
+const envSetCmd = new Command("set")
   // Pretend value is required
   .usage("[options] <name> <value>")
-  .arguments("[name] [value]")
+  .argument("[name]", "The name of the environment variable to set.")
+  .argument(
+    "[value]",
+    "The value to set the variable to. Omit to set it interactively.",
+  )
   .summary("Set a variable")
   .description(
-    "Set environment variables on your deployment.\n\n" +
-      "  npx convex env set NAME 'value'\n" +
-      "  npx convex env set NAME # omit a value to set one interactively\n" +
-      "  npx convex env set NAME --from-file value.txt\n" +
-      "  npx convex env set --from-file .env.defaults\n" +
-      "When setting multiple values, it will refuse all changes if any " +
-      "variables are already set to different values by default. " +
-      "Pass --force to overwrite the provided values.\n",
+    [
+      "Set environment variables on your deployment.",
+      "",
+      "• `npx convex env set NAME 'value'`",
+      "• `npx convex env set NAME # omit a value to set one interactively`",
+      "• `npx convex env set NAME --from-file value.txt`",
+      "• `npx convex env set --from-file .env.defaults`",
+      "",
+      "When setting multiple values, it will refuse all changes if any variables are already set to different values by default. Pass --force to overwrite the provided values.",
+      "",
+      "To keep secrets out of your shell history, omit the value to pipe it in via stdin, for instance:",
+      "• `pbpaste | npx convex env set API_KEY` (macOS)",
+      "• `Get-Clipboard | npx convex env set API_KEY` (Windows PowerShell)",
+      "",
+      "To update many variables at once, save them with `npx convex env list --include-values > .env.convex`, edit the file, then reapply the changes with `npx convex env set --force < .env.convex`.",
+    ].join("\n"),
   )
   .option(
     "--from-file <file>",
@@ -52,13 +66,8 @@ const envSet = new Command("set")
       ctx,
       deployment,
       action: async () => {
-        const didAnything = await envSetInDeployment(
-          ctx,
-          deployment,
-          name,
-          value,
-          cmdOptions,
-        );
+        const backend = deploymentEnvBackend(ctx, deployment);
+        const didAnything = await envSet(ctx, backend, name, value, cmdOptions);
         if (didAnything === false) {
           cmd.outputHelp({ error: true });
           return await ctx.crash({
@@ -72,7 +81,7 @@ const envSet = new Command("set")
     });
   });
 
-async function selectEnvDeployment(
+export async function selectEnvDeployment(
   options: DeploymentSelectionOptions,
 ): Promise<{
   ctx: Context;
@@ -109,8 +118,8 @@ async function selectEnvDeployment(
   return result;
 }
 
-const envGet = new Command("get")
-  .arguments("<name>")
+const envGetCmd = new Command("get")
+  .argument("<name>", "The name of the environment variable to print.")
   .summary("Print a variable's value")
   .description("Print a variable's value: `npx convex env get NAME`")
   .configureHelp({ showGlobalOptions: true })
@@ -123,15 +132,16 @@ const envGet = new Command("get")
       ctx,
       deployment,
       action: async () => {
-        await envGetInDeploymentAction(ctx, deployment, envVarName);
+        const backend = deploymentEnvBackend(ctx, deployment);
+        await envGet(ctx, backend, envVarName);
       },
     });
   });
 
-const envRemove = new Command("remove")
+const envRemoveCmd = new Command("remove")
   .alias("rm")
   .alias("unset")
-  .arguments("<name>")
+  .argument("<name>", "The name of the environment variable to unset.")
   .summary("Unset a variable")
   .description(
     "Unset a variable: `npx convex env remove NAME`\n" +
@@ -147,25 +157,51 @@ const envRemove = new Command("remove")
       ctx,
       deployment,
       action: async () => {
-        await envRemoveInDeployment(ctx, deployment, name);
+        const backend = deploymentEnvBackend(ctx, deployment);
+        await envRemove(ctx, backend, name);
       },
     });
   });
 
-const envList = new Command("list")
-  .summary("List all variables")
-  .description("List all variables: `npx convex env list`")
+const envListCmd = new Command("list")
+  .summary("List all environment variables and their values")
+  .description(
+    [
+      "• List only variable names (no values): `npx convex env list --names-only`",
+      "• List all variables and their values: `npx convex env list --include-values`",
+      "• Save all variables to a file: `npx convex env list --include-values > .env.convex`",
+      "• Append to a file: `npx convex env list --include-values >> .env.convex`",
+      "",
+      "When an AI agent runs this command (detected from environment variables like AI_AGENT or CLAUDECODE), only names are listed unless --include-values is passed.",
+    ].join("\n"),
+  )
+  .option(
+    "--names-only",
+    "List only the names of environment variables, without their values",
+  )
+  .addOption(
+    new Option(
+      "--include-values",
+      "Print each variable's value alongside its name, in .env format. This is the default unless an AI agent is detected, so pass it explicitly in scripts that rely on the values.",
+    ).conflicts("namesOnly"),
+  )
   .configureHelp({ showGlobalOptions: true })
   .allowExcessArguments(false)
-  .action(async (_options, cmd) => {
-    const options = cmd.optsWithGlobals();
+  .action(async (cmdOptions, cmd) => {
+    // Note: We use `as` here because optsWithGlobals() type inference doesn't
+    // include global options from the parent command (added via addDeploymentSelectionOptions)
+    const options = cmd.optsWithGlobals() as DeploymentSelectionOptions;
     const { ctx, deployment } = await selectEnvDeployment(options);
     await ensureHasConvexDependency(ctx, "env list");
     await withRunningBackend({
       ctx,
       deployment,
       action: async () => {
-        await envListInDeployment(ctx, deployment);
+        const backend = deploymentEnvBackend(ctx, deployment);
+        await envList(ctx, backend, {
+          namesOnly: cmdOptions.namesOnly ?? false,
+          includeValues: cmdOptions.includeValues ?? false,
+        });
       },
     });
   });
@@ -173,19 +209,27 @@ const envList = new Command("list")
 export const env = new Command("env")
   .summary("Set and view environment variables")
   .description(
-    "Set and view environment variables on your deployment\n\n" +
-      "  Set a variable: `npx convex env set NAME 'value'`\n" +
-      "  Set interactively: `npx convex env set NAME`\n" +
-      "  Set multiple from file: `npx convex env set --from-file .env`\n" +
-      "  Unset a variable: `npx convex env remove NAME`\n" +
-      "  List all variables: `npx convex env list`\n" +
-      "  Print a variable's value: `npx convex env get NAME`\n\n" +
+    [
+      "Set and view environment variables on your deployment",
+      "",
+      "• Set a variable: `npx convex env set NAME 'value'`",
+      "• Set interactively: `npx convex env set NAME`",
+      "• Set multiple from file: `npx convex env set --from-file .env`",
+      "• Unset a variable: `npx convex env remove NAME`",
+      "• List only variable names (no values): `npx convex env list --names-only`",
+      "• List all variables and their values: `npx convex env list --include-values`",
+      "• Print a variable's value: `npx convex env get NAME`",
+      "",
       "By default, this sets and views variables on your dev deployment.",
+      "",
+      "See the environment variables guide (https://docs.convex.dev/production/environment-variables) to learn more.",
+    ].join("\n"),
   )
-  .addCommand(envSet)
-  .addCommand(envGet)
-  .addCommand(envRemove)
-  .addCommand(envList)
+  .addCommand(envSetCmd)
+  .addCommand(envGetCmd)
+  .addCommand(envRemoveCmd)
+  .addCommand(envListCmd)
+  .addCommand(envDefault)
   .helpCommand(false)
   .addDeploymentSelectionOptions(
     actionDescription("Set and view environment variables on"),

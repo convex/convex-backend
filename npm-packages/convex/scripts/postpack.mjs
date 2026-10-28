@@ -62,6 +62,19 @@ fs.rmSync(path.join(tmpPackage, "dist", "internal-esm-types"), {
   recursive: true,
 });
 
+// Remove `./bundle-analyzer-internal`
+for (const dir of [
+  "src",
+  "dist/esm",
+  "dist/cjs",
+  "dist/esm-types",
+  "dist/cjs-types",
+]) {
+  fs.rmSync(path.join(tmpPackage, dir, "bundle-analyzer-internal"), {
+    recursive: true,
+  });
+}
+
 auditInternal(tmpPackage);
 
 await tar.create(
@@ -89,12 +102,15 @@ function getOnlyTarball(dirname) {
 
 function removeInternal(obj) {
   for (const key of Object.keys(obj)) {
-    let value = obj[key];
+    const value = obj[key];
     if (key === "convex-internal-types") {
       delete obj[key];
-    }
-    if (typeof value === "object") {
+    } else if (typeof value === "object") {
       removeInternal(value);
+      // Clean up a key if it now points to an empty object
+      if (Object.keys(value).length === 0) {
+        delete obj[key];
+      }
     }
   }
 }

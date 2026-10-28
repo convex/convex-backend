@@ -3,6 +3,43 @@ import { WorkOS } from "@workos-inc/node";
 
 let instance: WorkOS | undefined;
 
+export const WORKOS_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Thrown when a WorkOS request exceeds {@link WORKOS_REQUEST_TIMEOUT_MS}.
+ * Distinct from a `null` session (genuinely unauthenticated) so callers can
+ * send the user to the "try again" page instead of a login loop that would hit
+ * the same unavailable WorkOS.
+ */
+export class WorkOSUnavailableError extends Error {
+  constructor(operation: string) {
+    super(`WorkOS request timed out (${operation})`);
+    this.name = "WorkOSUnavailableError";
+  }
+}
+
+export async function withWorkOSTimeout<T>(
+  operation: string,
+  promise: Promise<T>,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new WorkOSUnavailableError(operation)),
+          WORKOS_REQUEST_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 export function getWorkOS() {
   if (instance !== undefined) {
     return instance;
@@ -70,7 +107,7 @@ async function refreshCookieSession(
     ReturnType<typeof getWorkOS>["userManagement"]["loadSealedSession"]
   >,
 ) {
-  const refreshResult = await session.refresh();
+  const refreshResult = await withWorkOSTimeout("refresh", session.refresh());
 
   if (
     !refreshResult.authenticated ||
@@ -97,7 +134,10 @@ export async function getSession(
       return null;
     }
 
-    const sess = await session.authenticate();
+    const sess = await withWorkOSTimeout(
+      "authenticate",
+      session.authenticate(),
+    );
     if (!sess.authenticated) {
       // Token expired, try to refresh
       const refreshed = await refreshCookieSession(session);
@@ -131,6 +171,11 @@ export async function getSession(
       accessToken,
     };
   } catch (error) {
+    // Surface an unreachable WorkOS to the caller so it can show the
+    // "try again" page; treat every other error as unauthenticated.
+    if (error instanceof WorkOSUnavailableError) {
+      throw error;
+    }
     console.error("Error loading WorkOS session:", error);
     return null;
   }
@@ -167,6 +212,9 @@ export async function refreshSession(
       sealedSession: refreshed.sealedSession,
     };
   } catch (error) {
+    if (error instanceof WorkOSUnavailableError) {
+      throw error;
+    }
     console.error("Error refreshing WorkOS session:", error);
     return null;
   }
@@ -181,7 +229,22 @@ export function withPageAuthRequired(
   options: WithPageAuthRequiredOptions = {},
 ) {
   return async (context: GetServerSidePropsContext) => {
-    const session = await getSession(context.req);
+    let session: WorkOSSession | null;
+    try {
+      session = await getSession(context.req);
+    } catch (error) {
+      if (error instanceof WorkOSUnavailableError) {
+        return {
+          redirect: {
+            destination: `/login-error?returnTo=${encodeURIComponent(
+              context.resolvedUrl,
+            )}`,
+            permanent: false,
+          },
+        };
+      }
+      throw error;
+    }
 
     // If there's a custom getServerSideProps, call it
     if (options.getServerSideProps) {

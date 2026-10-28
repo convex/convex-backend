@@ -24,6 +24,8 @@ testing = [
     "storage/testing",
     "usage_tracking/testing",
     "value/testing",
+    "convex_macro/testing",
+    "packed_value/testing",
 ]
 
 [dependencies]
@@ -41,7 +43,6 @@ database = { workspace = true }
 derive_more = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
-fivetran_destination = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
 humansize = { workspace = true }
@@ -51,6 +52,7 @@ maplit = { workspace = true }
 metrics = { workspace = true }
 migrations_model = { workspace = true }
 openidconnect = { workspace = true }
+packed_value = { workspace = true }
 pb = { workspace = true }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
@@ -65,6 +67,7 @@ sentry = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_json = { workspace = true }
+serde_with = { workspace = true }
 storage = { workspace = true }
 strum = { workspace = true }
 sync_types = { workspace = true }
@@ -78,17 +81,20 @@ value = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
+convex_macro = { workspace = true, features = ["testing"] }
 database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }
 migrations_model = { workspace = true, features = ["testing"] }
+packed_value = { workspace = true, features = ["testing"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
 proptest-http = { workspace = true }
 runtime = { workspace = true, features = ["testing"] }
 search = { workspace = true, features = ["testing"] }
+search_index_workers = { workspace = true, features = ["testing"] }
 storage = { workspace = true, features = ["testing"] }
 sync_types = { workspace = true, features = [
     "testing",

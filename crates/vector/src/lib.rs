@@ -1,9 +1,4 @@
 #![feature(iterator_try_collect)]
-#![feature(int_roundings)]
-#![feature(type_alias_impl_trait)]
-#![feature(coroutines)]
-#![feature(coroutine_trait)]
-#![feature(try_blocks)]
 #![feature(try_blocks_heterogeneous)]
 #![feature(impl_trait_in_assoc_type)]
 
@@ -30,8 +25,6 @@ pub mod result_merger;
 mod searcher;
 mod vector_index_manager;
 
-#[cfg(any(test, feature = "testing"))]
-pub use self::qdrant_index::cosine_similarity;
 pub use self::{
     memory_index::MemoryVectorIndex,
     metrics::{

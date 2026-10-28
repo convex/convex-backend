@@ -41,3 +41,11 @@ pub fn log_snapshot_import_failed(e: &anyhow::Error) {
         vec![StaticMetricLabel::new("status", status)],
     );
 }
+
+register_convex_counter!(
+    SNAPSHOT_IMPORT_LEGACY_GENERATED_SCHEMA_TOTAL,
+    "Number of times snapshot import encountered a non-uniform generated_schema.jsonl"
+);
+pub fn log_snapshot_import_found_legacy_generated_schema() {
+    SNAPSHOT_IMPORT_LEGACY_GENERATED_SCHEMA_TOTAL.inc();
+}

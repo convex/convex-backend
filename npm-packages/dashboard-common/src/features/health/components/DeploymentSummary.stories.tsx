@@ -6,6 +6,7 @@ import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { mockDeploymentInfo } from "@common/lib/mockDeploymentInfo";
 import { DeploymentSummary } from "./DeploymentSummary";
+import { BackfillingIndexes, SchemaValidationByTable } from "./DeployProgress";
 
 const mockLastPushEvent = {
   _id: "123" as any,
@@ -25,13 +26,168 @@ const mockClient = mockConvexReactClient()
   )
   .registerQueryFake(udfs.convexCloudUrl.default, () => mockConvexCloudUrl)
   .registerQueryFake(udfs.convexSiteUrl.default, () => mockConvexSiteUrl)
-  .registerQueryFake(udfs.getVersion.default, () => "1.18.0");
+  .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
+  .registerQueryFake(
+    udfs.getSchemas.schemaValidationProgressByTable,
+    () => null,
+  )
+  .registerQueryFake(udfs.indexes.backfilling, () => []);
 
 const mockClientNeverDeployed = mockConvexReactClient()
   .registerQueryFake(udfs.deploymentEvents.lastPushEvent, () => null)
   .registerQueryFake(udfs.convexCloudUrl.default, () => mockConvexCloudUrl)
   .registerQueryFake(udfs.convexSiteUrl.default, () => mockConvexSiteUrl)
-  .registerQueryFake(udfs.getVersion.default, () => "1.18.0");
+  .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
+  .registerQueryFake(
+    udfs.getSchemas.schemaValidationProgressByTable,
+    () => null,
+  )
+  .registerQueryFake(udfs.indexes.backfilling, () => []);
+
+// A deploy still validating a schema and backfilling indexes.
+const mockClientDeploying = mockConvexReactClient()
+  .registerQueryFake(
+    udfs.deploymentEvents.lastPushEvent,
+    () => mockLastPushEvent,
+  )
+  .registerQueryFake(udfs.convexCloudUrl.default, () => mockConvexCloudUrl)
+  .registerQueryFake(udfs.convexSiteUrl.default, () => mockConvexSiteUrl)
+  .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
+  .registerQueryFake(
+    udfs.getSchemas.schemaValidationProgressByTable,
+    (): SchemaValidationByTable => ({
+      numDocsValidated: 432_400,
+      totalDocs: 1_200_000,
+      tables: [
+        {
+          tableName: "books",
+          staged: false,
+          state: "pending",
+          numDocsValidated: 428_000,
+          totalDocs: 1_190_000,
+        },
+        {
+          tableName: "pages",
+          staged: false,
+          state: "valid",
+          numDocsValidated: 400,
+          totalDocs: 400,
+        },
+        {
+          tableName: "reviews",
+          staged: true,
+          state: "pending",
+          numDocsValidated: 4_000,
+          totalDocs: 9_600,
+        },
+      ],
+    }),
+  )
+  .registerQueryFake(
+    udfs.indexes.backfilling,
+    (): BackfillingIndexes => [
+      {
+        tableName: "books",
+        name: "by_author",
+        kind: "database",
+        staged: false,
+        stats: { numDocsIndexed: 380_000, totalDocs: 1_190_000 },
+      },
+      {
+        tableName: "pages",
+        name: "search_body",
+        kind: "search",
+        staged: true,
+        stats: { numDocsIndexed: 12_000, totalDocs: 88_000 },
+      },
+    ],
+  );
+
+function mockClientWithSchemaProgress(progress: SchemaValidationByTable) {
+  return mockConvexReactClient()
+    .registerQueryFake(
+      udfs.deploymentEvents.lastPushEvent,
+      () => mockLastPushEvent,
+    )
+    .registerQueryFake(udfs.convexCloudUrl.default, () => mockConvexCloudUrl)
+    .registerQueryFake(udfs.convexSiteUrl.default, () => mockConvexSiteUrl)
+    .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
+    .registerQueryFake(
+      udfs.getSchemas.schemaValidationProgressByTable,
+      () => progress,
+    )
+    .registerQueryFake(udfs.indexes.backfilling, () => []);
+}
+
+// Staged validators on the active schema, with no push in flight. The settled
+// `pages` attempt stays listed while `reviews` is still validating.
+const mockClientStagedValidation = mockClientWithSchemaProgress({
+  numDocsValidated: 404_400,
+  totalDocs: 1_200_400,
+  tables: [
+    {
+      tableName: "pages",
+      staged: true,
+      state: "valid",
+      numDocsValidated: 400,
+      totalDocs: 400,
+    },
+    {
+      tableName: "reviews",
+      staged: true,
+      state: "pending",
+      numDocsValidated: 404_000,
+      totalDocs: 1_200_000,
+    },
+  ],
+});
+
+// A staged validator that found a non-matching document while another is
+// still validating.
+const mockClientStagedValidationFailed = mockClientWithSchemaProgress({
+  numDocsValidated: 61_000,
+  totalDocs: 129_600,
+  tables: [
+    {
+      tableName: "authors",
+      staged: true,
+      state: "failed",
+      error: "Document with ID abc123 does not match the staged schema",
+      numDocsValidated: 57_000,
+      totalDocs: 120_000,
+    },
+    {
+      tableName: "reviews",
+      staged: true,
+      state: "pending",
+      numDocsValidated: 4_000,
+      totalDocs: 9_600,
+    },
+  ],
+});
+
+// A push validating `books` against its new enforced validator while the
+// active schema's staged validator for `books` is still validating.
+const mockClientStagedAndEnforcedSameTable = mockClientWithSchemaProgress({
+  numDocsValidated: 1_028_000,
+  totalDocs: 2_380_000,
+  tables: [
+    {
+      tableName: "books",
+      staged: false,
+      state: "pending",
+      numDocsValidated: 428_000,
+      totalDocs: 1_190_000,
+    },
+    {
+      tableName: "books",
+      staged: true,
+      state: "pending",
+      numDocsValidated: 600_000,
+      totalDocs: 1_190_000,
+    },
+  ],
+});
 
 const prodDeployment: PlatformDeploymentResponse = {
   id: 1,
@@ -111,6 +267,22 @@ const previewDeploymentWithExpiry: PlatformDeploymentResponse = {
   expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 3, // 3 days from now
 };
 
+const d1024Deployment: PlatformDeploymentResponse = {
+  id: 7,
+  name: "speedy-falcon-789",
+  deploymentType: "prod",
+  projectId: 1,
+  kind: "cloud",
+  class: "d1024",
+  region: "aws-us-east-1",
+  createTime: Date.now() - 1000 * 60 * 60 * 24 * 7, // 1 week ago
+  isDefault: true,
+  creator: null,
+  previewIdentifier: null,
+  reference: "production",
+  deploymentUrl: "https://speedy-falcon-789.convex.cloud",
+};
+
 const customDeployment: PlatformDeploymentResponse = {
   id: 5,
   name: "wandering-fish-513",
@@ -139,8 +311,7 @@ const meta = {
     teamSlug: "my-team",
     projectSlug: "my-project",
     lastBackupTime: Date.now() - 1000 * 60 * 60 * 24, // 1 day ago
-    creatorId: 123,
-    creatorName: "Ari",
+    teamMembers: [{ id: 123, name: "Ari", email: "ari@example.com" }],
     regions: mockRegions,
   },
   render: (args) => (
@@ -184,6 +355,54 @@ export const ProductionNeverDeployed: Story = {
   ),
 };
 
+export const ProductionDeploying: Story = {
+  render: (args) => (
+    <ConvexProvider client={mockClientDeploying}>
+      <DeploymentInfoContext.Provider value={mockDeploymentInfo}>
+        <div className="max-w-4xl">
+          <DeploymentSummary {...args} showDeployProgress />
+        </div>
+      </DeploymentInfoContext.Provider>
+    </ConvexProvider>
+  ),
+};
+
+export const ProductionStagedValidation: Story = {
+  render: (args) => (
+    <ConvexProvider client={mockClientStagedValidation}>
+      <DeploymentInfoContext.Provider value={mockDeploymentInfo}>
+        <div className="max-w-4xl">
+          <DeploymentSummary {...args} showDeployProgress />
+        </div>
+      </DeploymentInfoContext.Provider>
+    </ConvexProvider>
+  ),
+};
+
+export const ProductionStagedValidationFailed: Story = {
+  render: (args) => (
+    <ConvexProvider client={mockClientStagedValidationFailed}>
+      <DeploymentInfoContext.Provider value={mockDeploymentInfo}>
+        <div className="max-w-4xl">
+          <DeploymentSummary {...args} showDeployProgress />
+        </div>
+      </DeploymentInfoContext.Provider>
+    </ConvexProvider>
+  ),
+};
+
+export const ProductionStagedAndEnforcedSameTable: Story = {
+  render: (args) => (
+    <ConvexProvider client={mockClientStagedAndEnforcedSameTable}>
+      <DeploymentInfoContext.Provider value={mockDeploymentInfo}>
+        <div className="max-w-4xl">
+          <DeploymentSummary {...args} showDeployProgress />
+        </div>
+      </DeploymentInfoContext.Provider>
+    </ConvexProvider>
+  ),
+};
+
 export const DevelopmentCloud: Story = {
   args: {
     deployment: devCloudDeployment,
@@ -217,6 +436,13 @@ export const Custom: Story = {
   },
 };
 
+export const D1024Production: Story = {
+  args: {
+    deployment: d1024Deployment,
+    lastBackupTime: null,
+  },
+};
+
 export const PreviewWithExpiry: Story = {
   args: {
     deployment: previewDeploymentWithExpiry,
@@ -233,7 +459,12 @@ export const Loading: Story = {
         )
         .registerQueryFake(udfs.convexCloudUrl.default, () => undefined as any)
         .registerQueryFake(udfs.convexSiteUrl.default, () => undefined as any)
-        .registerQueryFake(udfs.getVersion.default, () => undefined as any)}
+        .registerQueryFake(udfs.getVersion.default, () => undefined as any)
+        .registerQueryFake(
+          udfs.getSchemas.schemaValidationProgressByTable,
+          () => undefined as any,
+        )
+        .registerQueryFake(udfs.indexes.backfilling, () => undefined as any)}
     >
       <DeploymentInfoContext.Provider value={mockDeploymentInfo}>
         <div className="max-w-4xl">

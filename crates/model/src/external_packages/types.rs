@@ -1,20 +1,24 @@
-use std::collections::BTreeMap;
-
 use common::types::{
     NodeDependency,
     ObjectKey,
 };
+use serde::{
+    Deserialize,
+    Serialize,
+};
+use serde_bytes::ByteBuf;
 use value::{
+    codegen_convex_serialization,
     id_v6::DeveloperDocumentId,
-    obj,
     sha256::Sha256Digest,
     ConvexObject,
-    ConvexValue,
 };
 
-use crate::source_packages::types::PackageSize;
+use crate::source_packages::types::{
+    PackageSize,
+    SerializedPackageSize,
+};
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalDepsPackage {
     pub storage_key: ObjectKey,
@@ -23,7 +27,6 @@ pub struct ExternalDepsPackage {
     pub package_size: PackageSize,
 }
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalDepsPackageId(DeveloperDocumentId);
 
@@ -39,94 +42,67 @@ impl From<ExternalDepsPackageId> for DeveloperDocumentId {
     }
 }
 
-impl From<ExternalDepsPackageId> for ConvexValue {
+impl From<ExternalDepsPackageId> for String {
     fn from(value: ExternalDepsPackageId) -> Self {
         value.0.into()
     }
 }
 
-impl TryFrom<ConvexValue> for ExternalDepsPackageId {
+impl TryFrom<String> for ExternalDepsPackageId {
     type Error = anyhow::Error;
 
-    fn try_from(value: ConvexValue) -> Result<Self, Self::Error> {
-        let id: DeveloperDocumentId = value.try_into()?;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let id = DeveloperDocumentId::decode(&value)?;
         Ok(Self(id))
     }
 }
 
-impl TryFrom<ConvexObject> for ExternalDepsPackage {
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializedExternalDepsPackage {
+    storage_key: String,
+    sha256: ByteBuf,
+    deps: Vec<ConvexObject>,
+    #[serde(default)]
+    package_size: Option<SerializedPackageSize>,
+}
+
+impl TryFrom<SerializedExternalDepsPackage> for ExternalDepsPackage {
     type Error = anyhow::Error;
 
-    fn try_from(value: ConvexObject) -> Result<Self, Self::Error> {
-        let mut fields = BTreeMap::from(value);
-
-        let storage_key = match fields.remove("storageKey") {
-            Some(ConvexValue::String(key)) => String::from(key).try_into()?,
-            _ => anyhow::bail!("Missing or invalid 'storage_key' in {fields:?}"),
-        };
-        let sha256 = match fields.remove("sha256") {
-            Some(sha256) => sha256.try_into()?,
-            _ => anyhow::bail!("Missing or invalid 'sha256' in {fields:?}"),
-        };
-        let deps = match fields.remove("deps") {
-            Some(ConvexValue::Array(arr)) => arr
+    fn try_from(value: SerializedExternalDepsPackage) -> Result<Self, Self::Error> {
+        Ok(Self {
+            storage_key: value.storage_key.try_into()?,
+            sha256: value.sha256.into_vec().try_into()?,
+            deps: value
+                .deps
                 .into_iter()
                 .map(NodeDependency::try_from)
-                .collect::<Result<Vec<_>, anyhow::Error>>()?,
-            _ => anyhow::bail!("Missing or invalid 'deps' in {fields:?}"),
-        };
-        let package_size: PackageSize = match fields.remove("packageSize") {
-            Some(ConvexValue::Object(o)) => o.try_into()?,
-            // Use PackageSize::default for safety on backends that happen to have used
-            // external deps before they were released, so we don't break them
-            None => PackageSize::default(),
-            _ => anyhow::bail!("Invalid 'packageSize' for ExternalDepsPackage in {fields:?}"),
-        };
-        Ok(Self {
-            storage_key,
-            sha256,
-            deps,
-            package_size,
+                .collect::<anyhow::Result<_>>()?,
+            package_size: value
+                .package_size
+                .map(TryInto::try_into)
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 }
 
-impl TryFrom<ExternalDepsPackage> for ConvexObject {
+impl TryFrom<ExternalDepsPackage> for SerializedExternalDepsPackage {
     type Error = anyhow::Error;
 
     fn try_from(value: ExternalDepsPackage) -> Result<Self, Self::Error> {
-        let storage_key: String = value.storage_key.into();
-        obj!(
-            "storageKey" => storage_key,
-            "sha256" => value.sha256,
-            "deps" => ConvexValue::Array(
-                value.deps
-                    .into_iter()
-                    .map(ConvexValue::try_from)
-                    .collect::<Result<Vec<_>, anyhow::Error>>()?
-                    .try_into()?
-            ),
-            "packageSize" => ConvexValue::Object(value.package_size.try_into()?),
-        )
+        Ok(Self {
+            storage_key: value.storage_key.into(),
+            sha256: ByteBuf::from(value.sha256.to_vec().as_slice()),
+            deps: value
+                .deps
+                .into_iter()
+                .map(ConvexObject::try_from)
+                .collect::<anyhow::Result<_>>()?,
+            package_size: Some(value.package_size.try_into()?),
+        })
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use common::testing::assert_roundtrips;
-    use proptest::prelude::*;
-    use value::ConvexObject;
-
-    use super::ExternalDepsPackage;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_external_package_roundtrip(v in any::<ExternalDepsPackage>()) {
-            assert_roundtrips::<ExternalDepsPackage, ConvexObject>(v);
-        }
-    }
-}
+codegen_convex_serialization!(ExternalDepsPackage, SerializedExternalDepsPackage);

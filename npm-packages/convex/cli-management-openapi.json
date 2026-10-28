@@ -547,15 +547,15 @@
           "clientId"
         ],
         "properties": {
-          "clientId": {
-            "type": "string",
-            "description": "WorkOS client ID"
-          },
           "projectId": {
             "type": "integer",
             "format": "int64",
             "description": "Project ID",
             "minimum": 0
+          },
+          "clientId": {
+            "type": "string",
+            "description": "WorkOS client ID"
           }
         }
       },
@@ -566,15 +566,15 @@
           "clientId"
         ],
         "properties": {
-          "clientId": {
-            "type": "string",
-            "description": "WorkOS client ID of the environment to delete"
-          },
           "projectId": {
             "type": "integer",
             "format": "int64",
             "description": "Project ID for the environment to delete",
             "minimum": 0
+          },
+          "clientId": {
+            "type": "string",
+            "description": "WorkOS client ID of the environment to delete"
           }
         }
       },
@@ -691,24 +691,24 @@
           "isProduction"
         ],
         "properties": {
-          "isProduction": {
-            "type": "boolean"
-          },
-          "userEnvironmentName": {
-            "type": "string",
-            "description": "The user-provided environment name (e.g., \"staging\", \"development\")"
-          },
-          "workosApiKey": {
-            "type": "string"
-          },
-          "workosClientId": {
-            "type": "string"
-          },
           "workosEnvironmentId": {
             "type": "string"
           },
           "workosEnvironmentName": {
             "type": "string"
+          },
+          "workosClientId": {
+            "type": "string"
+          },
+          "workosApiKey": {
+            "type": "string"
+          },
+          "userEnvironmentName": {
+            "type": "string",
+            "description": "The user-provided environment name (e.g., \"staging\", \"development\")"
+          },
+          "isProduction": {
+            "type": "boolean"
           }
         }
       },
@@ -744,12 +744,11 @@
           "teamId"
         ],
         "properties": {
-          "adminConvexEmail": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Email of Convex team member who created the WorkOS account.\nThis field should always be present when has_associated_workos_team is\ntrue."
+          "hasAssociatedWorkosTeam": {
+            "type": "boolean"
+          },
+          "teamId": {
+            "$ref": "#/components/schemas/TeamId"
           },
           "adminEmail": {
             "type": [
@@ -765,11 +764,12 @@
             ],
             "description": "Name of Convex team member who created the WorkOS account.\nThis field is optional even when has_associated_workos_team is true."
           },
-          "hasAssociatedWorkosTeam": {
-            "type": "boolean"
-          },
-          "teamId": {
-            "$ref": "#/components/schemas/TeamId"
+          "adminConvexEmail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Email of Convex team member who created the WorkOS account.\nThis field should always be present when has_associated_workos_team is\ntrue."
           }
         }
       },
@@ -779,18 +779,18 @@
           "eligibleEmails"
         ],
         "properties": {
+          "eligibleEmails": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "adminEmail": {
             "type": [
               "string",
               "null"
             ],
             "description": "The admin email used to create this team's WorkOS account (always\neligible for re-invitation)"
-          },
-          "eligibleEmails": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           }
         }
       },
@@ -801,13 +801,13 @@
           "email"
         ],
         "properties": {
-          "email": {
-            "type": "string",
-            "description": "Email address to invite to the WorkOS team,\nmust be a verified email address associated with the user's account"
-          },
           "teamId": {
             "$ref": "#/components/schemas/TeamId",
             "description": "Convex team ID that has an associated WorkOS team"
+          },
+          "email": {
+            "type": "string",
+            "description": "Email address to invite to the WorkOS team,\nmust be a verified email address associated with the user's account"
           }
         }
       },
@@ -858,29 +858,25 @@
           "id",
           "name",
           "slug",
-          "isDemo",
           "teamId",
           "createTime"
         ],
         "properties": {
-          "createTime": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "devDeploymentName": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "id": {
             "$ref": "#/components/schemas/ProjectId"
           },
-          "isDemo": {
-            "type": "boolean"
-          },
           "name": {
             "$ref": "#/components/schemas/ProjectName"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/ProjectSlug"
+          },
+          "teamId": {
+            "$ref": "#/components/schemas/TeamId"
+          },
+          "createTime": {
+            "type": "integer",
+            "format": "int64"
           },
           "prodDeploymentName": {
             "type": [
@@ -888,11 +884,11 @@
               "null"
             ]
           },
-          "slug": {
-            "$ref": "#/components/schemas/ProjectSlug"
-          },
-          "teamId": {
-            "$ref": "#/components/schemas/TeamId"
+          "devDeploymentName": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -907,21 +903,21 @@
           "isProduction"
         ],
         "properties": {
-          "isProduction": {
-            "type": "boolean"
-          },
-          "userEnvironmentName": {
-            "type": "string",
-            "description": "The user-provided environment name (e.g., \"staging\", \"development\")"
-          },
-          "workosClientId": {
-            "type": "string"
-          },
           "workosEnvironmentId": {
             "type": "string"
           },
           "workosEnvironmentName": {
             "type": "string"
+          },
+          "workosClientId": {
+            "type": "string"
+          },
+          "userEnvironmentName": {
+            "type": "string",
+            "description": "The user-provided environment name (e.g., \"staging\", \"development\")"
+          },
+          "isProduction": {
+            "type": "boolean"
           }
         }
       },
@@ -946,16 +942,16 @@
           "newlyProvisioned"
         ],
         "properties": {
-          "apiKey": {
+          "environmentId": {
+            "type": "string"
+          },
+          "environmentName": {
             "type": "string"
           },
           "clientId": {
             "type": "string"
           },
-          "environmentId": {
-            "type": "string"
-          },
-          "environmentName": {
+          "apiKey": {
             "type": "string"
           },
           "newlyProvisioned": {
@@ -992,24 +988,24 @@
           "userEnvironmentName"
         ],
         "properties": {
+          "workosEnvironmentId": {
+            "type": "string"
+          },
+          "workosEnvironmentName": {
+            "type": "string"
+          },
+          "workosClientId": {
+            "type": "string"
+          },
+          "workosApiKey": {
+            "type": "string"
+          },
           "newlyProvisioned": {
             "type": "boolean"
           },
           "userEnvironmentName": {
             "type": "string",
             "description": "The user-provided environment name (e.g., \"staging\", \"development\")"
-          },
-          "workosApiKey": {
-            "type": "string"
-          },
-          "workosClientId": {
-            "type": "string"
-          },
-          "workosEnvironmentId": {
-            "type": "string"
-          },
-          "workosEnvironmentName": {
-            "type": "string"
           }
         }
       },
@@ -1020,13 +1016,13 @@
           "email"
         ],
         "properties": {
-          "email": {
-            "type": "string",
-            "description": "Email address to use for the WorkOS team admin,\nmust be a verified email address associated with the user's account"
-          },
           "teamId": {
             "$ref": "#/components/schemas/TeamId",
             "description": "Convex team ID, no WorkOS team exists at this point"
+          },
+          "email": {
+            "type": "string",
+            "description": "Email address to use for the WorkOS team admin,\nmust be a verified email address associated with the user's account"
           }
         }
       },
@@ -1038,13 +1034,13 @@
           "adminEmail"
         ],
         "properties": {
-          "adminEmail": {
-            "type": "string"
-          },
           "workosTeamId": {
             "type": "string"
           },
           "workosTeamName": {
+            "type": "string"
+          },
+          "adminEmail": {
             "type": "string"
           }
         }
@@ -1056,7 +1052,9 @@
         "type": "string",
         "enum": [
           "aws-us-east-1",
-          "aws-eu-west-1"
+          "aws-eu-west-1",
+          "aws-ca-central-1",
+          "aws-ap-southeast-2"
         ]
       },
       "TeamId": {
@@ -1077,6 +1075,15 @@
           "referralCode"
         ],
         "properties": {
+          "id": {
+            "$ref": "#/components/schemas/TeamId"
+          },
+          "name": {
+            "$ref": "#/components/schemas/TeamName"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/TeamSlug"
+          },
           "creator": {
             "oneOf": [
               {
@@ -1087,37 +1094,8 @@
               }
             ]
           },
-          "defaultRegion": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/RegionName"
-              }
-            ]
-          },
-          "id": {
-            "$ref": "#/components/schemas/TeamId"
-          },
-          "managedBy": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/ManagedBy"
-              }
-            ]
-          },
-          "managedByUrl": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name": {
-            "$ref": "#/components/schemas/TeamName"
+          "suspended": {
+            "type": "boolean"
           },
           "referralCode": {
             "$ref": "#/components/schemas/ReferralCode"
@@ -1132,8 +1110,25 @@
               }
             ]
           },
-          "slug": {
-            "$ref": "#/components/schemas/TeamSlug"
+          "managedBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedBy"
+              }
+            ]
+          },
+          "defaultRegion": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RegionName"
+              }
+            ]
           },
           "ssoLoginId": {
             "type": [
@@ -1141,8 +1136,11 @@
               "null"
             ]
           },
-          "suspended": {
-            "type": "boolean"
+          "managedByUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -1157,13 +1155,13 @@
           "clientId"
         ],
         "properties": {
-          "clientId": {
-            "type": "string"
-          },
           "id": {
             "type": "string"
           },
           "name": {
+            "type": "string"
+          },
+          "clientId": {
             "type": "string"
           }
         }
@@ -1172,7 +1170,9 @@
         "type": "string",
         "enum": [
           "active",
-          "inactive"
+          "inactive",
+          "suspended",
+          "deleting"
         ]
       },
       "WorkOSTeamHealthResponse": {
@@ -1181,6 +1181,10 @@
           "teamProvisioned"
         ],
         "properties": {
+          "teamProvisioned": {
+            "type": "boolean",
+            "description": "Whether a WorkOS team has been provisioned for this Convex team"
+          },
           "teamInfo": {
             "oneOf": [
               {
@@ -1191,10 +1195,6 @@
                 "description": "WorkOS team details, present only when team_provisioned is true"
               }
             ]
-          },
-          "teamProvisioned": {
-            "type": "boolean",
-            "description": "Whether a WorkOS team has been provisioned for this Convex team"
           }
         }
       },

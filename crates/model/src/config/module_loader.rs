@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use common::{
     components::CanonicalizedComponentModulePath,
@@ -7,6 +8,7 @@ use common::{
     runtime::Runtime,
 };
 use database::Transaction;
+use storage::Storage;
 
 use crate::{
     modules::{
@@ -16,16 +18,21 @@ use crate::{
     },
     source_packages::{
         types::SourcePackage,
+        upload_download::download_package,
         SourcePackageModel,
     },
 };
 
 #[async_trait]
 pub trait ModuleLoader<RT: Runtime>: Sync + Send + 'static {
+    /// The passed in [`SourcePackage`] is the source package that we would like
+    /// to load the given [`ModuleMetadata`] from. Thus, it is valid to pass in
+    /// a different source package than the one specified in [`ModuleMetadata`]
+    /// since later source packages can contain the same module.
     async fn get_module_with_metadata(
         &self,
-        module_metadata: ParsedDocument<ModuleMetadata>,
-        source_package: ParsedDocument<SourcePackage>,
+        module_metadata: &ParsedDocument<ModuleMetadata>,
+        source_package: &ParsedDocument<SourcePackage>,
     ) -> anyhow::Result<Arc<FullModuleSource>>;
 
     async fn get_module(
@@ -41,62 +48,32 @@ pub trait ModuleLoader<RT: Runtime>: Sync + Send + 'static {
         let source_package = SourcePackageModel::new(tx, component.into())
             .get(module_metadata.source_package_id)
             .await?;
-        self.get_module_with_metadata(module_metadata, source_package)
+        self.get_module_with_metadata(&module_metadata, &source_package)
             .await
             .map(Some)
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-pub mod test_module_loader {
-    use std::sync::Arc;
+/// Loads module versions directly from storage, without caching.
+pub struct UncachedModuleLoader {
+    pub modules_storage: Arc<dyn Storage>,
+}
 
-    use anyhow::Context;
-    use async_trait::async_trait;
-    use common::{
-        document::ParsedDocument,
-        runtime::Runtime,
-    };
-    use storage::Storage;
-
-    use super::ModuleLoader;
-    use crate::{
-        modules::{
-            module_versions::FullModuleSource,
-            types::ModuleMetadata,
-        },
-        source_packages::{
-            types::SourcePackage,
-            upload_download::download_package,
-        },
-    };
-
-    // Loads module versions directly from storage.
-    pub struct UncachedModuleLoader {
-        pub modules_storage: Arc<dyn Storage>,
-    }
-
-    #[async_trait]
-    impl<RT: Runtime> ModuleLoader<RT> for UncachedModuleLoader {
-        async fn get_module_with_metadata(
-            &self,
-            module_metadata: ParsedDocument<ModuleMetadata>,
-            source_package: ParsedDocument<SourcePackage>,
-        ) -> anyhow::Result<Arc<FullModuleSource>> {
-            let source_package = source_package.into_value();
-            let package = download_package(
-                self.modules_storage.clone(),
-                source_package.storage_key,
-                source_package.sha256,
-            )
-            .await?;
-            let module_config = package
-                .get(&module_metadata.path)
-                .with_context(|| format!("Missing module source {}", module_metadata.id()))?;
-            Ok(Arc::new(FullModuleSource {
-                source: module_config.source.clone(),
-                source_map: module_config.source_map.clone(),
-            }))
-        }
+#[async_trait]
+impl<RT: Runtime> ModuleLoader<RT> for UncachedModuleLoader {
+    #[fastrace::trace]
+    async fn get_module_with_metadata(
+        &self,
+        module_metadata: &ParsedDocument<ModuleMetadata>,
+        source_package: &ParsedDocument<SourcePackage>,
+    ) -> anyhow::Result<Arc<FullModuleSource>> {
+        let package = download_package(self.modules_storage.clone(), source_package).await?;
+        let module_config = package
+            .get(&module_metadata.path)
+            .with_context(|| format!("Missing module source {}", module_metadata.id()))?;
+        Ok(Arc::new(FullModuleSource {
+            source: module_config.source.clone(),
+            source_map: module_config.source_map.clone(),
+        }))
     }
 }

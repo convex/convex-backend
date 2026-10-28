@@ -1,6 +1,6 @@
 "use node";
 import { v } from "convex/values";
-import { action } from "./_generated/server";
+import { action, env } from "./_generated/server";
 import snowflake from "snowflake-sdk";
 
 export const doSqlQuery = action({
@@ -8,10 +8,16 @@ export const doSqlQuery = action({
     stmt: v.string(),
   },
   handler: async (_, { stmt }) => {
+    const { SNOWFLAKE_ACCOUNT, SNOWFLAKE_USERNAME, SNOWFLAKE_PASSWORD } = env;
+    if (!SNOWFLAKE_ACCOUNT || !SNOWFLAKE_USERNAME || !SNOWFLAKE_PASSWORD) {
+      throw new Error(
+        "Set SNOWFLAKE_ACCOUNT, SNOWFLAKE_USERNAME and SNOWFLAKE_PASSWORD to run this demo",
+      );
+    }
     const connection = snowflake.createConnection({
-      account: process.env.SNOWFLAKE_ACCOUNT!,
-      username: process.env.SNOWFLAKE_USERNAME,
-      password: process.env.SNOWFLAKE_PASSWORD,
+      account: SNOWFLAKE_ACCOUNT,
+      username: SNOWFLAKE_USERNAME,
+      password: SNOWFLAKE_PASSWORD,
       authenticator: "SNOWFLAKE",
     });
 

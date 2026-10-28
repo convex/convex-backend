@@ -9,7 +9,6 @@ use sync_types::Timestamp;
 
 /// WARNING: constructors of this struct must validate the timestamp is
 /// repeatable -- according to the commit protocol -- in the constructor.
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Copy, Debug, derive_more::Display, Ord, PartialOrd, Eq, PartialEq)]
 pub struct RepeatableTimestamp(Timestamp);
 
@@ -27,9 +26,6 @@ pub enum RepeatableReason {
     MinSnapshotTsPersistence,
     /// ts <= some other RepeatableTimestamp
     InductiveRepeatableTimestamp,
-    /// only in tests
-    #[cfg(any(test, feature = "testing"))]
-    TestOnly,
     /// only in db-info tool, and only when
     /// non-repeatable reads are directly requested.
     DbInfoManuallyRequested,
@@ -91,11 +87,6 @@ impl Deref for RepeatableTimestamp {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-pub fn unchecked_repeatable_ts(ts: Timestamp) -> RepeatableTimestamp {
-    RepeatableTimestamp::new_validated(ts, RepeatableReason::TestOnly)
-}
-
 /// RepeatableTimestampProto should never be constructed directly. Always use
 /// From<RepeatableTimestamp> to guarantee it's repeatable.
 impl From<RepeatableTimestamp> for RepeatableTimestampProto {
@@ -128,32 +119,7 @@ impl TryFrom<RepeatableTimestampProto> for RepeatableTimestamp {
 /// do so without risking confusing an uncommitted write with a committed one.
 /// The `Pending` timestamp sorts greater than any committed timestamp.
 #[derive(Clone, Copy, Ord, Eq, Debug, PartialEq, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum WriteTimestamp {
     Committed(Timestamp),
     Pending,
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use sync_types::{
-        testing::assert_roundtrips,
-        Timestamp,
-    };
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-
-        #[test]
-        fn test_timestamp_roundtrips(ts in any::<Timestamp>()) {
-            // Some databases encode as i64, some as u64, some as json.
-            // Arbitrary Timestamps should be in a range that fits i64 and u64,
-            // and serde_json should work for numbers > the max precise js integer.
-            assert_roundtrips::<Timestamp, i64>(ts);
-            assert_roundtrips::<Timestamp, u64>(ts);
-            assert_roundtrips::<Timestamp, serde_json::Value>(ts);
-        }
-    }
 }

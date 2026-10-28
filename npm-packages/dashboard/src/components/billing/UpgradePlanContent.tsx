@@ -1,5 +1,6 @@
 import { Button } from "@ui/Button";
 import { Spinner } from "@ui/Spinner";
+import { Stepper } from "@ui/Stepper";
 import { TextInput } from "@ui/TextInput";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useDebounce } from "react-use";
@@ -8,10 +9,10 @@ import { useGetCoupon, useCreateSubscription } from "api/billing";
 import { FormikProvider, useFormik, useFormikContext } from "formik";
 import * as Yup from "yup";
 import { Address, PlanResponse, TeamResponse } from "generatedApi";
-import Link from "next/link";
 import { PriceSummary } from "components/billing/PriceSummary";
 import { usePostHog } from "hooks/usePostHog";
-import { PaymentDetailsForm } from "./PaymentDetailsForm";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+import { CardHoldNote, PaymentDetailsForm } from "./PaymentDetailsForm";
 import { BillingAddressInputs } from "./BillingAddressInputs";
 import { useStripePaymentSetup } from "../../hooks/useStripe";
 import { BillingContactInputs } from "./BillingContactInputs";
@@ -35,7 +36,6 @@ export type UpgradePlanContentProps = {
   setPaymentMethod: (paymentMethod?: string) => void;
   billingAddressInputs: React.ReactNode;
   paymentDetailsForm: React.ReactNode;
-  isChef: boolean;
   teamManagedBy?: string;
 };
 
@@ -56,14 +56,12 @@ export function UpgradePlanContentContainer({
   name: profileName,
   onUpgradeComplete,
   plan,
-  isChef,
   ...props
 }: Pick<UpgradePlanContentProps, "numMembers" | "plan"> & {
   team: TeamResponse;
   email?: string;
   name?: string | null;
   onUpgradeComplete: () => void;
-  isChef: boolean;
 }) {
   const createSubscription = useCreateSubscription(team.id);
   const { capture } = usePostHog();
@@ -76,7 +74,7 @@ export function UpgradePlanContentContainer({
       planId: plan.id,
       paymentMethod: undefined,
       billingAddress: undefined,
-      spendingLimitWarningThresholdUsd: "",
+      spendingLimitWarningThresholdUsd: null,
       spendingLimitDisableThresholdUsd: null,
     },
     validationSchema: CreateSubscriptionSchema.concat(
@@ -90,6 +88,7 @@ export function UpgradePlanContentContainer({
     onSubmit: async (v) => {
       await createSubscription({
         planId: v.planId,
+        promoCode: v.promoCode || undefined,
         paymentMethod: v.paymentMethod,
         billingAddress: v.billingAddress,
         name: v.name,
@@ -140,24 +139,18 @@ export function UpgradePlanContentContainer({
     [],
   );
 
-  const {
-    stripePromise,
-    options,
-    retrieveSetupIntent,
-    confirmSetup,
-    resetClientSecret,
-  } = useStripePaymentSetup(
-    team,
-    formState.values.paymentMethod ?? undefined,
-    setPaymentMethod,
-  );
+  const { stripePromise, options, confirmSetup, resetClientSecret } =
+    useStripePaymentSetup(
+      team,
+      formState.values.paymentMethod ?? undefined,
+      setPaymentMethod,
+    );
 
   return (
     <FormikProvider value={formState}>
       <UpgradePlanContent
         {...props}
         plan={plan}
-        isChef={isChef}
         teamManagedBy={team.managedBy === "vercel" ? team.managedBy : undefined}
         setPaymentMethod={(p) => {
           if (!p) {
@@ -189,10 +182,7 @@ export function UpgradePlanContentContainer({
           // so we can test the UpgradePlanContent component in isolation
           options.clientSecret ? (
             <Elements stripe={stripePromise} options={options}>
-              <PaymentDetailsForm
-                retrieveSetupIntent={retrieveSetupIntent}
-                confirmSetup={confirmSetup}
-              />
+              <PaymentDetailsForm confirmSetup={confirmSetup} />
             </Elements>
           ) : undefined
         }
@@ -212,11 +202,12 @@ export function UpgradePlanContent({
   setPaymentMethod,
   billingAddressInputs,
   paymentDetailsForm,
-  isChef,
   teamManagedBy,
 }: UpgradePlanContentProps) {
   const formState = useFormikContext<UpgradeFormState>();
   const [currentStep, setCurrentStep] = useState(0);
+  // Evaluated by big brain too, which places the hold this note describes.
+  const { preAuthorizeStarterPlan } = useLaunchDarkly();
 
   if (teamMemberDiscountPct < 0 || teamMemberDiscountPct > 1) {
     throw new Error(
@@ -261,35 +252,21 @@ export function UpgradePlanContent({
     if (index === 0) {
       return (
         <div className="flex flex-col gap-6">
-          {plan.planType === "CONVEX_PROFESSIONAL" && (
-            <div className="flex max-w-64 items-center gap-2">
-              <TextInput
-                label="Promo code"
-                placeholder="Enter a promo code"
-                onChange={(e) =>
-                  formState.setFieldValue(
-                    "promoCode",
-                    e.target.value.toUpperCase(),
-                  )
-                }
-                value={formState.values.promoCode}
-                id="promoCode"
-                error={promoCodeError}
-              />
-              {isLoadingPromo && (
-                <span data-testid="loading-spinner" className="mt-4">
-                  <Spinner />
-                </span>
-              )}
-            </div>
-          )}
-
           <div className="flex flex-col gap-2">
             <h5>Billing Contact</h5>
             <BillingContactInputs formState={formState} />
           </div>
 
           {billingAddressInputs}
+
+          {plan.planType === "CONVEX_PROFESSIONAL" && (
+            <PromoCodeField
+              value={formState.values.promoCode}
+              onChange={(value) => formState.setFieldValue("promoCode", value)}
+              isLoading={isLoadingPromo}
+              error={promoCodeError}
+            />
+          )}
         </div>
       );
     }
@@ -298,8 +275,8 @@ export function UpgradePlanContent({
         <div className="flex flex-col gap-6">
           <div className="flex flex-col gap-2">
             <p className="text-sm text-content-secondary">
-              We recommend setting spending limit warnings and hard limits to
-              avoid unexpected charges on your Convex usage.
+              We recommend setting a warning threshold and a disable threshold
+              to avoid unexpected charges on your Convex usage.
             </p>
             <SpendingLimits />
             {!requiresPaymentMethod && (
@@ -316,6 +293,8 @@ export function UpgradePlanContent({
     if (index === 2 && requiresPaymentMethod) {
       return (
         <div className="flex flex-col gap-6">
+          {preAuthorizeStarterPlan &&
+            plan.planType === "CONVEX_STARTER_PLUS" && <CardHoldNote />}
           {!formState.values.paymentMethod ? (
             <div className="flex flex-col gap-2">
               {/* Reduce the amount of space stripe can take up so it doesn't render horizontal overflow */}
@@ -355,7 +334,14 @@ export function UpgradePlanContent({
         <Button
           size="sm"
           onClick={() => setCurrentStep(currentStep + 1)}
-          disabled={currentStep === 0 && !canProceedFromStep0}
+          disabled={
+            (currentStep === 0 && !canProceedFromStep0) ||
+            (currentStep === 1 &&
+              !!(
+                formState.errors.spendingLimitWarningThresholdUsd ||
+                formState.errors.spendingLimitDisableThresholdUsd
+              ))
+          }
           tip={
             currentStep === 0
               ? !formState.values.name
@@ -408,95 +394,70 @@ export function UpgradePlanContent({
   );
 
   return (
-    <>
-      {isChef && plan.planType === "CONVEX_STARTER_PLUS" && (
-        <p className="mb-2">
-          {plan.name} is recommended for Convex Chef users.{" "}
-          <Link
-            href="/team/settings/billing"
-            className="text-content-link hover:underline"
-          >
-            View all plans.
-          </Link>
-        </p>
+    <div className="flex flex-col gap-4">
+      <PriceSummary
+        plan={plan}
+        teamMemberDiscountPct={teamMemberDiscountPct}
+        numMembers={numMembers}
+        requiresPaymentMethod={requiresPaymentMethod}
+        couponDurationInMonths={couponDurationInMonths}
+        isUpgrading={false}
+        teamManagedBy={teamManagedBy}
+      />
+
+      <Stepper activeStep={currentStep} onSelectStep={setCurrentStep}>
+        {steps.map((step, index) => (
+          <Stepper.Step key={step.label} label={step.label}>
+            {stepContent(index)}
+            {index === currentStep && navigationButtons}
+          </Stepper.Step>
+        ))}
+      </Stepper>
+    </div>
+  );
+}
+
+function PromoCodeField({
+  value,
+  onChange,
+  isLoading,
+  error,
+}: {
+  value: string | undefined;
+  onChange: (value: string) => void;
+  isLoading: boolean;
+  error?: string;
+}) {
+  const [isExpanded, setIsExpanded] = useState(() => !!value || !!error);
+
+  if (!isExpanded) {
+    return (
+      <Button
+        variant="unstyled"
+        onClick={() => setIsExpanded(true)}
+        className="self-start text-xs text-content-tertiary underline hover:text-content-secondary"
+      >
+        Have a promo code?
+      </Button>
+    );
+  }
+
+  return (
+    <div className="flex max-w-64 items-center gap-2">
+      <TextInput
+        label="Promo code"
+        placeholder="Enter a promo code"
+        onChange={(e) => onChange(e.target.value.toUpperCase())}
+        value={value}
+        id="promoCode"
+        error={error}
+        autoFocus
+      />
+      {isLoading && (
+        <span data-testid="loading-spinner" className="mt-4">
+          <Spinner />
+        </span>
       )}
-      <div className="flex flex-col gap-4">
-        <PriceSummary
-          plan={plan}
-          teamMemberDiscountPct={teamMemberDiscountPct}
-          numMembers={numMembers}
-          requiresPaymentMethod={requiresPaymentMethod}
-          couponDurationInMonths={couponDurationInMonths}
-          isUpgrading={false}
-          teamManagedBy={teamManagedBy}
-        />
-
-        {/* Vertical Timeline */}
-        <div className="flex flex-col">
-          {steps.map((step, index) => {
-            const isCompleted = index < currentStep;
-            const isCurrent = index === currentStep;
-            const isLast = index === steps.length - 1;
-
-            return (
-              <div key={step.label} className="flex">
-                {/* Left column: circle + connecting line */}
-                <div className="mr-3 flex flex-col items-center">
-                  {/* eslint-disable-next-line react/forbid-elements -- custom timeline step circle indicator */}
-                  <button
-                    type="button"
-                    disabled={!isCompleted}
-                    onClick={() => isCompleted && setCurrentStep(index)}
-                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-medium ${
-                      isCompleted
-                        ? "cursor-pointer bg-util-accent text-white"
-                        : isCurrent
-                          ? "border-2 border-util-accent text-content-primary"
-                          : "border border-border-transparent text-content-tertiary"
-                    }`}
-                  >
-                    {index + 1}
-                  </button>
-                  {!isLast && (
-                    <div
-                      className={`w-px grow ${isCompleted ? "bg-util-accent" : "bg-border-transparent"}`}
-                    />
-                  )}
-                </div>
-
-                {/* Right column: label + content */}
-                <div
-                  className={`flex min-w-0 grow flex-col pb-6 ${isLast ? "pb-0" : ""}`}
-                >
-                  {/* eslint-disable-next-line react/forbid-elements -- custom timeline step label */}
-                  <button
-                    type="button"
-                    disabled={!isCompleted}
-                    onClick={() => isCompleted && setCurrentStep(index)}
-                    className={`flex h-7 items-center text-left font-semibold ${
-                      isCompleted
-                        ? "cursor-pointer text-content-primary"
-                        : isCurrent
-                          ? "text-content-primary"
-                          : "text-content-tertiary"
-                    }`}
-                  >
-                    {step.label}
-                  </button>
-                  <div
-                    className={
-                      isCurrent ? "mt-3 flex flex-col gap-4" : "hidden"
-                    }
-                  >
-                    {stepContent(index)}
-                    {isCurrent && navigationButtons}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </>
+    </div>
   );
 }

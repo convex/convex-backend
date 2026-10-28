@@ -1,0 +1,6 @@
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+convex_local_backend.sqlite3
+convex_local_storage/

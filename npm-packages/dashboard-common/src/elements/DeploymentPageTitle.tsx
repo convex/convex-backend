@@ -1,6 +1,7 @@
 import Head from "next/head";
 import { useContext } from "react";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { deploymentIdentityLabel } from "@common/lib/deploymentTypeColorClasses";
 
 export function DeploymentPageTitle({
   title,
@@ -23,14 +24,10 @@ export function DeploymentPageTitle({
           {title} {subtitle && `| ${subtitle} `}
           {deploymentId === 0
             ? null
-            : `| ${capitalize(deployment.deploymentType)}`}{" "}
+            : `| ${deploymentIdentityLabel(deployment)}`}{" "}
           {project.id === 0 ? null : `| ${project.name}`} | Convex Dashboard
         </title>
       )}
     </Head>
   );
-}
-
-function capitalize(text: string) {
-  return text.charAt(0).toUpperCase() + text.slice(1);
 }

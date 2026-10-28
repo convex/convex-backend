@@ -6,7 +6,7 @@ import { Callout } from "@ui/Callout";
 import { TeamResponse } from "generatedApi";
 import { Loading } from "@ui/Loading";
 import { ReferralsBenefits } from "components/referral/ReferralsBenefits";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { MAX_REFERRALS } from "./Referrals";
 
 type TeamEligibilityError =
@@ -204,11 +204,7 @@ function CodeError({
       <p>
         No worries, you can still use another referral link later. In the
         meantime, you can get started using Convex with the{" "}
-        <Link
-          href="https://www.convex.dev/pricing"
-          target="_blank"
-          className="text-content-link hover:underline"
-        >
+        <Link href="https://www.convex.dev/pricing" target="_blank">
           default limits
         </Link>{" "}
         and also refer others to increase your quota.

@@ -1,24 +1,27 @@
 import { Button } from "@ui/Button";
-import { Tooltip } from "@ui/Tooltip";
 import { formatDate } from "@common/lib/format";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { Checkbox } from "@ui/Checkbox";
 import { useState } from "react";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useCancelSubscription } from "api/billing";
-import { InfoCircledIcon } from "@radix-ui/react-icons";
+import {
+  useHasCustomRolePermission,
+  useIsCurrentMemberTeamAdmin,
+} from "api/roles";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { OrbSubscriptionResponse, TeamResponse } from "generatedApi";
 import startCase from "lodash/startCase";
+import { BILLING_RESOURCE } from "lib/permissions";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { PlanCard } from "./PlanCard";
 
 export function FreePlan({
   subscription,
-  hasAdminPermissions,
   team,
   isLoading = false,
 }: {
   subscription?: OrbSubscriptionResponse;
-  hasAdminPermissions: boolean;
   team: TeamResponse;
   isLoading?: boolean;
 }) {
@@ -26,6 +29,14 @@ export function FreePlan({
     useState(false);
   const [acceptedConsequences, setAcceptedConsequences] = useState(false);
   const cancelSubscription = useCancelSubscription(team.id);
+  const isTeamAdmin = useIsCurrentMemberTeamAdmin();
+  const canCancelCustom = useHasCustomRolePermission(
+    team.id,
+    "billing:subscription:changePlan",
+    BILLING_RESOURCE,
+    false,
+  );
+  const canCancel = isTeamAdmin || canCancelCustom;
   return (
     <>
       <PlanCard
@@ -41,29 +52,30 @@ export function FreePlan({
         saleHeader="No credit card required"
         action={
           !subscription ? (
-            <p className="flex h-[2.125rem] items-center px-0.5 font-semibold">
+            <p className="flex h-8.5 items-center px-0.5 font-semibold">
               Current Plan
             </p>
           ) : typeof subscription.endDate === "number" ? (
             <p className="flex items-center gap-1 px-0.5 py-2 font-semibold">
               Next Billing Cycle{" "}
-              <Tooltip
-                tip={`Your subscription has been canceled and will end on ${formatDate(new Date(subscription.endDate))}. You may resume the subscription before then to avoid losing access to features.`}
-              >
-                <InfoCircledIcon />
-              </Tooltip>
+              <HelpTooltip>
+                {`Your subscription has been canceled and will end on ${formatDate(new Date(subscription.endDate))}. You may resume the subscription before then to avoid losing access to features.`}
+              </HelpTooltip>
             </p>
           ) : (
             <Button
               disabled={
                 isLoading ||
-                !hasAdminPermissions ||
+                canCancel !== true ||
                 team.managedBy === "vercel" ||
                 subscription.plan.planType === "CONVEX_BUSINESS"
               }
               tip={
-                !hasAdminPermissions
-                  ? "You do not have permission to modify the team subscription."
+                canCancel === false
+                  ? permissionDeniedTip(
+                      "You do not have permission to modify the team subscription.",
+                      "billing:subscription:changePlan",
+                    )
                   : team.managedBy === "vercel"
                     ? `You can manage your subscription in ${startCase(team.managedBy)}.`
                     : subscription.plan.planType === "CONVEX_BUSINESS"
@@ -96,12 +108,7 @@ export function FreePlan({
               </p>
               <p>
                 If this team's{" "}
-                <Link
-                  className="text-content-link hover:underline"
-                  href={`/t/${team?.slug}/settings/usage`}
-                >
-                  usage
-                </Link>{" "}
+                <Link href={`/t/${team?.slug}/settings/usage`}>usage</Link>{" "}
                 exceeds the Free plan limits, your projects may be automatically
                 disabled.
               </p>

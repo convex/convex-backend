@@ -4,7 +4,6 @@ import Editor, {
   EditorProps,
 } from "@monaco-editor/react";
 import { ValidatorJSON, Value } from "convex/values";
-import { useTheme } from "next-themes";
 import isEqual from "lodash/isEqual";
 import React, {
   useCallback,
@@ -18,7 +17,9 @@ import isArray from "lodash/isArray";
 import isPlainObject from "lodash/isPlainObject";
 import { UNDEFINED_PLACEHOLDER } from "system-udfs/convex/_system/frontend/lib/values";
 import { stringifyValue } from "@common/lib/stringifyValue";
+import { useCurrentTheme } from "@common/lib/useCurrentTheme";
 import { cn } from "@ui/cn";
+import { useIsMobileDevice } from "@ui/useIsMobileDevice";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import {
   ConvexSchemaValidationError,
@@ -27,12 +28,18 @@ import {
 } from "./ast/types";
 import { walkAst, WalkAstOptions } from "./ast/walkAst";
 import { registerIdCommands, useIdDecorations } from "./useIdDecorations";
+import { PlainObjectEditor } from "./PlainObjectEditor";
 
 export type ObjectEditorProps = {
   defaultValue?: Value;
+  // Seeds the editor with this text instead of the stringified `defaultValue`,
+  // for text that has no value to stringify (something that doesn't parse).
+  defaultInnerText?: string;
   onChange(v?: Value): void;
   onChangeInnerText?(v: string): void;
-  onError(errors: string[]): void;
+  // `shown` is false while `deferErrorsUntilEdit` is holding these errors back:
+  // they are real (the value can't be used) but not the user's to see yet.
+  onError(errors: string[], shown: boolean): void;
   path: string;
   className?: string;
   // Classes to apply to the Monaco editor.
@@ -49,6 +56,10 @@ export type ObjectEditorProps = {
   padding?: boolean;
   showLineNumbers?: boolean;
   disableFolding?: boolean;
+  // Leaves the value the editor is seeded with unmarked until the first edit,
+  // so an editor that opens on a value that doesn't validate doesn't open on an
+  // error the user hasn't caused.
+  deferErrorsUntilEdit?: boolean;
   // If true, calls to onError will include errors produced by the validated.
   // In either case, the editor will still show the errors.
   shouldSurfaceValidatorErrors?: boolean;
@@ -57,17 +68,68 @@ export type ObjectEditorProps = {
   size?: "sm" | "md";
   disabled?: boolean;
   fixedOverflowWidgets?: boolean;
+  placeholder?: string;
+  "aria-label"?: string;
 } & WalkAstOptions;
 
 // Special case -- empty documents should be formatted to include space to entry a new field right away.
 const emptyObject = "{\n\n}";
 
 export function ObjectEditor(props: ObjectEditorProps) {
+  const isMobile = useIsMobileDevice();
+  const valueRef = useRef(props.defaultValue);
+  const onChangeRef = useRef(props.onChange);
+  onChangeRef.current = props.onChange;
+  const handleChange = useCallback((v?: Value) => {
+    valueRef.current = v;
+    onChangeRef.current(v);
+  }, []);
+
+  if (isMobile) {
+    return (
+      <PlainObjectEditor
+        defaultValue={valueRef.current}
+        onChange={handleChange}
+        onError={props.onError}
+        onChangeInnerText={props.onChangeInnerText}
+        defaultInnerText={props.defaultInnerText}
+        deferErrorsUntilEdit={props.deferErrorsUntilEdit}
+        mode={props.mode}
+        validator={props.validator}
+        allowTopLevelUndefined={
+          "allowTopLevelUndefined" in props
+            ? !!props.allowTopLevelUndefined
+            : undefined
+        }
+        shouldSurfaceValidatorErrors={props.shouldSurfaceValidatorErrors}
+        disabled={props.disabled}
+        autoFocus={props.autoFocus}
+        fullHeight={props.fullHeight}
+        saveAction={props.saveAction}
+        enterSaves={props.enterSaves}
+        placeholder={props.placeholder}
+        className={cn(props.className, props.editorClassname)}
+        aria-label={props["aria-label"]}
+      />
+    );
+  }
+
+  return (
+    <ObjectEditorImpl
+      {...props}
+      defaultValue={valueRef.current}
+      onChange={handleChange}
+    />
+  );
+}
+
+function ObjectEditorImpl(props: ObjectEditorProps) {
   const {
     className,
     editorClassname,
     multilineClasses,
     defaultValue,
+    defaultInnerText,
     onChange,
     onChangeInnerText,
     onError,
@@ -82,42 +144,27 @@ export function ObjectEditor(props: ObjectEditorProps) {
     disableFolding = false,
     validator,
     mode,
+    deferErrorsUntilEdit = false,
     shouldSurfaceValidatorErrors = false,
     showTableNames = false,
     size = "md",
     disabled = false,
     fixedOverflowWidgets = true,
+    placeholder,
   } = props;
 
   const indentTopLevel = mode === "addDocuments" || mode === "editDocument";
   const [monaco, setMonaco] = useState<Parameters<BeforeMount>[0]>();
+  const monacoRef = useRef(monaco);
 
   const getDocumentRefs = useIdDecorations(monaco, path, showTableNames);
-
-  // Initialize all markers on mount.
-  useEffect(() => {
-    if (monaco) {
-      handleCodeChange(
-        defaultValueString,
-        mode,
-        validator,
-        "allowTopLevelUndefined" in props
-          ? // eslint-disable-next-line react/destructuring-assignment
-            !!props.allowTopLevelUndefined
-          : false,
-        shouldSurfaceValidatorErrors,
-        handleError,
-        onChange,
-        getDocumentRefs,
-      );
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monaco]);
 
   const saveActionRef = useRef(saveAction);
   useEffect(() => {
     saveActionRef.current = saveAction;
   }, [saveAction]);
+
+  const edited = useRef(false);
 
   const handleError = useCallback(
     (errors: ConvexValidationError[]) => {
@@ -128,19 +175,28 @@ export function ObjectEditor(props: ObjectEditorProps) {
             !(e instanceof ConvexSchemaValidationError),
         )
         .map((e: any) => e.message);
-      onError?.(validationErrors);
+      const shown = !deferErrorsUntilEdit || edited.current;
+      onError?.(validationErrors, shown);
 
-      if (monaco) {
-        setErrorMarkers(monaco, errors, path, shouldSurfaceValidatorErrors);
+      if (monacoRef.current) {
+        setErrorMarkers(
+          monacoRef.current,
+          shown ? errors : [],
+          path,
+          shouldSurfaceValidatorErrors,
+        );
       }
 
       return validationErrors.length > 0;
     },
-    [monaco, onError, path, shouldSurfaceValidatorErrors],
+    [deferErrorsUntilEdit, onError, path, shouldSurfaceValidatorErrors],
   );
 
   // Use state here so we don't recalculate the default value.
   const [defaultValueString] = useState(() => {
+    if (defaultInnerText !== undefined) {
+      return defaultInnerText;
+    }
     if (defaultValue === undefined) {
       return "";
     }
@@ -158,22 +214,24 @@ export function ObjectEditor(props: ObjectEditorProps) {
   const [numLines, setNumLines] = useState(
     numLinesFromCode(defaultValueString),
   );
-  const editorLineHeight = size === "sm" ? 13 : 18;
-  const editorHeight = Math.min(Math.max(numLines, 2), 15) * editorLineHeight;
+  const [isEmpty, setIsEmpty] = useState(defaultValueString === "");
+  const editorLineHeightRem = (size === "sm" ? 13 : 18) / 16;
+  const editorHeight = `${Math.min(Math.max(numLines, 2), 15) * editorLineHeightRem}rem`;
 
   const handleChange = useCallback(
     (code?: string) => {
+      edited.current = true;
       // Hook to inform the parent component of the inner text of the editor.
       onChangeInnerText?.(code ?? "");
 
       setNumLines(code ? numLinesFromCode(code) : 1);
+      setIsEmpty(!code);
       handleCodeChange(
         code,
         mode,
         validator,
         "allowTopLevelUndefined" in props
-          ? // eslint-disable-next-line react/destructuring-assignment
-            !!props.allowTopLevelUndefined
+          ? !!props.allowTopLevelUndefined
           : false,
         shouldSurfaceValidatorErrors,
         handleError,
@@ -195,7 +253,7 @@ export function ObjectEditor(props: ObjectEditorProps) {
 
   const { deploymentsURI, captureMessage } = useContext(DeploymentInfoContext);
 
-  const { resolvedTheme: currentTheme } = useTheme();
+  const currentTheme = useCurrentTheme();
   const prefersDark = currentTheme === "dark";
 
   return (
@@ -204,7 +262,7 @@ export function ObjectEditor(props: ObjectEditorProps) {
       className={cn(
         // Setting a min-h makes sure the editor is able to properly resize when the
         // parent is resized.
-        "relative h-full min-h-4 w-full max-w-full rounded-sm border",
+        "relative size-full min-h-4 max-w-full rounded-sm border",
         className,
         disabled && "cursor-not-allowed bg-background-tertiary",
         numLines > 2 && multilineClasses,
@@ -217,7 +275,19 @@ export function ObjectEditor(props: ObjectEditorProps) {
       onScroll={(e) => e.stopPropagation()}
     >
       {disabled && (
-        <div className="absolute z-10 h-full w-full cursor-not-allowed bg-background-tertiary/20" />
+        <div className="absolute z-10 size-full cursor-not-allowed bg-background-tertiary/20" />
+      )}
+      {placeholder && isEmpty && !disabled && (
+        <div
+          className="pointer-events-none absolute z-10 font-mono text-content-secondary italic"
+          style={{
+            marginTop: 5,
+            marginLeft: 11,
+            fontSize: size === "sm" ? 12 : undefined,
+          }}
+        >
+          {placeholder}
+        </div>
       )}
       <Editor
         height="100%"
@@ -225,7 +295,7 @@ export function ObjectEditor(props: ObjectEditorProps) {
         className={cn(
           padding && "pt-2",
           editorClassname,
-          size === "sm" && "mt-[1px]",
+          size === "sm" && "mt-px",
           disabled &&
             "disabled cursor-not-allowed bg-background-tertiary text-content-secondary",
         )}
@@ -263,9 +333,27 @@ export function ObjectEditor(props: ObjectEditorProps) {
             // The "unused block" diagnostic code.
             diagnosticCodesToIgnore: [7028],
           });
+          monacoRef.current = m;
           setMonaco(m);
         }}
         onMount={(editor, m) => {
+          // Run the initial validation now that the editor model exists (it's
+          // created between `beforeMount` and `onMount`), so error decorations
+          // render on first paint even when the default value is invalid.
+          monacoRef.current = m;
+          handleCodeChange(
+            defaultValueString,
+            mode,
+            validator,
+            "allowTopLevelUndefined" in props
+              ? !!props.allowTopLevelUndefined
+              : false,
+            shouldSurfaceValidatorErrors,
+            handleError,
+            onChange,
+            getDocumentRefs,
+          );
+
           registerIdCommands({ monaco: m, deploymentsURI, captureMessage });
 
           editor.onKeyDown((e) => {
@@ -424,7 +512,7 @@ function handleCodeChange(
   }
 }
 
-function processCode(
+export function processCode(
   code: string | undefined,
   mode: "editField" | "addDocuments" | "editDocument" | "patchDocuments",
   validator: ValidatorJSON | undefined,

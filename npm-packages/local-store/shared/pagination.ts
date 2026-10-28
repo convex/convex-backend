@@ -389,9 +389,9 @@ export function paginator<Schema extends SchemaDefinition<any, boolean>>(
   return new PaginatorDatabaseReader(db, schema);
 }
 
-export class PaginatorDatabaseReader<DataModel extends GenericDataModel>
-  implements GenericDatabaseReader<DataModel>
-{
+export class PaginatorDatabaseReader<
+  DataModel extends GenericDataModel,
+> implements GenericDatabaseReader<DataModel> {
   // TODO: support system tables
   public system: any = null;
 
@@ -416,8 +416,7 @@ export class PaginatorDatabaseReader<DataModel extends GenericDataModel>
 export class PaginatorQueryInitializer<
   DataModel extends GenericDataModel,
   T extends TableNamesInDataModel<DataModel>,
-> implements QueryInitializer<NamedTableInfo<DataModel, T>>
-{
+> implements QueryInitializer<NamedTableInfo<DataModel, T>> {
   constructor(
     public parent: PaginatorDatabaseReader<DataModel>,
     public table: T,
@@ -501,8 +500,7 @@ export class PaginatorQueryInitializer<
 export class PaginatorQuery<
   DataModel extends GenericDataModel,
   T extends TableNamesInDataModel<DataModel>,
-> implements Query<NamedTableInfo<DataModel, T>>
-{
+> implements Query<NamedTableInfo<DataModel, T>> {
   constructor(
     public parent: PaginatorQueryInitializer<DataModel, T>,
     public index: IndexNames<NamedTableInfo<DataModel, T>>,
@@ -556,8 +554,7 @@ export class PaginatorQuery<
 export class OrderedPaginatorQuery<
   DataModel extends GenericDataModel,
   T extends TableNamesInDataModel<DataModel>,
-> implements OrderedQuery<NamedTableInfo<DataModel, T>>
-{
+> implements OrderedQuery<NamedTableInfo<DataModel, T>> {
   public startIndexKey: IndexKey | undefined;
   public startInclusive: boolean;
   public endIndexKey: IndexKey | undefined;

@@ -4,10 +4,14 @@ import { Callout } from "@ui/Callout";
 import { Button } from "@ui/Button";
 import { useTeamMembers } from "api/teams";
 import { useListPlans, useTeamOrbSubscription } from "api/billing";
-import { useIsCurrentMemberTeamAdmin } from "api/roles";
+import {
+  useHasCustomRolePermission,
+  useIsCurrentMemberTeamAdmin,
+} from "api/roles";
+import { BILLING_RESOURCE } from "lib/permissions";
 import { TeamSettingsLayout } from "layouts/TeamSettingsLayout";
 import { withAuthenticatedPage } from "lib/withAuthenticatedPage";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useRouter } from "next/router";
 import { TeamResponse } from "generatedApi";
 import { Plans } from "components/billing/Plans";
@@ -21,10 +25,13 @@ import { Loading } from "@ui/Loading";
 import { planNameMap } from "components/billing/planCards/PlanCard";
 import { OpenInVercel } from "components/OpenInVercel";
 import startCase from "lodash/startCase";
+import { PromoCodeModalContainer } from "components/billing/PromoCodeModal";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 
 export { getServerSideProps } from "lib/ssr";
 
 function Billing({ team }: { team: TeamResponse }) {
+  const { promos } = useLaunchDarkly();
   const { subscription: orbSub, isLoading: isOrbSubLoading } =
     useTeamOrbSubscription(team.id);
 
@@ -32,12 +39,20 @@ function Billing({ team }: { team: TeamResponse }) {
 
   const members = useTeamMembers(team.id);
   const hasAdminPermissions = useIsCurrentMemberTeamAdmin();
+  // Mirror the gate `OrbSelfServePlan` uses on the Upgrade button — otherwise
+  // a custom-role member with `billing:subscription:changePlan` can click
+  // Upgrade and watch the page do nothing because `showUpgrade` stays false.
+  const canChangePlanCustom = useHasCustomRolePermission(
+    team.id,
+    "billing:subscription:changePlan",
+    BILLING_RESOURCE,
+    false,
+  );
+  const canChangePlan = hasAdminPermissions || canChangePlanCustom === true;
   const myProfile = useProfile();
   const orbPlans = useListPlans(team.id);
-  const selectedPlan = orbPlans.plans?.find((p) =>
-    router.query.source === "chef"
-      ? p.planType === "CONVEX_STARTER_PLUS"
-      : p.id === router.query.upgradePlan,
+  const selectedPlan = orbPlans.plans?.find(
+    (p) => p.id === router.query.upgradePlan,
   );
 
   const newPlanName = selectedPlan?.planType
@@ -45,10 +60,17 @@ function Billing({ team }: { team: TeamResponse }) {
     : selectedPlan?.name;
 
   const showUpgrade =
-    selectedPlan && orbSub?.plan.id !== selectedPlan.id && hasAdminPermissions;
+    selectedPlan && orbSub?.plan.id !== selectedPlan.id && canChangePlan;
+  const promoCode =
+    typeof router.query.promoCode === "string"
+      ? router.query.promoCode
+      : undefined;
 
   return (
     <div className="-mx-6 flex grow flex-col">
+      {promos && promoCode !== undefined && (
+        <PromoCodeModalContainer code={promoCode} initialTeam={team} />
+      )}
       <div className="sticky top-0 z-10 -mt-6 flex items-center gap-2 bg-background-primary p-6">
         {showUpgrade && (
           <Button
@@ -90,7 +112,7 @@ function Billing({ team }: { team: TeamResponse }) {
           {!isOrbSubLoading && orbSub !== undefined ? (
             <div
               className={cn(
-                "flex h-full min-h-0 w-full gap-6 transition-transform duration-500 motion-reduce:transition-none",
+                "flex size-full min-h-0 gap-6 transition-transform duration-500 motion-reduce:transition-none",
                 showUpgrade
                   ? "-translate-x-[calc(100%+1.5rem)]"
                   : "translate-x-0",
@@ -98,7 +120,7 @@ function Billing({ team }: { team: TeamResponse }) {
             >
               <div
                 className={cn(
-                  "scrollbar flex w-full shrink-0 grow flex-col gap-4 overflow-y-auto px-6 pr-2",
+                  "scrollbar flex w-full shrink-0 grow flex-col gap-4 overflow-y-auto px-6 pr-2 pb-6",
                   showUpgrade ? "pointer-events-none select-none" : "",
                 )}
                 // @ts-expect-error https://github.com/facebook/react/issues/17157
@@ -107,17 +129,12 @@ function Billing({ team }: { team: TeamResponse }) {
                 <div className="flex w-full min-w-[20rem] flex-col gap-4">
                   <Sheet className="flex flex-col gap-4 text-sm">
                     <h3>Plans</h3>
-                    <Plans
-                      team={team}
-                      hasAdminPermissions={hasAdminPermissions}
-                      subscription={orbSub || undefined}
-                    />
+                    <Plans team={team} subscription={orbSub || undefined} />
                     <div className="text-center text-content-secondary">
                       Compare all plan features on the{" "}
                       <Link
                         href="https://convex.dev/plans"
                         passHref
-                        className="text-content-link"
                         target="_blank"
                       >
                         pricing page
@@ -131,7 +148,7 @@ function Billing({ team }: { team: TeamResponse }) {
                   />
                   <LocalDevCallout
                     tipText="Tip: Run this to enable audit logs locally:"
-                    command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement audit_log_retention_days --team-id ${team.id} --reason "local" 90 --for-real`}
+                    command={`just big-brain-tool-dev entitlement grant add --team-entitlement audit_log_retention_days --team-id ${team.id} --reason "local" 90 --for-real`}
                   />
                 </div>
               </div>
@@ -152,7 +169,6 @@ function Billing({ team }: { team: TeamResponse }) {
                       team={team}
                       numMembers={members?.length || 1}
                       plan={selectedPlan}
-                      isChef={router.query.source === "chef"}
                       onUpgradeComplete={() => {
                         void router.push(
                           {
@@ -171,7 +187,7 @@ function Billing({ team }: { team: TeamResponse }) {
               </div>
             </div>
           ) : (
-            <Loading className="mx-6 h-full w-full" />
+            <Loading className="mx-6 size-full" />
           )}
         </div>
       </ErrorBoundary>
@@ -179,7 +195,7 @@ function Billing({ team }: { team: TeamResponse }) {
   );
 }
 
-function BillingPage() {
+export function BillingPage() {
   return (
     <TeamSettingsLayout page="billing" Component={Billing} title="Billing" />
   );
@@ -199,7 +215,7 @@ function BillingErrorFallback({ eventId }: { eventId: string | null }) {
           <Link
             href="mailto:support@convex.dev"
             passHref
-            className="items-center text-content-link"
+            className="items-center"
           >
             support@convex.dev
           </Link>{" "}

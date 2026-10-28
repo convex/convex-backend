@@ -1,16 +1,15 @@
 use std::{
     self,
     convert::Infallible,
-    net::SocketAddr,
     sync::Arc,
 };
 
+use errors::ErrorMetadata;
 use fnv::FnvHashMap;
 use futures::Future;
 use pb::error_metadata::ErrorMetadataStatusExt;
 use pb_extras::ReflectionService;
 use sentry::integrations::tower as sentry_tower;
-use tokio::net::TcpSocket;
 use tonic::{
     server::NamedService,
     service::Routes,
@@ -27,7 +26,10 @@ use tonic_health::{
 use tonic_middleware::MiddlewareLayer;
 use tower::ServiceBuilder;
 
-use crate::knobs::HTTP_SERVER_TCP_BACKLOG;
+use crate::{
+    http::MakeSocket,
+    knobs::HTTP_SERVER_TCP_BACKLOG,
+};
 
 mod middleware;
 
@@ -77,7 +79,7 @@ impl ConvexGrpcService {
         self
     }
 
-    pub async fn serve<F>(self, addr: SocketAddr, shutdown: F) -> anyhow::Result<()>
+    pub async fn serve<F>(self, addr: impl MakeSocket, shutdown: F) -> anyhow::Result<()>
     where
         F: Future<Output = ()>,
     {
@@ -91,8 +93,10 @@ impl ConvexGrpcService {
             .layer(sentry_tower::NewSentryLayer::new_from_top())
             .layer(sentry_tower::SentryHttpLayer::new());
 
+        let socket = addr.make_socket()?;
+        let local_addr = socket.local_addr()?;
         tracing::info!(
-            "gRPC services {} listening on ipv4://{addr}",
+            "gRPC services {} listening on ipv4://{local_addr}",
             self.service_names.join(",")
         );
         for service_name in self.service_names {
@@ -100,16 +104,17 @@ impl ConvexGrpcService {
                 .set_service_status(service_name, ServingStatus::Serving)
                 .await;
         }
-        // Set SO_REUSEADDR and a bounded TCP accept backlog for our server's listening
-        // socket.
-        let socket = TcpSocket::new_v4()?;
-        socket.set_reuseaddr(true)?;
-        socket.set_nodelay(true)?;
-        socket.bind(addr)?;
-
         let listener = socket.listen(*HTTP_SERVER_TCP_BACKLOG)?;
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
         tonic::transport::Server::builder()
+            // Internal Convex gRPC clients can validly cancel many streams on
+            // long-lived connections; don't let h2's external-peer abuse
+            // heuristic close those trusted connections.
+            // TODO: Apply the same policy to internal gRPC clients once tonic
+            // exposes h2's client-side max_local_error_reset_streams setting.
+            // The Sentry "too_many_internal_resets" issues are likely from
+            // client-side channels, so this server setting alone is incomplete.
+            .http2_max_local_error_reset_streams(None)
             .layer(convex_layers)
             .add_routes(self.routes)
             .serve_with_incoming_shutdown(incoming, shutdown)
@@ -122,6 +127,50 @@ impl ConvexGrpcService {
 pub fn handle_response<T>(response: Result<Response<T>, Status>) -> anyhow::Result<T> {
     match response {
         Ok(response) => Ok(response.into_inner()),
+        Err(status) => Err(status.into_anyhow()),
+    }
+}
+
+/// Returns true if `status` is a failure to *establish* the connection to the
+/// server (connection refused, host down, connect timeout, …).
+///
+/// Tonic wraps every connection-establishment error in [`tonic::ConnectError`]
+/// and nothing on the request/response data path produces one, so its presence
+/// anywhere in the error's source chain proves the request was never
+/// dispatched — making it safe to retry on another upstream even for
+/// non-idempotent operations. We key on `ConnectError` rather than
+/// [`tonic::Code::Unavailable`] precisely because some mid-flight failures
+/// (e.g. an h2 `REFUSED_STREAM`) also map to `Unavailable` but may have reached
+/// the server.
+pub fn is_connect_error(status: &Status) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(status);
+    while let Some(err) = source {
+        if err.is::<tonic::ConnectError>() {
+            return true;
+        }
+        source = err.source();
+    }
+    false
+}
+
+/// Like [`handle_response`], but tags connection-establishment failures as
+/// [`ErrorMetadata::rejected_before_execution`] so callers that fail over to
+/// another upstream retry them (see [`is_connect_error`]). Apply this to the
+/// *initial* response of an RPC, not to errors surfaced while consuming a
+/// response stream — those may be mid-flight and unsafe to retry.
+pub fn handle_response_retry_on_connect<T>(
+    response: Result<Response<T>, Status>,
+) -> anyhow::Result<T> {
+    match response {
+        Ok(response) => Ok(response.into_inner()),
+        Err(status) if is_connect_error(&status) => {
+            Err(status
+                .into_anyhow()
+                .context(ErrorMetadata::rejected_before_execution(
+                    "UpstreamConnectError",
+                    "Failed to connect to upstream",
+                )))
+        },
         Err(status) => Err(status.into_anyhow()),
     }
 }

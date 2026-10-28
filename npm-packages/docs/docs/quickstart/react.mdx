@@ -7,12 +7,9 @@ sidebar_position: 100
 ---
 
 import sampleData from "!!raw-loader!@site/../private-demos/quickstarts/react-vite/sampleData.jsonl";
-import tasks from "!!raw-loader!@site/../private-demos/quickstarts/react-vite/convex/tasks.js";
-import main from "!!raw-loader!@site/../private-demos/quickstarts/react-vite/src/main.jsx";
-import App from "!!raw-loader!@site/../private-demos/quickstarts/react-vite/src/App.jsx";
-import tasksTS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/convex/tasks.ts";
-import mainTS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/main.tsx";
-import AppTS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/App.tsx";
+import tasks from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/convex/tasks.ts";
+import main from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/main.tsx";
+import App from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/App.tsx";
 
 <iframe
   width="560"
@@ -37,22 +34,15 @@ or follow the guide below.
 
 ---
 
-Learn how to query data from Convex in a React app using Vite
-and<LanguageSelector verbose />
+Learn how to query data from Convex in a React app using Vite.
 
 <StepByStep>
   <Step title="Create a React app">
     Create a React app using the `create vite` command.
 
-    <JSDialectVariants>
-      ```sh
-      npm create vite@latest my-app -- --template react-ts
-      ```
-
-      ```sh
-      npm create vite@latest my-app -- --template react
-      ```
-    </JSDialectVariants>
+    ```sh
+    npm create vite@latest my-app -- --template react-ts
+    ```
 
   </Step>
   <Step title="Install the Convex client and server library">
@@ -101,7 +91,7 @@ and<LanguageSelector verbose />
     with the sample data into your Convex database with
     the `import` command.
 
-    ```
+    ```sh
     npx convex import --table tasks sampleData.jsonl
     ```
 
@@ -114,13 +104,6 @@ and<LanguageSelector verbose />
     This will declare the types of your data for optional
     typechecking with TypeScript, and it will be also
     enforced at runtime.
-
-    <JSDialectVariants>
-    Alternatively remove the line `'plugin:@typescript-eslint/recommended-requiring-type-checking',`
-    from the `.eslintrc.cjs` file to lower the type checking strictness.
-
-    <></>
-    </JSDialectVariants>
 
     ```ts noDialect title="convex/schema.ts"
     import { defineSchema, defineTable } from "convex/server";
@@ -137,28 +120,26 @@ and<LanguageSelector verbose />
   </Step>
 
   <Step title="Expose a database query">
-    Add a new file <JSDialectFileName name="tasks.ts" /> in the `convex/` folder
+    Add a new file `tasks.ts` in the `convex/` folder
     with a query function that loads the data.
 
     Exporting a query function from this file
     declares an API function named after the file
     and the export name, `api.tasks.get`.
 
-    <TSAndJSSnippet
-      sourceTS={tasksTS}
-      sourceJS={tasks}
+    <Snippet
+      source={tasks}
       title="convex/tasks.ts"
     />
 
   </Step>
 
   <Step title="Connect the app to your backend">
-    In <JSDialectFileName name="src/main.jsx" />, create a `ConvexReactClient` and pass it to a `ConvexProvider`
+    In `src/main.tsx`, create a `ConvexReactClient` and pass it to a `ConvexProvider`
     wrapping your app.
 
-    <TSAndJSSnippet
-      sourceTS={mainTS}
-      sourceJS={main}
+    <Snippet
+      source={main}
       title="src/main.tsx"
       highlightPatterns={[ "Convex", ]}
     />
@@ -166,14 +147,13 @@ and<LanguageSelector verbose />
   </Step>
 
   <Step title="Display the data in your app">
-    In <JSDialectFileName name="src/App.jsx" />, use the `useQuery` hook to fetch from your `api.tasks.get`
+    In `src/App.tsx`, use the `useQuery` hook to fetch from your `api.tasks.get`
     API function and display the data.
 
-    <TSAndJSSnippet
-      sourceTS={AppTS}
-      sourceJS={App}
+    <Snippet
+      source={App}
       title="src/App.tsx"
-      highlightPatterns={[ "useQuery", "api", "tasks", "text", "\\)\\)\\}" ]}
+      highlightPatterns={[ "useQuery", "api", "tasks", "text" ]}
     />
 
   </Step>
@@ -190,4 +170,4 @@ and<LanguageSelector verbose />
 
 </StepByStep>
 
-See the complete [React documentation](/client/react.mdx).
+See the complete [React documentation](/client/react/overview.mdx).

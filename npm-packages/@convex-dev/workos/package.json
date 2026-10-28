@@ -1,29 +1,35 @@
 {
   "name": "@convex-dev/workos",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "description": "Helper for authenticating a Convex client via WorkOS AuthKit",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/convex/convex-backend.git",
+    "directory": "npm-packages/@convex-dev/workos"
+  },
   "scripts": {
     "build": "node version-check.mjs && zshy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build",
     "prepack": "node src/scripts/dont-publish-alpha-as-latest.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@workos-inc/authkit-react": "^0.11.0"
+    "@workos-inc/authkit-react": "^0.16.0"
   },
   "devDependencies": {
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
     "convex": "workspace:*",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.0",
     "zshy": "0.7.0"
   },
   "peerDependencies": {
-    "convex": "^1.31.7",
+    "convex": "^1.42.3",
     "react": "^18.0.0 || ^19.0.0-0 || ^19.0.0"
   },
   "zshy": "./src/index.tsx",

@@ -24,13 +24,13 @@ jobs:
     runs-on: [self-hosted, aws, "${{ matrix.arch }}", xlarge]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -42,7 +42,7 @@ jobs:
           '+%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
 
       - name: Build and push backend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         id: build-image
         env:
           DOCKER_BUILD_RECORD_UPLOAD: false
@@ -50,13 +50,15 @@ jobs:
           context: .
           file: self-hosted/docker-build/Dockerfile.backend
           tags: |
-            ghcr.io/get-convex/convex-backend
-          cache-from: |
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.sha }},prefix=buildkit,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.ref_name }},prefix=buildkit,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
-          cache-to: |
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.sha }},mode=max,prefix=buildkit,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.ref_name }},mode=max,prefix=buildkit,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
+            ghcr.io/convex/convex-backend
+          # This workflow does not use a build cache.
+          # A shared cache is not safe for a release build. A bad cache entry
+          # from a cache poisoning attack can put incorrect content into the
+          # image.
+          # A build without a cache is slower, but the speed is not a problem
+          # here. This workflow runs only when a change merges to the `release`
+          # branch.
+          no-cache: true
           outputs: push-by-digest=true,type=image,push=true
           provenance: false
           build-args: |
@@ -64,7 +66,7 @@ jobs:
             VERGEN_GIT_COMMIT_TIMESTAMP=${{ env.COMMIT_TIMESTAMP }}
 
       - name: Write digest
-        uses: cloudposse/github-action-matrix-outputs-write@v1
+        uses: cloudposse/github-action-matrix-outputs-write@ed06cf3a6bf23b8dce36d1cf0d63123885bb8375 # v1
         id: digest
         with:
           matrix-step-name: ${{ github.job }}
@@ -76,7 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build]
     steps:
-      - uses: cloudposse/github-action-matrix-outputs-read@v1
+      - uses: cloudposse/github-action-matrix-outputs-read@33cac12fa9282a7230a418d859b93fdbc4f27b5a # v1
         id: read
         with:
           matrix-step-name: build

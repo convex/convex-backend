@@ -27,7 +27,10 @@ use super::{
         VectorIndexState,
     },
 };
-use crate::bootstrap_model::index::text_index::TextIndexSnapshotData;
+use crate::{
+    bootstrap_model::index::text_index::TextIndexSnapshotData,
+    types::PersistenceIndexId,
+};
 
 /// Configuration that depends on the type of index.
 ///
@@ -38,12 +41,12 @@ use crate::bootstrap_model::index::text_index::TextIndexSnapshotData;
 /// If spec changes (eg fields), it's a *different* index.
 /// State can change over time (eg. backfill state or staged flag)
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum IndexConfig {
     /// Standard database index.
     Database {
         spec: DatabaseIndexSpec,
         on_disk_state: DatabaseIndexState,
+        persistence_index_id: Option<PersistenceIndexId>,
     },
 
     /// Full text search index.
@@ -212,6 +215,8 @@ pub enum SerializedIndexConfig {
         #[serde(flatten)]
         spec: SerializedDatabaseIndexSpec,
         on_disk_state: SerializedDatabaseIndexState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persistence_index_id: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     Search {
@@ -235,9 +240,11 @@ impl TryFrom<IndexConfig> for SerializedIndexConfig {
             IndexConfig::Database {
                 spec,
                 on_disk_state,
+                persistence_index_id,
             } => SerializedIndexConfig::Database {
                 spec: spec.into(),
                 on_disk_state: on_disk_state.try_into()?,
+                persistence_index_id: persistence_index_id.map(|id| i64::from(id.value())),
             },
             IndexConfig::Text {
                 spec,
@@ -265,9 +272,13 @@ impl TryFrom<SerializedIndexConfig> for IndexConfig {
             SerializedIndexConfig::Database {
                 spec,
                 on_disk_state,
+                persistence_index_id,
             } => IndexConfig::Database {
                 spec: spec.try_into()?,
                 on_disk_state: on_disk_state.try_into()?,
+                persistence_index_id: persistence_index_id
+                    .and_then(|id| u32::try_from(id).ok())
+                    .and_then(PersistenceIndexId::new),
             },
             SerializedIndexConfig::Search {
                 spec,
@@ -288,70 +299,3 @@ impl TryFrom<SerializedIndexConfig> for IndexConfig {
 }
 
 codegen_convex_serialization!(IndexConfig, SerializedIndexConfig, test_cases = 64);
-
-#[cfg(test)]
-mod tests {
-    use maplit::btreeset;
-    use value::{
-        obj,
-        ConvexValue,
-    };
-
-    use crate::bootstrap_model::index::{
-        vector_index::{
-            FragmentedVectorSegment,
-            VectorIndexBackfillState,
-            VectorIndexSpec,
-            VectorIndexState,
-        },
-        IndexConfig,
-    };
-
-    #[test]
-    fn test_backwards_compatibility() -> anyhow::Result<()> {
-        let serialized = obj!(
-            "type" => "vector",
-            "onDiskState" => {
-                "state" => "backfilling",
-                "document_cursor" => ConvexValue::Null,
-                "segments" => [
-                    {
-                        "segment_key" => "abc",
-                        "id_tracker_key" => "def",
-                        "deleted_bitset_key" => "ghi",
-                        "id" => "jkl",
-                        "num_vectors" => 11i64,
-                        "num_deleted" => 12i64,
-                    },
-                ],
-            },
-            "dimensions" => 1536i64,
-            "vectorField" => "embedding.field",
-            "filterFields" => ["filter1", "filter2"],
-        )?;
-        let deserialized: IndexConfig = serialized.try_into()?;
-        assert_eq!(
-            deserialized,
-            IndexConfig::Vector {
-                spec: VectorIndexSpec {
-                    dimensions: 1536.try_into()?,
-                    vector_field: "embedding.field".parse()?,
-                    filter_fields: btreeset! { "filter1".parse()?, "filter2".parse()? },
-                },
-                on_disk_state: VectorIndexState::Backfilling(VectorIndexBackfillState {
-                    cursor: None,
-                    segments: vec![FragmentedVectorSegment {
-                        segment_key: "abc".to_string().try_into()?,
-                        id_tracker_key: "def".to_string().try_into()?,
-                        deleted_bitset_key: "ghi".to_string().try_into()?,
-                        id: "jkl".to_string(),
-                        num_vectors: 11,
-                        num_deleted: 12,
-                    }],
-                    staged: false,
-                }),
-            }
-        );
-        Ok(())
-    }
-}

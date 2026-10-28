@@ -12,7 +12,7 @@ const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
 const { version } = packageJson;
 
 if (!(process.env.npm_config_user_agent ?? "").startsWith("pnpm")) {
-  console.error("❌ Use `just rush-pnpm publish` instead of `npm publish`");
+  console.error("❌ Use `just pnpm publish` instead of `npm publish`");
   process.exit(1);
 }
 
@@ -27,7 +27,7 @@ if (isAlpha) {
     console.error(
       `❌ Alpha version ${version} cannot be published to "latest" tag`,
     );
-    console.error("Use: just rush-pnpm publish --tag=alpha");
+    console.error("Use: just pnpm publish --tag=alpha");
     process.exit(1);
   }
 
@@ -35,7 +35,7 @@ if (isAlpha) {
     console.error(
       `❌ Alpha version ${version} should use --tag=alpha, not --tag=${npmTag}`,
     );
-    console.error("Use: just rush-pnpm publish --tag=alpha");
+    console.error("Use: just pnpm publish --tag=alpha");
     process.exit(1);
   }
 

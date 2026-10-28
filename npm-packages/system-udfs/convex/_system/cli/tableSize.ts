@@ -1,7 +1,7 @@
 import { queryGeneric } from "../secretSystemTables";
 import { v } from "convex/values";
 
-export default queryGeneric({
+export default queryGeneric("ViewData")({
   args: {
     tableName: v.string(),
   },

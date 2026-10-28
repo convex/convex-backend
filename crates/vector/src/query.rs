@@ -23,8 +23,6 @@ use common::{
 };
 use errors::ErrorMetadata;
 use pb::searchlight as proto;
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use serde::{
     Deserialize,
     Serialize,
@@ -67,64 +65,6 @@ pub struct VectorSearch {
 pub enum VectorSearchExpression {
     Eq(FieldPath, Option<ConvexValue>),
     In(FieldPath, BTreeSet<Option<ConvexValue>>),
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for VectorSearch {
-    type Parameters = ();
-
-    type Strategy = impl Strategy<Value = VectorSearch>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        (
-            any::<IndexName>(),
-            any::<ComponentId>(),
-            any::<Option<u32>>(),
-            any::<Vec<f32>>(),
-            // There's an invariant that there's at most one `VectorSearchExpression` for a given
-            // field. To ensure this, generate a map from FieldPath to filtered values
-            // and construct the `VectorSearchExpression` from that.
-            proptest::collection::btree_map(
-                any::<FieldPath>(),
-                proptest::collection::btree_set(any::<Option<ConvexValue>>(), 1..5),
-                1..5,
-            ),
-        )
-            .prop_map(|(index_name, component_id, limit, vector, field_map)| {
-                VectorSearch {
-                    index_name,
-                    component_id,
-                    limit,
-                    vector,
-                    expressions: VectorSearchExpression::from_field_map(field_map),
-                }
-            })
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for VectorSearchExpression {
-    type Parameters = ();
-
-    type Strategy = impl Strategy<Value = VectorSearchExpression>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        prop_oneof![
-            any::<(FieldPath, Option<ConvexValue>)>()
-                .prop_map(|(field_path, value)| VectorSearchExpression::Eq(field_path, value)),
-            (
-                any::<FieldPath>(),
-                // In expressions should have at least 2 values
-                prop::collection::btree_set(any::<Option<ConvexValue>>(), 2..5),
-            )
-                .prop_map(|(field_path, elements)| {
-                    VectorSearchExpression::In(field_path, elements)
-                })
-        ]
-    }
 }
 
 impl VectorSearchExpression {
@@ -419,7 +359,7 @@ impl Debug for CompiledVectorSearch {
             "CompiledVectorSearch {{ vector_size: {}, limit: {}, filter_conditions: {:?} }}",
             self.vector.len(),
             self.limit,
-            &self.filter_conditions,
+            self.filter_conditions,
         )
     }
 }
@@ -431,7 +371,6 @@ pub enum CompiledVectorFilter {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct VectorSearchQueryResult {
     pub score: f32,
     pub id: InternalId,
@@ -576,7 +515,6 @@ impl TryFrom<proto::VectorQueryResult> for VectorSearchQueryResult {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct PublicVectorSearchQueryResult {
     pub score: f32,
     pub id: DeveloperDocumentId,
@@ -620,34 +558,5 @@ impl Ord for PublicVectorSearchQueryResult {
 impl PartialOrd for PublicVectorSearchQueryResult {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use value::testing::assert_roundtrips;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_roundtrips(
-            query in any::<VectorSearch>()
-        ) {
-            assert_roundtrips::<VectorSearch, JsonValue>(query)
-        }
-
-        #[test]
-        fn test_vector_query_result_roundtrips(
-            result in any::<VectorSearchQueryResult>()
-        ) {
-            assert_roundtrips::<VectorSearchQueryResult, proto::VectorQueryResult>(result)
-        }
     }
 }

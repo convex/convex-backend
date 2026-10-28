@@ -1,7 +1,7 @@
 use clap::Parser;
 use common::types::MemberId;
 use keybroker::{
-    InstanceSecret,
+    DeploymentSecret,
     KeyBroker,
 };
 
@@ -17,8 +17,7 @@ struct Args {
     instance_name: String,
 
     /// Instance secret (32-byte hex string),
-    /// which can be generated with `generate_secret`
-    /// or a command like `openssl rand -hex 32`
+    /// which can be generated with `openssl rand -hex 32`
     #[arg(help = "Instance secret (32-byte hex string)")]
     instance_secret: String,
 
@@ -40,8 +39,8 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let instance_secret = InstanceSecret::try_from(&args.instance_secret[..])?;
-    let broker = KeyBroker::new(&args.instance_name, instance_secret)?;
+    let deployment_secret = DeploymentSecret::try_from(&args.instance_secret[..])?;
+    let broker = KeyBroker::new(&args.instance_name, deployment_secret)?;
 
     if args.system_key {
         eprintln!("System key:");

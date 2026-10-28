@@ -1,9 +1,8 @@
-import { TeamResponse } from "generatedApi";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
 import { ArchiveIcon } from "@radix-ui/react-icons";
 import { useState } from "react";
-import { useGetZipExport } from "hooks/deploymentApi";
-import { BackupResponse, useListCloudBackups } from "api/backups";
+import { useDownloadZipExport } from "hooks/deploymentApi";
+import { BackupResponse, useListCloudBackupsIfAvailable } from "api/backups";
 import { Loading } from "@ui/Loading";
 import { EmptySection } from "@common/elements/EmptySection";
 import { useQuery } from "convex/react";
@@ -11,22 +10,27 @@ import udfs from "@common/udfs";
 import { BackupListItem, progressMessageForBackup } from "./BackupListItem";
 import { BackupDeploymentSelector } from "./BackupDeploymentSelector";
 import { useLatestRestore } from "./BackupRestoreStatus";
+import { BackupNowButton } from "./BackupNowButton";
 
 export function BackupList({
+  teamId,
   targetDeployment,
-  team,
-  canPerformActions,
+  canCreate,
+  canImport,
+  canDelete,
   maxCloudBackups,
 }: {
+  teamId: number;
   targetDeployment: PlatformDeploymentResponse; // = deployment the settings page is open for
-  team: TeamResponse;
-  canPerformActions: boolean;
+  canCreate: boolean;
+  canImport: boolean;
+  canDelete: boolean;
   maxCloudBackups: number;
 }) {
-  const backups = useListCloudBackups(team?.id); // order: latest to oldest
-
   const [selectedDeployment, setSelectedDeployment] =
     useState(targetDeployment);
+
+  const backups = useListCloudBackupsIfAvailable(selectedDeployment); // order: latest to oldest
 
   const latestRestore = useLatestRestore();
   const requestor = latestRestore?.requestor;
@@ -48,21 +52,28 @@ export function BackupList({
         <BackupDeploymentSelector
           selectedDeployment={selectedDeployment}
           onChange={setSelectedDeployment}
-          team={team}
           targetDeployment={targetDeployment}
-        />
+        >
+          <BackupNowButton
+            teamId={teamId}
+            deployment={targetDeployment}
+            maxCloudBackups={maxCloudBackups}
+            canCreate={canCreate}
+          />
+        </BackupDeploymentSelector>
       </div>
       <div className="scrollbar grow overflow-auto">
-        {backups === undefined ? (
+        {!backups ? (
           <Loading />
         ) : (
           <BackupListForDeployment
+            teamId={teamId}
             backups={backups}
-            selectedDeployment={selectedDeployment}
             targetDeployment={targetDeployment}
             restoringBackupId={restoringBackupId}
-            team={team}
-            canPerformActions={canPerformActions}
+            canCreate={canCreate}
+            canImport={canImport}
+            canDelete={canDelete}
             maxCloudBackups={maxCloudBackups}
           />
         )}
@@ -72,50 +83,46 @@ export function BackupList({
 }
 
 function BackupListForDeployment({
+  teamId,
   backups,
-  selectedDeployment,
   targetDeployment,
   restoringBackupId,
-  team,
-  canPerformActions,
+  canCreate,
+  canImport,
+  canDelete,
   maxCloudBackups,
 }: {
+  teamId: number;
   backups: BackupResponse[];
-  selectedDeployment: PlatformDeploymentResponse;
   targetDeployment: PlatformDeploymentResponse;
   restoringBackupId: bigint | null;
-  team: TeamResponse;
-  canPerformActions: boolean;
+  canCreate: boolean;
+  canImport: boolean;
+  canDelete: boolean;
   maxCloudBackups: number;
 }) {
   const existingCloudBackup = useQuery(udfs.latestExport.latestCloudExport);
 
-  const selectedDeploymentBackups = backups.filter(
-    (b) =>
-      selectedDeployment.kind === "cloud" &&
-      b.sourceDeploymentId === selectedDeployment.id,
-  );
+  // Backups are already scoped to the selected deployment by the server.
+  // For target deployment stats, use a separate query (SWR deduplicates when
+  // selectedDeployment === targetDeployment, the common case).
+  const targetBackups = useListCloudBackupsIfAvailable(targetDeployment);
 
   const latestBackupInTargetDeployment =
-    backups?.find(
-      (s) =>
-        targetDeployment.kind === "cloud" &&
-        s.sourceDeploymentId === targetDeployment.id,
-    ) ?? null;
+    (targetDeployment.kind === "cloud" && targetBackups?.[0]) || null;
 
-  const someBackupInProgress = backups.some(
-    (backup) =>
-      targetDeployment.kind === "cloud" &&
-      backup.sourceDeploymentId === targetDeployment.id &&
-      (backup.state === "requested" || backup.state === "inProgress"),
-  );
+  const someBackupInProgress =
+    targetDeployment.kind === "cloud" &&
+    (targetBackups ?? []).some(
+      (backup) => backup.state === "requested" || backup.state === "inProgress",
+    );
 
-  const getZipExportUrl = useGetZipExport({
+  const downloadZipExport = useDownloadZipExport({
     format: "zip",
     include_storage: true,
   });
 
-  return selectedDeploymentBackups.length === 0 ? (
+  return backups.length === 0 ? (
     <EmptySection
       Icon={ArchiveIcon}
       header="No backups in this deployment."
@@ -128,18 +135,20 @@ function BackupListForDeployment({
     />
   ) : (
     <div className="flex flex-col divide-y px-4 py-2">
-      {selectedDeploymentBackups.map((backup) => (
+      {backups.map((backup) => (
         <BackupListItem
           key={backup.id}
+          teamId={teamId}
           backup={backup}
           restoring={BigInt(backup.id) === restoringBackupId}
           someBackupInProgress={someBackupInProgress}
           someRestoreInProgress={restoringBackupId !== null}
           latestBackupInTargetDeployment={latestBackupInTargetDeployment}
           targetDeployment={targetDeployment}
-          team={team}
-          getZipExportUrl={getZipExportUrl}
-          canPerformActions={canPerformActions}
+          downloadZipExport={downloadZipExport}
+          canCreate={canCreate}
+          canImport={canImport}
+          canDelete={canDelete}
           maxCloudBackups={maxCloudBackups}
           progressMessage={progressMessageForBackup(
             backup,

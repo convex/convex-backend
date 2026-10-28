@@ -46,19 +46,13 @@ snippets include three different files:
 - `src/App.tsx` - frontend code in a separate repository where `api.ts` is
   checked in
 
-<TSAndJSSnippet
-  title="convex/messages.ts"
-  snippets="send"
-  sourceTS={Functions}
-  sourceJS={Functions}
-/>
+<Snippet title="convex/messages.ts" snippets="send" source={Functions} />
 
-<TSAndJSSnippet title="api.ts" sourceTS={API} sourceJS={API} />
+<Snippet title="api.ts" source={API} />
 
-<TSAndJSSnippet
+<Snippet
   title="src/App.tsx"
-  sourceTS={Frontend}
-  sourceJS={Frontend}
+  source={Frontend}
   highlightPatterns={["import { api } from"]}
 />
 

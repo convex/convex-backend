@@ -12,9 +12,20 @@ use common::{
         ParseDocument,
         ParsedDocument,
     },
+    interval::{
+        BinaryKey,
+        Interval,
+    },
+    persistence::PersistenceSnapshot,
+    query::Order,
     runtime::Runtime,
-    types::IndexId,
+    types::{
+        IndexId,
+        IndexRef,
+    },
 };
+use futures::TryStreamExt;
+use indexing::index_registry::IndexRegistry;
 use serde::{
     Deserialize,
     Serialize,
@@ -22,8 +33,12 @@ use serde::{
 use sync_types::Timestamp;
 use value::{
     codegen_convex_serialization,
+    values_to_bytes,
+    ConvexValue,
     FieldPath,
     InternalId,
+    NamespacedTableMapping,
+    ResolvedDocumentId,
     TableName,
     TableNamespace,
 };
@@ -123,11 +138,47 @@ impl<'a, RT: Runtime> IndexWorkerMetadataModel<'a, RT> {
     }
 }
 
-pub static INDEX_WORKER_METADATA_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_index_worker_metadata"
-        .parse()
-        .expect("_index_worker_metadata is an invalid table name")
-});
+pub async fn load_metadata_fast_forward_ts(
+    registry: &IndexRegistry,
+    snapshot: &PersistenceSnapshot,
+    table_mapping: &NamespacedTableMapping,
+    index: ResolvedDocumentId,
+) -> anyhow::Result<Option<Timestamp>> {
+    let metadata_table_id = table_mapping.id(&INDEX_WORKER_METADATA_TABLE)?;
+    let metadata_index_id = INDEX_DOC_ID_INDEX
+        .name()
+        .map_table(&table_mapping.name_to_tablet())?;
+    let metadata_index = IndexRef::try_from(registry.get_enabled(&metadata_index_id).unwrap())?;
+
+    let id_value = ConvexValue::String(index.internal_id().to_string().try_into()?);
+    let id_value_bytes = values_to_bytes(&[Some(id_value)]);
+    let interval = Interval::prefix(BinaryKey::from(id_value_bytes));
+
+    let stream = snapshot.index_scan(
+        metadata_index,
+        metadata_table_id.tablet_id,
+        &interval,
+        Order::Asc,
+        100,
+    );
+    let mut results: Vec<_> = stream
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .map(|(_, rev)| rev.value)
+        .collect();
+    let fast_forward_ts = if !results.is_empty() {
+        let mut doc = ParseDocument::<IndexWorkerMetadataRecord>::parse(results.remove(0))?;
+        // This defaults to Timestamp(0) if a document isn't present, which is fine for
+        // our purpose
+        Some(*doc.index_metadata.mut_fast_forward_ts())
+    } else {
+        None
+    };
+    Ok(fast_forward_ts)
+}
+
+pub const INDEX_WORKER_METADATA_TABLE: TableName = TableName::const_new("_index_worker_metadata");
 
 static INDEX_DOC_ID_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "index_id".parse().expect("Invalid built-in field"));
@@ -139,9 +190,7 @@ pub struct IndexWorkerMetadataTable;
 impl SystemTable for IndexWorkerMetadataTable {
     type Metadata = IndexWorkerMetadataRecord;
 
-    fn table_name() -> &'static TableName {
-        &INDEX_WORKER_METADATA_TABLE
-    }
+    const TABLE_NAME: TableName = INDEX_WORKER_METADATA_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![INDEX_DOC_ID_INDEX.clone()]
@@ -155,12 +204,8 @@ impl SystemTable for IndexWorkerMetadataTable {
 /// metadata. This must be used only within the index worker as an
 /// implementation detail of how the index is built.
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct IndexWorkerMetadataRecord {
-    index_id: InternalId,
+    index_id: IndexId,
     pub index_metadata: IndexWorkerMetadata,
 }
 
@@ -188,7 +233,7 @@ impl TryFrom<SerializedIndexWorkerMetadataRecord> for IndexWorkerMetadataRecord 
     type Error = anyhow::Error;
 
     fn try_from(value: SerializedIndexWorkerMetadataRecord) -> Result<Self, Self::Error> {
-        let index_id = InternalId::from_str(&value.index_id)?;
+        let index_id = InternalId::from_str(&value.index_id)?.into();
         let index_metadata = IndexWorkerMetadata::try_from(value.index_metadata)?;
         Ok(IndexWorkerMetadataRecord {
             index_id,
@@ -198,10 +243,6 @@ impl TryFrom<SerializedIndexWorkerMetadataRecord> for IndexWorkerMetadataRecord 
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub enum IndexWorkerMetadata {
     TextSearch(IndexWorkerBatchMetadata),
     VectorSearch(IndexWorkerBatchMetadata),
@@ -264,10 +305,6 @@ impl TryFrom<SerializedIndexWorkerMetadata> for IndexWorkerMetadata {
 ///
 /// For now this is vector and text search.
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct IndexWorkerBatchMetadata {
     fast_forward_ts: Timestamp,
 }
@@ -291,40 +328,5 @@ impl TryFrom<SerializedIndexWorkerBatchMetadata> for IndexWorkerBatchMetadata {
     fn try_from(value: SerializedIndexWorkerBatchMetadata) -> Result<Self, Self::Error> {
         let fast_forward_ts = Timestamp::try_from(value.fast_forward_ts)?;
         Ok(IndexWorkerBatchMetadata { fast_forward_ts })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use sync_types::Timestamp;
-    use value::{
-        assert_obj,
-        InternalId,
-    };
-
-    use crate::bootstrap_model::index_workers::{
-        IndexWorkerBatchMetadata,
-        IndexWorkerMetadata,
-        IndexWorkerMetadataRecord,
-    };
-
-    #[test]
-    fn test_frozen_obj() {
-        assert_eq!(
-            IndexWorkerMetadataRecord::try_from(assert_obj! {
-                "index_id" => "BJbr11wH980UmedO1cm7Aw",
-                "index_metadata" => assert_obj! {
-                    "metadata" => assert_obj! { "fast_forward_ts" => 6067670556026735204i64 },
-                    "metadata_type" => "text_search",
-                },
-            })
-            .unwrap(),
-            IndexWorkerMetadataRecord {
-                index_id: InternalId::from_developer_str("BJbr11wH980UmedO1cm7Aw").unwrap(),
-                index_metadata: IndexWorkerMetadata::TextSearch(IndexWorkerBatchMetadata {
-                    fast_forward_ts: Timestamp::try_from(6067670556026735204i64).unwrap()
-                })
-            }
-        );
     }
 }

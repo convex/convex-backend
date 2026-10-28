@@ -97,7 +97,7 @@ export const StatusTool: ConvexTool<typeof inputSchema, typeof outputSchema> = {
     ];
     // Also get the prod cloud deployment if we're using a cloud-hosted dev-deployment
     if (
-      selectionWithinProject.kind === "ownDev" &&
+      selectionWithinProject.kind === "unspecified" &&
       !(
         deploymentSelection.kind === "existingDeployment" &&
         deploymentSelection.deploymentToActOn.deploymentFields === null

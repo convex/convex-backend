@@ -46,13 +46,14 @@ and all errors thrown by your functions.
 
 You can view these logs:
 
-1. When using the [`ConvexReactClient`](/client/react.mdx), in your browser
-   developer tools console pane. The logs are sent from your dev deployment to
-   your client, and the client logs them to the browser. Production deployments
+1. When using the [`ConvexReactClient`](/client/react/overview.mdx), in your
+   browser developer tools console pane. The logs are sent from your dev
+   deployment to your client, and the client logs them to the browser.
+   Production deployments
    [**do not** send logs to the client](/functions/error-handling/error-handling.mdx#differences-in-error-reporting-between-dev-and-prod).
-2. In your Convex dashboard on the [Logs page](/dashboard/deployments/logs.md).
-3. In your terminal with [`npx convex dev`](/cli.md#tail-deployment-logs) during
-   development or [`npx convex logs`](/cli.md#tail-deployment-logs), which only
+2. In your Convex dashboard on the [Logs page](/dashboard/deployments/logs.mdx).
+3. In your terminal with [`npx convex dev`](/cli/reference/dev.mdx) during
+   development or [`npx convex logs`](/cli/reference/logs.mdx), which only
    prints logs.
 
 ### Using a debugger
@@ -83,6 +84,6 @@ format: `[Request ID: <request_id>]`.
 
 You can copy and paste a Request ID into your Convex dashboard to view the logs
 for functions started by that request. See the
-[Dashboard logs page](/dashboard/deployments/logs.md#filter-logs) for details.
+[Dashboard logs page](/dashboard/deployments/logs.mdx#filter-logs) for details.
 
 {/* TODO: Document how to filter by Request ID in Datadog/Axiom */}

@@ -5,12 +5,6 @@ export function ReferralsBenefits() {
     <>
       <Benefit>
         <strong>
-          +85,000&nbsp;tokens <small>/ month</small>
-        </strong>{" "}
-        Chef tokens
-      </Benefit>
-      <Benefit>
-        <strong>
           +1M <small>/ month</small>
         </strong>{" "}
         function calls
@@ -28,7 +22,7 @@ export function ReferralsBenefits() {
         <strong>
           +1&nbsp;GB <small>/ month</small>
         </strong>{" "}
-        database bandwidth
+        database io
       </Benefit>
       <Benefit>
         <strong>+1&nbsp;GB</strong> file storage
@@ -37,7 +31,7 @@ export function ReferralsBenefits() {
         <strong>
           +1&nbsp;GB <small>/ month</small>
         </strong>{" "}
-        file bandwidth
+        data egress
       </Benefit>
     </>
   );
@@ -45,7 +39,7 @@ export function ReferralsBenefits() {
 
 function Benefit({ children }: { children: React.ReactNode }) {
   return (
-    <li className="flex gap-2 text-sm leading-snug">
+    <li className="flex gap-2 text-sm/snug">
       <CheckCircledIcon className="size-5 text-green-700 dark:text-green-400" />
       <div className="flex flex-col text-content-secondary [&>strong]:font-medium [&>strong]:text-content-primary">
         {children}

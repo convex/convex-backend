@@ -15,7 +15,8 @@ import {
   versionedBinaryDir,
   dashboardOutDir,
   resetDashboardDir,
-  loadDashboardConfig,
+  loadGlobalDashboardConfig,
+  saveGlobalDashboardConfig,
   executableName,
 } from "./filePaths.js";
 import child_process from "child_process";
@@ -26,6 +27,7 @@ import { recursivelyDelete, recursivelyCopy } from "../fsUtils.js";
 import { LocalDeploymentError } from "./errors.js";
 import type { ProgressBarInstance } from "../../../vendor/progress/index.js";
 import path from "path";
+import { isValidBackendVersion } from "./utils.js";
 
 async function makeExecutable(p: string) {
   switch (process.platform) {
@@ -66,6 +68,7 @@ async function _ensureBackendBinaryDownloaded(
   ctx: Context,
   version: string,
 ): Promise<{ binaryPath: string; version: string }> {
+  await assertValidBackendVersion(ctx, version);
   logVerbose(`Ensuring backend binary downloaded for version ${version}`);
   const existingDownload = await checkForExistingDownload(ctx, version);
   if (existingDownload !== null) {
@@ -79,11 +82,51 @@ async function _ensureBackendBinaryDownloaded(
   return { version, binaryPath };
 }
 
+async function assertValidBackendVersion(ctx: Context, version: string) {
+  if (!isValidBackendVersion(version)) {
+    return await ctx.crash({
+      exitCode: 1,
+      errorType: "fatal",
+      printedMessage: "Invalid local backend version",
+      errForSentry: new LocalDeploymentError(
+        `Invalid local backend version: ${JSON.stringify(version)}`,
+      ),
+    });
+  }
+}
+
+let cachedLatestVersion: string | null = null;
+
+/**
+ * Finds the latest version of the Convex local backend through
+ * version.convex.dev, caching the resolved version for the lifetime of the
+ * process so repeated lookups hit the network at most once.
+ *
+ * Wraps {@link _findLatestVersionWithBinary}. Only successful (non-null)
+ * results are cached, so a failed `requireSuccess: false` lookup can be retried
+ * by a later call.
+ */
+export async function findLatestVersionWithBinary<
+  RequireSuccess extends boolean,
+>(
+  ctx: Context,
+  requireSuccess: RequireSuccess,
+): Promise<RequireSuccess extends true ? string : string | null> {
+  if (cachedLatestVersion !== null) {
+    return cachedLatestVersion;
+  }
+  const result = await _findLatestVersionWithBinary(ctx, requireSuccess);
+  if (result !== null) {
+    cachedLatestVersion = result;
+  }
+  return result;
+}
+
 /**
  * Finds the latest version of the Convex local backend
  * through version.convex.dev
  */
-export async function findLatestVersionWithBinary<
+export async function _findLatestVersionWithBinary<
   RequireSuccess extends boolean,
 >(
   ctx: Context,
@@ -231,7 +274,7 @@ function getDownloadPath() {
 }
 
 function getGithubDownloadUrl(version: string, filename: string) {
-  return `https://github.com/get-convex/convex-backend/releases/download/${version}/${filename}`;
+  return `https://github.com/convex/convex-backend/releases/download/${version}/${filename}`;
 }
 
 async function downloadZipFile(
@@ -298,12 +341,16 @@ async function downloadZipFile(
 }
 
 export async function ensureDashboardDownloaded(ctx: Context, version: string) {
-  const config = loadDashboardConfig(ctx);
+  await assertValidBackendVersion(ctx, version);
+  const config = loadGlobalDashboardConfig(ctx);
   if (config !== null && config.version === version) {
     return;
   }
   await resetDashboardDir(ctx);
   await _ensureDashboardDownloaded(ctx, version);
+  // Record which version is now in `dashboardOutDir()`
+  // so we can skip the download next time.
+  saveGlobalDashboardConfig(ctx, { version });
 }
 async function _ensureDashboardDownloaded(ctx: Context, version: string) {
   const zipLocation = dashboardZip();

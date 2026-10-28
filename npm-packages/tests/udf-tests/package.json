@@ -1,0 +1,31 @@
+{
+  "name": "udf-tests",
+  "version": "0.0.0",
+  "dependencies": {
+    "convex": "workspace:*",
+    "shapes": "workspace:*",
+    "id-encoding": "workspace:*",
+    "chai": "~6.2.0",
+    "chai-as-promised": "~8.0.0",
+    "effect3": "npm:effect@3.21.2",
+    "effect4": "npm:effect@4.0.0-beta.74",
+    "@types/chai-as-promised": "~8.0.0",
+    "udf-syscall-ffi": "workspace:*",
+    "fast-check": "3.23.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.4",
+    "typescript": "^5.9.2",
+    "@types/node": "^18.17.0",
+    "@types/chai": "~5.2.3"
+  },
+  "scripts": {
+    "build": "",
+    "test": "tsc -p convex && tsc -p wpt-import",
+    "generate_crypto_interop_data": "tsx src/generate_crypto_interop_data.ts",
+    "consume_crypto_interop_data": "tsx src/consume_crypto_interop_data.ts",
+    "wpt:sync": "tsx wpt-import/src/main.ts sync",
+    "wpt:bump": "tsx wpt-import/src/main.ts bump",
+    "wpt:verify": "tsx wpt-import/src/main.ts verify"
+  }
+}

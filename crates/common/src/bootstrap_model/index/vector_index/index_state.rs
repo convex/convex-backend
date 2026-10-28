@@ -16,7 +16,6 @@ use super::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum VectorIndexState {
     Backfilling(VectorIndexBackfillState),
     Backfilled {

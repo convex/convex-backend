@@ -1,15 +1,14 @@
 /* stylelint-disable docusaurus/copyright-header */
 
+/* Customize the search button in nav and modal */
+@import url("./search.css");
+
 /* @import "tailwindcss"; but without preflight */
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @source "../**/*.{js,jsx,ts,tsx}";
-
-/* Customize the search button in nav and modal */
-@import url("./search.css");
-@import url("./language-selector.css");
 
 @theme {
   --color-neutral-white: #ffffff;
@@ -57,6 +56,38 @@
 
 /* Apply the dark mode when [data-theme="dark"] is present */
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* Theme the @convex-internal/web-analytics consent banner. */
+.wa-banner {
+  --wa-banner-background-color: var(--color-neutral-n1);
+  --wa-banner-text-color: var(--color-neutral-n10);
+  --wa-banner-border-color: var(--color-neutral-n4);
+  --wa-banner-font-family: var(--ifm-font-family-base);
+  --wa-banner-border-radius: 0.5rem;
+  --wa-banner-box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  --wa-banner-padding: 0.75rem;
+  --wa-banner-action-gap: 0.75rem;
+  --wa-banner-z-index: 100;
+  --wa-banner-button-border-radius: 9999px;
+  --wa-banner-button-padding: 0.75rem 1rem;
+  --wa-banner-button-min-height: auto;
+  --wa-banner-button-font-size: 0.875rem;
+  --wa-banner-button-font-weight: 500;
+  --wa-banner-button-line-height: 1;
+  --wa-banner-decline-background-color: var(--color-neutral-n4);
+  --wa-banner-decline-text-color: var(--color-neutral-n10);
+  --wa-banner-accept-background-color: var(--color-plum-p4);
+  --wa-banner-accept-text-color: var(--color-neutral-white);
+}
+
+[data-theme="dark"] .wa-banner {
+  --wa-banner-background-color: var(--color-neutral-n11);
+  --wa-banner-text-color: var(--color-neutral-white);
+  --wa-banner-border-color: var(--color-neutral-n10);
+  --wa-banner-box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.3);
+  --wa-banner-decline-background-color: var(--color-neutral-n10);
+  --wa-banner-decline-text-color: var(--color-neutral-white);
+}
 
 /**
  * Any CSS included here will be global. The classic template
@@ -118,7 +149,8 @@
   --convex-active-background: rgb(222, 226, 234);
   /* Copy of the sidebar chevron/arrow svg to make it smaller and darker */
   --ifm-menu-link-sublist-icon: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16px" height="16px" viewBox="-12 -12 48 48"><path fill="rgb(28, 30, 33)" d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"></path></svg>');
-  --convex-sidebar-icon-filter: none;
+  --convex-sidebar-icon-filter: opacity(0.6);
+  --convex-sidebar-filled-icon-filter: opacity(0.4);
   --convex-toc-background-color: rgba(255, 255, 255, 1);
   --ifm-menu-link-padding-vertical: 0.4375rem;
   --ifm-menu-link-padding-horizontal: 0.625rem;
@@ -139,10 +171,10 @@
 
   --ifm-code-font-size: 95%;
   --ifm-font-weight-semibold: 400;
-  --ifm-font-family-base: "Inter", system-ui, -apple-system, Segoe UI, Roboto,
-    Ubuntu, Cantarell, Noto Sans, sans-serif, BlinkMacSystemFont, "Segoe UI",
-    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol";
+  --ifm-font-family-base:
+    "Inter", system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell,
+    Noto Sans, sans-serif, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 
   /* Footer */
   --ifm-footer-background-color: var(--ifm-background-color);
@@ -167,9 +199,17 @@
 
   --color-error: #ee342f;
 
-  /* Zen of Convex */
-  --convex-zen-do-color: var(--ifm-color-success-dark);
-  --convex-zen-do-not-color: var(--ifm-color-warning-dark);
+  /* Zen of Convex: desaturated so the icons sit quietly next to text */
+  --convex-zen-do-color: #5b9a6a;
+  --convex-zen-do-not-color: #c98f3d;
+  --convex-zen-category-icon-color: var(--color-n7);
+
+  --convex-sidebar-top-level-color: var(--color-n10);
+  --convex-pagination-muted-color: var(--color-n8);
+  --convex-dashboard-button-border-color: var(--color-n4);
+  --convex-dashboard-button-hover-background: var(--color-n2);
+  --convex-video-icon-color: var(--color-n9);
+  --convex-video-icon-background: var(--color-n2);
 
   --ifm-font-size-base: 0.9375rem;
   --ifm-line-height-base: 1.6;
@@ -240,8 +280,14 @@ for when the whole page is scrolled down */
 @media (min-width: 997px) {
   .convex-docs-title {
     display: block;
+    /* Same 150-unit-tall frame and 2.5rem height as the Convex logo, so the
+    glyphs match its scale and the baselines line up. The viewBox is cropped
+    horizontally to the glyphs, 212 units wide, so at that scale (2.5rem is
+    37.5px, i.e. 0.25px per unit) the width is a whole 53px; a fractional
+    width smears the glyph edges across two pixels at 1x. */
     width: auto;
     height: 2.5rem;
+    flex-shrink: 0;
   }
 }
 
@@ -273,13 +319,14 @@ for when the whole page is scrolled down */
 
   .navbar__items .convex-dashboard-button {
     border-radius: 6px;
-    padding: 0.35rem 0.5rem 0.25rem 0.5rem;
-    background-color: var(--ifm-navbar-link-color);
-    color: var(--ifm-toc-border-color);
+    padding: 0.3rem 0.625rem 0.2rem 0.625rem;
+    border: 1px solid var(--convex-dashboard-button-border-color);
+    color: var(--ifm-navbar-link-color);
   }
 
   .navbar__items .convex-dashboard-button:hover {
-    background-color: var(--ifm-navbar-link-hover-color);
+    background-color: var(--convex-dashboard-button-hover-background);
+    color: var(--ifm-navbar-link-color);
   }
 
   .convex-dashboard-button svg {
@@ -435,6 +482,21 @@ article code {
   margin: 1.5rem 0 2.5rem;
 }
 
+/* The card lists use <ul>/<li> for semantics; reset the list styling and let
+   the card links act as the grid items so the layout is unchanged. */
+.cards,
+.qs-cards,
+.large-cards {
+  padding: 0;
+  list-style: none;
+}
+
+.cards > li,
+.qs-cards > li,
+.large-cards > li {
+  display: contents;
+}
+
 .component-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -551,7 +613,7 @@ a.card:hover {
   text-decoration: none;
 }
 
-a.card h2 {
+a.card .card__title {
   font-size: 0.9375rem;
 }
 
@@ -559,7 +621,7 @@ a.card p {
   font-size: 0.75rem;
 }
 
-a.card h2,
+a.card .card__title,
 a.card p {
   margin-bottom: 0;
   overflow: hidden;
@@ -568,86 +630,153 @@ a.card p {
   font-weight: 400;
 }
 
+/* Hero cards share the pagination cards' look: bordered, chevron on the
+right that nudges and turns brand color on hover. */
 a.card.convex-hero-card {
-  margin: 2rem 0 2rem;
+  margin: 2rem 0;
   position: relative;
-  padding: 1.5rem;
-  gap: 1.5rem;
+  max-width: 100%;
+  padding: 1rem 3rem 1rem 1.25rem;
+  gap: 0.875rem;
+  transition: border-color var(--ifm-transition-fast);
+}
+
+a.card.convex-hero-card:hover {
+  background-color: var(--ifm-background-color);
+  border-color: var(--ifm-color-primary);
 }
 
 a.card.convex-hero-card p {
   display: none;
 }
 
-@media (min-width: 997px) {
-  a.card.convex-hero-card h2 {
-    font-size: 1.25rem;
-  }
+a.card.convex-hero-card .card__title {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.011em;
+}
 
-  a.card.convex-hero-card {
-    max-width: 100%;
-  }
+/* Icons arrive at their own size and color (e.g. a hardcoded stroke), so
+normalize them into a small muted tile. */
+a.card.convex-hero-card > svg {
+  box-sizing: content-box;
+  width: 1.25rem;
+  height: 1.25rem;
+  min-width: 0;
+  padding: 0.5rem;
+  border-radius: 8px;
+  color: var(--convex-video-icon-color);
+  background-color: var(--convex-video-icon-background);
+}
 
-  a.card.convex-hero-card::after {
-    content: "→";
-    position: absolute;
-    right: 1.5rem;
-    font-size: 2rem;
-  }
+a.card.convex-hero-card > svg [stroke]:not([stroke="none"]) {
+  stroke: currentColor;
+}
+
+a.card.convex-hero-card::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 1.25rem;
+  width: 1rem;
+  height: 1rem;
+  margin-top: -0.5rem;
+  background-color: var(--convex-pagination-muted-color);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3l5 5-5 5'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  transition:
+    background-color var(--ifm-transition-fast),
+    transform var(--ifm-transition-fast);
+}
+
+a.card.convex-hero-card:hover::after {
+  background-color: var(--ifm-color-primary);
+  transform: translateX(2px);
 }
 
 /* END: Custom cards implementation */
 
-/* No "card" stylization for pagination links */
 a.pagination-nav__link {
-  border-width: 0;
-  padding-left: 0;
-  padding-right: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  height: 100%;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: var(--ifm-card-border-radius);
+  transition: border-color var(--ifm-transition-fast);
 }
 
-/* Pagination "previous"/"next" style */
-a.pagination-nav__link .pagination-nav__sublabel {
+a.pagination-nav__link--next {
+  flex-direction: row-reverse;
+  text-align: right;
+}
+
+a.pagination-nav__link:hover {
+  border-color: var(--ifm-color-primary);
+}
+
+.pagination-nav__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.pagination-nav__arrow {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  color: var(--convex-pagination-muted-color);
+  transition:
+    color var(--ifm-transition-fast),
+    transform var(--ifm-transition-fast);
+}
+
+a.pagination-nav__link:hover .pagination-nav__arrow {
+  color: var(--ifm-color-primary);
+}
+
+a.pagination-nav__link--prev:hover .pagination-nav__arrow {
+  transform: translateX(-2px);
+}
+
+a.pagination-nav__link--next:hover .pagination-nav__arrow {
+  transform: translateX(2px);
+}
+
+a.pagination-nav__link .pagination-nav__sublabel,
+a.pagination-nav__link .pagination-nav__section-label {
+  margin: 0;
+  color: var(--convex-pagination-muted-color);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+a.pagination-nav__link .pagination-nav__label {
   color: var(--ifm-font-color-base);
   font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.011em;
+  line-height: 1.3;
 }
 
-/* Pagination doc name style */
-a.pagination-nav__link .pagination-nav__label {
-  color: var(--ifm-color-primary);
-  font-size: 1.5rem;
-  font-weight: 400;
-}
-
-/* Pagination doc name hover style */
-a.pagination-nav__link .pagination-nav__label:hover {
-  color: var(--ifm-color-primary-darkest);
-}
-
-/* START: Swap where arrows are shown in pagination */
-.pagination-nav__link--prev .pagination-nav__label::before {
+/* Arrows are drawn by PaginatorNavLink, so drop Infima's « and ». The `a`
+   prefix outranks Infima's `.pagination-nav__link--prev .pagination-nav__label`
+   selectors. */
+a.pagination-nav__link--prev .pagination-nav__label::before,
+a.pagination-nav__link--next .pagination-nav__label::after {
   content: none;
 }
-
-.pagination-nav__link--prev .pagination-nav__sublabel::before {
-  content: "← ";
-}
-
-.pagination-nav__link--next .pagination-nav__label::after {
-  content: none;
-}
-
-.pagination-nav__link--next .pagination-nav__sublabel::after {
-  content: " →";
-}
-/* END: Swap where arrows are shown in pagination */
 
 /* Stylize the top doc headings to match convex.dev */
 .markdown h1:first-child {
   --ifm-h1-font-size: 2rem;
   margin-top: 1.25rem;
-  --ifm-heading-font-family: "GT America", system-ui, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol";
+  --ifm-heading-font-family:
+    "GT America", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -663,9 +792,9 @@ h1,
 h2,
 h3,
 h4 {
-  --ifm-heading-font-family: "GT America", system-ui, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol";
+  --ifm-heading-font-family:
+    "GT America", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -701,7 +830,7 @@ ul.menu__list {
 .theme-doc-sidebar-item-category-level-1
   > .menu__list-item-collapsible
   > a.menu__link:not(.menu__link--active) {
-  color: var(--ifm-navbar-link-color);
+  color: var(--convex-sidebar-top-level-color);
 }
 
 /* Active sidebar links have bold text color */
@@ -815,6 +944,17 @@ html[data-theme="dark"] .convex-menu-header {
 /* Sidebar: Move the “external link” icon to the right */
 .convex-sidebar-external-link svg {
   margin-left: auto;
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--convex-pagination-muted-color);
+}
+
+/* Solid-filled brand logos read much heavier than the outline icons used
+everywhere else in the sidebar, so fade them further. */
+.theme-doc-sidebar-item-link-level-1.convex-sidebar-stack > a::before,
+.theme-doc-sidebar-item-link-level-1.convex-sidebar-github > a::before,
+.theme-doc-sidebar-item-link-level-1.convex-sidebar-discord > a::before {
+  filter: var(--convex-sidebar-filled-icon-filter);
 }
 
 /* START: Icons for each top level item */
@@ -889,12 +1029,12 @@ html[data-theme="dark"] .convex-menu-header {
 .convex-sidebar-ai-agents {
   --convex-icon: url("../../static/img/sidebar-icons/bot.svg");
 }
+
+.convex-sidebar-ai-gateway {
+  --convex-icon: url("../../static/img/sidebar-icons/route.svg");
+}
 .convex-sidebar-platform-apis {
   --convex-icon: url("../../static/img/sidebar-icons/grid.svg");
-}
-
-.convex-sidebar-chef {
-  --convex-icon: url("../../static/img/sidebar-icons/chef.svg");
 }
 
 .convex-sidebar-production {
@@ -961,8 +1101,8 @@ html[data-theme="dark"] .convex-menu-header {
   margin-left: 0.9em;
 }
 
-.convex-sidebar-cli .menu__list li:first-child .menu__link:after,
-.convex-sidebar-cli .menu__list li:nth-child(2) .menu__link:after {
+.convex-sidebar-beta-badge > .menu__link:after,
+.convex-sidebar-beta-badge > .menu__list-item-collapsible > .menu__link:after {
   font-weight: 400;
   font-size: 0.6em;
   margin-left: 1em;
@@ -973,14 +1113,17 @@ html[data-theme="dark"] .convex-menu-header {
   float: right;
 }
 
-.convex-sidebar-cli .menu__list li:first-child .menu__link--active:after {
-  /* shift left to compensate for text to the left being bold */
-  margin-left: 0.7em;
+.convex-sidebar-beta-badge > .menu__list-item-collapsible > .menu__link:after {
+  /* Category links use ::after for the caret. */
+  transform: rotateZ(0deg) !important;
 }
 
-.convex-sidebar-cli .menu__list li:nth-child(2) .menu__link--active:after {
+.convex-sidebar-beta-badge > .menu__link--active:after,
+.convex-sidebar-beta-badge
+  > .menu__list-item-collapsible
+  > .menu__link--active:after {
   /* shift left to compensate for text to the left being bold */
-  margin-left: 0.8em;
+  margin-left: 0.7em;
 }
 
 .convex-sidebar-svelte {
@@ -1019,6 +1162,10 @@ html[data-theme="dark"] .convex-menu-header {
   --convex-icon: url("../../static/img/sidebar-icons/keyboard.svg");
 }
 
+.convex-sidebar-team-management {
+  --convex-icon: url(heroicons/24/outline/user-group.svg);
+}
+
 .convex-sidebar-convex-api {
   --convex-icon: url(heroicons/24/outline/book-open.svg);
 }
@@ -1028,11 +1175,23 @@ html[data-theme="dark"] .convex-menu-header {
 }
 
 .convex-sidebar-http-api {
-  --convex-icon: url(heroicons/24/outline/book-open.svg);
+  --convex-icon: url(heroicons/24/outline/link.svg);
+}
+
+.convex-sidebar-config-files {
+  --convex-icon: url(heroicons/24/outline/document-duplicate.svg);
+}
+
+.convex-sidebar-errors {
+  --convex-icon: url(heroicons/24/outline/exclamation-triangle.svg);
 }
 
 .convex-sidebar-eslint {
   --convex-icon: url("../../static/img/sidebar-icons/eslint.svg");
+}
+
+.convex-sidebar-linting {
+  --convex-icon: url("../../static/img/sidebar-icons/check-circled.svg");
 }
 
 /* END: Icons for each top level item */
@@ -1320,8 +1479,11 @@ h2.zen-header {
 }
 .zen-tip svg,
 .zen-header svg {
-  width: 2rem;
-  height: 2rem;
+  width: 1.5rem;
+  height: 1.5rem;
+}
+.zen-header svg {
+  color: var(--convex-zen-category-icon-color);
 }
 .zen-do h3 > svg {
   color: var(--convex-zen-do-color);
@@ -1342,10 +1504,15 @@ h2.zen-header {
   margin: 0 auto;
 }
 
-/* Fix pages should not be too wide, except for all the quick starts and management API docs */
-html:not([class*="docs-doc-id-quickstart/"]):not(
-    [class*="docs-doc-id-management-api/"]
-  ):not([class*="docs-doc-id-deployment-api/"])
+/* Fix pages should not be too wide, except for all the quick starts (other than
+   the quickstarts overview landing page) and management API docs */
+html:not(
+    [class*="docs-doc-id-quickstart/"]:not(
+      [class*="docs-doc-id-quickstart/overview"]
+    )
+  ):not([class*="docs-doc-id-management-api/"]):not(
+    [class*="docs-doc-id-deployment-api/"]
+  )
   main
   > .container
   > .row
@@ -1355,9 +1522,13 @@ html:not([class*="docs-doc-id-quickstart/"]):not(
 }
 
 @media (min-width: 997px) {
-  html:not([class*="docs-doc-id-quickstart/"]):not(
-      [class*="docs-doc-id-management-api/"]
-    ):not([class*="docs-doc-id-deployment-api/"])
+  html:not(
+      [class*="docs-doc-id-quickstart/"]:not(
+        [class*="docs-doc-id-quickstart/overview"]
+      )
+    ):not([class*="docs-doc-id-management-api/"]):not(
+      [class*="docs-doc-id-deployment-api/"]
+    )
     main
     > .container
     > .row
@@ -1372,10 +1543,75 @@ html:not([class*="docs-doc-id-quickstart/"]):not(
   box-shadow: var(--ifm-global-shadow-lw);
 }
 
-/* Make space for language selector in code blocks */
-.codeblock-header {
-  display: flex;
-  justify-content: space-between;
+.openapi-tabs__schema-container {
+  --schema-tab-track-bg: var(--ifm-color-emphasis-100);
+  --schema-tab-active-bg: var(--ifm-background-color);
+  --schema-tab-active-accent: var(--ifm-color-primary);
+  --schema-tab-idle-text: var(--ifm-color-emphasis-700);
+  --schema-tab-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.openapi-tabs__schema-container .openapi-tabs__schema-tabs-container {
+  width: fit-content;
+  max-width: 100%;
+}
+
+/* A lone option (e.g. the Body / Schema picker once its synthetic example tab
+ * is removed) isn't a choice — hide the selector and just show its content. */
+.openapi-tabs__schema-container
+  .openapi-tabs__schema-tabs-container:has(
+    .openapi-tabs__schema-item:only-child
+  ) {
+  display: none;
+}
+
+.openapi-tabs__schema-container .openapi-tabs__schema-list-container {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  width: auto;
+  max-width: 100%;
+  padding: 3px;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 999px;
+  background-color: var(--schema-tab-track-bg);
+}
+
+.openapi-tabs__schema-container .openapi-tabs__schema-item {
+  margin: 0 !important;
+  padding: 0.3rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--schema-tab-idle-text);
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.openapi-tabs__schema-container .openapi-tabs__schema-item:hover {
+  background-color: transparent;
+  border: 1px solid transparent;
+  color: var(--ifm-color-content);
+}
+
+.openapi-tabs__schema-container .openapi-tabs__schema-item.active {
+  background-color: var(--schema-tab-active-bg);
+  border: 1px solid var(--schema-tab-active-accent);
+  color: var(--schema-tab-active-accent);
+  box-shadow: var(--schema-tab-active-shadow);
+}
+
+.badge--info {
+  color: var(--ifm-color-primary);
+  background-color: color-mix(
+    in srgb,
+    var(--ifm-color-primary) 12%,
+    transparent
+  );
+  border-color: color-mix(in srgb, var(--ifm-color-primary) 35%, transparent);
 }
 
 /* FROM HERE ON: Dark mode styles */
@@ -1398,15 +1634,31 @@ html[data-theme="dark"] {
   --ifm-menu-color-active: white;
   --ifm-menu-color-background-active: rgb(73, 76, 84);
   --convex-active-background: rgb(73, 76, 84);
-  --convex-sidebar-icon-filter: invert(100%);
+  --convex-sidebar-icon-filter: invert(100%) opacity(0.7);
+  --convex-sidebar-filled-icon-filter: invert(100%) opacity(0.5);
   --convex-toc-background-color: var(--ifm-background-color);
   --ifm-menu-link-sublist-icon-filter: brightness(0) invert(100%);
   --convex-link-underline-color: #888;
 
-  --convex-zen-do-color: var(--ifm-color-success-lightest);
-  --convex-zen-do-not-color: var(--ifm-color-warning-lightest);
+  --convex-zen-do-color: #8cc29a;
+  --convex-zen-do-not-color: #ddb173;
+  --convex-zen-category-icon-color: var(--color-n7);
+
+  --convex-sidebar-top-level-color: var(--color-n4);
+  --convex-pagination-muted-color: var(--color-n6);
+  --convex-dashboard-button-border-color: var(--color-n10);
+  --convex-dashboard-button-hover-background: var(--color-n11);
+  --convex-video-icon-color: var(--color-n5);
+  --convex-video-icon-background: var(--color-n11);
 
   --color-error: #fca5a5;
+}
+
+/* Schema selectors: a light page-background highlight is invisible on the dark
+ * track, so lift the active segment with a lighter fill and a deeper shadow. */
+html[data-theme="dark"] .openapi-tabs__schema-list-container {
+  --schema-tab-active-bg: var(--ifm-color-emphasis-300);
+  --schema-tab-active-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 /* Fixes the highlighted code line background */
@@ -1436,8 +1688,9 @@ html[data-theme="dark"] a.card.convex-invert-icon svg {
 }
 
 .StackPosts-title {
-  font-family: "GT America", system-ui, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  font-family:
+    "GT America", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   display: flex;
   flex-direction: row;
   align-items: center;
@@ -1496,6 +1749,12 @@ html[data-theme="dark"] .StackPosts-title-image--dark {
   width: 11rem;
   height: 6rem;
   object-fit: cover;
+}
+
+.StackPosts-post-image--default {
+  padding: 2rem;
+  background: var(--color-n1);
+  object-fit: contain;
 }
 
 .StackPosts-post-content {
@@ -1617,8 +1876,21 @@ a.video-card:hover {
 }
 
 a.video-card .play-icon {
-  color: var(--ifm-font-color-base);
+  box-sizing: content-box;
+  width: 0.875rem;
+  height: 0.875rem;
+  padding: 0.625rem;
   flex-shrink: 0;
+  border-radius: 9999px;
+  color: var(--convex-video-icon-color);
+  background-color: var(--convex-video-icon-background);
+  transition:
+    color var(--ifm-transition-fast),
+    background-color var(--ifm-transition-fast);
+}
+
+a.video-card:hover .play-icon {
+  color: var(--ifm-color-primary);
 }
 
 a.video-card h2 {
@@ -1651,4 +1923,35 @@ a.video-card h2 {
   to {
     transform: translateY(0);
   }
+}
+
+table > caption {
+  font-weight: 500;
+  font-size: 105%;
+  margin-bottom: 0.5em;
+}
+
+/*
+ * "Beta" badge in the OpenAPI sidebar, next to beta endpoints.
+ *
+ * The openapi-docs plugin only sets `deprecated`/method classes on sidebar
+ * items, so there's no per-operation class to hang a badge on. Instead we key
+ * on the generated route, which is `/deployment-api/<kebab-cased operationId>`.
+ * Keep this in sync with the operations tagged `beta` in the OpenAPI spec (see
+ * scripts/prepare-openapi-specs.js): add one selector per beta endpoint.
+ */
+.menu__link[href*="/deployment-api/get-current-usage"]::after {
+  content: "Beta";
+  display: inline-block;
+  margin-left: 0.4rem;
+  padding: 0 0.35rem;
+  border-radius: 0.25rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--ifm-color-warning-contrast-foreground, #4d3800);
+  background-color: var(--ifm-color-warning-contrast-background, #fff8e6);
+  vertical-align: middle;
 }

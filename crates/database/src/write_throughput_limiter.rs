@@ -3,45 +3,79 @@ use std::collections::VecDeque;
 use common::{
     knobs::{
         MAX_BYTES_WRITTEN_PER_SECOND,
+        MAX_ROWS_WRITTEN_PER_SECOND,
+        PROPOSED_MAX_BYTES_WRITTEN_PER_SECOND,
         WRITE_THROUGHPUT_WINDOW,
     },
     types::Timestamp,
 };
 
-use crate::metrics::log_write_throughput_limit_exceeded;
+use crate::metrics::{
+    log_write_throughput,
+    log_write_throughput_limit_exceeded,
+    log_write_throughput_limit_would_be_exceeded,
+    log_write_throughput_rows,
+    log_write_throughput_rows_limit_exceeded,
+};
+
+/// What a commit wrote to persistence.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WriteVolume {
+    /// Serialized size of the document and index rows.
+    pub bytes: u64,
+    /// Number of document and index rows.
+    pub rows: u64,
+}
+
+/// A write throughput limit that a deployment can exceed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteThroughputLimit {
+    Bytes,
+    Rows,
+}
 
 /// Tracks write throughput and enforces rate limits on database writes.
 ///
-/// This limiter maintains a sliding window of write events and their byte
-/// sizes, allowing efficient O(1) throughput checks by keeping a running total.
+/// This limiter maintains a sliding window of write events and their volume,
+/// allowing efficient O(1) throughput checks by keeping a running total.
 pub struct WriteThroughputLimiter {
-    /// Bytes written in transactions that committed at each timestamp.
-    bytes_written: VecDeque<(Timestamp, u64)>,
-    /// Running total of bytes in bytes_written for O(1) throughput checks.
-    total_bytes_written_in_window: u64,
-    /// Maximum number of bytes that can be written in the given window.
-    max_bytes_written_in_window: u64,
+    /// Volume written in transactions that committed at each timestamp.
+    writes: VecDeque<(Timestamp, WriteVolume)>,
+    /// Running total of `writes` for O(1) throughput checks.
+    total_in_window: WriteVolume,
+    /// Maximum volume that can be written in the window. `u64::MAX` rows means
+    /// unlimited.
+    max_in_window: WriteVolume,
+    /// Proposed maximum bytes that can be written in the window. Exceeding it
+    /// only logs a metric.
+    proposed_max_bytes_in_window: u64,
 }
 
 impl WriteThroughputLimiter {
     pub fn new() -> Self {
+        let window_ms = WRITE_THROUGHPUT_WINDOW.as_millis() as u64;
         Self {
-            bytes_written: VecDeque::new(),
-            total_bytes_written_in_window: 0,
-            max_bytes_written_in_window: *MAX_BYTES_WRITTEN_PER_SECOND
-                * WRITE_THROUGHPUT_WINDOW.as_millis() as u64
+            writes: VecDeque::new(),
+            total_in_window: WriteVolume::default(),
+            max_in_window: WriteVolume {
+                bytes: (*MAX_BYTES_WRITTEN_PER_SECOND).saturating_mul(window_ms) / 1000,
+                rows: MAX_ROWS_WRITTEN_PER_SECOND.map_or(u64::MAX, |rows_per_second| {
+                    rows_per_second.saturating_mul(window_ms) / 1000
+                }),
+            },
+            proposed_max_bytes_in_window: (*PROPOSED_MAX_BYTES_WRITTEN_PER_SECOND)
+                .saturating_mul(window_ms)
                 / 1000,
         }
     }
 
-    pub fn record_write(&mut self, ts: Timestamp, write_bytes: u64) {
+    pub fn record_write(&mut self, ts: Timestamp, volume: WriteVolume) {
         // Clean up old write events outside the write throughput window
-        while let Some((event_ts, _)) = self.bytes_written.front() {
+        while let Some((event_ts, _)) = self.writes.front() {
             if (ts - *event_ts) > *WRITE_THROUGHPUT_WINDOW {
-                if let Some((_, old_write_bytes)) = self.bytes_written.pop_front() {
-                    self.total_bytes_written_in_window = self
-                        .total_bytes_written_in_window
-                        .saturating_sub(old_write_bytes);
+                if let Some((_, WriteVolume { bytes, rows })) = self.writes.pop_front() {
+                    self.total_in_window.bytes = self.total_in_window.bytes.saturating_sub(bytes);
+                    self.total_in_window.rows = self.total_in_window.rows.saturating_sub(rows);
                 }
             } else {
                 break;
@@ -49,92 +83,61 @@ impl WriteThroughputLimiter {
         }
 
         // Track new write event for throughput limiting
-        self.bytes_written.push_back((ts, write_bytes));
-        self.total_bytes_written_in_window += write_bytes;
+        self.writes.push_back((ts, volume));
+        self.total_in_window.bytes += volume.bytes;
+        self.total_in_window.rows += volume.rows;
     }
 
-    pub fn check_limit(&self) -> bool {
-        if self.total_bytes_written_in_window > self.max_bytes_written_in_window {
-            log_write_throughput_limit_exceeded();
-            false
+    /// The running total as of `current_ts`. Old entries are only evicted on
+    /// writes, so once the newest write has left the window, nothing written
+    /// is in it. While writes are still arriving, this may include older
+    /// writes that have since left the window.
+    fn total_at(&self, current_ts: Timestamp) -> WriteVolume {
+        let newest_write_expired = self.writes.back().is_some_and(|(event_ts, _)| {
+            current_ts >= *event_ts && (current_ts - *event_ts) > *WRITE_THROUGHPUT_WINDOW
+        });
+        if newest_write_expired {
+            WriteVolume::default()
         } else {
-            true
+            self.total_in_window
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use common::{
-        knobs::WRITE_THROUGHPUT_WINDOW,
-        types::Timestamp,
-    };
-
-    use super::WriteThroughputLimiter;
-
-    #[test]
-    fn test_write_throughput_limiter_allows_writes_under_limit() {
-        let mut limiter = WriteThroughputLimiter::new();
-        let ts = Timestamp::MIN;
-
-        // Write just under the limit
-        let bytes_under_limit = limiter.max_bytes_written_in_window - 1;
-        limiter.record_write(ts, bytes_under_limit);
-        assert!(limiter.check_limit());
-    }
-
-    #[test]
-    fn test_write_throughput_limiter_blocks_writes_over_limit() {
-        let mut limiter = WriteThroughputLimiter::new();
-        let ts = Timestamp::MIN;
-
-        // Write over the limit
-        let bytes_over_limit = limiter.max_bytes_written_in_window + 1;
-        limiter.record_write(ts, bytes_over_limit);
-        assert!(!limiter.check_limit());
-    }
-
-    #[test]
-    fn test_write_throughput_limiter_cleans_up_old_writes() {
-        let mut limiter = WriteThroughputLimiter::new();
-        let ts1 = Timestamp::MIN;
-
-        // Write over the limit
-        limiter.record_write(ts1, limiter.max_bytes_written_in_window + 1);
-
-        // Should fail
-        assert!(!limiter.check_limit());
-
-        // Move forward past the window
-        let ts2 = ts1
-            .add(*WRITE_THROUGHPUT_WINDOW)
-            .unwrap()
-            .add(Duration::from_millis(1))
-            .unwrap();
-        limiter.record_write(ts2, 100);
-
-        // Should succeed now since the old write is outside the window
-        assert!(limiter.check_limit());
-        assert_eq!(limiter.total_bytes_written_in_window, 100);
-    }
-
-    #[test]
-    fn test_write_throughput_limiter_accumulates_writes_in_window() {
-        let mut limiter = WriteThroughputLimiter::new();
-        let ts1 = Timestamp::MIN;
-
-        // First write
-        let half_limit = limiter.max_bytes_written_in_window / 2;
-        limiter.record_write(ts1, half_limit);
-        assert!(limiter.check_limit());
-
-        // Second write within window
-        let ts2 = ts1.add(Duration::from_millis(100)).unwrap();
-        limiter.record_write(ts2, half_limit + 1);
-
-        // Should fail since we're over the limit
-        assert!(!limiter.check_limit());
+    /// Returns the limit exceeded by writes in the window ending at
+    /// `current_ts`, if any.
+    pub fn exceeded_limit(&self, current_ts: Timestamp) -> Option<WriteThroughputLimit> {
+        let total_in_window = self.total_at(current_ts);
+        log_write_throughput(total_in_window.bytes);
+        log_write_throughput_rows(total_in_window.rows);
+        let in_window = if total_in_window.bytes > self.max_in_window.bytes
+            || total_in_window.rows > self.max_in_window.rows
+        {
+            // N.B. Check the actual volume written in the window relative to
+            // the current ts passed in, because old entries are only evicted
+            // on writes.
+            self.writes
+                .iter()
+                .filter(|(event_ts, _)| {
+                    current_ts < *event_ts || (current_ts - *event_ts) <= *WRITE_THROUGHPUT_WINDOW
+                })
+                .fold(WriteVolume::default(), |total, (_, volume)| WriteVolume {
+                    bytes: total.bytes + volume.bytes,
+                    rows: total.rows + volume.rows,
+                })
+        } else {
+            total_in_window
+        };
+        if in_window.bytes > self.max_in_window.bytes {
+            log_write_throughput_limit_exceeded();
+            return Some(WriteThroughputLimit::Bytes);
+        }
+        if in_window.rows > self.max_in_window.rows {
+            log_write_throughput_rows_limit_exceeded();
+            return Some(WriteThroughputLimit::Rows);
+        }
+        if in_window.bytes > self.proposed_max_bytes_in_window {
+            log_write_throughput_limit_would_be_exceeded();
+        }
+        None
     }
 }

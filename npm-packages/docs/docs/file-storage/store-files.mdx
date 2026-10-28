@@ -2,23 +2,23 @@
 title: "Storing Generated Files"
 sidebar_label: "Store"
 sidebar_position: 2
-description: "Store files generated in Convex actions"
+description: "Store files generated in Convex functions"
 ---
 
-import StoreImageTS from "!!raw-loader!@site/../private-demos/snippets/convex/images.ts";
-import StoreImageJS from "!!raw-loader!@site/../private-demos/snippets/convex/imagesJS.js";
+import StoreImage from "!!raw-loader!@site/../private-demos/snippets/convex/images.ts";
+import FilesInMutations from "!!raw-loader!@site/../private-demos/snippets/convex/filesInMutations.ts";
 
 Files can be uploaded to Convex from a client and stored directly, see
 [Upload](/file-storage/upload-files.mdx).
 
-Alternatively files can also be stored after they've been fetched or generated
-in [actions](/functions/actions.mdx) and
-[HTTP actions](/functions/http-actions.mdx). For example you might call a
-third-party API to generate an image based on a user prompt and then store that
-image in Convex.
+Alternatively files can also be stored inside [actions](/functions/actions.mdx),
+[HTTP actions](/functions/http-actions.mdx), and
+[mutations](/functions/mutation-functions.mdx). For example, an action might
+call a third-party API to generate an image based on a user prompt and then
+store that image in Convex.
 
 **Example:**
-[Dall-E Storage & Action](https://github.com/get-convex/convex-demos/tree/main/dall-e-storage-action)
+[Dall-E Storage & Action](https://github.com/convex/convex-demos/tree/main/dall-e-storage-action)
 
 ## Storing files in actions
 
@@ -29,17 +29,40 @@ The action takes these steps:
 
 1. Fetch or generate an image.
 2. Store the image using
-   [`storage.store()`](/api/interfaces/server.StorageActionWriter#store) and
-   receive a storage ID.
+   [`storage.store()`](/api/interfaces/server.StorageWriter#store) and receive a
+   storage ID.
 3. Save the storage ID into your data model via a mutation.
 
 Storage IDs correspond to documents in the `"_storage"` system table (see
 [Metadata](/file-storage/file-metadata.mdx)), so they can be validated using the
 `v.id("_storage")` validator and typed as `Id<"_storage">` in TypeScript.
 
-<TSAndJSSnippet
+<Snippet
   title="convex/images.ts"
-  sourceTS={StoreImageTS}
-  sourceJS={StoreImageJS}
+  source={StoreImage}
   highlightPatterns={["fetch", "storage.store", "runMutation\\("]}
 />
+
+## Storing files in mutations
+
+Mutations can also store files using
+[`storage.store()`](/api/interfaces/server.StorageWriter#store). The file is
+stored as part of the mutation's transaction, so you can store it and write its
+storage ID to a document atomically:
+
+<Snippet
+  title="convex/filesInMutations.ts"
+  source={FilesInMutations}
+  snippet="storeInMutation"
+  highlightPatterns={["storage.store", "db.insert"]}
+/>
+
+If the mutation throws an error the file will not be stored. Other functions
+only see the file once the mutation commits.
+
+See the [limits](/production/state/limits.mdx#transactions) for the number and
+total size of files a mutation can store, including in mutations it calls with
+`ctx.runMutation`.
+
+To store larger files, [upload](/file-storage/upload-files.mdx) them from the
+client or store them in an action.

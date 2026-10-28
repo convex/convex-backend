@@ -3,15 +3,22 @@ import { version } from "../../index.js";
 import { performAsyncSyscall } from "./syscall.js";
 import { parseArgs } from "../../common/index.js";
 import { SchedulableFunctionReference, Scheduler } from "../scheduler.js";
+import { FunctionReference_future } from "../api.js";
 import { Id } from "../../values/value.js";
 import { validateArg } from "./validate.js";
 import { getFunctionAddress } from "../components/paths.js";
+
+// Mirrors the constraint on `Scheduler.runAfter` and `Scheduler.runAt`, which
+// is module-local to `scheduler.ts`.
+type SchedulableFunctionReferenceCompat =
+  | SchedulableFunctionReference
+  | FunctionReference_future<"mutation" | "action", "public" | "internal">;
 
 export function setupMutationScheduler(): Scheduler {
   return {
     runAfter: async (
       delayMs: number,
-      functionReference: SchedulableFunctionReference,
+      functionReference: SchedulableFunctionReferenceCompat,
       args?: Record<string, Value>,
     ) => {
       const syscallArgs = runAfterSyscallArgs(delayMs, functionReference, args);
@@ -19,7 +26,7 @@ export function setupMutationScheduler(): Scheduler {
     },
     runAt: async (
       ms_since_epoch_or_date: number | Date,
-      functionReference: SchedulableFunctionReference,
+      functionReference: SchedulableFunctionReferenceCompat,
       args?: Record<string, Value>,
     ) => {
       const syscallArgs = runAtSyscallArgs(
@@ -41,7 +48,7 @@ export function setupActionScheduler(requestId: string): Scheduler {
   return {
     runAfter: async (
       delayMs: number,
-      functionReference: SchedulableFunctionReference,
+      functionReference: SchedulableFunctionReferenceCompat,
       args?: Record<string, Value>,
     ) => {
       const syscallArgs = {
@@ -52,7 +59,7 @@ export function setupActionScheduler(requestId: string): Scheduler {
     },
     runAt: async (
       ms_since_epoch_or_date: number | Date,
-      functionReference: SchedulableFunctionReference,
+      functionReference: SchedulableFunctionReferenceCompat,
       args?: Record<string, Value>,
     ) => {
       const syscallArgs = {
@@ -74,7 +81,7 @@ export function setupActionScheduler(requestId: string): Scheduler {
 
 function runAfterSyscallArgs(
   delayMs: number,
-  functionReference: SchedulableFunctionReference,
+  functionReference: SchedulableFunctionReferenceCompat,
   args?: Record<string, Value>,
 ) {
   if (typeof delayMs !== "number") {
@@ -100,7 +107,7 @@ function runAfterSyscallArgs(
 
 function runAtSyscallArgs(
   ms_since_epoch_or_date: number | Date,
-  functionReference: SchedulableFunctionReference,
+  functionReference: SchedulableFunctionReferenceCompat,
   args?: Record<string, Value>,
 ) {
   let ts;

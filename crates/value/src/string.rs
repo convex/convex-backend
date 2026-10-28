@@ -72,17 +72,3 @@ impl HeapSize for ConvexString {
         self.0.heap_size()
     }
 }
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for ConvexString {
-    type Parameters = proptest::string::StringParam;
-
-    type Strategy = impl proptest::strategy::Strategy<Value = ConvexString>;
-
-    fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
-        use proptest::strategy::Strategy;
-        String::arbitrary_with(args).prop_filter_map("String wasn't a valid Convex value", |s| {
-            ConvexString::try_from(s).ok()
-        })
-    }
-}

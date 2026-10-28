@@ -1,9 +1,6 @@
 use std::{
     collections::BTreeMap,
-    time::{
-        Duration,
-        Instant,
-    },
+    time::Instant,
 };
 
 use anyhow::Context;
@@ -13,12 +10,13 @@ use common::{
     document::ParseDocument,
     knobs::{
         EXPORT_MAX_INFLIGHT_PREFETCH_BYTES,
+        EXPORT_PROGRESS_UPDATE_INTERVAL,
         EXPORT_STORAGE_GET_CONCURRENCY,
     },
     persistence::LatestDocument,
     runtime::Runtime,
     types::{
-        IndexId,
+        IndexRef,
         TableName,
     },
 };
@@ -30,6 +28,7 @@ use fastrace::{
 use futures::{
     pin_mut,
     stream,
+    Future,
     StreamExt,
     TryStreamExt,
 };
@@ -48,6 +47,7 @@ use serde::{
 };
 use serde_json::json;
 use storage::StorageExt;
+use thousands::Separable;
 use tokio_util::io::StreamReader;
 use usage_tracking::{
     FunctionUsageTracker,
@@ -60,22 +60,31 @@ use value::{
 };
 
 use crate::{
+    ensure_file_storage_export_size,
     zip_uploader::ZipSnapshotUpload,
     ExportComponents,
 };
 
-pub(crate) async fn write_storage_table<'a, 'b: 'a, RT: Runtime>(
+pub(crate) async fn write_storage_table<'a, 'b: 'a, F, Fut, RT: Runtime>(
     components: &ExportComponents<RT>,
     path_prefix: &str,
     zip_snapshot_upload: &'a mut ZipSnapshotUpload<'b>,
     namespace: TableNamespace,
     component_path: &ComponentPath,
     table_iterator: &mut MultiTableIterator<RT>,
-    by_id_indexes: &BTreeMap<TabletId, IndexId>,
+    by_id_indexes: &BTreeMap<TabletId, IndexRef>,
     system_tables: &BTreeMap<(TableNamespace, TableName), TabletId>,
     usage: &FunctionUsageTracker,
     requestor: ExportRequestor,
-) -> anyhow::Result<()> {
+    update_progress: &F,
+    in_component_str: &str,
+    storage_total_entries: u64,
+    file_storage_size: &mut u64,
+) -> anyhow::Result<()>
+where
+    F: Fn(String) -> Fut + Send,
+    Fut: Future<Output = anyhow::Result<()>> + Send,
+{
     // _storage
     let tablet_id = system_tables
         .get(&(namespace, FILE_STORAGE_TABLE.clone()))
@@ -93,9 +102,14 @@ pub(crate) async fn write_storage_table<'a, 'b: 'a, RT: Runtime>(
         pin_mut!(stream);
         let mut num_storage_entries: u64 = 0;
         let mut last_log_time = Instant::now();
-        let log_interval = Duration::from_secs(60 * 60);
         while let Some(LatestDocument { value: doc, .. }) = stream.try_next().await? {
             let file_storage_entry = ParseDocument::<FileStorageEntry>::parse(doc)?;
+            let file_size = u64::try_from(file_storage_entry.size)
+                .context("file storage entry has a negative size")?;
+            *file_storage_size = file_storage_size
+                .checked_add(file_size)
+                .context("total file storage size overflowed")?;
+            ensure_file_storage_export_size(*file_storage_size)?;
             let virtual_storage_id = file_storage_entry.id().developer_id;
             let creation_time = f64::from(file_storage_entry.creation_time());
             table_upload
@@ -109,11 +123,17 @@ pub(crate) async fn write_storage_table<'a, 'b: 'a, RT: Runtime>(
                 }))
                 .await?;
             num_storage_entries += 1;
-            if last_log_time.elapsed() >= log_interval {
+            if last_log_time.elapsed() >= *EXPORT_PROGRESS_UPDATE_INTERVAL {
                 tracing::info!(
                     "Export _storage metadata in progress: {num_storage_entries} entries written \
                      so far",
                 );
+                update_progress(format!(
+                    "Backing up _storage{in_component_str}: {} / {} entries (metadata)",
+                    num_storage_entries.separate_with_commas(),
+                    storage_total_entries.separate_with_commas(),
+                ))
+                .await?;
                 last_log_time = Instant::now();
             }
         }
@@ -138,7 +158,7 @@ pub(crate) async fn write_storage_table<'a, 'b: 'a, RT: Runtime>(
                 .unwrap_or_default();
             let path = format!(
                 "{path_prefix}{}/{}{extension_guess}",
-                *FILE_STORAGE_VIRTUAL_TABLE,
+                FILE_STORAGE_VIRTUAL_TABLE,
                 virtual_storage_id.encode()
             );
             let file_stream = components
@@ -159,13 +179,7 @@ pub(crate) async fn write_storage_table<'a, 'b: 'a, RT: Runtime>(
                 .map(|ct| ct.parse())
                 .transpose()?;
             usage
-                .track_storage_call(
-                    component_path.clone(),
-                    requestor.usage_tag(),
-                    file_storage_entry.storage_id.clone(),
-                    content_type,
-                    file_storage_entry.sha256.clone(),
-                )
+                .track_storage_call(component_path.clone(), requestor.usage_tag(), content_type)
                 .await;
             usage
                 .track_storage_egress(
@@ -203,17 +217,22 @@ pub(crate) async fn write_storage_table<'a, 'b: 'a, RT: Runtime>(
     pin_mut!(files_stream);
     let mut num_files: u64 = 0;
     let mut last_log_time = Instant::now();
-    let log_interval = Duration::from_secs(60 * 60);
     while let Some((path, file_stream, permit)) = files_stream.try_next().await? {
         zip_snapshot_upload
             .stream_full_file(path, file_stream)
             .await?;
         drop(permit);
         num_files += 1;
-        if last_log_time.elapsed() >= log_interval {
+        if last_log_time.elapsed() >= *EXPORT_PROGRESS_UPDATE_INTERVAL {
             tracing::info!(
                 "Export _storage files in progress: {num_files} files downloaded so far",
             );
+            update_progress(format!(
+                "Backing up _storage{in_component_str}: {} / {} files (downloading)",
+                num_files.separate_with_commas(),
+                storage_total_entries.separate_with_commas(),
+            ))
+            .await?;
             last_log_time = Instant::now();
         }
     }

@@ -1,71 +1,47 @@
-use std::collections::BTreeMap;
-
 pub use common::types::{
     EnvVarName,
     EnvVarValue,
     EnvironmentVariable,
 };
-use value::{
-    obj,
-    ConvexObject,
-    ConvexValue,
+use serde::{
+    Deserialize,
+    Serialize,
 };
+use value::codegen_convex_serialization;
 
 #[derive(Debug, PartialEq, Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct PersistedEnvironmentVariable(pub EnvironmentVariable);
 
-impl TryFrom<PersistedEnvironmentVariable> for ConvexObject {
-    type Error = anyhow::Error;
+#[derive(Serialize, Deserialize)]
+pub struct SerializedEnvironmentVariable {
+    pub name: String,
+    pub value: String,
+}
 
-    fn try_from(
+impl From<PersistedEnvironmentVariable> for SerializedEnvironmentVariable {
+    fn from(
         PersistedEnvironmentVariable(
             EnvironmentVariable { name, value }
         ): PersistedEnvironmentVariable,
-    ) -> anyhow::Result<ConvexObject> {
-        obj!("name" => String::from(name), "value" => String::from(value))
+    ) -> SerializedEnvironmentVariable {
+        SerializedEnvironmentVariable {
+            name: name.into(),
+            value: value.into(),
+        }
     }
 }
 
-impl TryFrom<ConvexObject> for PersistedEnvironmentVariable {
+impl TryFrom<SerializedEnvironmentVariable> for PersistedEnvironmentVariable {
     type Error = anyhow::Error;
 
-    fn try_from(obj: ConvexObject) -> anyhow::Result<PersistedEnvironmentVariable> {
-        let mut fields = BTreeMap::from(obj);
-        let name: String = match fields.remove("name") {
-            Some(ConvexValue::String(s)) => s.into(),
-            v => anyhow::bail!("Invalid name field for EnvironmentVariable: {v:?}"),
-        };
-        let value: String = match fields.remove("value") {
-            Some(ConvexValue::String(s)) => s.into(),
-            v => anyhow::bail!("Invalid value field for EnvironmentVariable: {v:?}"),
-        };
+    fn try_from(
+        obj: SerializedEnvironmentVariable,
+    ) -> anyhow::Result<PersistedEnvironmentVariable> {
         Ok(Self(EnvironmentVariable {
-            name: name.parse()?,
-            value: value.parse()?,
+            name: obj.name.parse()?,
+            value: obj.value.parse()?,
         }))
     }
 }
 
-#[cfg(test)]
-mod tests {
-
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use value::{
-        testing::assert_roundtrips,
-        ConvexObject,
-    };
-
-    use super::PersistedEnvironmentVariable;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_env_var_to_object_roundtrip(e in any::<PersistedEnvironmentVariable>()) {
-            assert_roundtrips::<PersistedEnvironmentVariable, ConvexObject>(e);
-        }
-    }
-}
+codegen_convex_serialization!(PersistedEnvironmentVariable, SerializedEnvironmentVariable);

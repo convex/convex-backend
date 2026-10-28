@@ -18,7 +18,7 @@ import {
   stopSpinner,
 } from "../../../bundler/log.js";
 import { getTeamAndProjectSlugForDeployment } from "../api.js";
-import { callUpdateEnvironmentVariables, envGetInDeployment } from "../env.js";
+import { deploymentEnvBackend, EnvVarBackend } from "../env.js";
 import { deploymentDashboardUrlPage } from "../dashboard.js";
 import { changedEnvVarFile, suggestedEnvVarNames } from "../envvars.js";
 import { promptOptions, promptYesNo } from "../utils/prompts.js";
@@ -41,19 +41,16 @@ import type {
 } from "../config.js";
 import { getAuthKitConfig, readProjectConfig } from "../config.js";
 
-// Helper function to query WorkOS environment variables from deployment
-async function getWorkOSEnvVarsFromDeployment(
-  ctx: Context,
-  deployment: { deploymentUrl: string; adminKey: string },
-): Promise<{
+// Helper function to query WorkOS environment variables from a backend
+async function getWorkOSEnvVars(backend: EnvVarBackend): Promise<{
   clientId: string | null;
   apiKey: string | null;
   environmentId: string | null;
 }> {
   const [clientId, apiKey, environmentId] = await Promise.all([
-    envGetInDeployment(ctx, deployment, "WORKOS_CLIENT_ID"),
-    envGetInDeployment(ctx, deployment, "WORKOS_API_KEY"),
-    envGetInDeployment(ctx, deployment, "WORKOS_ENVIRONMENT_ID"),
+    backend.get("WORKOS_CLIENT_ID").then((v) => v?.value ?? null),
+    backend.get("WORKOS_API_KEY").then((v) => v?.value ?? null),
+    backend.get("WORKOS_ENVIRONMENT_ID").then((v) => v?.value ?? null),
   ]);
   return { clientId, apiKey, environmentId };
 }
@@ -75,10 +72,8 @@ async function resolveWorkOSCredentials(
     environmentId: string | null;
   };
 }> {
-  const deploymentEnvVars = await getWorkOSEnvVarsFromDeployment(
-    ctx,
-    deployment,
-  );
+  const backend = deploymentEnvBackend(ctx, deployment);
+  const deploymentEnvVars = await getWorkOSEnvVars(backend);
 
   let clientId: string | null;
   let apiKey: string | null;
@@ -144,10 +139,7 @@ async function resolveWorkOSCredentials(
       }
 
       // After provisioning, re-fetch the credentials
-      const provisionedEnvVars = await getWorkOSEnvVarsFromDeployment(
-        ctx,
-        deployment,
-      );
+      const provisionedEnvVars = await getWorkOSEnvVars(backend);
       clientId = provisionedEnvVars.clientId;
       apiKey = provisionedEnvVars.apiKey;
       environmentId = provisionedEnvVars.environmentId;
@@ -284,11 +276,8 @@ async function ensureDeploymentHasWorkOSCredentials(
 
   if (updates.length > 0) {
     changeSpinner("Setting WorkOS credentials in deployment...");
-    await callUpdateEnvironmentVariables(
-      ctx,
-      { ...deployment, deploymentNotice: "" },
-      updates,
-    );
+    const backend = deploymentEnvBackend(ctx, deployment);
+    await backend.update(updates);
     logVerbose(
       `WorkOS credentials propagated to deployment: ${updates.map((u) => u.name).join(", ")}`,
     );
@@ -323,7 +312,8 @@ export async function ensureWorkosEnvironmentProvisioned(
   }
 
   showSpinner("Checking for associated AuthKit environment...");
-  const existingEnvVars = await getExistingWorkosEnvVars(ctx, deployment);
+  const backend = deploymentEnvBackend(ctx, deployment);
+  const existingEnvVars = await getWorkOSEnvVars(backend);
   if (
     existingEnvVars.clientId &&
     existingEnvVars.environmentId &&
@@ -458,8 +448,7 @@ export async function ensureWorkosEnvironmentProvisioned(
 
   changeSpinner("Setting WORKOS_* deployment environment variables...");
   await setConvexEnvVars(
-    ctx,
-    deployment,
+    backend,
     data.clientId,
     data.environmentId,
     data.apiKey,
@@ -618,12 +607,11 @@ export async function tryToCreateAssociatedWorkosTeam(
   );
 
   if (!result.success) {
-    const dashboardUrl = deploymentDashboardUrlPage(
-      deploymentName,
-      `/settings/environment-variables?var=WORKOS_CLIENT_ID`,
-    );
     logMessage(
-      `To provide your own WorkOS environment credentials instead, set environment variables manually on the dashboard:\n  ${dashboardUrl}`,
+      `To provide your own WorkOS environment credentials instead, set environment variables manually:
+
+npx convex env set WORKOS_CLIENT_ID $YOUR_CLIENT_ID_HERE
+npx convex env set WORKOS_API_KEY $YOUR_API_KEY_HERE`,
     );
     return "choseNotToAssociatedTeam";
   }
@@ -752,11 +740,8 @@ export async function syncAuthKitConfigAfterPush(
   }
 
   // Get existing credentials from deployment
-  const [clientId, apiKey, environmentId] = await Promise.all([
-    envGetInDeployment(ctx, deployment, "WORKOS_CLIENT_ID"),
-    envGetInDeployment(ctx, deployment, "WORKOS_API_KEY"),
-    envGetInDeployment(ctx, deployment, "WORKOS_ENVIRONMENT_ID"),
-  ]);
+  const backend = deploymentEnvBackend(ctx, deployment);
+  const { clientId, apiKey, environmentId } = await getWorkOSEnvVars(backend);
 
   // We need the API key to make WorkOS API calls
   if (!apiKey) {
@@ -1139,38 +1124,13 @@ async function updateEnvLocal(
   }
 }
 
-async function getExistingWorkosEnvVars(
-  ctx: Context,
-  deployment: {
-    deploymentUrl: string;
-    adminKey: string;
-  },
-): Promise<{
-  clientId: string | null;
-  environmentId: string | null;
-  apiKey: string | null;
-}> {
-  const [clientId, environmentId, apiKey] = await Promise.all([
-    envGetInDeployment(ctx, deployment, "WORKOS_CLIENT_ID"),
-    envGetInDeployment(ctx, deployment, "WORKOS_ENVIRONMENT_ID"),
-    envGetInDeployment(ctx, deployment, "WORKOS_API_KEY"),
-  ]);
-
-  return { clientId, environmentId, apiKey };
-}
-
 async function setConvexEnvVars(
-  ctx: Context,
-  deployment: {
-    deploymentUrl: string;
-    adminKey: string;
-    deploymentNotice: string;
-  },
+  backend: EnvVarBackend,
   workosClientId: string,
   workosEnvironmentId: string,
   workosEnvironmentApiKey: string,
 ) {
-  await callUpdateEnvironmentVariables(ctx, deployment, [
+  await backend.update([
     { name: "WORKOS_CLIENT_ID", value: workosClientId },
     { name: "WORKOS_ENVIRONMENT_ID", value: workosEnvironmentId },
     { name: "WORKOS_API_KEY", value: workosEnvironmentApiKey },

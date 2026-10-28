@@ -2,7 +2,10 @@ import { usePaginatedQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { Doc } from "system-udfs/convex/_generated/dataModel";
 import { useEffect, useContext, useRef } from "react";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 
 export type DeploymentAuditLogEvent = Doc<"_deployment_audit_log"> & {
   memberName: string;
@@ -41,14 +44,41 @@ function processDeploymentAuditLogEvent(
     case "update_environment_variable":
     case "delete_environment_variable":
     case "replace_environment_variable":
+    case "create_usage_limit":
+    case "update_usage_limit":
+    case "delete_usage_limit":
+    case "usage_limit_exceeded":
+    case "change_usage_limit_stop_state":
     case "update_canonical_url":
     case "delete_canonical_url":
     case "push_config":
     case "push_config_with_components":
     case "change_deployment_state":
+    case "pause_deployment":
+    case "unpause_deployment":
+    case "change_system_stop_state":
     case "build_indexes":
     case "clear_tables":
     case "snapshot_import":
+    case "delete_scheduled_jobs_table":
+    case "delete_tables":
+    case "delete_component":
+    case "cancel_all_scheduled_functions":
+    case "cancel_scheduled_function":
+    case "request_export":
+    case "download_export":
+    case "cancel_export":
+    case "set_export_expiration":
+    case "create_integration":
+    case "update_integration":
+    case "delete_integration":
+    case "add_documents":
+    case "delete_documents":
+    case "update_documents":
+    case "create_table":
+    case "delete_files":
+    case "generate_upload_url":
+    case "create_data_sync":
       break;
     default:
       return null;
@@ -100,8 +130,10 @@ export function useDeploymentAuditLogs(
   // briefly return only the newest page, making older events disappear and then
   // reappear as pagination catches up; keeping the longest results avoids this
   // flicker. When any of those inputs change we clear the cache and start over.
-  const longestResultsRef = useRef<DeploymentAuditLogEvent[] | undefined>();
-  const resetKeyRef = useRef<string | undefined>();
+  const longestResultsRef = useRef<DeploymentAuditLogEvent[] | undefined>(
+    undefined,
+  );
+  const resetKeyRef = useRef<string | undefined>(undefined);
   const resetKey = [
     team?.id ?? "no-team",
     fromTimestamp ?? "no-timestamp",
@@ -155,9 +187,11 @@ export function usePaginatedDeploymentEvents(
   }[],
   initialNumItems = 10,
 ) {
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewAuditLog = useIsOperationAllowed("ViewAuditLog");
   const { results, ...rest } = usePaginatedQuery(
     udfs.paginatedDeploymentEvents.default,
-    filters ? { filters } : "skip",
+    filters && canViewAuditLog ? { filters } : "skip",
     {
       initialNumItems,
     },

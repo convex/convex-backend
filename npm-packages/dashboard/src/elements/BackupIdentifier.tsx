@@ -1,15 +1,12 @@
 import { BackupResponse, useGetCloudBackup } from "api/backups";
-import { useDeploymentById } from "api/deployments";
+import { useDeploymentByName } from "api/deployments";
 import { useCurrentTeam } from "api/teams";
 import { useProjectById } from "api/projects";
 import { Loading } from "@ui/Loading";
 
 export function BackupIdentifier({ backup }: { backup: BackupResponse }) {
   const team = useCurrentTeam();
-  const deployment = useDeploymentById(
-    team?.id || 0,
-    backup.sourceDeploymentId,
-  );
+  const deployment = useDeploymentByName(backup.sourceDeploymentName);
   const { project } = useProjectById(deployment?.projectId);
   return (
     <span className="text-xs text-content-secondary">

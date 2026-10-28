@@ -39,7 +39,7 @@ filter data. If, in our chat app we wanted to build a way to look up `messages`
 from just one user, we'd tell Convex to index the `user` field in the `messages`
 table and write the query with the `withIndex` syntax.
 
-[Learn how to use indexes](/database/reading-data/indexes/indexes.md).
+[Learn how to use indexes](/database/reading-data/indexes/indexes.mdx).
 
 ## Too many writes on the same document
 
@@ -54,7 +54,7 @@ There are a [few ways to deal with this](/error#remediation), including building
 something called a sharded counter...
 
 But before you go learn advanced scaling techniques on your own, there is a
-better way with [Convex Components](/components.mdx).
+better way with [Convex Components](/components/overview.mdx).
 
 ## Scaling best practices with Convex Components
 
@@ -65,13 +65,13 @@ component for you to use.
 Convex Components are deployed along with your Convex backend but have their own
 tables and functions.
 
-As you build more complicated features like [AI agents](/agents.mdx),
+As you build more complicated features like [AI agents](/agents/overview.mdx),
 [workflows](https://www.convex.dev/components/workflow),
 [leaderboards](https://www.convex.dev/components/aggregate),
 [feature flags](https://www.convex.dev/components/launchdarkly) or
 [rate limiters](https://www.convex.dev/components/rate-limiter), you may find
 that there is already a Convex Component that solves this problem.
-[Learn more about Convex Components here](/components.mdx).
+[Learn more about Convex Components here](/components/overview.mdx).
 
 <CardLink
   className="convex-hero-card"
@@ -85,12 +85,12 @@ that there is already a Convex Component that solves this problem.
 ## Wrap up
 
 We've covered a lot of ground in this tutorial. We started by
-[building a chat app](/tutorial/index.mdx) with queries, mutations and the
+[building a chat app](/tutorial/overview.mdx) with queries, mutations and the
 database that form the fundamental building blocks of the Convex sync engine. We
 then called an [external API](/tutorial/actions.mdx) from our backend, using the
 scheduler to coordinate the work. Finally, we learned that
-[Convex Components](/components.mdx) give you scaling best practices in neat
-packages.
+[Convex Components](/components/overview.mdx) give you scaling best practices in
+neat packages.
 
 If you are looking for more tips, read our
 [best practices](/understanding/best-practices/best-practices.mdx) and join the

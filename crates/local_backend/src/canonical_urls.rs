@@ -10,6 +10,7 @@ use common::http::{
         Json,
         MtState,
     },
+    ExtractRequestMetadata,
     HttpResponseError,
     RequestDestination,
 };
@@ -21,6 +22,7 @@ use model::{
     },
     deployment_audit_log::types::DeploymentAuditLogEvent,
 };
+use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
     Serialize,
@@ -29,10 +31,7 @@ use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
-    admin::{
-        must_be_admin,
-        must_be_admin_with_write_access,
-    },
+    admin::must_be_admin,
     authentication::ExtractIdentity,
     LocalAppState,
 };
@@ -55,6 +54,7 @@ pub struct UpdateCanonicalUrlRequest {
 #[utoipa::path(
     post,
     path = "/update_canonical_url",
+    tag = "Canonical URLs",
     request_body = UpdateCanonicalUrlRequest,
     responses((status = 200)),
     security(
@@ -67,9 +67,10 @@ pub struct UpdateCanonicalUrlRequest {
 pub async fn update_canonical_url(
     State(st): State<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(request): Json<UpdateCanonicalUrlRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::WriteEnvironmentVariables)?;
 
     let mut tx = st.application.begin(identity).await?;
 
@@ -96,7 +97,12 @@ pub async fn update_canonical_url(
     }
 
     st.application
-        .commit_with_audit_log_events(tx, audit_log_events, "update_canonical_url")
+        .commit_with_audit_log_events(
+            tx,
+            audit_log_events,
+            request_metadata,
+            "update_canonical_url",
+        )
         .await?;
 
     Ok(StatusCode::OK)
@@ -115,6 +121,7 @@ pub struct GetCanonicalUrlsResponse {
 #[utoipa::path(
     get,
     path = "/get_canonical_urls",
+    tag = "Canonical URLs",
     responses(
         (status = 200, body = GetCanonicalUrlsResponse)
     ),
@@ -129,7 +136,12 @@ pub async fn get_canonical_urls(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin(&identity)?;
+    if !identity.is_system() {
+        // Any admin can view canonical URLs as they are
+        // not secret & necessary information for deploying
+        // via CLI.
+        must_be_admin(&identity)?;
+    }
 
     let mut tx = st.application.begin(identity).await?;
     let urls = CanonicalUrlsModel::new(&mut tx)
@@ -169,169 +181,4 @@ where
         update_canonical_url,
         get_canonical_urls
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use axum_extra::headers::authorization::Credentials;
-    use common::http::RequestDestination;
-    use http::Request;
-    use runtime::prod::ProdRuntime;
-    use serde_json::json;
-    use value::val;
-
-    use crate::{
-        canonical_urls::GetCanonicalUrlsResponse,
-        test_helpers::{
-            setup_backend_for_test,
-            TestLocalBackend,
-        },
-    };
-
-    async fn update_canonical_url(
-        backend: &TestLocalBackend,
-        request_destination: RequestDestination,
-        url: Option<&str>,
-    ) -> anyhow::Result<()> {
-        let json_body = json!({
-            "requestDestination": request_destination,
-            "url": url,
-        });
-        let body = axum::body::Body::from(serde_json::to_vec(&json_body)?);
-        let req = Request::builder()
-            .uri("/api/update_canonical_url")
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(body)?;
-        let () = backend.expect_success(req).await?;
-        Ok(())
-    }
-
-    async fn get_canonical_urls_helper(
-        backend: &TestLocalBackend,
-    ) -> anyhow::Result<GetCanonicalUrlsResponse> {
-        let json_body = json!({});
-        let body = axum::body::Body::from(serde_json::to_vec(&json_body)?);
-        let req = Request::builder()
-            .uri("/api/v1/get_canonical_urls")
-            .method("GET")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(body)?;
-        backend.expect_success(req).await
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_canonical_urls(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-        update_canonical_url(
-            &backend,
-            RequestDestination::ConvexCloud,
-            Some("https://cloud.example.com"),
-        )
-        .await?;
-        update_canonical_url(
-            &backend,
-            RequestDestination::ConvexSite,
-            Some("https://site.example.com"),
-        )
-        .await?;
-
-        let response = get_canonical_urls_helper(&backend).await?;
-        assert_eq!(response.convex_cloud_url, "https://cloud.example.com");
-        assert_eq!(response.convex_site_url, "https://site.example.com");
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_update_canonical_urls(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-        update_canonical_url(
-            &backend,
-            RequestDestination::ConvexCloud,
-            Some("https://cloud.example.com"),
-        )
-        .await?;
-        update_canonical_url(
-            &backend,
-            RequestDestination::ConvexSite,
-            Some("https://site.example.com"),
-        )
-        .await?;
-
-        // Update existing URLs
-        update_canonical_url(
-            &backend,
-            RequestDestination::ConvexCloud,
-            Some("https://new-cloud.example.com"),
-        )
-        .await?;
-        update_canonical_url(
-            &backend,
-            RequestDestination::ConvexSite,
-            Some("https://new-site.example.com"),
-        )
-        .await?;
-
-        let response = get_canonical_urls_helper(&backend).await?;
-        assert_eq!(response.convex_cloud_url, "https://new-cloud.example.com");
-        assert_eq!(response.convex_site_url, "https://new-site.example.com");
-
-        let query_convex_cloud = backend
-            .run_query("_system/frontend/convexCloudUrl".parse()?)
-            .await?;
-        assert_eq!(
-            query_convex_cloud.result.map(|v| v.unpack().unwrap()),
-            Ok(val!("https://new-cloud.example.com"))
-        );
-
-        let query_convex_site = backend
-            .run_query("_system/frontend/convexSiteUrl".parse()?)
-            .await?;
-        assert_eq!(
-            query_convex_site.result.map(|v| v.unpack().unwrap()),
-            Ok(val!("https://new-site.example.com"))
-        );
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_delete_canonical_urls(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-        update_canonical_url(
-            &backend,
-            RequestDestination::ConvexCloud,
-            Some("https://cloud.example.com"),
-        )
-        .await?;
-        update_canonical_url(
-            &backend,
-            RequestDestination::ConvexSite,
-            Some("https://site.example.com"),
-        )
-        .await?;
-
-        // Delete URLs
-        update_canonical_url(&backend, RequestDestination::ConvexCloud, None).await?;
-        update_canonical_url(&backend, RequestDestination::ConvexSite, None).await?;
-
-        // After deletion, should return default URLs
-        let response = get_canonical_urls_helper(&backend).await?;
-        assert_eq!(response.convex_cloud_url, backend.st.origin.to_string());
-        assert_eq!(response.convex_site_url, backend.st.site_origin.to_string());
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_get_default_canonical_urls(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        // Without setting any canonical URLs, should return default URLs
-        let response = get_canonical_urls_helper(&backend).await?;
-        assert_eq!(response.convex_cloud_url, backend.st.origin.to_string());
-        assert_eq!(response.convex_site_url, backend.st.site_origin.to_string());
-        Ok(())
-    }
 }

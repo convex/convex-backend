@@ -1,7 +1,6 @@
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import React, { useMemo } from "react";
 import { Shape } from "shapes";
-import { ExternalLinkIcon } from "@radix-ui/react-icons";
 import { ConvexSchemaFilePath } from "@common/features/data/components/ConvexSchemaFilePath";
 import { HighlightLines, ReadonlyCode } from "@common/elements/ReadonlyCode";
 import { displaySchemaFromShapes } from "@common/lib/format";
@@ -40,12 +39,11 @@ export function GenerateSchema({
   const widthString = displayedSchema ? "max-w-full" : "w-[32rem]";
   const learnMoreLink = (
     <Link
-      className="inline-flex items-center text-content-link"
       href="https://docs.convex.dev/database/schemas"
       target="_blank"
+      externalIcon
     >
       Schema docs
-      <ExternalLinkIcon className="ml-2" />
     </Link>
   );
   return (
@@ -59,7 +57,8 @@ export function GenerateSchema({
         {displayedSchema ? (
           <div className="flex flex-col gap-2">
             <div>
-              We've generated a schema based on the data available in your table
+              We've generated an approximate schema based on the data available
+              in your table
               {shapes.size > 1 ? "s" : ""}. {showLearnMoreLink && learnMoreLink}
             </div>
             {showUsageInstructions && (
@@ -86,7 +85,7 @@ export function GenerateSchema({
       </div>
       {displayedSchema && (
         <div
-          className="relative block rounded-sm border p-4 text-sm break-words whitespace-pre-wrap"
+          className="relative block rounded-sm border p-4 text-sm wrap-break-word whitespace-pre-wrap"
           aria-hidden="true"
         >
           <ReadonlyCode

@@ -1,9 +1,10 @@
 import { chalkStderr } from "chalk";
 import { Context } from "../../bundler/context.js";
-import { logWarning } from "../../bundler/log.js";
+import { logVerbose, logWarning } from "../../bundler/log.js";
 import { teamDashboardUrl } from "./dashboard.js";
 import { fetchTeamAndProject } from "./api.js";
-import { bigBrainAPI } from "./utils/utils.js";
+import { isAnonymousDeployment } from "./deployment.js";
+import { bigBrainAPIMaybeThrows } from "./utils/utils.js";
 
 async function warn(
   ctx: Context,
@@ -18,7 +19,7 @@ async function warn(
 }
 
 async function teamUsageState(ctx: Context, teamId: number) {
-  const { usageState } = (await bigBrainAPI({
+  const { usageState } = (await bigBrainAPIMaybeThrows({
     ctx,
     method: "GET",
     path: "dashboard/teams/" + teamId + "/usage/team_usage_state",
@@ -30,7 +31,7 @@ async function teamUsageState(ctx: Context, teamId: number) {
 }
 
 async function teamSpendingLimitsState(ctx: Context, teamId: number) {
-  const response = (await bigBrainAPI({
+  const response = (await bigBrainAPIMaybeThrows({
     ctx,
     method: "GET",
     path: "dashboard/teams/" + teamId + "/get_spending_limits",
@@ -53,16 +54,27 @@ export async function usageStateWarning(
     auth === null ||
     auth.kind === "projectKey" ||
     auth.kind === "deploymentKey" ||
-    process.env.CONVEX_AGENT_MODE === "anonymous"
+    process.env.CONVEX_AGENT_MODE === "anonymous" ||
+    isAnonymousDeployment(targetDeployment)
   ) {
     return;
   }
+
   const { teamId, team } = await fetchTeamAndProject(ctx, targetDeployment);
 
-  const [usageState, spendingLimitsState] = await Promise.all([
-    teamUsageState(ctx, teamId),
-    teamSpendingLimitsState(ctx, teamId),
-  ]);
+  let usageState: Awaited<ReturnType<typeof teamUsageState>>;
+  let spendingLimitsState: Awaited<ReturnType<typeof teamSpendingLimitsState>>;
+  try {
+    [usageState, spendingLimitsState] = await Promise.all([
+      teamUsageState(ctx, teamId),
+      teamSpendingLimitsState(ctx, teamId),
+    ]);
+  } catch (err) {
+    // Non-fatal: usage warnings are advisory, so don't block `convex dev`
+    // if these endpoints error.
+    logVerbose("Skipping usage state warning:", err);
+    return;
+  }
   if (spendingLimitsState === "Disabled") {
     await warn(ctx, {
       title:

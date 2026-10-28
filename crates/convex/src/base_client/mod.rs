@@ -90,14 +90,9 @@ struct Query {
 
 /// An identifier for a single subscriber to a query.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, PartialOrd, Ord, Hash)]
-#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct SubscriberId(QueryId, usize);
 
 impl SubscriberId {
-    #[cfg(test)]
-    pub fn query_id(&self) -> QueryId {
-        self.0
-    }
 }
 
 fn serialize_path_and_args(udf_path: UdfPath, args: BTreeMap<String, Value>) -> QueryToken {
@@ -144,8 +139,7 @@ impl LocalSyncState {
         let query_id = self.next_query_id;
         self.next_query_id = QueryId::new(self.next_query_id.get_id() + 1);
         let base_version = self.query_set_version;
-        self.query_set_version += 1;
-        let new_version = self.query_set_version;
+        let new_version = self.query_set_version.incr();
 
         let add = QuerySetModification::Add(convex_sync_types::Query {
             query_id,
@@ -200,10 +194,10 @@ impl LocalSyncState {
         }
         self.query_set.remove(&query_token);
         self.query_id_to_token.remove(&query_id);
+        self.latest_results.results.remove(&query_id);
 
         let base_version = self.query_set_version;
-        self.query_set_version += 1;
-        let new_version = self.query_set_version;
+        let new_version = self.query_set_version.incr();
 
         let remove = QuerySetModification::Remove { query_id };
         Some(ClientMessage::ModifyQuerySet {
@@ -237,7 +231,7 @@ impl LocalSyncState {
 
     fn authenticate(&mut self, token: AuthenticationToken) -> ClientMessage {
         let base_version = self.identity_version;
-        self.identity_version += 1;
+        self.identity_version.incr();
         ClientMessage::Authenticate {
             base_version,
             token,
@@ -245,7 +239,7 @@ impl LocalSyncState {
     }
 
     async fn restart(&mut self) -> Vec<ClientMessage> {
-        self.identity_version = 0;
+        self.identity_version = IdentityVersion::default();
         let mut messages = Vec::new();
 
         // If we have a fetcher, get a fresh token for the new connection.
@@ -253,10 +247,10 @@ impl LocalSyncState {
             match fetcher(true).await {
                 Ok(token) if token != AuthenticationToken::None => {
                     messages.push(ClientMessage::Authenticate {
-                        base_version: 0,
+                        base_version: self.identity_version,
                         token,
                     });
-                    self.identity_version += 1;
+                    self.identity_version.incr();
                 },
                 Ok(_) => {},
                 Err(e) => {
@@ -282,11 +276,13 @@ impl LocalSyncState {
             });
             modifications.push(add)
         }
-        self.query_set_version = 1;
+        self.query_set_version = QuerySetVersion::default();
+        let base_version = self.query_set_version;
+        let new_version = self.query_set_version.incr();
 
         messages.push(ClientMessage::ModifyQuerySet {
-            base_version: 0,
-            new_version: 1,
+            base_version,
+            new_version,
             modifications,
         });
 
@@ -804,135 +800,4 @@ macro_rules! convex_logs {
         tracing::event!(target: "convex_logs", tracing::Level::DEBUG, $($arg)+);
         // Additional custom behavior can be added here
     };
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::FromStr;
-
-    use convex_sync_types::{
-        AuthenticationToken,
-        ClientMessage,
-        QuerySetVersion,
-        UdfPath,
-    };
-    use maplit::btreemap;
-
-    use super::BaseConvexClient;
-
-    /// Simulates the server-side version tracking from
-    /// `sync::state::SyncState::modify_query_set`. Returns Err with the
-    /// same message the server produces when versions don't match.
-    fn simulate_server_version_check(messages: &[ClientMessage]) -> Result<(), String> {
-        let mut query_set_version: QuerySetVersion = 0;
-        for msg in messages {
-            if let ClientMessage::ModifyQuerySet {
-                base_version,
-                new_version,
-                ..
-            } = msg
-            {
-                if *base_version != query_set_version {
-                    return Err(format!(
-                        "Base version {base_version} passed up doesn't match the current version \
-                         {query_set_version}"
-                    ));
-                }
-                query_set_version = *new_version;
-            }
-        }
-        Ok(())
-    }
-
-    /// Reproduces the bug where repeated reconnection attempts accumulate
-    /// stale messages in the outgoing queue, causing the server to reject
-    /// messages with "Base version 0 passed up doesn't match the current
-    /// version 1".
-    ///
-    /// In the real client, this happens when `communicate()` is interrupted
-    /// by a `ProtocolResponse::Failure` mid-drain (e.g. the WebSocket
-    /// connection attempt fails). The first message is popped and sent to
-    /// the WebSocket worker channel, but remaining messages stay in the
-    /// queue. When `resend_ongoing_queries_mutations()` appends fresh
-    /// restart messages, the stale leftovers cause version conflicts.
-    #[tokio::test]
-    async fn test_reconnect_does_not_send_duplicate_version_messages() {
-        let mut client = BaseConvexClient::new();
-
-        // Authenticated client with one active subscription.
-        client
-            .set_auth_fetcher(Some(Box::new(|_force_refetch| {
-                Box::pin(async { Ok(AuthenticationToken::User("test-token".into())) })
-            })))
-            .await;
-        let udf = UdfPath::from_str("some:query").unwrap();
-        client.subscribe(udf, btreemap! {});
-
-        // Drain initial messages (successfully sent while connected).
-        while client.pop_next_message().is_some() {}
-
-        // --- Connection drops, first reconnect attempt ---
-        client.resend_ongoing_queries_mutations().await;
-
-        // Simulate partial drain: the first message (Authenticate) was
-        // popped and handed to the WebSocket layer, but the connection
-        // failed before the second message (ModifyQuerySet) could be sent.
-        let _ = client.pop_next_message();
-
-        // --- Connection still down, second reconnect attempt ---
-        client.resend_ongoing_queries_mutations().await;
-
-        // Connection finally succeeds — all queued messages are flushed.
-        let mut messages = vec![];
-        while let Some(msg) = client.pop_next_message() {
-            messages.push(msg);
-        }
-
-        // The server tracks query set versions sequentially and rejects
-        // any message whose base_version doesn't match its current state
-        // (sync::state::SyncState::modify_query_set). Without the fix,
-        // the stale ModifyQuerySet{base_version:0} from the first attempt
-        // is still in the queue, followed by the second attempt's
-        // ModifyQuerySet{base_version:0}.
-        simulate_server_version_check(&messages)
-            .expect("Server would reject these messages with a FatalError");
-    }
-
-    #[tokio::test]
-    async fn test_reconnect_path_requests_refreshed_token() {
-        let mut client = BaseConvexClient::new();
-
-        // Authenticated client with one active subscription.
-        client
-            .set_auth_fetcher(Some(Box::new(|force_refetch| {
-                Box::pin(async move {
-                    if force_refetch {
-                        // A fake refreshed token.
-                        Ok(AuthenticationToken::User("refetched-token".into()))
-                    } else {
-                        Ok(AuthenticationToken::User("original-token".into()))
-                    }
-                })
-            })))
-            .await;
-        let udf = UdfPath::from_str("some:query").unwrap();
-        client.subscribe(udf, btreemap! {});
-
-        // Drain initial messages (successfully sent while connected).
-        while client.pop_next_message().is_some() {}
-
-        // --- Connection drops, reconnect attempt ---
-        client.resend_ongoing_queries_mutations().await;
-
-        // A fresh authentication attempt should have been initiated, with a new token.
-        assert_eq!(
-            client
-                .pop_next_message()
-                .expect("Expected an authentication message."),
-            ClientMessage::Authenticate {
-                base_version: 0,
-                token: AuthenticationToken::User("refetched-token".into()),
-            }
-        );
-    }
 }

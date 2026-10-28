@@ -8,7 +8,7 @@ const schema = defineSchema({
   messages: defineTable({
     author: v.id("users"),
     body: v.string(),
-  }),
+  }).index("by_author", ["author"]),
 });
 export default schema;
 

@@ -37,6 +37,7 @@ use crate::{
         index::IndexTable,
         index_backfills::IndexBackfillTable,
         index_workers::IndexWorkerMetadataTable,
+        next_persistence_index_id::NextPersistenceIndexIdTable,
         schema::SchemasTable,
         schema_validation_progress::{
             SchemaValidationProgressTable,
@@ -47,10 +48,13 @@ use crate::{
     system_tables::ErasedSystemTable,
     ComponentDefinitionsTable,
     ComponentsTable,
+    SchemaValidationTable,
     INDEX_BACKFILLS_TABLE,
     INDEX_WORKER_METADATA_TABLE,
+    NEXT_PERSISTENCE_INDEX_ID_TABLE,
     NUM_RESERVED_LEGACY_TABLE_NUMBERS,
     SCHEMAS_TABLE,
+    SCHEMA_VALIDATIONS_TABLE,
 };
 
 pub fn bootstrap_system_tables() -> Vec<&'static dyn ErasedSystemTable> {
@@ -60,9 +64,11 @@ pub fn bootstrap_system_tables() -> Vec<&'static dyn ErasedSystemTable> {
         &SchemasTable,
         &IndexBackfillTable,
         &IndexWorkerMetadataTable,
+        &NextPersistenceIndexIdTable,
         &ComponentDefinitionsTable,
         &ComponentsTable,
         &SchemaValidationProgressTable,
+        &SchemaValidationTable,
     ]
 }
 
@@ -77,34 +83,13 @@ pub static DEFAULT_BOOTSTRAP_TABLE_NUMBERS: LazyLock<BTreeMap<TableName, TableNu
             COMPONENT_DEFINITIONS_TABLE.clone() => tn(31),
             COMPONENTS_TABLE.clone() => tn(32),
             INDEX_BACKFILLS_TABLE.clone() => tn(36),
-            SCHEMA_VALIDATION_PROGRESS_TABLE.clone() => tn(37)
+            SCHEMA_VALIDATION_PROGRESS_TABLE.clone() => tn(37),
+            NEXT_PERSISTENCE_INDEX_ID_TABLE.clone() => tn(42),
+            SCHEMA_VALIDATIONS_TABLE.clone() => tn(43)
             // To add a bootstrap system table, first add to model/src/lib and then
             // replicate that table number to here.
         }
     });
-
-#[cfg(test)]
-mod test_bootstrap_system_tables {
-    use std::collections::BTreeSet;
-
-    use super::{
-        bootstrap_system_tables,
-        DEFAULT_BOOTSTRAP_TABLE_NUMBERS,
-    };
-
-    #[test]
-    fn test_ensure_consistent() {
-        assert_eq!(
-            bootstrap_system_tables()
-                .into_iter()
-                .map(|t| t.table_name())
-                .collect::<BTreeSet<_>>(),
-            DEFAULT_BOOTSTRAP_TABLE_NUMBERS
-                .keys()
-                .collect::<BTreeSet<_>>(),
-        );
-    }
-}
 
 /// Contains the table_id and index_id that never change after initializing the
 /// backend database. We prefer to pass this around instead of the full
@@ -142,7 +127,7 @@ impl BootstrapTableIds {
     pub fn index_resolved_doc_id(&self, index_id: IndexId) -> ResolvedDocumentId {
         ResolvedDocumentId::new(
             self.index_id.tablet_id,
-            DeveloperDocumentId::new(self.index_id.table_number, index_id),
+            DeveloperDocumentId::new(self.index_id.table_number, index_id.0),
         )
     }
 

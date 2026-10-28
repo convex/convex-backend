@@ -1,13 +1,19 @@
 use std::{
     env,
+    path::Path,
     pin::Pin,
-    time::Duration,
+    sync::Arc,
+    time::{
+        Duration,
+        SystemTime,
+    },
 };
 
 use anyhow::Context;
 use async_trait::async_trait;
 use aws_config::retry::RetryConfig;
 use aws_sdk_s3::{
+    error::ProvideErrorMetadata,
     operation::{
         create_multipart_upload::builders::CreateMultipartUploadFluentBuilder,
         head_object::{
@@ -28,6 +34,7 @@ use aws_sdk_s3::{
 };
 use aws_utils::{
     are_checksums_disabled,
+    is_range_prefetch_disabled,
     is_sse_disabled,
     must_s3_config_from_env,
     s3::S3Client,
@@ -56,6 +63,7 @@ use futures::{
     StreamExt,
     TryStreamExt,
 };
+use pb::searchlight::storage_type::StorageType;
 use serde_json::{
     json,
     Value as JsonValue,
@@ -64,7 +72,10 @@ use storage::{
     BufferedUpload,
     ClientDrivenUploadPartToken,
     ClientDrivenUploadToken,
+    InvalidGetRangeError,
+    LocalDirStorage,
     ObjectAttributes,
+    ObjectListing,
     Storage,
     StorageCacheKey,
     StorageGetStream,
@@ -154,27 +165,68 @@ impl<RT: Runtime> S3Storage<RT> {
         S3Storage::new_with_prefix(bucket_name, key_prefix, runtime).await
     }
 
+    fn s3_key(&self, key: &ObjectKey) -> S3Key {
+        S3Key(self.key_prefix.clone() + key)
+    }
+
     /// Helper method to configure multipart upload builder with optional AWS
     /// headers for S3 compatibility with non-AWS services
     fn configure_multipart_upload_builder(
         &self,
-        mut upload_builder: CreateMultipartUploadFluentBuilder,
+        upload_builder: CreateMultipartUploadFluentBuilder,
     ) -> CreateMultipartUploadFluentBuilder {
-        // Add server-side encryption if not disabled for S3 compatibility
-        if !is_sse_disabled() {
-            upload_builder = upload_builder.server_side_encryption(ServerSideEncryption::Aes256);
-        }
-
-        // Add checksum algorithm if not disabled for S3 compatibility
-        if !are_checksums_disabled() {
+        upload_builder
+            .set_server_side_encryption(server_side_encryption())
             // Because we're using multipart uploads, we're really specifying the part
             // checksum algorithm here, so it needs to match what we use for
             // each part.
-            upload_builder = upload_builder.checksum_algorithm(ChecksumAlgorithm::Crc32);
-        }
-
-        upload_builder
+            .set_checksum_algorithm(checksum_algorithm())
     }
+
+    async fn start_upload_with_key(&self, key: ObjectKey) -> anyhow::Result<S3Upload<RT>> {
+        let s3_key = self.s3_key(&key);
+        let upload_builder = self
+            .client
+            .create_multipart_upload()
+            .bucket(self.bucket.clone())
+            .key(&s3_key.0);
+
+        let upload_builder = self.configure_multipart_upload_builder(upload_builder);
+
+        let output = upload_builder
+            .send()
+            .await
+            .context("Failed to create multipart upload")?;
+        let upload_id = output
+            .upload_id()
+            .ok_or_else(|| anyhow::anyhow!("Multipart upload is missing an upload_id."))?;
+        let s3_upload = S3Upload::new(
+            self.client.clone(),
+            self.bucket.clone(),
+            upload_id.to_string().into(),
+            key,
+            s3_key,
+            self.runtime.clone(),
+        )
+        .await?;
+        Ok(s3_upload)
+    }
+}
+
+/// Inverse of [`Storage::storage_type_proto`].
+pub async fn storage_from_proto<RT: Runtime>(
+    rt: RT,
+    storage_type: StorageType,
+) -> anyhow::Result<Arc<dyn Storage>> {
+    Ok(match storage_type {
+        StorageType::S3(prefix) => {
+            Arc::new(S3Storage::new_with_prefix(prefix.bucket, prefix.prefix, rt).await?)
+        },
+        StorageType::Local(dir) => Arc::new(LocalDirStorage::new_at_path(
+            rt,
+            Path::new(&dir.path).to_owned(),
+        )?),
+    })
 }
 
 async fn s3_client() -> Result<Client, anyhow::Error> {
@@ -239,33 +291,8 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
     #[fastrace::trace]
     async fn start_upload(&self) -> anyhow::Result<Box<BufferedUpload>> {
         let key: ObjectKey = self.runtime.new_uuid_v4().to_string().try_into()?;
-        let s3_key = S3Key(self.key_prefix.clone() + &key);
-        let upload_builder = self
-            .client
-            .create_multipart_upload()
-            .bucket(self.bucket.clone())
-            .key(&s3_key.0);
-
-        let upload_builder = self.configure_multipart_upload_builder(upload_builder);
-
-        let output = upload_builder
-            .send()
-            .await
-            .context("Failed to create multipart upload")?;
-        let upload_id = output
-            .upload_id()
-            .ok_or_else(|| anyhow::anyhow!("Multipart upload is missing an upload_id."))?;
-        let s3_upload = S3Upload::new(
-            self.client.clone(),
-            self.bucket.clone(),
-            upload_id.to_string().into(),
-            key,
-            s3_key,
-            self.runtime.clone(),
-        )
-        .await?;
         let upload = BufferedUpload::new(
-            s3_upload,
+            self.start_upload_with_key(key).await?,
             MIN_S3_INTERMEDIATE_PART_SIZE,
             std::cmp::min(
                 MAX_S3_INTERMEDIATE_PART_SIZE,
@@ -277,7 +304,7 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
 
     async fn start_client_driven_upload(&self) -> anyhow::Result<ClientDrivenUploadToken> {
         let key: ObjectKey = self.runtime.new_uuid_v4().to_string().try_into()?;
-        let s3_key = S3Key(self.key_prefix.clone() + &key);
+        let s3_key = self.s3_key(&key);
         let upload_builder = self
             .client
             .create_multipart_upload()
@@ -306,13 +333,13 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
         part_number: u16,
         part: Bytes,
     ) -> anyhow::Result<ClientDrivenUploadPartToken> {
+        let part_number = PartNumber::try_from(part_number)
+            .map_err(|e| ErrorMetadata::bad_request("Invalid part number", e.to_string()))?;
         let ClientDrivenUpload {
             object_key,
             upload_id,
         } = token.try_into()?;
-        let s3_key = S3Key(self.key_prefix.clone() + &object_key);
-        PartNumber::try_from(part_number + 1)
-            .map_err(|e| ErrorMetadata::bad_request("Invalid part number", e.to_string()))?;
+        let s3_key = self.s3_key(&object_key);
         let mut s3_upload = S3Upload::new_client_driven(
             self.client.clone(),
             self.bucket.clone(),
@@ -321,7 +348,7 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
             s3_key,
             self.runtime.clone(),
             vec![],
-            part_number.try_into()?,
+            part_number,
         )?;
         s3_upload.write(part).await?;
         let object_part = s3_upload
@@ -345,7 +372,7 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
             object_key,
             upload_id,
         } = token.try_into()?;
-        let s3_key = S3Key(self.key_prefix.clone() + &object_key);
+        let s3_key = self.s3_key(&object_key);
         let uploaded_parts: Vec<_> = part_tokens
             .into_iter()
             .map(ObjectPart::try_from)
@@ -366,7 +393,7 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
 
     async fn signed_url(&self, key: ObjectKey, expires_in: Duration) -> anyhow::Result<String> {
         let timer = sign_url_timer();
-        let s3_key = S3Key(self.key_prefix.clone() + &key);
+        let s3_key = self.s3_key(&key);
         let presigning_config = PresigningConfig::builder().expires_in(expires_in).build()?;
         let presigned_request = self
             .client
@@ -384,7 +411,7 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
         expires_in: Duration,
     ) -> anyhow::Result<(ObjectKey, String)> {
         let key: ObjectKey = self.runtime.new_uuid_v4().to_string().try_into()?;
-        let s3_key = S3Key(self.key_prefix.clone() + &key);
+        let s3_key = self.s3_key(&key);
         let presigning_config = PresigningConfig::builder().expires_in(expires_in).build()?;
         // TODO(CX-4921): figure out how to add SSE/checksums here
         let presigned_request = self
@@ -417,37 +444,56 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
         key: &FullyQualifiedObjectKey,
         bytes_range: std::ops::Range<u64>,
     ) -> BoxFuture<'static, anyhow::Result<StorageGetStream>> {
-        let get_object = self.client.get_object();
-        let key = key.clone();
-        async move {
-            let (bucket, s3_key) = key
-                .as_str()
-                .split_once('/')
-                .with_context(|| format!("Invalid fully qualified S3 key {key:?}"))?;
-            if bytes_range.start >= bytes_range.end {
-                return Ok(StorageGetStream {
+        if bytes_range.start >= bytes_range.end {
+            return async {
+                Ok(StorageGetStream {
                     content_length: 0,
-                    stream: Box::pin(stream::iter(vec![])),
-                });
+                    stream: Box::pin(stream::empty()),
+                })
             }
-            let output = get_object
-                .bucket(bucket)
-                .key(s3_key)
-                .range(format!(
-                    "bytes={}-{}",
-                    bytes_range.start,
-                    bytes_range.end - 1
-                ))
-                .send()
-                .await?;
-            Ok(StorageGetStream {
-                content_length: output
-                    .content_length()
-                    .context("Missing content length for object")?,
-                stream: output.body.into_stream().boxed(),
-            })
+            .boxed();
         }
-        .boxed()
+        self.get_small_range_internal(key, bytes_range)
+            .map(|r| Ok(r?.context("No such key")?.0))
+            .boxed()
+    }
+
+    fn get_small_range_and_total_size(
+        &self,
+        key: &FullyQualifiedObjectKey,
+        bytes_range: std::ops::Range<u64>,
+    ) -> Option<BoxFuture<'static, anyhow::Result<Option<(StorageGetStream, u64)>>>> {
+        if is_range_prefetch_disabled() {
+            return None;
+        }
+        Some(
+            self.get_small_range_internal(key, bytes_range)
+                .map(|r| {
+                    let Some((stream, content_range)) = r? else {
+                        return Ok(None);
+                    };
+                    // header looks like:
+                    //   Content-Range: bytes 0-39/12345678
+                    let total_size: u64 = try {
+                        content_range
+                            .as_deref()?
+                            .strip_prefix("bytes ")?
+                            .split_once('/')?
+                            .1
+                            .parse()
+                            .ok()?
+                    }
+                    .with_context(|| {
+                        format!(
+                            "invalid Content-Range header: {content_range:?}. If your \
+                             S3-compatible storage provider doesn't return this header, set \
+                             AWS_S3_DISABLE_RANGE_PREFETCH=true"
+                        )
+                    })?;
+                    Ok(Some((stream, total_size)))
+                })
+                .boxed(),
+        )
     }
 
     async fn get_fq_object_attributes(
@@ -486,14 +532,15 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
         let prefix = self.key_prefix.clone();
         let bucket = self.bucket.clone();
         pb::searchlight::StorageType {
-            storage_type: Some(pb::searchlight::storage_type::StorageType::S3(
-                pb::searchlight::S3Storage { prefix, bucket },
-            )),
+            storage_type: Some(StorageType::S3(pb::searchlight::S3Storage {
+                prefix,
+                bucket,
+            })),
         }
     }
 
     async fn delete_object(&self, key: &ObjectKey) -> anyhow::Result<()> {
-        let s3_key = S3Key(self.key_prefix.clone() + key);
+        let s3_key = self.s3_key(key);
         self.client
             .delete_object()
             .bucket(self.bucket.clone())
@@ -503,6 +550,116 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
             .context(format!("Failed to delete object {key:?}"))?;
         Ok(())
     }
+
+    async fn put_object(&self, key: ObjectKey, bytes: Bytes) -> anyhow::Result<()> {
+        self.client
+            .put_object()
+            .bucket(self.bucket.clone())
+            .key(&self.s3_key(&key).0)
+            .body(ByteStream::from(bytes))
+            .set_server_side_encryption(server_side_encryption())
+            .set_checksum_algorithm(checksum_algorithm())
+            .send()
+            .await
+            .with_context(|| format!("Failed to put object {key:?}"))?;
+        Ok(())
+    }
+
+    async fn list_objects(&self, key_prefix: &str) -> anyhow::Result<Vec<ObjectListing>> {
+        let s3_prefix = format!("{}{}", self.key_prefix, key_prefix);
+        let mut paginator = self
+            .client
+            .list_objects_v2()
+            .bucket(self.bucket.clone())
+            .prefix(&s3_prefix)
+            .into_paginator()
+            .send();
+
+        let mut objects = Vec::new();
+        while let Some(page) = paginator.next().await {
+            let page =
+                page.context(format!("Failed to list objects with prefix {key_prefix:?}"))?;
+            for object in page.contents.unwrap_or_default() {
+                let Some(s3_key) = object.key.as_ref() else {
+                    continue;
+                };
+                let relative_key = s3_key
+                    .strip_prefix(&self.key_prefix)
+                    .with_context(|| format!("S3 key {s3_key:?} missing storage prefix"))?;
+                let key = ObjectKey::try_from(relative_key)?;
+                let last_modified = *object
+                    .last_modified()
+                    .context("S3 object missing last_modified")?;
+                let last_modified = SystemTime::try_from(last_modified)
+                    .context("S3 last_modified isn't valid SystemTime")?;
+                objects.push(ObjectListing { key, last_modified });
+            }
+        }
+        Ok(objects)
+    }
+}
+
+impl<RT: Runtime> S3Storage<RT> {
+    /// Also returns the raw `Content-Range` response header, which carries
+    /// the object's total size.
+    fn get_small_range_internal(
+        &self,
+        key: &FullyQualifiedObjectKey,
+        bytes_range: std::ops::Range<u64>,
+    ) -> impl Future<Output = anyhow::Result<Option<(StorageGetStream, Option<String>)>>> + use<RT>
+    {
+        let get_object = self.client.get_object();
+        let key = key.clone();
+        async move {
+            let (bucket, s3_key) = key
+                .as_str()
+                .split_once('/')
+                .with_context(|| format!("Invalid fully qualified S3 key {key:?}"))?;
+            anyhow::ensure!(bytes_range.start < bytes_range.end);
+            let output = match get_object
+                .bucket(bucket)
+                .key(s3_key)
+                .range(format!(
+                    "bytes={}-{}",
+                    bytes_range.start,
+                    bytes_range.end - 1
+                ))
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) if e.as_service_error().is_some_and(|e| e.is_no_such_key()) => {
+                    return Ok(None)
+                },
+                Err(e) if e.as_service_error().and_then(|e| e.code()) == Some("InvalidRange") => {
+                    anyhow::bail!(InvalidGetRangeError);
+                },
+                Err(e) => return Err(e.into()),
+            };
+            let content_range = output.content_range().map(String::from);
+            Ok(Some((
+                StorageGetStream {
+                    content_length: output
+                        .content_length()
+                        .context("Missing content length for object")?,
+                    stream: output.body.into_stream().boxed(),
+                },
+                content_range,
+            )))
+        }
+    }
+}
+
+/// Optional server-side encryption header to configure upload builders, for
+/// S3 compatibility with non-AWS services.
+fn server_side_encryption() -> Option<ServerSideEncryption> {
+    (!is_sse_disabled()).then_some(ServerSideEncryption::Aes256)
+}
+
+/// Optional checksum algorithm header to configure upload builders, for S3
+/// compatibility with non-AWS services.
+fn checksum_algorithm() -> Option<ChecksumAlgorithm> {
+    (!are_checksums_disabled()).then_some(ChecksumAlgorithm::Crc32)
 }
 
 struct S3Key(String);
@@ -514,7 +671,7 @@ pub struct S3Upload<RT: Runtime> {
     key: ObjectKey,
     s3_key: S3Key,
     uploaded_parts: Vec<ObjectPart>,
-    next_part_number: PartNumber,
+    next_part_number: Option<PartNumber>,
     /// Initialized to true - set to fault if cleanly completed or cleanly
     /// aborted explicitly. Aborting helps save space by cleaning out
     /// incomplete multipart uploads.
@@ -538,7 +695,7 @@ impl<RT: Runtime> S3Upload<RT> {
             key,
             s3_key,
             uploaded_parts: vec![],
-            next_part_number: 1.try_into()?,
+            next_part_number: Some(1.try_into()?),
             needs_abort_on_drop: true,
             runtime,
         })
@@ -561,15 +718,19 @@ impl<RT: Runtime> S3Upload<RT> {
             key,
             s3_key,
             uploaded_parts,
-            next_part_number,
+            next_part_number: Some(next_part_number),
             needs_abort_on_drop: false,
             runtime,
         })
     }
 
     fn next_part_number(&mut self) -> anyhow::Result<PartNumber> {
-        let part_number = self.next_part_number;
-        self.next_part_number = (Into::<u16>::into(self.next_part_number) + 1).try_into()?;
+        let part_number = self
+            .next_part_number
+            .context("S3 multipart part limit reached")?;
+        self.next_part_number = u16::from(part_number)
+            .checked_add(1)
+            .and_then(|next| PartNumber::try_from(next).ok());
         Ok(part_number)
     }
 
@@ -577,19 +738,15 @@ impl<RT: Runtime> S3Upload<RT> {
         let part_number = self.next_part_number()?;
         crate::metrics::log_aws_s3_part_upload_size_bytes(data.len());
 
-        let mut builder = self
+        let builder = self
             .client
             .upload_part()
             .body(ByteStream::from(data))
             .bucket(self.bucket.clone())
             .key(&self.s3_key.0)
             .part_number(Into::<u16>::into(part_number) as i32)
-            .upload_id(self.upload_id.to_string());
-
-        // Add checksum algorithm if not disabled for S3 compatibility
-        if !are_checksums_disabled() {
-            builder = builder.checksum_algorithm(ChecksumAlgorithm::Crc32);
-        }
+            .upload_id(self.upload_id.to_string())
+            .set_checksum_algorithm(checksum_algorithm());
 
         Ok(UploadPart {
             part_number,
@@ -652,6 +809,7 @@ impl<RT: Runtime> Upload for S3Upload<RT> {
 
     #[fastrace::trace]
     async fn complete(mut self: Box<Self>) -> anyhow::Result<ObjectKey> {
+        let key = self.key.clone();
         let mut completed_parts = Vec::new();
         for part in &self.uploaded_parts {
             let mut builder = CompletedPart::builder()
@@ -679,7 +837,7 @@ impl<RT: Runtime> Upload for S3Upload<RT> {
             .send()
             .await?;
         self.needs_abort_on_drop = false;
-        Ok(self.key.clone())
+        Ok(key)
     }
 }
 
@@ -733,136 +891,3 @@ pub fn s3_bucket_name(use_case: &StorageUseCase) -> anyhow::Result<String> {
 }
 
 // Test below only works if you have AWS environment variables set
-#[cfg(test)]
-mod tests {
-
-    use std::{
-        iter,
-        time::Duration,
-    };
-
-    use bytes::Bytes;
-    use common::{
-        runtime::Runtime,
-        sha256::Sha256,
-        types::ObjectKey,
-    };
-    use futures::StreamExt;
-    use runtime::prod::ProdRuntime;
-    use storage::{
-        Storage,
-        Upload,
-        UploadExt,
-    };
-    use tokio::sync::mpsc;
-    use tokio_stream::wrappers::ReceiverStream;
-
-    use super::S3Storage;
-
-    const TEST_BUCKET: &str = "test-convex-snapshot-export2";
-    const TEST_BUFFER_SIZE: usize = 6000000;
-
-    async fn create_test_storage<RT: Runtime>(runtime: RT) -> S3Storage<RT> {
-        S3Storage::new_with_prefix(TEST_BUCKET.to_string(), "".to_owned(), runtime)
-            .await
-            .expect("Must set env variables")
-    }
-
-    // Generate some large data that's not quite identical so that we can catch
-    // hashing ordering errors.
-    fn large_upload_buffers(total_buffers: usize) -> impl Iterator<Item = Bytes> {
-        iter::from_coroutine(
-            #[coroutine]
-            move || {
-                let mut current = 0;
-                for _ in 1..total_buffers {
-                    let mut buffer = vec![0; TEST_BUFFER_SIZE];
-                    #[allow(clippy::needless_range_loop)] // We want to mutate the buffer.
-                    for i in 0..TEST_BUFFER_SIZE {
-                        buffer[i] = current;
-                        if current == u8::MAX {
-                            current = 0;
-                        } else {
-                            current += 1;
-                        }
-                    }
-                    yield buffer.into();
-                }
-            },
-        )
-    }
-
-    #[convex_macro::prod_rt_test]
-    #[ignore]
-    async fn test_parallel_upload(rt: ProdRuntime) -> anyhow::Result<()> {
-        let (sender, receiver) = mpsc::channel::<Bytes>(10);
-        let target_upload_parts = 3;
-
-        let handle = rt.spawn_thread("test", move || async move {
-            let buffers = large_upload_buffers(target_upload_parts);
-            for buffer in buffers {
-                sender.send(buffer.clone()).await.unwrap();
-            }
-            sender.send(vec![4, 5, 6].into()).await.unwrap();
-        });
-
-        let mut manual_checksum = Sha256::new();
-        for buffer in large_upload_buffers(target_upload_parts) {
-            manual_checksum.update(&buffer);
-        }
-        manual_checksum.update(&[4, 5, 6]);
-        let manual_digest = manual_checksum.finalize();
-
-        let storage = create_test_storage(rt.clone()).await;
-        let mut s3_upload = storage.start_upload().await?;
-        let (_, stream_digest) = s3_upload
-            .try_write_parallel_and_hash(ReceiverStream::new(receiver).map(Ok))
-            .await?;
-        let _key = s3_upload.complete().await?;
-
-        handle.join().await?;
-
-        assert_eq!(manual_digest, stream_digest);
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    #[ignore]
-    async fn test_sequential_upload(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = create_test_storage(rt.clone()).await;
-        let mut checksum = Sha256::new();
-        for buffer in large_upload_buffers(2) {
-            checksum.update(&buffer);
-        }
-        checksum.update(&[4, 5, 6]);
-
-        let mut s3_upload = storage.start_upload().await?;
-
-        for buffer in large_upload_buffers(2) {
-            s3_upload.write(buffer.clone()).await?;
-        }
-        s3_upload.write(vec![4, 5, 6].into()).await?;
-        let _key = s3_upload.complete().await?;
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    #[ignore]
-    async fn test_abort(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = create_test_storage(rt.clone()).await;
-        let s3_upload = storage.start_upload().await?;
-        s3_upload.abort().await?;
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    #[ignore]
-    async fn test_signed_url(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = create_test_storage(rt).await;
-        let object_key: ObjectKey = "new-key".try_into()?;
-        storage
-            .signed_url(object_key, Duration::from_secs(600))
-            .await?;
-        Ok(())
-    }
-}

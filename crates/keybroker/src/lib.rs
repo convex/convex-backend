@@ -1,18 +1,13 @@
-#![feature(try_blocks)]
-#![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 
 mod broker;
+mod deployment_jwt;
 mod encryptor;
 mod legacy_encryptor;
 mod metrics;
+mod operations;
 mod secret;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
-
-#[cfg(test)]
-mod tests;
-
+pub use pb::convex_identity::DeploymentOperation;
 pub use sync_types::UserIdentityAttributes;
 
 pub use self::{
@@ -21,21 +16,37 @@ pub use self::{
         AdminIdentityPrincipal,
         CoreIdTokenWithCustomClaims,
         CustomClaims,
+        ExportDownloadActor,
         FunctionRunnerKeyBroker,
         GetFileAuthorization,
         Identity,
+        IdentityValidity,
         KeyBroker,
         StoreFileAuthorization,
         SystemKey,
         UserIdentity,
     },
-    encryptor::Encryptor,
+    deployment_jwt::{
+        deployment_jwt_issuer,
+        DeploymentJwtKey,
+        DeploymentJwtKeys,
+        DeploymentJwtRequest,
+    },
+    encryptor::{
+        Encryptor,
+        RandomEncryptor,
+    },
     legacy_encryptor::LegacyEncryptor,
+    operations::{
+        bad_admin_key_error,
+        operations_for_deploy_key,
+        read_only_operations,
+        DeploymentOp,
+    },
     secret::{
-        InstanceSecret,
+        DeploymentSecret,
         Secret,
     },
 };
 
 pub const DEV_INSTANCE_NAME: &str = include_str!("../dev/instance_name.txt");
-pub const DEV_SECRET: &str = include_str!("../dev/secret.txt");

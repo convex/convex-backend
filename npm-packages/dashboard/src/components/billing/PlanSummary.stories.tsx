@@ -1,10 +1,10 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
-import { PlanSummaryForTeam } from "./PlanSummary";
+import { BusinessPlanSummary } from "./PlanSummary";
 
 const meta = {
-  component: PlanSummaryForTeam,
+  component: BusinessPlanSummary,
   parameters: { a11y: { test: "todo" } },
-} satisfies Meta<typeof PlanSummaryForTeam>;
+} satisfies Meta<typeof BusinessPlanSummary>;
 
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -13,31 +13,48 @@ export const Primary: Story = {
   args: {
     hasSubscription: true,
     showEntitlements: true,
-    teamSummary: [
+    isBusinessPlan: false,
+    aiGatewayCost: 1.2345,
+    summary: [
       {
+        deploymentClass: "s16",
         region: "aws-us-east-1",
-        databaseBandwidth: 3072 * 1024 * 1024,
         databaseStorage: 8 * 1024 * 1024,
-        fileStorage: 12 * 1024,
-        fileBandwidth: 8,
+        databaseIO: 3072 * 1024 * 1024,
         functionCalls: 200000,
-        actionCompute: 180,
-        vectorBandwidth: 0,
-        vectorStorage: 0,
+        queryMutationCompute: 60,
+        actionComputeConvex: 120,
+        actionComputeNode: 60,
+        actionComputeUser: 120,
+        fileStorage: 12 * 1024,
+        searchStorage: 0,
+        dataEgress: 8,
+        auditLogBandwidth: 4,
+        searchQueries: 0,
+        deploymentCount: 10,
+        pausedDeploymentCount: 2,
+        idleDeploymentCount: 3,
       },
       {
+        deploymentClass: "s16",
         region: "aws-eu-west-1",
-        databaseBandwidth: 1024 * 1024 * 1024,
         databaseStorage: 2 * 1024 * 1024,
-        fileStorage: 3 * 1024,
-        fileBandwidth: 2,
+        databaseIO: 1024 * 1024 * 1024,
         functionCalls: 50000,
-        actionCompute: 60,
-        vectorBandwidth: 0,
-        vectorStorage: 0,
+        queryMutationCompute: 20,
+        actionComputeConvex: 40,
+        actionComputeNode: 20,
+        actionComputeUser: 40,
+        fileStorage: 3 * 1024,
+        searchStorage: 0,
+        dataEgress: 2,
+        auditLogBandwidth: 0,
+        searchQueries: 0,
+        deploymentCount: 2,
+        pausedDeploymentCount: 0,
+        idleDeploymentCount: 1,
       },
     ],
-    deploymentCount: 12,
     entitlements: {
       teamMaxDatabaseBandwidth: 1024 * 1024 * 1024,
       teamMaxDatabaseStorage: 512 * 1024 * 1024, // 512 MB in bytes
@@ -45,23 +62,26 @@ export const Primary: Story = {
       teamMaxFileStorage: 1024 * 1024 * 1024,
       teamMaxFunctionCalls: 1000000,
       teamMaxActionCompute: 20,
+      teamMaxSearchQueries: 50000,
       teamMaxVectorBandwidth: 512 * 1024 * 1024,
       teamMaxVectorStorage: 256 * 1024 * 1024,
       maxTeamMembers: 50000,
       logStreamingEnabled: true,
       customDomainsEnabled: true,
+      maxCustomDomains: 100,
+      customRolesEnabled: true,
+      customAuditLogsInLogStreamsConfigEnabled: true,
       streamingExportEnabled: true,
       periodicBackupsEnabled: true,
       maxCloudBackups: 50,
-      maxProjects: 10,
       maxChefTokens: 8500000,
       ssoEnabled: false,
+      directorySyncEnabled: false,
       auditLogRetentionDays: 90,
       maxDeployments: 40,
       managementApiEnabled: true,
       previewDeploymentRetentionDays: 1,
       deploymentClassSelectionEnabled: false,
     },
-    hasFilter: false,
   },
 };

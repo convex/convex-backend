@@ -1,13 +1,13 @@
 [package]
 name = "convex_sync_types"
 description = "Sync types for the Convex Websocket protocol (convex.dev)"
-version = "0.10.3"
+version = "0.10.4"
 authors = ["Convex, Inc. <no-reply@convex.dev>"]
 edition = "2021"
-rust-version = "1.80.1"
+rust-version = "1.85"
 resolver = "2"
 license = "Apache-2.0"
-repository = "https://github.com/get-convex/convex-rs"
+repository = "https://github.com/convex/convex-rs"
 homepage = "https://www.convex.dev/"
 
 [features]
@@ -16,7 +16,6 @@ testing = ["proptest", "proptest-derive", "pretty_assertions"]
 [dependencies]
 anyhow = { workspace = true }
 base64 = { workspace = true }
-bytes = { workspace = true }
 derive_more = { workspace = true }
 headers = { workspace = true }
 pretty_assertions = { workspace = true, optional = true }
@@ -30,6 +29,7 @@ serde_json = { workspace = true, features = [
     "raw_value",
 ] }
 strum = { workspace = true }
+thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]

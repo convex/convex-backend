@@ -3,7 +3,7 @@ import { queryGeneric } from "../secretSystemTables";
 import { v } from "convex/values";
 import { DatabaseReader } from "../../_generated/server";
 
-export default queryGeneric({
+export default queryGeneric("ViewData")({
   args: {
     tableName: v.string(),
     componentId: v.optional(v.union(v.string(), v.null())),
@@ -17,13 +17,14 @@ export default queryGeneric({
   },
 });
 
-export const sizeOfAllTables = queryGeneric({
+export const sizeOfAllTables = queryGeneric("ViewData")({
   args: { componentId: v.optional(v.union(v.string(), v.null())) },
   handler: async function allTableSizes({ db }): Promise<number> {
     // Getting private system table here is OK because there are no args to this
     // system UDF.
     const tables = await ((db as any).privateSystem as DatabaseReader)
       .query("_tables")
+      // eslint-disable-next-line @convex-dev/no-filter-in-query -- very small system table
       .filter((q) => q.eq(q.field("state"), "active"))
       .collect();
     const tablesWithoutSystemTables = tables

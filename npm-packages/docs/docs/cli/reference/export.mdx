@@ -1,0 +1,61 @@
+---
+sidebar_position: 8
+title: "npx convex export"
+sidebar_label: "npx convex export"
+description: "Export data from your deployment to a ZIP file"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex export`
+
+Export data, and optionally file storage, from your Convex deployment to a ZIP file.
+
+- Export to a directory: <CodeWithCopyButton text={"npx convex export --path dir/"} />
+- Export to a ZIP file: <CodeWithCopyButton text={"npx convex export --path snapshot.zip"} />
+- Include file storage: <CodeWithCopyButton text={"npx convex export --include-file-storage --path dir/"} />
+
+By default, this exports from your dev deployment.
+
+See the data export guide (https://docs.convex.dev/database/import-export/export) for details and use cases.
+
+## Syntax
+
+```sh
+npx convex export [options]
+```
+
+## Options
+
+<dl>
+<dt>`--path <zipFilePath>`</dt>
+<dd>
+
+Exports data into a ZIP file at this path, which may be a directory or unoccupied .zip path
+
+</dd>
+<dt>`--include-file-storage`</dt>
+<dd>
+
+Includes stored files (https://dashboard.convex.dev/deployment/files) in a _storage folder within the ZIP file
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Export data from this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Export data from a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

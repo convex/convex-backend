@@ -23,24 +23,3 @@ impl TryFrom<FieldPathProto> for FieldPath {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use value::testing::assert_roundtrips;
-
-    use super::FieldPath;
-    use crate::common::FieldPath as FieldPathProto;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_field_path_roundtrips(left in any::<FieldPath>()) {
-            assert_roundtrips::<FieldPath, FieldPathProto>(left);
-        }
-    }
-}

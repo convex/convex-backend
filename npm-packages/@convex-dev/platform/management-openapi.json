@@ -59,6 +59,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -67,13 +70,112 @@
         ]
       }
     },
-    "/teams/{team_id}/list_projects": {
+    "/projects/{project_id}": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Get project by ID",
+        "description": "Get a project by its ID.",
+        "operationId": "get project by id",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Update project",
+        "description": "Update a project's name and/or slug. Returns the updated project.",
+        "operationId": "update project",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformUpdateProjectArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/projects": {
       "get": {
         "tags": [
           "Projects"
         ],
         "summary": "List projects",
-        "description": "List all projects for a team.",
+        "description": "List a page of projects for a team, ordered by descending project ID. Pass\n`limit` to set the page size and the `nextCursor` from the previous response\nas `cursor` to fetch the next page.",
         "operationId": "list projects",
         "parameters": [
           {
@@ -84,6 +186,34 @@
             "schema": {
               "$ref": "#/components/schemas/TeamId"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for pagination",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of projects to return (1-100, defaults to 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Search query to filter projects by name or slug (case-insensitive)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -92,16 +222,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/PlatformProjectDetails"
-                  }
+                  "$ref": "#/components/schemas/PlatformPaginatedProjectsResponse"
                 }
               }
             }
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -183,6 +313,9 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -267,6 +400,9 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -361,6 +497,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -395,54 +534,13 @@
         },
         "security": [
           {
-            "OAuth Team Token": []
+            "PAT": []
           },
-          {
-            "Team Token": []
-          }
-        ]
-      }
-    },
-    "/projects/{project_id}": {
-      "get": {
-        "tags": [
-          "Projects"
-        ],
-        "summary": "Get project by ID",
-        "description": "Get a project by its ID.",
-        "operationId": "get project by id",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "description": "Project ID",
-            "required": true,
-            "schema": {
-              "$ref": "#/components/schemas/ProjectId"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PlatformProjectDetails"
-                }
-              }
-            }
-          }
-        },
-        "security": [
           {
             "OAuth Team Token": []
           },
           {
             "Team Token": []
-          },
-          {
-            "OAuth Project Token": []
           }
         ]
       }
@@ -481,13 +579,16 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PlatformProjectDetails"
+                  "$ref": "#/components/schemas/ProjectResponse"
                 }
               }
             }
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -540,6 +641,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -547,6 +651,9 @@
           },
           {
             "OAuth Project Token": []
+          },
+          {
+            "Preview Deploy Key": []
           }
         ]
       }
@@ -574,6 +681,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -581,6 +691,9 @@
           },
           {
             "OAuth Project Token": []
+          },
+          {
+            "Preview Deploy Key": []
           }
         ]
       }
@@ -618,6 +731,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -625,6 +741,9 @@
           },
           {
             "OAuth Project Token": []
+          },
+          {
+            "Preview Deploy Key": []
           }
         ]
       },
@@ -662,6 +781,62 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          },
+          {
+            "Preview Deploy Key": []
+          }
+        ]
+      }
+    },
+    "/deployments/{deployment_name}/transfer": {
+      "post": {
+        "tags": [
+          "Deployments"
+        ],
+        "summary": "Transfer deployment",
+        "description": "Transfer a deployment from its current project to another project within the\nsame team. For production deployments, the caller must be a project admin on\nboth the source and destination projects. For other deployment types, any\nteam member can transfer deployments they created, or project admins can\ntransfer any deployment.",
+        "operationId": "transfer deployment",
+        "parameters": [
+          {
+            "name": "deployment_name",
+            "in": "path",
+            "description": "Deployment Name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformTransferDeploymentArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -704,6 +879,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -739,7 +917,18 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
       }
     },
     "/teams/{team_id}/list_deployments": {
@@ -857,6 +1046,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -897,6 +1089,63 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/deployments/{deployment_name}/mint_ai_gateway_jwt": {
+      "post": {
+        "tags": [
+          "Deployments"
+        ],
+        "summary": "Mint an AI gateway JWT",
+        "description": "Mints a short-lived AI gateway JWT for a local deployment.",
+        "operationId": "mint ai gateway jwt",
+        "parameters": [
+          {
+            "name": "deployment_name",
+            "in": "path",
+            "description": "Local deployment name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MintLocalAiGatewayJwtArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintLocalAiGatewayJwtResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -946,6 +1195,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -989,6 +1241,9 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -1034,6 +1289,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -1051,7 +1309,7 @@
           "Deploy Keys"
         ],
         "summary": "Create preview deploy key",
-        "description": "Create a preview deploy key like \"preview:team-slug:project-slug|ey...\"\nwhich can be used with the Convex CLI to create and manage preview\ndeployments within the project.",
+        "description": "Create a preview deploy key like \"preview:team-slug:project-slug|ey...\"\nwhich can be used with the Convex CLI to create and manage preview\ndeployments within the project.\n\nWhen access to the project is granted through an OAuth token this preview\ndeploy key will use the same OAuth-granted token.\n\nWhen access to the project is granted any other way a new token scoped to\npreview deployments in this project will be created.",
         "operationId": "create preview deploy key",
         "parameters": [
           {
@@ -1087,6 +1345,9 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -1141,6 +1402,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -1188,6 +1452,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -1195,6 +1462,231 @@
           },
           {
             "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/list_personal_access_tokens": {
+      "get": {
+        "tags": [
+          "Access Tokens"
+        ],
+        "summary": "List personal access tokens",
+        "description": "Lists all personal access tokens for the authenticated user.",
+        "operationId": "list personal access tokens",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for pagination",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of tokens to return (default 10, max 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedPersonalAccessTokensResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          }
+        ]
+      }
+    },
+    "/create_personal_access_token": {
+      "post": {
+        "tags": [
+          "Access Tokens"
+        ],
+        "summary": "Create personal access token",
+        "description": "Creates a new personal access token for the authenticated user.",
+        "operationId": "create personal access token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePersonalAccessTokenArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePersonalAccessTokenResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          }
+        ]
+      }
+    },
+    "/delete_personal_access_token": {
+      "post": {
+        "tags": [
+          "Access Tokens"
+        ],
+        "summary": "Delete personal access token",
+        "description": "Deletes a personal access token for the authenticated user. The `id` in the\nrequest body can be the encoded token secret or the name of the token.",
+        "operationId": "delete personal access token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletePersonalAccessTokenArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/list_access_tokens": {
+      "get": {
+        "tags": [
+          "Access Tokens"
+        ],
+        "summary": "List team access tokens",
+        "description": "Lists the team access tokens created by the authenticated member for the\ngiven team.",
+        "operationId": "list team access tokens",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for pagination",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of tokens to return (default 10, max 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListTeamAccessTokensResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/delete_access_token": {
+      "post": {
+        "tags": [
+          "Access Tokens"
+        ],
+        "summary": "Delete a team access token",
+        "description": "Deletes a team access token, identified by its secret value or name.",
+        "operationId": "delete team access token",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteTeamAccessTokenArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
           }
         ]
       }
@@ -1220,6 +1712,9 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -1263,6 +1758,9 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -1308,6 +1806,9 @@
         },
         "security": [
           {
+            "PAT": []
+          },
+          {
             "OAuth Team Token": []
           },
           {
@@ -1348,6 +1849,9 @@
           }
         },
         "security": [
+          {
+            "PAT": []
+          },
           {
             "OAuth Team Token": []
           },
@@ -1390,10 +1894,7 @@
         },
         "security": [
           {
-            "OAuth Team Token": []
-          },
-          {
-            "Team Token": []
+            "PAT": []
           }
         ]
       }
@@ -1404,6 +1905,7 @@
           "Teams"
         ],
         "summary": "Create a team",
+        "description": "This endpoint is not publicly accessible. It is reserved for specific\nintegrations that have been granted permission to create teams on behalf of\nusers. To request access, contact platforms@convex.dev.",
         "operationId": "create team",
         "requestBody": {
           "content": {
@@ -1426,8 +1928,11 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid team name or deployment region"
+          },
           "403": {
-            "description": "Caller is not authorized to create teams"
+            "description": "This application is not authorized to create teams. This endpoint is reserved for specific integrations that are allowed to create users. If you need to create teams for your users, please contact us at platforms@convex.dev"
           }
         },
         "security": []
@@ -1438,40 +1943,1036 @@
         "tags": [
           "Access Tokens"
         ],
-        "summary": "Create a team management access token",
-        "operationId": "create team management access token",
+        "summary": "Create a team access token",
+        "operationId": "create team access token",
         "parameters": [
           {
             "name": "team_id",
             "in": "path",
-            "description": "",
-            "required": true
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateTeamAccessTokenArgs"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
-            "description": "Team management access token created successfully",
+            "description": "Team access token created successfully",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CreateTeamManagementAccessTokenResponse"
+                  "$ref": "#/components/schemas/CreateTeamAccessTokenResponse"
                 }
               }
             }
           },
           "403": {
-            "description": "Caller is not authorized to create team management access tokens"
+            "description": "Caller is not authorized to create team access tokens"
           }
         },
-        "security": []
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/list_audit_log_events": {
+      "get": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "List audit log events",
+        "description": "List a team's audit log events within a time range, with optional filters.",
+        "operationId": "list audit log events",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Start of the time range, in milliseconds since epoch.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "End of the time range, in milliseconds since epoch.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "memberId",
+            "in": "query",
+            "description": "Only return events performed by this member.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/MemberId"
+                }
+              ]
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "team:join",
+                "team:create",
+                "team:update",
+                "team:delete",
+                "project:create",
+                "project:transfer",
+                "project:receive",
+                "project:update",
+                "project:delete",
+                "defaultEnvironmentVariable:create",
+                "defaultEnvironmentVariable:update",
+                "defaultEnvironmentVariable:delete",
+                "deployment:create",
+                "deployment:delete",
+                "member:invite",
+                "member:cancelInvitation",
+                "member:remove",
+                "member:updateRole",
+                "project:updateMemberRole",
+                "billing:paymentMethod:update",
+                "billing:contact:update",
+                "billing:address:update",
+                "billing:subscription:create",
+                "billing:subscription:resume",
+                "billing:subscription:cancel",
+                "billing:subscription:changePlan",
+                "team:token:create",
+                "team:token:update",
+                "team:token:delete",
+                "team:token:view",
+                "project:token:create",
+                "project:token:update",
+                "project:token:delete",
+                "project:token:view",
+                "deployment:token:create",
+                "deployment:token:update",
+                "deployment:token:delete",
+                "deployment:token:view",
+                "member:token:createWithSsoAccess",
+                "team:domain:create",
+                "team:domain:delete",
+                "deployment:customDomain:create",
+                "deployment:customDomain:delete",
+                "deployment:backups:create",
+                "deployment:backups:import",
+                "deployment:backups:configurePeriodic",
+                "deployment:backups:disablePeriodic",
+                "deployment:backups:delete",
+                "team:disableExceedingSpendingLimits",
+                "billing:spendingLimit:update",
+                "team:applyReferralCode",
+                "oauthApplication:create",
+                "oauthApplication:update",
+                "oauthApplication:delete",
+                "oauthApplication:verify",
+                "oauthApplication:generateClientSecret",
+                "integration:workos:team:create",
+                "integration:workos:environment:create",
+                "integration:workos:environment:delete",
+                "integration:workos:environment:retrieveCredentials",
+                "integration:workos:team:disconnect",
+                "integration:workos:team:inviteMember",
+                "integration:workos:projectEnvironment:create",
+                "integration:workos:projectEnvironment:delete",
+                "integration:workos:projectEnvironment:retrieveCredentials",
+                "sso:enable",
+                "sso:disable",
+                "sso:update",
+                "member:loginWithSso",
+                "directorySync:enable",
+                "directorySync:disable",
+                "directorySync:updateGroupMapping",
+                "directorySync:deleteGroupMapping",
+                "deployment:transfer",
+                "deployment:receive",
+                "deployment:update",
+                "customRole:create",
+                "customRole:update",
+                "customRole:delete"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of events to return (1-100, defaults to 15).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a previous response to fetch the next page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListAuditLogEventsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/invite_team_member": {
+      "post": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Invite a team member",
+        "description": "Invite a member to the given team by email. `role` is required and must be\none of `admin`, `developer`, or `custom`. Pass `custom` together with a\nnon-empty `customRoles` list to invite a member into a custom role; for\n`admin` and `developer`, `customRoles` must be omitted.",
+        "operationId": "invite team member",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/list_pending_invites": {
+      "get": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "List pending team invitations",
+        "description": "List the pending invitations for the given team.",
+        "operationId": "list pending team invites",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformListInvitationsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/cancel_team_member_invite": {
+      "post": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Cancel a pending team invitation",
+        "operationId": "cancel team member invite",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelInvitationArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          }
+        ]
+      }
+    },
+    "/projects/{project_id}/list_default_environment_variables": {
+      "get": {
+        "tags": [
+          "Environment Variables"
+        ],
+        "summary": "List default environment variables",
+        "description": "Lists all default environment variables for the specified project, with\noptional filtering by name and deployment type.",
+        "operationId": "list default environment variables",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectId"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Filter by exact environment variable name.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "deploymentType",
+            "in": "query",
+            "description": "Filter by deployment type",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/DeploymentType"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedDefaultEnvironmentVariablesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/projects/{project_id}/update_default_environment_variables": {
+      "post": {
+        "tags": [
+          "Environment Variables"
+        ],
+        "summary": "Update default environment variables",
+        "description": "Creates, updates, or deletes default environment variables for the specified\nproject. When `value` is a string, the variable is upserted. When `value` is\nnull, the variable is deleted.",
+        "operationId": "update default environment variables",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDefaultEnvironmentVariablesArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/create_custom_role": {
+      "post": {
+        "tags": [
+          "Custom Roles"
+        ],
+        "summary": "Create a custom role",
+        "description": "Creates a new custom role for the team with the specified name,\ndescription, and permission statements.",
+        "operationId": "create custom role",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomRoleArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomRoleResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/list_custom_roles": {
+      "get": {
+        "tags": [
+          "Custom Roles"
+        ],
+        "summary": "List custom roles",
+        "description": "Lists all custom roles for the team with cursor-based pagination.",
+        "operationId": "list custom roles",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for pagination",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max results per page (default: 100, max: 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListCustomRolesResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/update_custom_role": {
+      "post": {
+        "tags": [
+          "Custom Roles"
+        ],
+        "summary": "Update a custom role",
+        "description": "Updates an existing custom role's name, description, and permission\nstatements.",
+        "operationId": "update custom role",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCustomRoleArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomRoleResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/delete_custom_role": {
+      "post": {
+        "tags": [
+          "Custom Roles"
+        ],
+        "summary": "Delete a custom role",
+        "description": "Deletes a custom role from the team. Fails with `CustomRoleInUse` if\nthe role is still attached to any team members; reassign those members\n(e.g. via `update_team_member_role`) before retrying.",
+        "operationId": "delete custom role",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteCustomRoleArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/update_team_member_role": {
+      "post": {
+        "tags": [
+          "Teams"
+        ],
+        "summary": "Update a team member's role",
+        "description": "Sets either the member's built-in `role` (admin/developer) or their\n`customRoles`. The two fields are mutually exclusive: setting `role`\nclears `customRoles`, and setting `customRoles` (must be non-empty)\nputs the member in the `custom` role.",
+        "operationId": "update team member role",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTeamMemberRoleArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          }
+        ]
       }
     }
   },
   "components": {
     "schemas": {
+      "AccessTokenId": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0
+      },
       "AdminKey": {
         "type": "string",
         "description": "Encrypted admin key"
+      },
+      "AttributionClaims": {
+        "type": "object",
+        "description": "The wire format of the claims sent to the gateway.\n\nAll three are absent when we cannot identify the caller. A caller in the\nroot component has a `function_name` but no `component_path`.",
+        "properties": {
+          "componentPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "functionName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "functionType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "AuditLogActor": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "System",
+            "description": "The internal Convex system.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Member",
+            "description": "A member acting via the dashboard.",
+            "required": [
+              "member_id",
+              "kind"
+            ],
+            "properties": {
+              "member_id": {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "Member ID"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "member"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Token",
+            "description": "A token.",
+            "required": [
+              "token_id",
+              "kind"
+            ],
+            "properties": {
+              "member_id": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MemberId",
+                    "description": "Member ID"
+                  }
+                ]
+              },
+              "token_id": {
+                "$ref": "#/components/schemas/AccessTokenId",
+                "description": "Token ID. `0` for legacy audit log rows created before token IDs\nwere recorded."
+              },
+              "client_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Client ID of the OAuth application the token was issued to or is\nmanaged by, if any."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "token"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Integration",
+            "description": "An integration (OAuth application).",
+            "required": [
+              "client_id",
+              "kind"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "Client ID of the integration"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "integration"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The identity that executed an audit log action."
+      },
+      "AuditLogEventResponse": {
+        "type": "object",
+        "required": [
+          "teamId",
+          "actor",
+          "action",
+          "createTime",
+          "metadata"
+        ],
+        "properties": {
+          "teamId": {
+            "$ref": "#/components/schemas/TeamId",
+            "description": "Team ID"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/AuditLogActor",
+            "description": "The identity that executed the action"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "team:join",
+              "team:create",
+              "team:update",
+              "team:delete",
+              "project:create",
+              "project:transfer",
+              "project:receive",
+              "project:update",
+              "project:delete",
+              "defaultEnvironmentVariable:create",
+              "defaultEnvironmentVariable:update",
+              "defaultEnvironmentVariable:delete",
+              "deployment:create",
+              "deployment:delete",
+              "member:invite",
+              "member:cancelInvitation",
+              "member:remove",
+              "member:updateRole",
+              "project:updateMemberRole",
+              "billing:paymentMethod:update",
+              "billing:contact:update",
+              "billing:address:update",
+              "billing:subscription:create",
+              "billing:subscription:resume",
+              "billing:subscription:cancel",
+              "billing:subscription:changePlan",
+              "team:token:create",
+              "team:token:update",
+              "team:token:delete",
+              "team:token:view",
+              "project:token:create",
+              "project:token:update",
+              "project:token:delete",
+              "project:token:view",
+              "deployment:token:create",
+              "deployment:token:update",
+              "deployment:token:delete",
+              "deployment:token:view",
+              "member:token:createWithSsoAccess",
+              "team:domain:create",
+              "team:domain:delete",
+              "deployment:customDomain:create",
+              "deployment:customDomain:delete",
+              "deployment:backups:create",
+              "deployment:backups:import",
+              "deployment:backups:configurePeriodic",
+              "deployment:backups:disablePeriodic",
+              "deployment:backups:delete",
+              "team:disableExceedingSpendingLimits",
+              "billing:spendingLimit:update",
+              "team:applyReferralCode",
+              "oauthApplication:create",
+              "oauthApplication:update",
+              "oauthApplication:delete",
+              "oauthApplication:verify",
+              "oauthApplication:generateClientSecret",
+              "integration:workos:team:create",
+              "integration:workos:environment:create",
+              "integration:workos:environment:delete",
+              "integration:workos:environment:retrieveCredentials",
+              "integration:workos:team:disconnect",
+              "integration:workos:team:inviteMember",
+              "integration:workos:projectEnvironment:create",
+              "integration:workos:projectEnvironment:delete",
+              "integration:workos:projectEnvironment:retrieveCredentials",
+              "sso:enable",
+              "sso:disable",
+              "sso:update",
+              "member:loginWithSso",
+              "directorySync:enable",
+              "directorySync:disable",
+              "directorySync:updateGroupMapping",
+              "directorySync:deleteGroupMapping",
+              "deployment:transfer",
+              "deployment:receive",
+              "deployment:update",
+              "customRole:create",
+              "customRole:update",
+              "customRole:delete"
+            ]
+          },
+          "createTime": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Time the event was created, in milliseconds since epoch."
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/Value",
+            "description": "Additional JSON metadata about the audit log event"
+          },
+          "clientIp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "IP address of the client that performed the action, if known."
+          },
+          "clientUserAgent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User agent of the client that performed the action, if known."
+          }
+        }
+      },
+      "CancelInvitationArgs": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateCustomRoleArgs": {
+        "type": "object",
+        "required": [
+          "name",
+          "statements"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleStatement"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "CreateDeploymentType": {
         "type": "string",
@@ -1482,7 +2983,87 @@
           "custom"
         ]
       },
-      "CreateTeamManagementAccessTokenResponse": {
+      "CreateInvitationArgs": {
+        "type": "object",
+        "required": [
+          "email",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role",
+            "description": "Role to assign when the invitation is accepted.\nPass `custom` together with a non-empty `customRoles` list to invite a\nmember into a custom role; `admin` and `developer` must be sent without\n`customRoles`."
+          },
+          "customRoles": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CustomRoleId"
+            },
+            "description": "Custom roles to attach when `role` is `custom`. Required and non-empty\nin that case, and forbidden otherwise."
+          }
+        }
+      },
+      "CreatePersonalAccessTokenArgs": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name for the personal access token."
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this personal access token will\nexpire. Must be at least 30 minutes in the future."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreatePersonalAccessTokenResponse": {
+        "type": "object",
+        "required": [
+          "accessToken"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "The generated personal access token."
+          }
+        }
+      },
+      "CreateTeamAccessTokenArgs": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name for the access token."
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this token will expire. Must be at least\n30 minutes in the future. Defaults to no expiry if omitted."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateTeamAccessTokenResponse": {
         "type": "object",
         "required": [
           "accessToken",
@@ -1497,12 +3078,149 @@
           }
         }
       },
+      "CustomRoleId": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0
+      },
+      "CustomRoleResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "teamId",
+          "name",
+          "statements",
+          "createTime"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/CustomRoleId"
+          },
+          "teamId": {
+            "$ref": "#/components/schemas/TeamId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleStatement"
+            }
+          },
+          "creator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MemberId"
+              }
+            ]
+          },
+          "createTime": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DefaultEnvironmentVariableChangeArgs": {
+        "type": "object",
+        "required": [
+          "name",
+          "deploymentType"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "deploymentType": {
+            "$ref": "#/components/schemas/DeploymentType"
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set to a value to upsert the default environment variable\nwith the given name and type. If null, will delete the\nenvironment variable with the given name and deployment\ntype if it exists (and do nothing if it doesn’t exist)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DefaultEnvironmentVariableResponse": {
+        "type": "object",
+        "required": [
+          "name",
+          "value",
+          "deploymentTypes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "deploymentTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeploymentType"
+            },
+            "description": "The deployment types that this env var name + value apply to.\nNote that when filtering by a particular deployment type,\nall items in the result will have a single element\nin `deploymentType`."
+          }
+        }
+      },
+      "DeleteCustomRoleArgs": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/CustomRoleId"
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeletePersonalAccessTokenArgs": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The token to delete. This can be the secret value of the token or the\ntoken's unique name."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeleteTeamAccessTokenArgs": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The token to delete. This can be its secret value or its name."
+          }
+        },
+        "additionalProperties": false
+      },
       "DeploymentClass": {
         "type": "string",
         "enum": [
           "s16",
           "s256",
-          "d1024"
+          "d1024",
+          "d2048"
         ]
       },
       "DeploymentClassMetadata": {
@@ -1512,11 +3230,11 @@
           "available"
         ],
         "properties": {
-          "available": {
-            "type": "boolean"
-          },
           "type": {
             "$ref": "#/components/schemas/DeploymentClass"
+          },
+          "available": {
+            "type": "boolean"
           }
         }
       },
@@ -1537,14 +3255,14 @@
           "available"
         ],
         "properties": {
-          "available": {
-            "type": "boolean"
+          "name": {
+            "$ref": "#/components/schemas/RegionName"
           },
           "displayName": {
             "type": "string"
           },
-          "name": {
-            "$ref": "#/components/schemas/RegionName"
+          "available": {
+            "type": "boolean"
           }
         }
       },
@@ -1560,9 +3278,74 @@
       "DeviceName": {
         "type": "string"
       },
+      "InvitationResponse": {
+        "type": "object",
+        "required": [
+          "email",
+          "expired",
+          "role"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "expired": {
+            "type": "boolean"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "customRoles": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TeamMemberCustomRole"
+            },
+            "description": "The custom roles attached to this invitation. Present iff `role` is\n`custom`."
+          }
+        }
+      },
       "IsDefaultDeployment": {
         "type": "boolean",
         "description": "Indicates whether the deployment is the default prod deployment for the\nproject, or the default cloud dev deployment for the member in the project."
+      },
+      "ListAuditLogEventsResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AuditLogEventResponse"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
+      },
+      "ListCustomRolesResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomRoleResponse"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
       },
       "ListDeploymentClassesResponse": {
         "type": "object",
@@ -1606,6 +3389,25 @@
           }
         }
       },
+      "ListTeamAccessTokensResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamAccessTokenResponse"
+            },
+            "description": "The team access tokens created by the authenticated member."
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
+      },
       "ManagedBy": {
         "oneOf": [
           {
@@ -1632,6 +3434,47 @@
         "format": "int64",
         "minimum": 0
       },
+      "MintLocalAiGatewayJwtArgs": {
+        "type": "object",
+        "required": [
+          "attribution"
+        ],
+        "properties": {
+          "attribution": {
+            "$ref": "#/components/schemas/AttributionClaims"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MintLocalAiGatewayJwtResponse": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "PaginatedDefaultEnvironmentVariablesResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DefaultEnvironmentVariableResponse"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
+      },
       "PaginatedDeploymentsResponse": {
         "type": "object",
         "required": [
@@ -1643,6 +3486,24 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PlatformDeploymentResponse"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
+      },
+      "PaginatedPersonalAccessTokensResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PersonalAccessTokenResponse"
             }
           },
           "pagination": {
@@ -1667,6 +3528,51 @@
           }
         }
       },
+      "PersonalAccessTokenResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "creationTime"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AccessTokenId",
+            "description": "Stable identifier for this access token."
+          },
+          "name": {
+            "$ref": "#/components/schemas/DeviceName"
+          },
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lastUsedTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ssoTeamId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TeamId"
+              }
+            ]
+          }
+        }
+      },
       "PlatformCreateDeployKeyArgs": {
         "type": "object",
         "required": [
@@ -1676,9 +3582,50 @@
           "name": {
             "type": "string",
             "description": "Name for the deploy key."
+          },
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "deployment:deploy",
+                "deployment:env:view",
+                "deployment:env:write",
+                "deployment:pause",
+                "deployment:unpause",
+                "deployment:logs:view",
+                "deployment:metrics:view",
+                "deployment:integrations:view",
+                "deployment:integrations:write",
+                "deployment:data:view",
+                "deployment:data:write",
+                "deployment:backups:view",
+                "deployment:backups:create",
+                "deployment:backups:download",
+                "deployment:backups:delete",
+                "deployment:backups:import",
+                "deployment:functions:actAsUser",
+                "deployment:functions:runInternalQueries",
+                "deployment:functions:runInternalMutations",
+                "deployment:functions:runInternalActions",
+                "deployment:functions:runTestQuery",
+                "deployment:auditLog:view",
+                "deployment:usageLimits:view",
+                "deployment:usageLimits:write",
+                "deployment:usage:view",
+                "deployment:aiGateway:use"
+              ]
+            }
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this deploy key will expire. Must be\nat least 30 minutes in the future."
           }
-        },
-        "additionalProperties": false
+        }
       },
       "PlatformCreateDeployKeyResponse": {
         "type": "object",
@@ -1698,26 +3645,15 @@
           "type"
         ],
         "properties": {
+          "type": {
+            "$ref": "#/components/schemas/CreateDeploymentType"
+          },
           "class": {
             "type": [
               "string",
               "null"
             ],
             "description": "The class to use for this deployment. If not provided, the default\ndeployment class for your team will be used."
-          },
-          "isDefault": {
-            "type": [
-              "boolean",
-              "null"
-            ],
-            "description": "When creating a prod deployment, whether the deployment is the default\nproduction deployment for the project (i.e. the one used by default\nwhen running `npx convex deploy`).\nWhen creating a dev deployment, whether the deployment is the default\ndevelopment deployment for the member that creates it (i.e. the one used\nby default when running `npx convex dev`).\nThis option can’t be set on other types of deployments.\nIf not provided, defaults to `true` when creating a dev or prod\ndeployment without providing a reference (and defaults to `false`\notherwise)."
-          },
-          "reference": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "An identifier that uniquely identifies this deployment within the\nproject. By providing a reference, you can create multiple dev and prod\ndeployments in the project. If you don’t provide a reference, the\nendpoint will create the default production deployment for the project,\nor the default development deployment for the member that creates it\n(i.e. the deployment used by default when running `npx convex deploy`\nor `npx convex dev` respectively). When not providing a reference,\na reference will be automatically generated."
           },
           "region": {
             "oneOf": [
@@ -1730,8 +3666,27 @@
               }
             ]
           },
-          "type": {
-            "$ref": "#/components/schemas/CreateDeploymentType"
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An identifier that uniquely identifies this deployment within the\nproject. By providing a reference, you can create multiple dev and prod\ndeployments in the project. If you don’t provide a reference, the\nendpoint will create the default production deployment for the project,\nor the default development deployment for the member that creates it\n(i.e. the deployment used by default when running `npx convex deploy`\nor `npx convex dev` respectively). When not providing a reference,\na reference will be automatically generated."
+          },
+          "isDefault": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "When creating a prod deployment, whether the deployment is the default\nproduction deployment for the project (i.e. the one used by default\nwhen running `npx convex deploy`).\nWhen creating a dev deployment, whether the deployment is the default\ndevelopment deployment for the member that creates it (i.e. the one used\nby default when running `npx convex dev`).\nThis option can’t be set on other types of deployments.\nIf not provided, defaults to `true` when creating a dev or prod\ndeployment without providing a reference (and defaults to `false`\notherwise)."
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this deployment will be deleted.\nPreview deployments have this set by default unless overridden.\nMust be at least 30 minutes in the future and cannot exceed the\nteam’s preview deployment retention days entitlement from now.\nSet to `null` to clear the expiration."
           }
         },
         "additionalProperties": false
@@ -1745,9 +3700,16 @@
           "name": {
             "type": "string",
             "description": "Name for the preview deploy key."
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this preview deploy key will expire.\nMust be at least 30 minutes in the future."
           }
-        },
-        "additionalProperties": false
+        }
       },
       "PlatformCreatePreviewDeployKeyResponse": {
         "type": "object",
@@ -1767,6 +3729,21 @@
           "projectName"
         ],
         "properties": {
+          "projectName": {
+            "$ref": "#/components/schemas/ProjectName",
+            "description": "The full name of the project as it will appear in the dashboard. Spaces\nand punctuations allowed."
+          },
+          "deploymentType": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CreateDeploymentType",
+                "description": "Optionally provision a \"dev\" development deployment or \"prod\" production\ndeployment alongside the project. If omitted, a project is created\nwithout a deployment."
+              }
+            ]
+          },
           "deploymentClass": {
             "type": [
               "string",
@@ -1784,21 +3761,6 @@
                 "description": "When creating a deployment, the hosting region to use for the\ndeployment. If not provided, the default deployment region for your\nteam will be used."
               }
             ]
-          },
-          "deploymentType": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/CreateDeploymentType",
-                "description": "Optionally provision a \"dev\" development deployment or \"prod\" production\ndeployment alongside the project. If omitted, a project is created\nwithout a deployment."
-              }
-            ]
-          },
-          "projectName": {
-            "$ref": "#/components/schemas/ProjectName",
-            "description": "The full name of the project as it will appear in the dashboard. Spaces\nand punctuations allowed."
           }
         },
         "additionalProperties": false
@@ -1806,9 +3768,22 @@
       "PlatformCreateProjectResponse": {
         "type": "object",
         "required": [
-          "projectId"
+          "projectId",
+          "id",
+          "slug"
         ],
         "properties": {
+          "projectId": {
+            "$ref": "#/components/schemas/ProjectId",
+            "description": "Deprecated alias for `id`, kept for backwards compatibility."
+          },
+          "id": {
+            "$ref": "#/components/schemas/ProjectId"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/ProjectSlug",
+            "description": "The shortened version of the project name used in Convex Dashboard URLs."
+          },
           "deploymentName": {
             "type": [
               "string",
@@ -1822,9 +3797,6 @@
               "null"
             ],
             "description": "Deployment cloud URL, where this deployment lives. Only present when a\ndeployment was requested."
-          },
-          "projectId": {
-            "$ref": "#/components/schemas/ProjectId"
           }
         }
       },
@@ -1861,13 +3833,13 @@
             "type": "string",
             "description": "The deployment name this domain is configured for."
           },
-          "domain": {
-            "type": "string",
-            "description": "The custom domain name."
-          },
           "requestDestination": {
             "$ref": "#/components/schemas/RequestDestination",
             "description": "The destination for this custom domain (convexCloud or convexSite)."
+          },
+          "domain": {
+            "type": "string",
+            "description": "The custom domain name."
           },
           "verificationTime": {
             "type": [
@@ -1886,13 +3858,13 @@
           "domain"
         ],
         "properties": {
-          "domain": {
-            "type": "string",
-            "description": "The custom domain name to delete."
-          },
           "requestDestination": {
             "$ref": "#/components/schemas/RequestDestination",
             "description": "The destination for this custom domain (convexCloud or convexSite)."
+          },
+          "domain": {
+            "type": "string",
+            "description": "The custom domain name to delete."
           }
         }
       },
@@ -1925,14 +3897,40 @@
       "PlatformDeployKeyResponse": {
         "type": "object",
         "required": [
+          "id",
           "name",
-          "creationTime"
+          "creationTime",
+          "allowedActions"
         ],
         "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AccessTokenId",
+            "description": "Stable identifier for this deploy key."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name given to the deploy key at creation."
+          },
           "creationTime": {
             "type": "integer",
             "format": "int64",
             "description": "Timestamp in milliseconds when this token was created."
+          },
+          "lastUsedTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this token was last used (if ever)."
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this deploy key will expire."
           },
           "creator": {
             "oneOf": [
@@ -1945,14 +3943,6 @@
               }
             ]
           },
-          "lastUsedTime": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Timestamp in milliseconds when this token was last used (if ever)."
-          },
           "managedBy": {
             "oneOf": [
               {
@@ -1964,9 +3954,39 @@
               }
             ]
           },
-          "name": {
-            "type": "string",
-            "description": "The name given to the deploy key at creation."
+          "allowedActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "deployment:deploy",
+                "deployment:env:view",
+                "deployment:env:write",
+                "deployment:pause",
+                "deployment:unpause",
+                "deployment:logs:view",
+                "deployment:metrics:view",
+                "deployment:integrations:view",
+                "deployment:integrations:write",
+                "deployment:data:view",
+                "deployment:data:write",
+                "deployment:backups:view",
+                "deployment:backups:create",
+                "deployment:backups:download",
+                "deployment:backups:delete",
+                "deployment:backups:import",
+                "deployment:functions:actAsUser",
+                "deployment:functions:runInternalQueries",
+                "deployment:functions:runInternalMutations",
+                "deployment:functions:runInternalActions",
+                "deployment:functions:runTestQuery",
+                "deployment:auditLog:view",
+                "deployment:usageLimits:view",
+                "deployment:usageLimits:write",
+                "deployment:usage:view",
+                "deployment:aiGateway:use"
+              ]
+            }
           }
         }
       },
@@ -1988,14 +4008,33 @@
               "kind"
             ],
             "properties": {
-              "class": {
+              "id": {
+                "$ref": "#/components/schemas/DeploymentId"
+              },
+              "name": {
                 "type": "string",
-                "description": "The deployment class for this deployment."
+                "description": "The readable identifier for this deployment, something like\nplayful-otter-123."
               },
               "createTime": {
                 "type": "integer",
                 "format": "int64",
                 "description": "Timestamp in milliseconds when this deployment was created."
+              },
+              "lastDeployTime": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "Timestamp in milliseconds of the last deploy to this deployment, if\nany."
+              },
+              "deploymentType": {
+                "$ref": "#/components/schemas/DeploymentType",
+                "description": "The type of this deployment."
+              },
+              "projectId": {
+                "$ref": "#/components/schemas/ProjectId",
+                "description": "The project this deployment belongs to."
               },
               "creator": {
                 "oneOf": [
@@ -2008,16 +4047,35 @@
                   }
                 ]
               },
+              "previewIdentifier": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PreviewDeploymentIdentifier",
+                    "description": "Preview deployment identifier, if this is a preview deployment."
+                  }
+                ]
+              },
+              "region": {
+                "$ref": "#/components/schemas/RegionName",
+                "description": "The region where this deployment is hosted."
+              },
+              "isDefault": {
+                "$ref": "#/components/schemas/IsDefaultDeployment",
+                "description": "For prod deployments, whether they are the default prod deployment\nof the project. For dev deployments, whether they are the default\ndev deployment for the member that created it.\nFor other deployments, set to false."
+              },
+              "reference": {
+                "$ref": "#/components/schemas/DeploymentReference",
+                "description": "An identifier that uniquely identifies this deployment within the\nproject."
+              },
               "dashboardEditConfirmation": {
                 "type": [
                   "boolean",
                   "null"
                 ],
                 "description": "Controls whether the dashboard requires a confirmation before\nallowing edits during a browser session for this deployment.\nIf not set, defaults to true for prod deployments and false\nfor dev and preview deployments."
-              },
-              "deploymentType": {
-                "$ref": "#/components/schemas/DeploymentType",
-                "description": "The type of this deployment."
               },
               "deploymentUrl": {
                 "type": "string",
@@ -2031,53 +4089,9 @@
                 "format": "int64",
                 "description": "Timestamp in milliseconds when this deployment will be\ndeleted. Preview deployments have this set by default unless\noverridden."
               },
-              "id": {
-                "$ref": "#/components/schemas/DeploymentId"
-              },
-              "isDefault": {
-                "$ref": "#/components/schemas/IsDefaultDeployment",
-                "description": "For prod deployments, whether they are the default prod deployment\nof the project. For dev deployments, whether they are the default\ndev deployment for the member that created it.\nFor other deployments, set to false."
-              },
-              "kind": {
+              "class": {
                 "type": "string",
-                "enum": [
-                  "cloud"
-                ]
-              },
-              "lastDeployTime": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "int64",
-                "description": "Timestamp in milliseconds of the last deploy to this deployment, if\nany."
-              },
-              "name": {
-                "type": "string",
-                "description": "The readable identifier for this deployment, something like\nplayful-otter-123."
-              },
-              "previewIdentifier": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/PreviewDeploymentIdentifier",
-                    "description": "Preview deployment identifier, if this is a preview deployment."
-                  }
-                ]
-              },
-              "projectId": {
-                "$ref": "#/components/schemas/ProjectId",
-                "description": "The project this deployment belongs to."
-              },
-              "reference": {
-                "$ref": "#/components/schemas/DeploymentReference",
-                "description": "An identifier that uniquely identifies this deployment within the\nproject."
-              },
-              "region": {
-                "$ref": "#/components/schemas/RegionName",
-                "description": "The region where this deployment is hosted."
+                "description": "The deployment class for this deployment."
               },
               "sendLogsToClient": {
                 "type": [
@@ -2085,6 +4099,12 @@
                   "null"
                 ],
                 "description": "Whether to send function logs to the client. If `null`, the\ndeployment-type default is used (true for dev/preview, false for\nprod)."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cloud"
+                ]
               }
             }
           },
@@ -2102,18 +4122,43 @@
               "kind"
             ],
             "properties": {
+              "name": {
+                "type": "string",
+                "description": "The readable identifier for this deployment."
+              },
               "createTime": {
                 "type": "integer",
                 "format": "int64",
                 "description": "Timestamp in milliseconds when this deployment was created."
               },
+              "deploymentType": {
+                "$ref": "#/components/schemas/DeploymentType",
+                "description": "Whether this is a \"dev\" development deployment or \"prod\" production\ndeployment. Note that this will always be \"dev\" for local\ndeployments."
+              },
+              "projectId": {
+                "$ref": "#/components/schemas/ProjectId",
+                "description": "The project this deployment belongs to."
+              },
               "creator": {
                 "$ref": "#/components/schemas/MemberId",
                 "description": "The member who created this deployment."
               },
-              "deploymentType": {
-                "$ref": "#/components/schemas/DeploymentType",
-                "description": "Whether this is a \"dev\" development deployment or \"prod\" production\ndeployment. Note that this will always be \"dev\" for local\ndeployments."
+              "previewIdentifier": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PreviewDeploymentIdentifier",
+                    "description": "Preview deployment identifier. Note that this will always be None\nfor local deployments."
+                  }
+                ]
+              },
+              "port": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The port where this local deployment is running.",
+                "minimum": 0
               },
               "deviceName": {
                 "$ref": "#/components/schemas/DeviceName",
@@ -2128,31 +4173,6 @@
                 "enum": [
                   "local"
                 ]
-              },
-              "name": {
-                "type": "string",
-                "description": "The readable identifier for this deployment."
-              },
-              "port": {
-                "type": "integer",
-                "format": "int32",
-                "description": "The port where this local deployment is running.",
-                "minimum": 0
-              },
-              "previewIdentifier": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/PreviewDeploymentIdentifier",
-                    "description": "Preview deployment identifier. Note that this will always be None\nfor local deployments."
-                  }
-                ]
-              },
-              "projectId": {
-                "$ref": "#/components/schemas/ProjectId",
-                "description": "The project this deployment belongs to."
               }
             }
           }
@@ -2170,6 +4190,20 @@
               "$ref": "#/components/schemas/PlatformCustomDomainResponse"
             },
             "description": "List of custom domains configured for this deployment."
+          }
+        }
+      },
+      "PlatformListInvitationsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InvitationResponse"
+            }
           }
         }
       },
@@ -2202,7 +4236,210 @@
           }
         }
       },
-      "PlatformProjectDetails": {
+      "PlatformPaginatedProjectsResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectResponse"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
+      },
+      "PlatformTokenDetailsResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "teamId",
+              "name",
+              "createTime",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/AccessTokenId",
+                "description": "Stable identifier for this access token."
+              },
+              "teamId": {
+                "$ref": "#/components/schemas/TeamId",
+                "description": "The team ID this token is associated with."
+              },
+              "name": {
+                "$ref": "#/components/schemas/DeviceName",
+                "description": "The name given to the token at creation."
+              },
+              "createTime": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Timestamp in milliseconds when this token was created."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "teamToken"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "id",
+              "projectId",
+              "name",
+              "createTime",
+              "type"
+            ],
+            "properties": {
+              "id": {
+                "$ref": "#/components/schemas/AccessTokenId",
+                "description": "Stable identifier for this access token."
+              },
+              "projectId": {
+                "$ref": "#/components/schemas/ProjectId",
+                "description": "The project ID this token is associated with."
+              },
+              "name": {
+                "$ref": "#/components/schemas/DeviceName",
+                "description": "The name given to the token at creation."
+              },
+              "createTime": {
+                "type": "integer",
+                "format": "int64",
+                "description": "Timestamp in milliseconds when this token was created."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "projectToken"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "PlatformTransferDeploymentArgs": {
+        "type": "object",
+        "required": [
+          "destinationProjectId"
+        ],
+        "properties": {
+          "destinationProjectId": {
+            "$ref": "#/components/schemas/ProjectId"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlatformUpdateDeploymentArgs": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reference of the deployment. When provided, must match the following\nrules:\n  - be unique across deployment references in the project\n  - 3 to 100 characters (included)\n  - only lowercase letters, numbers, \"-\"\" and \"/\"\n  - not follow the deployment name format [a-z]+-[a-z]+-[0-9]+ (e.g.\n    \"happy-capybara-123\")\n  - not start with \"local-\"\"\n  - not be one of the following reserved keywords: \"prod\", \"dev\",\n    \"cloud\", \"local\", \"default\", \"name\", \"new\", \"existing\",\n    \"deployment\", \"preview\""
+          },
+          "dashboardEditConfirmation": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Controls whether the dashboard requires a confirmation before allowing\nedits during a browser session for this deployment. If set to `null`,\nthe setting is reset to the default behavior (true for prod deployments,\nfalse for dev and preview deployments). If set to `true` or `false`, the\nsetting is explicitly overridden."
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when this deployment will be deleted.\nPreview deployments have this set by default unless overridden.\nMust be at least 30 minutes in the future and cannot exceed the\nteam's preview deployment retention days entitlement from now.\nSet to `null` to clear the expiration."
+          },
+          "sendLogsToClient": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to send function logs to the client. If set to `null`, the\nsetting is reset to the deployment-type default (true for dev/preview,\nfalse for prod). If set to `true` or `false`, the setting is explicitly\noverridden."
+          },
+          "class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The deployment class to move this deployment to (e.g. \"s16\", \"s256\").\nRequires the deployment class selection entitlement."
+          },
+          "isDefault": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "For a prod deployment, whether the deployment is the default\nproduction deployment for the project (i.e. the one used by default\nwhen running `npx convex deploy`).\nFor a dev deployment, whether the deployment is the default\ndevelopment deployment for the member that created it (i.e. the one\nused by default when running `npx convex dev`).\nSetting this to `true` will fail on preview or custom deployments,\nor if there is already a matching default deployment in the project."
+          },
+          "deploymentType": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DeploymentType",
+                "description": "Set this field to change the deployment type of this deployment.\nIf the deployment is a default deployment, you will need to set\n`isDefault` explicitly."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PlatformUpdateProjectArgs": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectName",
+                "description": "New name for the project. If omitted, the name is left unchanged."
+              }
+            ]
+          },
+          "slug": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProjectSlug",
+                "description": "New slug for the project. If omitted, the slug is left unchanged."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PreviewDeploymentIdentifier": {
+        "type": "string"
+      },
+      "ProjectId": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0
+      },
+      "ProjectName": {
+        "type": "string"
+      },
+      "ProjectResponse": {
         "type": "object",
         "required": [
           "id",
@@ -2213,11 +4450,6 @@
           "createTime"
         ],
         "properties": {
-          "createTime": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Timestamp in milliseconds."
-          },
           "id": {
             "$ref": "#/components/schemas/ProjectId"
           },
@@ -2235,118 +4467,27 @@
           "teamSlug": {
             "$ref": "#/components/schemas/TeamSlug",
             "description": "The slug of the team that owns this project."
-          }
-        }
-      },
-      "PlatformTokenDetailsResponse": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "teamId",
-              "name",
-              "createTime",
-              "type"
-            ],
-            "properties": {
-              "createTime": {
-                "type": "integer",
-                "format": "int64",
-                "description": "Timestamp in milliseconds when this token was created."
-              },
-              "name": {
-                "$ref": "#/components/schemas/DeviceName",
-                "description": "The name given to the token at creation."
-              },
-              "teamId": {
-                "$ref": "#/components/schemas/TeamId",
-                "description": "The team ID this token is associated with."
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "teamToken"
-                ]
-              }
-            }
           },
-          {
-            "type": "object",
-            "required": [
-              "projectId",
-              "name",
-              "createTime",
-              "type"
-            ],
-            "properties": {
-              "createTime": {
-                "type": "integer",
-                "format": "int64",
-                "description": "Timestamp in milliseconds when this token was created."
-              },
-              "name": {
-                "$ref": "#/components/schemas/DeviceName",
-                "description": "The name given to the token at creation."
-              },
-              "projectId": {
-                "$ref": "#/components/schemas/ProjectId",
-                "description": "The project ID this token is associated with."
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "projectToken"
-                ]
-              }
-            }
-          }
-        ]
-      },
-      "PlatformUpdateDeploymentArgs": {
-        "type": "object",
-        "properties": {
-          "dashboardEditConfirmation": {
-            "type": [
-              "boolean",
-              "null"
-            ],
-            "description": "Controls whether the dashboard requires a confirmation before allowing\nedits during a browser session for this deployment. If set to `null`,\nthe setting is reset to the default behavior (true for prod deployments,\nfalse for dev and preview deployments). If set to `true` or `false`, the\nsetting is explicitly overridden."
-          },
-          "expiresAt": {
-            "type": [
-              "integer",
-              "null"
-            ],
+          "createTime": {
+            "type": "integer",
             "format": "int64",
-            "description": "Timestamp in milliseconds when this deployment will be deleted.\nPreview deployments have this set by default unless overridden.\nMust be at least 30 minutes in the future and cannot exceed the\nteam's preview deployment retention days entitlement from now.\nSet to `null` to clear the expiration."
+            "description": "Timestamp in milliseconds."
           },
-          "reference": {
+          "prodDeploymentName": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The reference of the deployment. When provided, must match the following\nrules:\n  - be unique across deployment references in the project\n  - 3 to 100 characters (included)\n  - only lowercase letters, numbers, \"-\"\" and \"/\"\n  - not follow the deployment name format [a-z]+-[a-z]+-[0-9]+ (e.g.\n    \"happy-capybara-123\")\n  - not start with \"local-\"\"\n  - not be one of the following reserved keywords: \"prod\", \"dev\",\n    \"cloud\", \"local\", \"default\", \"name\", \"new\", \"existing\",\n    \"deployment\", \"preview\""
+            "description": "The name of the default production deployment for this project, if one\nexists (e.g. \"happy-otter-123\")."
           },
-          "sendLogsToClient": {
+          "devDeploymentName": {
             "type": [
-              "boolean",
+              "string",
               "null"
             ],
-            "description": "Whether to send function logs to the client. If set to `null`, the\nsetting is reset to the deployment-type default (true for dev/preview,\nfalse for prod). If set to `true` or `false`, the setting is explicitly\noverridden."
+            "description": "The name of the requesting member's default development deployment for\nthis project, if one exists (an active local deployment or default\ncloud dev deployment)."
           }
-        },
-        "additionalProperties": false
-      },
-      "PreviewDeploymentIdentifier": {
-        "type": "string"
-      },
-      "ProjectId": {
-        "type": "integer",
-        "format": "int64",
-        "minimum": 0
-      },
-      "ProjectName": {
-        "type": "string"
+        }
       },
       "ProjectSlug": {
         "type": "string"
@@ -2361,7 +4502,9 @@
         "type": "string",
         "enum": [
           "aws-us-east-1",
-          "aws-eu-west-1"
+          "aws-eu-west-1",
+          "aws-ca-central-1",
+          "aws-ap-southeast-2"
         ]
       },
       "RequestDestination": {
@@ -2375,8 +4518,219 @@
         "type": "string",
         "enum": [
           "admin",
-          "developer"
+          "developer",
+          "custom"
         ]
+      },
+      "RoleStatement": {
+        "type": "object",
+        "description": "A single permission rule within a custom role.",
+        "required": [
+          "effect",
+          "actions",
+          "resource"
+        ],
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/RoleStatementEffect"
+          },
+          "actions": {
+            "$ref": "#/components/schemas/RoleStatementActions"
+          },
+          "resource": {
+            "type": "string",
+            "description": "Resource path like `project:*`, `project:slug=my-app`, or\n`project:*:deployment:type=prod`.",
+            "example": "project:*"
+          }
+        }
+      },
+      "RoleStatementAction": {
+        "type": "string",
+        "description": "An action that can be allowed or denied by a custom role statement.",
+        "enum": [
+          "team:update",
+          "team:delete",
+          "project:create",
+          "project:transfer",
+          "project:receive",
+          "project:update",
+          "project:delete",
+          "project:view",
+          "project:updateMemberRole",
+          "defaultEnvironmentVariable:create",
+          "defaultEnvironmentVariable:update",
+          "defaultEnvironmentVariable:delete",
+          "defaultEnvironmentVariable:view",
+          "deployment:create",
+          "deployment:transfer",
+          "deployment:receive",
+          "deployment:updateReference",
+          "deployment:updateDashboardEditConfirmation",
+          "deployment:updateExpiresAt",
+          "deployment:updateSendLogsToClient",
+          "deployment:updateClass",
+          "deployment:updateIsDefault",
+          "deployment:updateType",
+          "deployment:delete",
+          "deployment:view",
+          "deployment:integrations:view",
+          "deployment:integrations:write",
+          "deployment:customDomain:create",
+          "deployment:customDomain:delete",
+          "deployment:customDomain:view",
+          "member:invite",
+          "member:cancelInvitation",
+          "member:remove",
+          "member:updateRole",
+          "member:view",
+          "billing:paymentMethod:update",
+          "billing:contact:update",
+          "billing:address:update",
+          "billing:subscription:changePlan",
+          "billing:spendingLimit:update",
+          "billing:view",
+          "billing:invoices:view",
+          "team:auditLog:view",
+          "team:domain:create",
+          "team:domain:delete",
+          "team:domain:view",
+          "team:token:create",
+          "team:token:update",
+          "team:token:delete",
+          "team:token:view",
+          "project:token:create",
+          "project:token:update",
+          "project:token:delete",
+          "project:token:view",
+          "deployment:token:create",
+          "deployment:token:update",
+          "deployment:token:delete",
+          "deployment:token:view",
+          "oauthApplication:create",
+          "oauthApplication:update",
+          "oauthApplication:delete",
+          "oauthApplication:view",
+          "oauthApplication:generateClientSecret",
+          "team:usage:view",
+          "deployment:insights:view",
+          "deployment:backups:create",
+          "deployment:backups:import",
+          "deployment:backups:configurePeriodic",
+          "deployment:backups:disablePeriodic",
+          "deployment:backups:delete",
+          "deployment:backups:view",
+          "sso:enable",
+          "sso:disable",
+          "sso:update",
+          "sso:view",
+          "directorySync:enable",
+          "directorySync:disable",
+          "directorySync:updateGroupMapping",
+          "directorySync:deleteGroupMapping",
+          "directorySync:view",
+          "customRole:view",
+          "integration:view",
+          "integration:create",
+          "integration:update",
+          "integration:delete",
+          "deployment:deploy",
+          "deployment:env:view",
+          "deployment:env:write",
+          "deployment:pause",
+          "deployment:unpause",
+          "deployment:logs:view",
+          "deployment:metrics:view",
+          "deployment:data:view",
+          "deployment:data:write",
+          "deployment:backups:download",
+          "deployment:functions:actAsUser",
+          "deployment:functions:runInternalQueries",
+          "deployment:functions:runInternalMutations",
+          "deployment:functions:runInternalActions",
+          "deployment:functions:runTestQuery",
+          "deployment:auditLog:view",
+          "deployment:usageLimits:view",
+          "deployment:usageLimits:write",
+          "deployment:usage:view",
+          "deployment:aiGateway:use"
+        ]
+      },
+      "RoleStatementActions": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RoleStatementWildcardAction"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleStatementAction"
+            }
+          }
+        ]
+      },
+      "RoleStatementEffect": {
+        "type": "string",
+        "description": "Whether a rule grants or revokes access.",
+        "enum": [
+          "allow",
+          "deny"
+        ]
+      },
+      "RoleStatementWildcardAction": {
+        "type": "string",
+        "enum": [
+          "*"
+        ]
+      },
+      "TeamAccessTokenResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "creationTime"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/AccessTokenId",
+            "description": "The id of this access token."
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the token."
+          },
+          "creationTime": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Timestamp in milliseconds when the token was created."
+          },
+          "lastUsedTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when the token was last used, if ever."
+          },
+          "expiresAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Timestamp in milliseconds when the token expires, if set."
+          },
+          "creator": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "The member who created the token."
+              }
+            ]
+          }
+        }
       },
       "TeamId": {
         "type": "integer",
@@ -2391,10 +4745,6 @@
           "role"
         ],
         "properties": {
-          "email": {
-            "type": "string",
-            "description": "The email of the team member"
-          },
           "id": {
             "$ref": "#/components/schemas/MemberId"
           },
@@ -2405,9 +4755,39 @@
             ],
             "description": "The name of the team member"
           },
+          "email": {
+            "type": "string",
+            "description": "The email of the team member"
+          },
           "role": {
             "$ref": "#/components/schemas/Role",
-            "description": "The role of the team member"
+            "description": "The role of the team member. `custom` indicates the member's\npermissions come from the attached `customRoles`."
+          },
+          "customRoles": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TeamMemberCustomRole"
+            },
+            "description": "The custom roles attached to this team member. Present iff\n`role` is `custom`."
+          }
+        }
+      },
+      "TeamMemberCustomRole": {
+        "type": "object",
+        "description": "A custom role attached to a team member, denormalized with the\nrole's display name so API consumers can render members without a\nseparate roles lookup.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/CustomRoleId"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },
@@ -2424,6 +4804,15 @@
           "referralCode"
         ],
         "properties": {
+          "id": {
+            "$ref": "#/components/schemas/TeamId"
+          },
+          "name": {
+            "$ref": "#/components/schemas/TeamName"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/TeamSlug"
+          },
           "creator": {
             "oneOf": [
               {
@@ -2434,37 +4823,8 @@
               }
             ]
           },
-          "defaultRegion": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/RegionName"
-              }
-            ]
-          },
-          "id": {
-            "$ref": "#/components/schemas/TeamId"
-          },
-          "managedBy": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/ManagedBy"
-              }
-            ]
-          },
-          "managedByUrl": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "name": {
-            "$ref": "#/components/schemas/TeamName"
+          "suspended": {
+            "type": "boolean"
           },
           "referralCode": {
             "$ref": "#/components/schemas/ReferralCode"
@@ -2479,8 +4839,25 @@
               }
             ]
           },
-          "slug": {
-            "$ref": "#/components/schemas/TeamSlug"
+          "managedBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ManagedBy"
+              }
+            ]
+          },
+          "defaultRegion": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RegionName"
+              }
+            ]
           },
           "ssoLoginId": {
             "type": [
@@ -2488,14 +4865,95 @@
               "null"
             ]
           },
-          "suspended": {
-            "type": "boolean"
+          "managedByUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
       "TeamSlug": {
         "type": "string"
-      }
+      },
+      "UpdateCustomRoleArgs": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "statements"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/CustomRoleId"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "statements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoleStatement"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateDefaultEnvironmentVariablesArgs": {
+        "type": "object",
+        "required": [
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DefaultEnvironmentVariableChangeArgs"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateTeamMemberRoleArgs": {
+        "type": "object",
+        "required": [
+          "memberId"
+        ],
+        "properties": {
+          "memberId": {
+            "$ref": "#/components/schemas/MemberId"
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Role",
+                "description": "Set the member's built-in role to `admin` or `developer`. Mutually\nexclusive with `customRoles`. The `custom` value is not accepted\nhere; assign `customRoles` to put the member in the custom state."
+              }
+            ]
+          },
+          "customRoles": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/CustomRoleId"
+            },
+            "description": "Replace the member's custom roles. Mutually exclusive with `role`.\nMust be non-empty. Sets the member's role to `custom`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "Value": {}
     },
     "securitySchemes": {
       "OAuth Project Token": {
@@ -2507,6 +4965,17 @@
         "type": "http",
         "scheme": "bearer",
         "description": "Obtained through a [Convex OAuth application](https://docs.convex.dev/management-api)."
+      },
+      "PAT": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "PAT",
+        "description": "Personal access token created in the Convex dashboard under user settings."
+      },
+      "Preview Deploy Key": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Preview deploy key scoped to a project. Allowed only when operating on preview deployments in the key's project."
       },
       "Team Token": {
         "type": "http",

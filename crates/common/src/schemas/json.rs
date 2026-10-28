@@ -27,6 +27,8 @@ use value::{
 use super::{
     validator::{
         FieldValidator,
+        FunctionHandleType,
+        FunctionValidator,
         LiteralValidator,
         ObjectValidator,
         Validator,
@@ -122,6 +124,7 @@ pub struct TableDefinitionJson {
     vector_indexes: Option<Vec<VectorIndexSchemaJson>>,
     staged_vector_indexes: Option<Vec<VectorIndexSchemaJson>>,
     document_type: Option<ValidatorJson>,
+    staged_document_type: Option<ValidatorJson>,
 }
 
 impl JsonForm for TableDefinition {
@@ -174,6 +177,7 @@ impl TryFrom<TableDefinitionJson> for TableDefinition {
         let staged_vector_indexes = j.staged_vector_indexes.unwrap_or_default();
 
         let document_type = j.document_type.map(|t| t.try_into()).transpose()?;
+        let staged_document_type = j.staged_document_type.map(|t| t.try_into()).transpose()?;
 
         let table_name: TableName = j
             .table_name
@@ -296,6 +300,7 @@ impl TryFrom<TableDefinitionJson> for TableDefinition {
             vector_indexes,
             staged_vector_indexes,
             document_type,
+            staged_document_type,
         })
     }
 }
@@ -313,6 +318,7 @@ impl TryFrom<TableDefinition> for TableDefinitionJson {
             vector_indexes,
             staged_vector_indexes,
             document_type,
+            staged_document_type,
         }: TableDefinition,
     ) -> anyhow::Result<Self> {
         let table_name = String::from(table_name);
@@ -339,6 +345,9 @@ impl TryFrom<TableDefinition> for TableDefinitionJson {
                 .collect::<anyhow::Result<Vec<_>>>()?,
         );
         let document_type = document_type.map(ValidatorJson::try_from).transpose()?;
+        let staged_document_type = staged_document_type
+            .map(ValidatorJson::try_from)
+            .transpose()?;
         let vector_indexes = Some(
             vector_indexes
                 .into_values()
@@ -360,6 +369,7 @@ impl TryFrom<TableDefinition> for TableDefinitionJson {
             vector_indexes,
             staged_vector_indexes,
             document_type,
+            staged_document_type,
         })
     }
 }
@@ -578,6 +588,19 @@ impl TryFrom<ValidatorJson> for DocumentSchema {
     }
 }
 
+impl DocumentSchema {
+    /// Stable content hash used to carry validation state into fresh attempts.
+    ///
+    /// Hashes the canonical JSON serialization: object fields are sorted
+    /// (`BTreeMap`), and union member order is significant — reordering union
+    /// members counts as a different validator.
+    pub fn content_hash(&self) -> anyhow::Result<String> {
+        let json = ValidatorJson::try_from(self.clone())?;
+        let bytes = serde_json::to_vec(&json)?;
+        Ok(value::sha256::Sha256::hash(&bytes).as_hex())
+    }
+}
+
 impl TryFrom<DocumentSchema> for ValidatorJson {
     type Error = anyhow::Error;
 
@@ -638,9 +661,19 @@ pub enum ValidatorJson {
     Null,
     Number,
     Bigint,
+    CommitTs,
     Boolean,
     String,
     Bytes,
+    #[serde(rename_all = "camelCase")]
+    Function {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fn_type: Option<FunctionHandleType>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<Box<ValidatorJson>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        returns: Option<Box<ValidatorJson>>,
+    },
     #[serde(alias = "map")]
     #[serde(alias = "set")]
     Any,
@@ -678,9 +711,23 @@ impl TryFrom<ValidatorJson> for Validator {
             ValidatorJson::Null => Ok(Validator::Null),
             ValidatorJson::Number => Ok(Validator::Float64),
             ValidatorJson::Bigint => Ok(Validator::Int64),
+            ValidatorJson::CommitTs => Ok(Validator::CommitTs),
             ValidatorJson::Boolean => Ok(Validator::Boolean),
             ValidatorJson::String => Ok(Validator::String),
             ValidatorJson::Bytes => Ok(Validator::Bytes),
+            ValidatorJson::Function {
+                fn_type,
+                args,
+                returns,
+            } => Ok(Validator::Function(FunctionValidator {
+                fn_type,
+                args: args
+                    .map(|a| Validator::try_from(*a).map(Box::new))
+                    .transpose()?,
+                returns: returns
+                    .map(|r| Validator::try_from(*r).map(Box::new))
+                    .transpose()?,
+            })),
             ValidatorJson::Any => Ok(Validator::Any),
             ValidatorJson::Literal { value } => Ok(Validator::Literal(value.try_into()?)),
             ValidatorJson::Id { table_name } => Ok(Validator::Id(table_name.parse()?)),
@@ -702,13 +749,13 @@ impl TryFrom<ValidatorJson> for Validator {
                 if keys_validator.is_string_subtype_with_string_literal() {
                     anyhow::bail!(ErrorMetadata::bad_request(
                         error_short_code,
-                        format!("Records cannot have string literal keys")
+                        "Records cannot have string literal keys".to_string()
                     ));
                 }
                 if values_validator.optional {
                     anyhow::bail!(ErrorMetadata::bad_request(
                         error_short_code,
-                        format!("Records cannot have optional values")
+                        "Records cannot have optional values".to_string()
                     ));
                 }
                 Ok(Validator::Record(
@@ -739,9 +786,23 @@ impl TryFrom<Validator> for ValidatorJson {
             Validator::Null => ValidatorJson::Null,
             Validator::Float64 => ValidatorJson::Number,
             Validator::Int64 => ValidatorJson::Bigint,
+            Validator::CommitTs => ValidatorJson::CommitTs,
             Validator::Boolean => ValidatorJson::Boolean,
             Validator::String => ValidatorJson::String,
             Validator::Bytes => ValidatorJson::Bytes,
+            Validator::Function(FunctionValidator {
+                fn_type,
+                args,
+                returns,
+            }) => ValidatorJson::Function {
+                fn_type,
+                args: args
+                    .map(|a| ValidatorJson::try_from(*a).map(Box::new))
+                    .transpose()?,
+                returns: returns
+                    .map(|r| ValidatorJson::try_from(*r).map(Box::new))
+                    .transpose()?,
+            },
             Validator::Literal(literal) => ValidatorJson::Literal {
                 value: literal.try_into()?,
             },
@@ -830,105 +891,5 @@ impl TryFrom<ObjectValidator> for BTreeMap<String, FieldTypeJson> {
             map.insert(field.to_string(), FieldTypeJson::try_from(field_type)?);
         }
         Ok(map)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use errors::ErrorMetadataAnyhowExt;
-    use serde_json::{
-        json,
-        Value as JsonValue,
-    };
-
-    use crate::schemas::{
-        json::{
-            TableDefinitionJson,
-            ValidatorJson,
-        },
-        validator::LiteralValidator,
-        TableDefinition,
-    };
-
-    #[test]
-    fn test_infinite_literal_is_user_error() -> anyhow::Result<()> {
-        let validator = LiteralValidator::Float64(f64::INFINITY.into());
-        let error = JsonValue::try_from(validator).unwrap_err();
-        assert!(error.is_bad_request());
-        Ok(())
-    }
-
-    #[test]
-    fn test_nan_literal_is_user_error() -> anyhow::Result<()> {
-        let validator = LiteralValidator::Float64(f64::NAN.into());
-        let error = JsonValue::try_from(validator).unwrap_err();
-        assert!(error.is_bad_request());
-        Ok(())
-    }
-
-    #[test]
-    fn test_search_indexes_same_field_different_filters_allowed() -> anyhow::Result<()> {
-        let table_def: TableDefinitionJson = serde_json::from_value(json!({
-            "tableName": "my_table",
-            "indexes": [],
-            "searchIndexes": [
-                {
-                    "indexDescriptor": "search_by_title",
-                    "searchField": "title",
-                    "filterFields": ["author"]
-                },
-                {
-                    "indexDescriptor": "search_by_title_with_status",
-                    "searchField": "title",
-                    "filterFields": ["status"]
-                }
-            ]
-        }))?;
-        TableDefinition::try_from(table_def)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_search_indexes_same_field_same_filters_rejected() {
-        let table_def: TableDefinitionJson = serde_json::from_value(json!({
-            "tableName": "my_table",
-            "indexes": [],
-            "searchIndexes": [
-                {
-                    "indexDescriptor": "search_idx_1",
-                    "searchField": "title",
-                    "filterFields": ["author"]
-                },
-                {
-                    "indexDescriptor": "search_idx_2",
-                    "searchField": "title",
-                    "filterFields": ["author"]
-                }
-            ]
-        }))
-        .unwrap();
-        let err = TableDefinition::try_from(table_def).unwrap_err();
-        assert!(
-            err.is_bad_request(),
-            "Expected bad request error, got: {err}"
-        );
-        assert_eq!(err.short_msg(), "SearchIndexFieldNotUnique");
-    }
-
-    #[test]
-    fn test_map_set_are_any() -> anyhow::Result<()> {
-        assert_eq!(
-            serde_json::from_value::<ValidatorJson>(
-                json!({"type": "map", "keys": {"type": "string"}, "values": {"type": "string"}})
-            )?,
-            ValidatorJson::Any
-        );
-        assert_eq!(
-            serde_json::from_value::<ValidatorJson>(
-                json!({"type": "set", "value": {"type": "string"}})
-            )?,
-            ValidatorJson::Any
-        );
-        Ok(())
     }
 }

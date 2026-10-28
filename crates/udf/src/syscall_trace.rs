@@ -19,7 +19,6 @@ use value::heap_size::{
 use crate::SyscallStats;
 
 #[derive(Clone, Debug, Default, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SyscallTrace {
     pub async_syscalls: WithHeapSize<BTreeMap<String, SyscallStats>>,
 }

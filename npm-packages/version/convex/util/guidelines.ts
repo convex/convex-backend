@@ -7,7 +7,7 @@ import {
 const GUIDELINES_FILE_NAME = "convex_rules.txt";
 
 export async function getLatestGuidelines() {
-  const repoPath = "get-convex/convex-evals";
+  const repoPath = "convex/convex-evals";
 
   // Fetch all releases from GitHub
   const releases = await fetchAllGitHubReleases(repoPath);

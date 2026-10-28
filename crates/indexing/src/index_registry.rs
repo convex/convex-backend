@@ -1,5 +1,6 @@
 use std::{
     collections::{
+        btree_map::Entry,
         BTreeMap,
         BTreeSet,
     },
@@ -28,10 +29,12 @@ use common::{
         ResolvedDocument,
     },
     document_index_keys::{
-        DocumentIndexKeyValue,
         DocumentIndexKeys,
+        IndexKeyUpdate,
+        IndexUpdate,
         SearchIndexKeyValue,
         SearchValueTokens,
+        Update,
     },
     index::{
         IndexKey,
@@ -44,8 +47,11 @@ use common::{
         GenericIndexName,
         IndexId,
         IndexName,
-        PersistenceVersion,
+        IndexRef,
+        IndexWriteMode,
+        PrevIndexEntry,
         TabletIndexName,
+        WriteTimestamp,
     },
 };
 use errors::ErrorMetadata;
@@ -55,7 +61,6 @@ use value::{
     ConvexString,
     ConvexValue,
     FieldPath,
-    InternalId,
     ResolvedDocumentId,
     TableMapping,
     TableNamespace,
@@ -84,22 +89,12 @@ pub struct IndexRegistry {
     index_table_number: TableNumber,
     // Indexes that are enabled and ready to be queried against.
     enabled_indexes: OrdMap<TabletIndexName, Index>,
-    // Indexes that are not yet enabled for queries, typically backfilling or waiting to be
-    // committed.
+    // Indexes that are not enabled for queries, typically backfilling, waiting to be
+    // committed, or disabled.
     pending_indexes: OrdMap<TabletIndexName, Index>,
-
-    persistence_version: PersistenceVersion,
 }
 
 impl IndexRegistry {
-    pub fn persistence_version(&self) -> PersistenceVersion {
-        self.persistence_version
-    }
-
-    pub fn set_persistence_version(&mut self, persistence_version: PersistenceVersion) {
-        self.persistence_version = persistence_version
-    }
-
     pub fn index_table(&self) -> TabletId {
         self.index_table
     }
@@ -113,10 +108,9 @@ impl IndexRegistry {
     /// all of them as completed since we'll be streaming in all non
     /// `_index` documents later.
     #[fastrace::trace]
-    pub fn bootstrap<'a, Doc: ParseDocument<TabletIndexMetadata>>(
+    pub fn bootstrap<Doc: ParseDocument<TabletIndexMetadata>>(
         table_mapping: &TableMapping,
         index_documents: impl Iterator<Item = Doc>,
-        persistence_version: PersistenceVersion,
     ) -> anyhow::Result<Self> {
         let index_table = table_mapping
             .namespace(TableNamespace::Global)
@@ -127,7 +121,6 @@ impl IndexRegistry {
             index_table_number,
             enabled_indexes: OrdMap::new(),
             pending_indexes: OrdMap::new(),
-            persistence_version,
         };
 
         let meta_index_name = GenericIndexName::by_id(index_table);
@@ -146,7 +139,7 @@ impl IndexRegistry {
         }
 
         let meta_index = meta_index
-            .ok_or_else(|| anyhow::anyhow!("Missing `by_id` index for {}", *INDEX_TABLE))?;
+            .ok_or_else(|| anyhow::anyhow!("Missing `by_id` index for {}", INDEX_TABLE))?;
 
         // First insert the `_index` table scan index.
         index.insert(Index::new(meta_index));
@@ -179,131 +172,247 @@ impl IndexRegistry {
     pub(crate) fn index_keys<'a, D: IndexedDocument>(
         &'a self,
         document: &'a D,
-    ) -> impl Iterator<Item = (&'a Index, D::IndexKey)> + 'a {
+    ) -> impl Iterator<Item = (&'a Index, IndexRef, IndexWriteMode, D::IndexKey)> + 'a {
         iter::from_coroutine(
             #[coroutine]
             move || {
                 for index in self.indexes_by_table(document.id().tablet_id) {
-                    // Only yield fields from database indexes.
+                    // Only database indexes have keys in persistence; the ref
+                    // and write mode come from the same config, so callers
+                    // need not convert or look them up.
                     if let IndexConfig::Database {
                         spec: DatabaseIndexSpec { fields },
-                        on_disk_state: _,
+                        on_disk_state,
+                        persistence_index_id,
                     } = &index.metadata.config
                     {
-                        yield (index, document.index_key_bytes(&fields[..]));
+                        yield (
+                            index,
+                            IndexRef::from_parts(index.id(), *persistence_index_id),
+                            on_disk_state.write_mode(),
+                            document.index_key_bytes(&fields[..]),
+                        );
                     }
                 }
             },
         )
     }
 
+    /// `deletion` carries the old revision's write timestamp, so every update
+    /// that supersedes one of its entries can say which. A revision still
+    /// pending in the same transaction has no persisted entry to supersede;
+    /// the committer's resolved update names the committed one.
     pub fn index_updates<'a>(
         &'a self,
-        deletion: Option<&'a ResolvedDocument>,
+        deletion: Option<(&'a ResolvedDocument, WriteTimestamp)>,
         insertion: Option<&'a ResolvedDocument>,
     ) -> Vec<DatabaseIndexUpdate> {
         let mut updates = BTreeMap::new();
-        if let Some(old_document) = deletion {
-            for (index, index_key) in self.index_keys(old_document) {
+        if let Some((old_document, old_ts)) = deletion {
+            let prev = match old_ts {
+                WriteTimestamp::Committed(ts) => Some(PrevIndexEntry {
+                    ts,
+                    document_id: old_document.id_with_table_id(),
+                }),
+                WriteTimestamp::Pending => None,
+            };
+            for (index, index_ref, mode, index_key) in self.index_keys(old_document) {
                 updates.insert(
                     (index.id(), index_key.clone()),
                     DatabaseIndexUpdate {
-                        index_id: index.id(),
+                        mode,
+                        index: index_ref,
                         key: index_key,
                         value: DatabaseIndexValue::Deleted,
+                        prev,
                         is_system_index: index.name().descriptor().is_reserved(),
                     },
                 );
             }
         }
         if let Some(new_document) = insertion {
-            for (index, index_key) in self.index_keys(new_document) {
-                updates.insert(
-                    (index.id(), index_key.clone()),
-                    DatabaseIndexUpdate {
-                        index_id: index.id(),
-                        key: index_key,
-                        value: DatabaseIndexValue::NonClustered(new_document.id()),
-                        is_system_index: index.name().descriptor().is_reserved(),
-                    },
-                );
+            for (index, index_ref, mode, index_key) in self.index_keys(new_document) {
+                let entry = updates.entry((index.id(), index_key.clone()));
+                let prev = match &entry {
+                    Entry::Occupied(superseded) => superseded.get().prev,
+                    Entry::Vacant(_) => None,
+                };
+                entry.insert_entry(DatabaseIndexUpdate {
+                    mode,
+                    index: index_ref,
+                    key: index_key,
+                    value: DatabaseIndexValue::NonClustered(new_document.id()),
+                    prev,
+                    is_system_index: index.name().descriptor().is_reserved(),
+                });
             }
         }
         updates.into_values().collect()
     }
 
+    /// A document's update to one text index's key, or `None` if `index` isn't
+    /// a text index or the document exists on neither side of the update.
+    fn text_index_key_update<F>(
+        index: &Index,
+        old_doc: Option<&PackedDocument>,
+        new_doc: Option<&PackedDocument>,
+        search_tokenizer: &F,
+    ) -> Option<Update<SearchIndexKeyValue>>
+    where
+        F: Fn(ConvexString) -> SearchValueTokens,
+    {
+        let IndexConfig::Text {
+            spec:
+                TextIndexSpec {
+                    search_field,
+                    filter_fields,
+                },
+            ..
+        } = &index.metadata.config
+        else {
+            return None;
+        };
+        let compute_search_key = |doc: &PackedDocument| {
+            let filter_values = filter_fields
+                .iter()
+                .map(|field| {
+                    let value = doc.value().get_path(field);
+                    let bytes = SearchFilterValue::from_search_value(value.as_ref());
+                    (field.clone(), bytes)
+                })
+                .collect();
+            let search_field_value = match doc.value().get_path(search_field) {
+                Some(ConvexValue::String(string)) => Some(search_tokenizer(string)),
+                _ => None,
+            };
+            SearchIndexKeyValue {
+                filter_values,
+                search_field: search_field.clone(),
+                search_field_value,
+            }
+        };
+        let update = Update {
+            old: old_doc.map(compute_search_key),
+            new: new_doc.map(compute_search_key),
+        };
+        (update.old.is_some() || update.new.is_some()).then_some(update)
+    }
+
+    /// A document's updates to enabled indexes
     pub fn document_index_keys<F>(
         &self,
-        document: &PackedDocument,
+        id: ResolvedDocumentId,
+        old_document: Option<&PackedDocument>,
+        new_document: Option<&PackedDocument>,
         search_tokenizer: F,
     ) -> DocumentIndexKeys
     where
         F: Fn(ConvexString) -> SearchValueTokens,
     {
-        let mut map: BTreeMap<_, _> = self
-            .indexes_by_table(document.id().tablet_id)
-            .flat_map(|index| {
-                let key = match &index.metadata.config {
-                    IndexConfig::Database {
-                        spec: DatabaseIndexSpec { fields },
-                        ..
-                    } => Some(DocumentIndexKeyValue::Standard(
-                        document.index_key_bytes(&fields[..]),
-                    )),
-                    IndexConfig::Text {
-                        spec:
-                            TextIndexSpec {
-                                search_field,
-                                filter_fields,
-                            },
-                        ..
-                    } => {
-                        let filter_values = filter_fields
-                            .iter()
-                            .map(|field| {
-                                let value = document.value().get_path(field);
-                                let bytes = SearchFilterValue::from_search_value(value.as_ref());
-                                (field.clone(), bytes)
-                            })
-                            .collect();
-
-                        let search_field_value = match document.value().get_path(search_field) {
-                            Some(ConvexValue::String(string)) => Some(search_tokenizer(string)),
-                            _ => None,
-                        };
-
-                        Some(DocumentIndexKeyValue::Search(SearchIndexKeyValue {
-                            filter_values,
-                            search_field: search_field.clone(),
-                            search_field_value,
-                        }))
+        let database_keys = self
+            .iter_database_index_keys(id, old_document, new_document)
+            .map(|(index_name, update)| (index_name, IndexKeyUpdate::Database(update)));
+        let text_keys = self
+            .enabled_indexes_for_table(id.tablet_id)
+            .filter_map(|index| {
+                let update = Self::text_index_key_update(
+                    index,
+                    old_document,
+                    new_document,
+                    &search_tokenizer,
+                )?;
+                Some((index.name(), IndexKeyUpdate::Text(update)))
+            });
+        let map = database_keys
+            .chain(text_keys)
+            .map(|(index_name, update)| {
+                (
+                    index_name,
+                    IndexUpdate {
+                        document_id: id,
+                        update,
+                        new_document: new_document.cloned(),
                     },
-                    IndexConfig::Vector { .. } => None,
-                };
-
-                key.map(|key| {
-                    let name = index.metadata().name.clone();
-                    (name, key)
-                })
+                )
             })
             .collect();
+        DocumentIndexKeys(map)
+    }
 
-        // Add the _index.by_table_id pseudoindex.
-        if document.id().tablet_id == self.index_table {
-            let index_name = GenericIndexName::new(
-                document.id().tablet_id,
-                INDEX_BY_TABLE_ID_VIRTUAL_INDEX_DESCRIPTOR.clone(),
-            )
-            .expect("invalid built-in index name");
+    /// A document's updates to the keys of enabled database indexes.
+    ///
+    /// Text index keys need the document's text tokenized, which is expensive
+    /// enough that callers who only conflict-check database indexes use this
+    /// rather than [`Self::document_index_keys`].
+    pub fn database_index_keys<'a>(
+        &'a self,
+        id: ResolvedDocumentId,
+        old_document: Option<&'a PackedDocument>,
+        new_document: Option<&'a PackedDocument>,
+    ) -> impl Iterator<Item = (TabletIndexName, Update<IndexKeyBytes>)> + 'a {
+        self.iter_database_index_keys(id, old_document, new_document)
+    }
 
-            let index_key_value = DocumentIndexKeyValue::Standard(
-                document.index_key_bytes(slice::from_ref(&*TABLE_ID_FIELD_PATH)),
-            );
+    /// The single source of which database indexes a document update touches,
+    /// so that [`Self::document_index_keys`] and [`Self::database_index_keys`]
+    /// can't disagree about it.
+    fn iter_database_index_keys<'a>(
+        &'a self,
+        id: ResolvedDocumentId,
+        old_document: Option<&'a PackedDocument>,
+        new_document: Option<&'a PackedDocument>,
+    ) -> impl Iterator<Item = (TabletIndexName, Update<IndexKeyBytes>)> + 'a {
+        let enabled = self
+            .enabled_indexes_for_table(id.tablet_id)
+            .filter_map(move |index| {
+                let IndexConfig::Database {
+                    spec: DatabaseIndexSpec { fields },
+                    ..
+                } = &index.metadata.config
+                else {
+                    return None;
+                };
+                let update = Self::database_index_key_update(fields, old_document, new_document)?;
+                Some((index.name(), update))
+            });
+        let by_table_id = (id.tablet_id == self.index_table)
+            .then(|| self.index_by_table_id_keys(old_document, new_document));
+        enabled.chain(by_table_id)
+    }
 
-            map.insert(index_name, index_key_value);
-        }
+    /// A document's update to one database index's key, or `None` if the
+    /// document exists on neither side of the update.
+    fn database_index_key_update(
+        fields: &[FieldPath],
+        old_doc: Option<&PackedDocument>,
+        new_doc: Option<&PackedDocument>,
+    ) -> Option<Update<IndexKeyBytes>> {
+        let update = Update {
+            old: old_doc.map(|doc| doc.index_key_bytes(fields)),
+            new: new_doc.map(|doc| doc.index_key_bytes(fields)),
+        };
+        (update.old.is_some() || update.new.is_some()).then_some(update)
+    }
 
-        DocumentIndexKeys::from(map)
+    /// The keys for `_index.by_table_id`, a virtual index that doesn't exist in
+    /// the registry but that transactions writing to a table take a read
+    /// dependency on.
+    fn index_by_table_id_keys(
+        &self,
+        old_document: Option<&PackedDocument>,
+        new_document: Option<&PackedDocument>,
+    ) -> (TabletIndexName, Update<IndexKeyBytes>) {
+        let index_name = GenericIndexName::new(
+            self.index_table,
+            INDEX_BY_TABLE_ID_VIRTUAL_INDEX_DESCRIPTOR.clone(),
+        )
+        .expect("invalid built-in index name");
+        let fields = slice::from_ref(&*TABLE_ID_FIELD_PATH);
+        let update = Update {
+            old: old_document.map(|doc| doc.index_key_bytes(fields)),
+            new: new_document.map(|doc| doc.index_key_bytes(fields)),
+        };
+        (index_name, update)
     }
 
     // Verifies if an update is valid.
@@ -427,7 +536,7 @@ impl IndexRegistry {
         existing: Option<&Index>,
         updated: &ParsedDocument<TabletIndexMetadata>,
     ) -> bool {
-        existing.is_none() || existing.unwrap().id() == updated.id().internal_id()
+        existing.is_none() || existing.unwrap().id() == updated.id().internal_id().into()
     }
 
     // Applies an already verified update. Should call verify_update beforehand
@@ -497,13 +606,13 @@ impl IndexRegistry {
             .collect()
     }
 
-    pub fn enabled_index_by_index_id(&self, index_id: &InternalId) -> Option<&Index> {
+    pub fn enabled_index_by_index_id(&self, index_id: &IndexId) -> Option<&Index> {
         self.enabled_indexes
             .values()
             .find(|index| *index_id == index.id())
     }
 
-    pub fn pending_index_by_index_id(&self, index_id: &InternalId) -> Option<&Index> {
+    pub fn pending_index_by_index_id(&self, index_id: &IndexId) -> Option<&Index> {
         self.pending_indexes
             .values()
             .find(|index| *index_id == index.id())
@@ -521,7 +630,7 @@ impl IndexRegistry {
     ) -> BTreeMap<IndexId, (TabletIndexName, IndexedFields)> {
         self.all_indexes()
             .filter_map(|index| {
-                let index_id = index.id().internal_id();
+                let index_id = index.id().internal_id().into();
                 let index_name = index.name.clone();
                 match &index.config {
                     IndexConfig::Database { spec, .. } => {
@@ -561,11 +670,11 @@ impl IndexRegistry {
             .map(|(_, index)| index)
     }
 
-    pub fn by_id_indexes(&self) -> BTreeMap<TabletId, IndexId> {
+    pub fn by_id_indexes(&self) -> anyhow::Result<BTreeMap<TabletId, IndexRef>> {
         self.all_enabled_indexes()
             .into_iter()
             .filter(|index| index.name.is_by_id())
-            .map(|index| (*index.name.table(), index.id().internal_id()))
+            .map(|index| Ok((*index.name.table(), IndexRef::try_from(&index)?)))
             .collect()
     }
 
@@ -666,7 +775,7 @@ impl IndexRegistry {
         };
         let removed = remove_from.remove(&to_remove.name);
         if let Some(removed) = removed {
-            if removed.id() != to_remove.id().internal_id() {
+            if removed.id() != to_remove.id().internal_id().into() {
                 panic!("Tried to remove a different index with the same name");
             }
         } else {
@@ -682,20 +791,6 @@ impl IndexRegistry {
             .collect()
     }
 
-    /// Returns true if the same indexes are present in this registry and in
-    /// `other`.
-    ///
-    /// Index state (ie pending/enabled) may not be identical even if this
-    /// method returns true.
-    pub fn same_indexes<'a>(&'a self, other: &'a Self) -> bool {
-        // The implementation of this method assumes that index definitions cannot be
-        // mutated. Updating or removing and re-adding an index must result in a
-        // new index ID being created for this implementation to work correctly.
-        vec![self, other]
-            .into_iter()
-            .map(|registry: &IndexRegistry| registry.index_ids())
-            .all_equal()
-    }
 }
 
 pub trait IndexedDocument {
@@ -732,13 +827,21 @@ pub struct Index {
     pub metadata: ParsedDocument<TabletIndexMetadata>,
 }
 
+impl TryFrom<&Index> for IndexRef {
+    type Error = anyhow::Error;
+
+    fn try_from(index: &Index) -> anyhow::Result<Self> {
+        Self::try_from(&index.metadata)
+    }
+}
+
 impl Index {
     fn new(metadata: ParsedDocument<TabletIndexMetadata>) -> Self {
         Self { metadata }
     }
 
     pub fn id(&self) -> IndexId {
-        self.metadata.id().internal_id()
+        self.metadata.id().internal_id().into()
     }
 
     pub fn name(&self) -> TabletIndexName {
@@ -766,206 +869,4 @@ pub fn index_staged_error(name: &IndexName) -> ErrorMetadata {
 
 pub fn index_not_found_error(name: &IndexName) -> ErrorMetadata {
     ErrorMetadata::bad_request("IndexNotFoundError", format!("Index {name} not found."))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::HashSet,
-        str::FromStr,
-    };
-
-    use common::{
-        bootstrap_model::index::{
-            database_index::IndexedFields,
-            text_index::{
-                TextIndexSnapshot,
-                TextIndexSnapshotData,
-                TextIndexSpec,
-                TextIndexState,
-                TextSnapshotVersion,
-            },
-            IndexMetadata,
-        },
-        document::CreationTime,
-        testing::TestIdGenerator,
-        types::{
-            GenericIndexName,
-            IndexDescriptor,
-            Timestamp,
-        },
-    };
-    use maplit::btreemap;
-    use value::{
-        assert_obj,
-        FieldPath,
-    };
-
-    use super::*;
-
-    #[test]
-    fn test_document_index_keys() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-        let table_name = "messages".parse()?;
-        let table_id = id_generator.user_table_id(&table_name);
-
-        // Create indexes
-        let by_id = GenericIndexName::by_id(table_id.tablet_id);
-        let by_name = GenericIndexName::new(table_id.tablet_id, IndexDescriptor::new("by_name")?)?;
-        let by_content =
-            GenericIndexName::new(table_id.tablet_id, IndexDescriptor::new("by_content")?)?;
-
-        let indexes = vec![
-            IndexMetadata::new_enabled(by_id.clone(), IndexedFields::by_id()),
-            IndexMetadata::new_enabled(by_name.clone(), vec!["name".parse()?].try_into()?),
-            IndexMetadata::new_text_index(
-                by_content.clone(),
-                TextIndexSpec {
-                    search_field: FieldPath::from_str("content")?,
-                    filter_fields: vec![FieldPath::from_str("author")?].into_iter().collect(),
-                },
-                TextIndexState::SnapshottedAt(TextIndexSnapshot {
-                    data: TextIndexSnapshotData::MultiSegment(vec![]),
-                    ts: Timestamp::MIN,
-                    version: TextSnapshotVersion::V2UseStringIds,
-                }),
-            ),
-        ];
-
-        let index_documents = index_documents(&mut id_generator, indexes)?;
-        let index_registry = IndexRegistry::bootstrap(
-            &id_generator,
-            index_documents.values(),
-            PersistenceVersion::default(),
-        )?;
-
-        let doc = ResolvedDocument::new(
-            id_generator.user_generate(&table_name),
-            CreationTime::ONE,
-            assert_obj!(
-                "name" => "test",
-                "content" => "hello world",
-                "author" => "alice"
-            ),
-        )?;
-
-        let index_keys =
-            index_registry.document_index_keys(&PackedDocument::pack(&doc), |string| {
-                let tokens: HashSet<String> =
-                    string.split_whitespace().map(|s| s.to_string()).collect();
-                SearchValueTokens::from_iter_for_test(tokens)
-            });
-
-        let expected = DocumentIndexKeys::from(btreemap! {
-            by_name => DocumentIndexKeyValue::Standard(
-                doc.index_key_bytes(&[FieldPath::from_str("name")?]).to_bytes()
-            ),
-            by_content => DocumentIndexKeyValue::Search(SearchIndexKeyValue {
-                filter_values: btreemap! {
-                    FieldPath::from_str("author")? => SearchFilterValue::from_search_value(
-                        doc.value().get_path(&FieldPath::from_str("author")?)
-                    )
-                }.into(),
-                search_field: FieldPath::from_str("content")?,
-                search_field_value: Some(
-                    SearchValueTokens::from_iter_for_test(vec!["hello".to_string(), "world".to_string()])
-                ),
-            }),
-            by_id => DocumentIndexKeyValue::Standard(
-                doc.index_key_bytes(&[]).to_bytes()
-            ),
-        });
-
-        assert_eq!(index_keys, expected);
-        Ok(())
-    }
-
-    #[test]
-    fn test_document_index_keys_index_system_table() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-
-        let index_table_id = id_generator.system_table_id(&INDEX_TABLE);
-
-        // Create some non-virtual index that must be included in the result too
-        let by_descriptor = GenericIndexName::new(
-            // This index doesn’t actually exist in the _index system table,
-            // this is just a test to make sure that document_index_keys returns
-            // both real and virtual indexes.
-            index_table_id.tablet_id,
-            IndexDescriptor::new("by_descriptor")?,
-        )?;
-        let indexes = vec![IndexMetadata::new_enabled(
-            by_descriptor.clone(),
-            vec!["descriptor".parse()?].try_into()?,
-        )];
-
-        let index_documents = index_documents(&mut id_generator, indexes)?;
-        let index_registry = IndexRegistry::bootstrap(
-            &id_generator,
-            index_documents.values(),
-            PersistenceVersion::default(),
-        )?;
-
-        let doc = ResolvedDocument::new(
-            id_generator.system_generate(&INDEX_TABLE),
-            CreationTime::ONE,
-            assert_obj!(
-                "table_id" => "123",
-            ),
-        )?;
-
-        let index_keys =
-            index_registry.document_index_keys(&PackedDocument::pack(&doc), |string| {
-                let tokens: HashSet<String> =
-                    string.split_whitespace().map(|s| s.to_string()).collect();
-                SearchValueTokens::from_iter_for_test(tokens)
-            });
-
-        let by_id = GenericIndexName::by_id(index_table_id.tablet_id);
-        let expected = DocumentIndexKeys::from(btreemap! {
-            by_id => DocumentIndexKeyValue::Standard(
-                doc.index_key_bytes(&[]).to_bytes()
-            ),
-
-            by_descriptor => DocumentIndexKeyValue::Standard(
-                doc.index_key_bytes(&[FieldPath::from_str("descriptor")?]).to_bytes()
-            ),
-
-            TabletIndexName::new(
-                index_table_id.tablet_id,
-                INDEX_BY_TABLE_ID_VIRTUAL_INDEX_DESCRIPTOR.clone(),
-            )? => DocumentIndexKeyValue::Standard(
-                doc.index_key_bytes(&[FieldPath::from_str("table_id")?]).to_bytes()
-            ),
-        });
-
-        assert_eq!(index_keys, expected);
-        Ok(())
-    }
-
-    fn index_documents(
-        id_generator: &mut TestIdGenerator,
-        mut indexes: Vec<TabletIndexMetadata>,
-    ) -> anyhow::Result<BTreeMap<ResolvedDocumentId, ResolvedDocument>> {
-        let mut index_documents = BTreeMap::new();
-        let index_table = id_generator.system_table_id(&INDEX_TABLE);
-        // Add the _index.by_id index.
-        indexes.push(IndexMetadata::new_enabled(
-            GenericIndexName::by_id(index_table.tablet_id),
-            IndexedFields::by_id(),
-        ));
-        for metadata in indexes {
-            let doc = gen_index_document(id_generator, metadata.clone())?;
-            index_documents.insert(doc.id(), doc);
-        }
-        Ok(index_documents)
-    }
-
-    fn gen_index_document(
-        id_generator: &mut TestIdGenerator,
-        metadata: TabletIndexMetadata,
-    ) -> anyhow::Result<ResolvedDocument> {
-        let index_id = id_generator.system_generate(&INDEX_TABLE);
-        ResolvedDocument::new(index_id, CreationTime::ONE, metadata.try_into()?)
-    }
 }

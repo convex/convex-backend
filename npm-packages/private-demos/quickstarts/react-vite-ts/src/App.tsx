@@ -6,7 +6,9 @@ function App() {
   const tasks = useQuery(api.tasks.get);
   return (
     <div className="App">
-      {tasks?.map(({ _id, text }) => <div key={_id}>{text}</div>)}
+      {tasks?.map(({ _id, text }) => (
+        <div key={_id}>{text}</div>
+      ))}
     </div>
   );
 }

@@ -163,6 +163,19 @@ impl ProdRuntime {
             tokio_builder.disable_lifo_slot();
         }
         let tokio_rt = tokio_builder.enable_all().build()?;
+
+        // Register a no-op SIGUSR1 handler so services don't crash when
+        // receiving an unintended signal (the default disposition is to
+        // terminate the process). The OS-level handler persists for the
+        // lifetime of the process once registered.
+        #[cfg(unix)]
+        {
+            let _guard = tokio_rt.enter();
+            let _sig =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())
+                    .expect("Failed to register SIGUSR1 handler");
+        }
+
         Ok(tokio_rt)
     }
 

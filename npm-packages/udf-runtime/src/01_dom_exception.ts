@@ -57,33 +57,53 @@ const nameToCodeMapping: Record<string, number> = Object.create(null, {
 });
 
 class DOMException {
-  message: string;
-  name: string;
-  code: number;
+  #message: string;
+  #name: string;
 
-  constructor(message = "", name = "Error") {
-    this.message = message;
-    this.name = name;
-    this.code = nameToCodeMapping[name] || 0;
+  constructor(message: unknown = "", name: unknown = "Error") {
+    // Coerce `message`/`name` to string
+    this.#message = `${message}`;
+    this.#name = `${name}`;
 
-    const error = new Error(message);
+    const error = new Error(this.#message);
     error.name = "DOMException";
     Object.defineProperty(this, "stack", {
+      // N.B.: this calls `prepareStackTrace` that populates `__frameData`.
       value: error.stack,
       writable: true,
       configurable: true,
     });
 
-    // This calls `prepareStackTrace` that populates `__frameData`.
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    error.stack;
-    (this as any).__frameData = (error as any).__frameData ?? [];
+    Object.defineProperty(this, "__frameData", {
+      value: (error as any).__frameData ?? [],
+      writable: true,
+      configurable: true,
+    });
   }
 
-  get [Symbol.toStringTag]() {
-    return "DOMException";
+  get name() {
+    return this.#name;
+  }
+
+  get message() {
+    return this.#message;
+  }
+
+  get code() {
+    return nameToCodeMapping[this.#name] || 0;
   }
 }
+
+// Web IDL attributes are enumerable, unlike JavaScript class accessors.
+for (const key of ["name", "message", "code"]) {
+  Object.defineProperty(DOMException.prototype, key, { enumerable: true });
+}
+Object.defineProperty(DOMException.prototype, Symbol.toStringTag, {
+  value: "DOMException",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 const entries = Object.entries({
   INDEX_SIZE_ERR,
@@ -116,11 +136,17 @@ const entries = Object.entries({
 for (let i = 0; i < entries.length; ++i) {
   const [key, value] = entries[i];
   const desc = { value, enumerable: true };
+  Object.defineProperty(DOMException, key, desc);
   Object.defineProperty(DOMException.prototype, key, desc);
 }
 
 Object.setPrototypeOf(DOMException.prototype, Error.prototype);
 
 export const setupDOMException = (global: any) => {
-  global.DOMException = DOMException;
+  Object.defineProperty(global, "DOMException", {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: DOMException,
+  });
 };

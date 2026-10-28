@@ -1,0 +1,32 @@
+{
+  "name": "demo_browser_tests",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "puppeteer": "^24.0.0",
+    "@convex-dev/platform": "workspace:*",
+    "commander": "^14.0.3"
+  },
+  "scripts": {
+    "postinstall": "node ./install-browser.mjs",
+    "build": "tsc",
+    "test-relational-data-modeling": "node ./dist/relational-data-modeling.js",
+    "test-users-and-auth": "node ./dist/users-and-auth.js",
+    "test-tutorial": "node ./dist/tutorial.js",
+    "test-sessions": "node ./dist/sessions.js",
+    "test-create-react-app": "node  ./dist/create-react-app.js",
+    "test-dashboard-production-provision": "node ./dist/dashboard-production-provision.js",
+    "test-dashboard-redirects-brand-new": "node ./dist/dashboard-redirects-brand-new.js",
+    "test-dashboard-redirects-last-viewed": "node ./dist/dashboard-redirects-last-viewed.js",
+    "test-platform": "node ./dist/test_platform.js"
+  },
+  "devDependencies": {
+    "@types/node": "^18.17.0",
+    "typescript": "^5.9.2"
+  },
+  "overrides": {
+    "js-yaml@>=4.0.0 <4.1.1": "4.1.1"
+  }
+}

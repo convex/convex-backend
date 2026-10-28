@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
         &ProvisionRequest::NewProject,
         &package_dir,
         StaticMetricLabel::new("load_description", "backend-harness"),
-        |host, _, _| async move {
+        |host, admin_key, _| async move {
             if cmd.is_empty() {
                 println!("Provisioned {host}. Ctrl-C to quit");
                 rx.recv()?;
@@ -58,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 Command::new(cmd[0].clone())
                     .args(&cmd[1..])
+                    .env("ADMIN_KEY", admin_key)
                     .spawn()?
                     .wait()
                     .await?

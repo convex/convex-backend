@@ -2,11 +2,10 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   PieChartIcon,
-  QuestionMarkCircledIcon,
 } from "@radix-ui/react-icons";
 import { useMemo } from "react";
 import { UdfLog, UdfLogOutcome } from "@common/lib/useLogs";
-import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { msFormat, formatBytes } from "@common/lib/format";
 import { UsageStats } from "system-udfs/convex/_system/frontend/common";
 import { FunctionNameOption } from "@common/elements/FunctionNameOption";
@@ -127,12 +126,19 @@ export function LogMetadata({
     const totals: RequestUsageStats = {
       memoryUsedMb: 0,
       databaseReadBytes: 0,
-      databaseReadDocuments: 0,
       databaseWriteBytes: 0,
+      databaseIoReadBytes: 0,
+      databaseIoWriteBytes: 0,
+      databaseReadDocuments: 0,
       storageReadBytes: 0,
       storageWriteBytes: 0,
       vectorIndexReadBytes: 0,
       vectorIndexWriteBytes: 0,
+      textIndexQueryBytes: 0,
+      textIndexWriteQueryBytes: 0,
+      vectorIndexReadQueryBytes: 0,
+      vectorIndexWriteQueryBytes: 0,
+      networkEgressBytes: 0,
       runtimeMs: 0,
       computeMbMs: 0,
     };
@@ -227,12 +233,7 @@ function ResourcesUsed({
               ) : (
                 <ul className="divide-y text-xs">
                   <li className="grid min-w-fit grid-cols-2 items-center gap-2 py-1.5">
-                    <span className="flex items-center gap-1 text-content-secondary">
-                      Compute
-                      <Tooltip tip="Only compute from Actions incur additional cost. Query/Mutation compute are included.">
-                        <QuestionMarkCircledIcon />
-                      </Tooltip>
-                    </span>
+                    <span className="text-content-secondary">Compute</span>
                     <span className="min-w-0 text-content-primary">
                       <strong>
                         {Number(
@@ -245,22 +246,16 @@ function ResourcesUsed({
                     </span>
                   </li>
                   <li className="grid min-w-fit grid-cols-2 items-center gap-2 py-1.5">
-                    <span className="text-content-secondary">DB Bandwidth</span>
+                    <span className="text-content-secondary">
+                      DB I/O Bandwidth
+                    </span>
                     <span className="min-w-0 text-content-primary">
-                      Accessed{" "}
                       <strong>
-                        {usageStats.databaseReadDocuments.toLocaleString()}{" "}
-                        {usageStats.databaseReadDocuments === 1
-                          ? "document"
-                          : "documents"}
-                      </strong>
-                      ,{" "}
-                      <strong>
-                        {formatBytes(usageStats.databaseReadBytes)}
+                        {formatBytes(usageStats.databaseIoReadBytes)}
                       </strong>{" "}
                       read,{" "}
                       <strong>
-                        {formatBytes(usageStats.databaseWriteBytes)}
+                        {formatBytes(usageStats.databaseIoWriteBytes)}
                       </strong>{" "}
                       written
                     </span>
@@ -281,27 +276,54 @@ function ResourcesUsed({
                     </span>
                   </li>
                   <li className="grid min-w-fit grid-cols-2 items-center gap-2 py-1.5">
-                    <span className="text-content-secondary">
-                      Vector Bandwidth
-                    </span>
+                    <span className="text-content-secondary">Text Search</span>
                     <span className="min-w-0 text-content-primary">
                       <strong>
-                        {formatBytes(usageStats.vectorIndexReadBytes)}
+                        {formatBytes(usageStats.textIndexQueryBytes)}
                       </strong>{" "}
-                      read,{" "}
+                      queried,{" "}
                       <strong>
-                        {formatBytes(usageStats.vectorIndexWriteBytes)}
+                        {formatBytes(usageStats.textIndexWriteQueryBytes)}
                       </strong>{" "}
                       written
                     </span>
                   </li>
+                  <li className="grid min-w-fit grid-cols-2 items-center gap-2 py-1.5">
+                    <span className="text-content-secondary">
+                      Vector Search
+                    </span>
+                    <span className="min-w-0 text-content-primary">
+                      <strong>
+                        {formatBytes(usageStats.vectorIndexReadQueryBytes)}
+                      </strong>{" "}
+                      queried,{" "}
+                      <strong>
+                        {formatBytes(usageStats.vectorIndexWriteQueryBytes)}
+                      </strong>{" "}
+                      written
+                    </span>
+                  </li>
+                  {!!usageStats.networkEgressBytes && (
+                    <li className="grid min-w-fit grid-cols-2 items-center gap-2 py-1.5">
+                      <span className="text-content-secondary">
+                        Network Egress
+                      </span>
+                      <span className="min-w-0 text-content-primary">
+                        <strong>
+                          {formatBytes(usageStats.networkEgressBytes)}
+                        </strong>{" "}
+                        sent
+                      </span>
+                    </li>
+                  )}
                   {usageStats.returnBytes && (
                     <li className="grid min-w-fit grid-cols-2 items-center gap-2 py-1.5">
                       <span className="flex items-center gap-1 text-content-secondary">
                         Return Size
-                        <Tooltip tip="Bandwidth from sending the return value of a function call to the user does not incur costs.">
-                          <QuestionMarkCircledIcon />
-                        </Tooltip>
+                        <HelpTooltip>
+                          Bandwidth from sending the return value of a function
+                          call to the user does not incur costs.
+                        </HelpTooltip>
                       </span>
                       <span className="min-w-0 text-content-primary">
                         <strong>{formatBytes(usageStats.returnBytes)}</strong>{" "}
@@ -341,27 +363,25 @@ function FunctionEnvironment({
       return (
         <div className="flex items-center gap-1">
           Convex
-          <Tooltip tip="This function was executed in Convex's isolated environment.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This function was executed in Convex's isolated environment.
+          </HelpTooltip>
         </div>
       );
     case "node":
       return (
         <div className="flex items-center gap-1">
           Node
-          <Tooltip tip="This function was executed in Convex's Node.js environment.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This function was executed in Convex's Node.js environment.
+          </HelpTooltip>
         </div>
       );
     case "unknown":
       return (
         <div className="flex items-center gap-1">
           Unknown
-          <Tooltip tip="This function's environment is unknown.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>This function's environment is unknown.</HelpTooltip>
         </div>
       );
     default:
@@ -381,18 +401,17 @@ function FunctionIdentity({
       return (
         <div className="flex items-center gap-1">
           Admin
-          <Tooltip tip="This request was initiated by a Convex Developer with access to this deployment.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This request was initiated by a Convex Developer with access to this
+            deployment.
+          </HelpTooltip>
         </div>
       );
     case "user":
       return (
         <div className="flex items-center gap-1">
           User
-          <Tooltip tip="This request was initiated by a user.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>This request was initiated by a user.</HelpTooltip>
         </div>
       );
     case "member_acting_user":
@@ -400,34 +419,35 @@ function FunctionIdentity({
       return (
         <div className="flex items-center gap-1">
           Admin (Acting as user)
-          <Tooltip tip="This request was initiated by a Convex Developer with access to this deployment while impersonating a user.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This request was initiated by a Convex Developer with access to this
+            deployment while impersonating a user.
+          </HelpTooltip>
         </div>
       );
     case "system":
       return (
         <div className="flex items-center gap-1">
           System
-          <Tooltip tip="This request was initiatedby the Convex system.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This request was initiatedby the Convex system.
+          </HelpTooltip>
         </div>
       );
     case "unknown":
       return caller === "Scheduler" || caller === "Cron" ? (
         <div className="flex items-center gap-1">
           System
-          <Tooltip tip="This function was executed by the Convex system.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This function was executed by the Convex system.
+          </HelpTooltip>
         </div>
       ) : (
         <div className="flex items-center gap-1">
           Unknown
-          <Tooltip tip="This identity for this function call is unknown.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This identity for this function call is unknown.
+          </HelpTooltip>
         </div>
       );
     default:
@@ -441,63 +461,61 @@ function FunctionCaller({ caller }: { caller?: string }) {
       return (
         <div className="flex items-center gap-1">
           Function Runner
-          <Tooltip tip="This function was executed through the Convex Dashboard or CLI.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This function was executed through the Convex Dashboard or CLI.
+          </HelpTooltip>
         </div>
       );
     case "HttpApi":
       return (
         <div className="flex items-center gap-1">
           HTTP API
-          <Tooltip tip="This function was called through the Convex HTTP API.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This function was called through the Convex HTTP API.
+          </HelpTooltip>
         </div>
       );
     case "HttpEndpoint":
       return (
         <div className="flex items-center gap-1">
           HTTP Endpoint
-          <Tooltip tip="This HTTP Action was called by an HTTP request.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This HTTP Action was called by an HTTP request.
+          </HelpTooltip>
         </div>
       );
     case "SyncWorker":
       return (
         <div className="flex items-center gap-1">
           Websocket
-          <Tooltip tip="This function was called through a websocket connection.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This function was called through a websocket connection.
+          </HelpTooltip>
         </div>
       );
     case "Cron":
       return (
         <div className="flex items-center gap-1">
           Cron Job
-          <Tooltip tip="This function was called by a scheduled Cron Job.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This function was called by a scheduled Cron Job.
+          </HelpTooltip>
         </div>
       );
     case "Scheduler":
       return (
         <div className="flex items-center gap-1">
           Scheduler
-          <Tooltip tip="This function was called by a scheduled job.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>
+            This function was called by a scheduled job.
+          </HelpTooltip>
         </div>
       );
     case "Action":
       return (
         <div className="flex items-center gap-1">
           Action
-          <Tooltip tip="This function was called by an action.">
-            <QuestionMarkCircledIcon className="text-content-tertiary" />
-          </Tooltip>
+          <HelpTooltip>This function was called by an action.</HelpTooltip>
         </div>
       );
     default:

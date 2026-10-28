@@ -5,8 +5,7 @@ import {
 import { AppAccessTokenResponse, TeamResponse } from "generatedApi";
 import { AuthorizedApplications } from "components/AuthorizedApplications";
 import { OauthApps } from "components/teamSettings/OauthApps";
-import { InfoCircledIcon } from "@radix-ui/react-icons";
-import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import React, { Fragment } from "react";
 import {
   TabGroup as HeadlessTabGroup,
@@ -15,6 +14,10 @@ import {
 } from "@headlessui/react";
 import { Tab } from "@ui/Tab";
 import { useRouter } from "next/router";
+import { useHasCustomRolePermission } from "api/roles";
+import { useProfile } from "api/profile";
+import { teamTokenResource } from "lib/permissions";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
 
 export function ApplicationsLayout({ team }: { team: TeamResponse }) {
   const router = useRouter();
@@ -22,7 +25,21 @@ export function ApplicationsLayout({ team }: { team: TeamResponse }) {
   const isOauthApps = router.pathname.endsWith("/oauth-apps");
   const selectedIndex = isOauthApps ? 1 : 0;
 
-  const teamAccessTokens = useTeamAppAccessTokens(team.id);
+  // `/teams/{team_id}/app_access_tokens` server-checks
+  // `team:token:view` on `team:*:token:creator=<self>` (only the
+  // requester's own app authorizations are returned). Without the
+  // grant the request would hang and the tab would spin forever, so
+  // skip the query and show a no-permission message instead.
+  const profile = useProfile();
+  const canViewOwnTeamTokens = useHasCustomRolePermission(
+    team.id,
+    "team:token:view",
+    teamTokenResource(profile?.id ?? null),
+    true,
+  );
+  const teamAccessTokens = useTeamAppAccessTokens(
+    canViewOwnTeamTokens === false ? undefined : team.id,
+  );
   const deleteTeamAccessToken = useDeleteAppAccessTokenByName({
     teamId: team.id,
   });
@@ -33,7 +50,7 @@ export function ApplicationsLayout({ team }: { team: TeamResponse }) {
         These 3rd-party applications have been authorized to access this team on
         your behalf.
       </p>
-      <div className="mt-2 mb-2 text-sm text-content-primary">
+      <div className="my-2 text-sm text-content-primary">
         <span className="font-semibold">
           What can authorized applications do?
         </span>
@@ -43,17 +60,20 @@ export function ApplicationsLayout({ team }: { team: TeamResponse }) {
           <li>
             <span className="flex items-center gap-1">
               Manage all projects on the team
-              <Tooltip tip="This includes actions like deleting projects, managing custom domains, managing project environment variable defaults, and managing cloud backups and restores.">
-                <InfoCircledIcon />
-              </Tooltip>
+              <HelpTooltip>
+                This includes actions like deleting projects, managing custom
+                domains, managing project environment variable defaults, and
+                managing cloud backups and restores.
+              </HelpTooltip>
             </span>
           </li>
           <li>
             <span className="flex items-center gap-1">
               Read and write data in all projects
-              <Tooltip tip="Write access to Production deployments will depend on your team-level and project-level roles.">
-                <InfoCircledIcon />
-              </Tooltip>
+              <HelpTooltip>
+                Write access to Production deployments will depend on your
+                team-level and project-level roles.
+              </HelpTooltip>
             </span>
           </li>
         </ul>
@@ -91,13 +111,20 @@ export function ApplicationsLayout({ team }: { team: TeamResponse }) {
             className="focus-visible:outline-none"
             tabIndex={-1}
           >
-            <AuthorizedApplications
-              accessTokens={teamAccessTokens}
-              explainer={explainer}
-              onRevoke={async (token: AppAccessTokenResponse) => {
-                await deleteTeamAccessToken({ name: token.name });
-              }}
-            />
+            {canViewOwnTeamTokens === false ? (
+              <NoPermissionMessage
+                message="You do not have permission to view authorized applications."
+                missingPermission="team:token:view"
+              />
+            ) : (
+              <AuthorizedApplications
+                accessTokens={teamAccessTokens}
+                explainer={explainer}
+                onRevoke={async (token: AppAccessTokenResponse) => {
+                  await deleteTeamAccessToken({ name: token.name });
+                }}
+              />
+            )}
           </HeadlessTabPanel>
           <HeadlessTabPanel
             className="focus-visible:outline-none"

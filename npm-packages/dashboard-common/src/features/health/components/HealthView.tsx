@@ -1,4 +1,4 @@
-import React from "react";
+import React, { JSX, useContext } from "react";
 import { cn } from "@ui/cn";
 import { ChevronDownIcon } from "@radix-ui/react-icons";
 import { SchedulerStatus } from "@common/elements/SchedulerStatus";
@@ -12,7 +12,11 @@ import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
 import { HealthCard } from "@common/elements/HealthCard";
 import { ChartForFunctionRate } from "@common/features/health/components/ChartForFunctionRate";
 import { DeploymentSummary } from "@common/features/health/components/DeploymentSummary";
+import { SubscriptionInvalidations } from "@common/features/health/components/SubscriptionInvalidations";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
+import { Sheet } from "@ui/Sheet";
+import { PermissionsContext } from "@common/lib/deploymentContext";
+import { NoPermissionMessage } from "@common/elements/NoPermissionMessage";
 
 export function HealthView({
   header,
@@ -22,8 +26,7 @@ export function HealthView({
   teamSlug,
   projectSlug,
   lastBackupTime,
-  creatorId,
-  creatorName,
+  teamMembers,
   regions,
 }: {
   header: JSX.Element;
@@ -33,16 +36,18 @@ export function HealthView({
   teamSlug?: string;
   projectSlug?: string;
   lastBackupTime?: number | null;
-  creatorId?: number;
-  creatorName?: string;
+  teamMembers?: Array<{ id: number; name?: string | null; email: string }>;
   regions?: Array<{ name: string; displayName: string }>;
 }) {
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewMetrics = useIsOperationAllowed("ViewMetrics");
+
   const {
     closedDescription: concurrencyClosedDescription,
     lag,
     running,
     queued,
-  } = useConcurrencyStatus();
+  } = useConcurrencyStatus(canViewMetrics, 4);
 
   return (
     <PageContent>
@@ -59,9 +64,9 @@ export function HealthView({
                     teamSlug={teamSlug}
                     projectSlug={projectSlug}
                     lastBackupTime={lastBackupTime}
-                    creatorId={creatorId}
-                    creatorName={creatorName}
+                    teamMembers={teamMembers}
                     regions={regions}
+                    showDeployProgress
                   />
                 </DisclosureSection>
               )}
@@ -76,11 +81,20 @@ export function HealthView({
                   </span>
                 }
               >
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  <FunctionCalls />
-                  <FailureRate />
-                  <CacheHitRate />
-                </div>
+                {canViewMetrics ? (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <FunctionCalls />
+                    <FailureRate />
+                    <CacheHitRate />
+                  </div>
+                ) : (
+                  <Sheet className="max-w-3xl py-12">
+                    <NoPermissionMessage
+                      message="You do not have permission to view metrics."
+                      missingPermission="deployment:metrics:view"
+                    />
+                  </Sheet>
+                )}
               </DisclosureSection>
 
               <DisclosureSection
@@ -89,27 +103,37 @@ export function HealthView({
                 defaultOpen={false}
                 closedDescription={concurrencyClosedDescription}
               >
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  <SchedulerStatus lag={lag} />
-                  <HealthCard
-                    title="Running Functions"
-                    tip="The maximum number of concurrently running functions in a given minute. This includes system functions used to power the Convex Dashboard."
-                  >
-                    <ChartForFunctionRate
-                      chartData={running}
-                      kind="functionConcurrency"
+                {canViewMetrics ? (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                    <SchedulerStatus lag={lag} />
+                    <HealthCard
+                      title="Running Functions"
+                      tip="The maximum number of concurrently running functions in a given minute. This includes system functions used to power the Convex Dashboard."
+                    >
+                      <ChartForFunctionRate
+                        chartData={running}
+                        kind="functionConcurrency"
+                      />
+                    </HealthCard>
+                    <HealthCard
+                      title="Queued Functions"
+                      tip="The maximum number of functions waiting to be ran in a given minute. Functions are queued when the concurrency limit has been reached. If a function is queued for too long, it will discarded."
+                    >
+                      <ChartForFunctionRate
+                        chartData={queued}
+                        kind="functionConcurrency"
+                      />
+                    </HealthCard>
+                    <SubscriptionInvalidations />
+                  </div>
+                ) : (
+                  <Sheet className="max-w-3xl py-12">
+                    <NoPermissionMessage
+                      message="You do not have permission to view metrics."
+                      missingPermission="deployment:metrics:view"
                     />
-                  </HealthCard>
-                  <HealthCard
-                    title="Queued Functions"
-                    tip="The maximum number of functions waiting to be ran in a given minute. Functions are queued when the concurrency limit has been reached. If a function is queued for too long, it will discarded."
-                  >
-                    <ChartForFunctionRate
-                      chartData={queued}
-                      kind="functionConcurrency"
-                    />
-                  </HealthCard>
-                </div>
+                  </Sheet>
+                )}
               </DisclosureSection>
             </div>
           </PageWrapper>
@@ -147,11 +171,16 @@ export function DisclosureSection({
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="flex w-full flex-wrap items-center gap-2 py-3 text-left font-normal"
+          className={cn(
+            "-mx-2 my-1.5 flex flex-wrap items-center gap-2 rounded-full py-1.5 pl-2 text-left font-normal transition-colors hover:bg-background-tertiary",
+            // The smaller closed description reads as cramped against the round
+            // cap with the same padding the title gets.
+            isOpen ? "pr-2" : "pr-3",
+          )}
         >
           <ChevronDownIcon
             className={cn(
-              "h-4 w-4 text-content-secondary transition-transform",
+              "size-4 text-content-secondary transition-transform",
               isOpen && "rotate-180",
             )}
           />

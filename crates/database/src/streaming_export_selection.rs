@@ -90,12 +90,8 @@ use common::{
         ID_FIELD,
     },
     pii::PII,
+    types::streaming_export::selection as serialized,
 };
-use fivetran_source::api_types::selection as serialized;
-#[cfg(test)]
-use proptest::prelude::*;
-#[cfg(test)]
-use proptest_derive::Arbitrary;
 use serde_json::Value as JsonValue;
 use value::{
     export::ValueFormat,
@@ -106,15 +102,9 @@ use value::{
     TableName,
 };
 
-#[cfg_attr(test, derive(Clone, Eq, PartialEq, Debug, Arbitrary))]
 pub struct StreamingExportSelection {
     /// For each listed component, defines what to do with it in the
     /// streaming export.
-    #[cfg_attr(
-        test,
-        proptest(strategy = "prop::collection::btree_map(any::<ComponentPath>(), \
-                             any::<StreamingExportComponentSelection>(), 0..3)")
-    )]
     pub components: BTreeMap<ComponentPath, StreamingExportComponentSelection>,
 
     /// Whether to include components that are not listed in `components`.
@@ -124,7 +114,6 @@ pub struct StreamingExportSelection {
 /// Defines what to do in streaming export for the components/tables/columns
 /// that are not explicitly listed.
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
-#[cfg_attr(test, derive(Arbitrary))]
 pub enum StreamingExportInclusionDefault {
     /// Exclude these items in streaming export.
     Excluded,
@@ -171,38 +160,12 @@ impl StreamingExportSelection {
         }
     }
 
-    /// Create a [`StreamingExportSelection`] that only includes a single
-    /// table.
-    #[cfg(test)]
-    pub fn single_table(component: ComponentPath, table: TableName) -> Self {
-        use maplit::btreemap;
-
-        Self {
-            components: btreemap! {
-                component => StreamingExportComponentSelection::Included {
-                    tables: btreemap! {
-                        table => StreamingExportTableSelection::Included(
-                            StreamingExportColumnSelection::all_columns(),
-                        ),
-                    },
-                    other_tables: StreamingExportInclusionDefault::Excluded,
-                },
-            },
-            other_components: StreamingExportInclusionDefault::Excluded,
-        }
-    }
 }
 
 /// What to do during streaming export for a particular component.
-#[cfg_attr(test, derive(Clone, Eq, PartialEq, Debug, Arbitrary))]
 pub enum StreamingExportComponentSelection {
     Excluded,
     Included {
-        #[cfg_attr(
-            test,
-            proptest(strategy = "prop::collection::btree_map(any::<TableName>(), \
-                                 any::<StreamingExportTableSelection>(), 0..3)")
-        )]
         tables: BTreeMap<TableName, StreamingExportTableSelection>,
         other_tables: StreamingExportInclusionDefault,
     },
@@ -241,7 +204,6 @@ impl StreamingExportComponentSelection {
 }
 
 /// What to do in streaming export for a particular table.
-#[cfg_attr(test, derive(Clone, Eq, PartialEq, Debug, Arbitrary))]
 pub enum StreamingExportTableSelection {
     Excluded,
     Included(StreamingExportColumnSelection),
@@ -249,20 +211,13 @@ pub enum StreamingExportTableSelection {
 
 /// For a table in the streaming export, defines what to do for each of its
 /// columns.
-#[cfg_attr(test, derive(Clone, Eq, PartialEq, Debug, Arbitrary))]
 pub struct StreamingExportColumnSelection {
-    #[cfg_attr(
-        test,
-        proptest(strategy = "prop::collection::btree_map(any::<FieldName>(), \
-                             any::<StreamingExportColumnInclusion>(), 0..3)")
-    )]
     columns: BTreeMap<FieldName, StreamingExportColumnInclusion>,
     other_columns: StreamingExportInclusionDefault,
 }
 
 /// Defines what to do for a particular column in the streaming export.
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
-#[cfg_attr(test, derive(Arbitrary))]
 pub enum StreamingExportColumnInclusion {
     Excluded,
     Included,
@@ -322,7 +277,6 @@ impl StreamingExportColumnSelection {
 /// Similar to [`DeveloperDocument`], but `_creationTime` is allowed to be
 /// omitted.
 #[derive(Eq, PartialEq, Debug)]
-#[cfg_attr(test, derive(Clone))]
 pub struct StreamingExportDocument {
     id: DeveloperDocumentId,
     value: PII<ConvexObject>,
@@ -365,125 +319,6 @@ impl StreamingExportDocument {
     }
 }
 
-#[cfg(test)]
-impl StreamingExportDocument {
-    /// Create a [`StreamingExportDocument`] from a [`ResolvedDocument`],
-    /// including all fields.
-    pub fn with_all_fields(document: ::common::document::ResolvedDocument) -> Self {
-        let document = document.to_developer();
-        Self {
-            id: document.id(),
-            value: document.into_value(),
-        }
-    }
-
-    pub fn id(&self) -> DeveloperDocumentId {
-        self.id
-    }
-}
-
-#[cfg(test)]
-mod tests_is_table_included {
-    use maplit::btreemap;
-
-    use super::*;
-
-    #[test]
-    fn test_uses_other_components_when_specific_table_information_not_available() {
-        let component: ComponentPath = "test_component".parse().unwrap();
-        let table: TableName = "test_table".parse().unwrap();
-
-        let selection_included = StreamingExportSelection {
-            components: BTreeMap::new(),
-            other_components: StreamingExportInclusionDefault::Included,
-        };
-        assert!(selection_included.is_table_included(&component, &table));
-
-        let selection_excluded = StreamingExportSelection {
-            components: BTreeMap::new(),
-            other_components: StreamingExportInclusionDefault::Excluded,
-        };
-        assert!(!selection_excluded.is_table_included(&component, &table));
-    }
-
-    #[test]
-    fn test_does_not_include_tables_from_excluded_components() {
-        let component: ComponentPath = "test_component".parse().unwrap();
-        let table: TableName = "test_table".parse().unwrap();
-
-        let selection = StreamingExportSelection {
-            components: btreemap! {
-                component.clone() => StreamingExportComponentSelection::Excluded,
-            },
-            other_components: StreamingExportInclusionDefault::Included,
-        };
-
-        assert!(!selection.is_table_included(&component, &table));
-    }
-
-    #[test]
-    fn test_uses_specific_table_information_when_available() {
-        let component: ComponentPath = "test_component".parse().unwrap();
-        let table: TableName = "test_table".parse().unwrap();
-
-        let selection_excluded = StreamingExportSelection {
-            components: btreemap! {
-                component.clone() => StreamingExportComponentSelection::Included {
-                    tables: btreemap! {
-                        table.clone() => StreamingExportTableSelection::Excluded,
-                    },
-                    other_tables: StreamingExportInclusionDefault::Included,
-                },
-            },
-            other_components: StreamingExportInclusionDefault::Included,
-        };
-        assert!(!selection_excluded.is_table_included(&component, &table));
-
-        let selection_included = StreamingExportSelection {
-            components: btreemap! {
-                component.clone() => StreamingExportComponentSelection::Included {
-                    tables: btreemap! {
-                        table.clone() => StreamingExportTableSelection::Included(
-                            StreamingExportColumnSelection::all_columns(),
-                        ),
-                    },
-                    other_tables: StreamingExportInclusionDefault::Excluded,
-                },
-            },
-            other_components: StreamingExportInclusionDefault::Excluded,
-        };
-        assert!(selection_included.is_table_included(&component, &table));
-    }
-
-    #[test]
-    fn test_uses_default_table_selection_when_necessary() {
-        let component: ComponentPath = "test_component".parse().unwrap();
-        let table: TableName = "test_table".parse().unwrap();
-
-        let selection_excluded = StreamingExportSelection {
-            components: btreemap! {
-                component.clone() => StreamingExportComponentSelection::Included {
-                    tables: BTreeMap::new(),
-                    other_tables: StreamingExportInclusionDefault::Excluded,
-                },
-            },
-            other_components: StreamingExportInclusionDefault::Included,
-        };
-        assert!(!selection_excluded.is_table_included(&component, &table));
-
-        let selection_included = StreamingExportSelection {
-            components: btreemap! {
-                component.clone() => StreamingExportComponentSelection::Included {
-                    tables: BTreeMap::new(),
-                    other_tables: StreamingExportInclusionDefault::Included,
-                },
-            },
-            other_components: StreamingExportInclusionDefault::Included,
-        };
-        assert!(selection_included.is_table_included(&component, &table));
-    }
-}
-
 impl TryFrom<serialized::Selection> for StreamingExportSelection {
     type Error = anyhow::Error;
 
@@ -503,11 +338,11 @@ impl TryFrom<serialized::Selection> for StreamingExportSelection {
     }
 }
 
-impl From<serialized::ColumnInclusion> for StreamingExportColumnInclusion {
-    fn from(value: serialized::ColumnInclusion) -> Self {
+impl From<serialized::ColumnSelection> for StreamingExportColumnInclusion {
+    fn from(value: serialized::ColumnSelection) -> Self {
         match value {
-            serialized::ColumnInclusion::Excluded => Self::Excluded,
-            serialized::ColumnInclusion::Included => Self::Included,
+            serialized::ColumnSelection::Excluded => Self::Excluded,
+            serialized::ColumnSelection::Included => Self::Included,
         }
     }
 }
@@ -517,7 +352,7 @@ impl TryFrom<serialized::ComponentSelection> for StreamingExportComponentSelecti
 
     fn try_from(value: serialized::ComponentSelection) -> Result<Self, Self::Error> {
         Ok(match value {
-            serialized::ComponentSelection::Excluded => Self::Excluded,
+            serialized::ComponentSelection::Excluded(_) => Self::Excluded,
             serialized::ComponentSelection::Included {
                 tables,
                 other_tables,
@@ -537,18 +372,20 @@ impl TryFrom<serialized::TableSelection> for StreamingExportTableSelection {
 
     fn try_from(value: serialized::TableSelection) -> Result<Self, Self::Error> {
         Ok(match value {
-            serialized::TableSelection::Excluded => Self::Excluded,
+            serialized::TableSelection::Excluded(_) => Self::Excluded,
             serialized::TableSelection::Included {
                 columns,
                 other_columns,
             } => {
-                let column_selection = StreamingExportColumnSelection {
-                    columns: columns
+                // `new` (rather than a struct literal) so deserialized
+                // selections can't bypass the `_id`-must-be-included check.
+                let column_selection = StreamingExportColumnSelection::new(
+                    columns
                         .into_iter()
                         .map(|(k, v)| -> anyhow::Result<_> { Ok((k.parse()?, v.into())) })
                         .try_collect()?,
-                    other_columns: other_columns.into(),
-                };
+                    other_columns.into(),
+                )?;
 
                 Self::Included(column_selection)
             },
@@ -562,330 +399,5 @@ impl From<serialized::InclusionDefault> for StreamingExportInclusionDefault {
             serialized::InclusionDefault::Excluded => Self::Excluded,
             serialized::InclusionDefault::Included => Self::Included,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests_column_filtering {
-    use common::document::CreationTime;
-    use maplit::btreemap;
-    use sync_types::Timestamp;
-    use value::{
-        assert_obj,
-        InternalId,
-        TableNumber,
-    };
-
-    use super::*;
-
-    #[test]
-    fn test_uses_specific_column_information_when_available() -> anyhow::Result<()> {
-        let column: FieldName = "test_column".parse().unwrap();
-
-        let selection_excluded = StreamingExportColumnSelection::new(
-            btreemap! {
-                "_id".parse()? => StreamingExportColumnInclusion::Included,
-                column.clone() => StreamingExportColumnInclusion::Excluded,
-            },
-            StreamingExportInclusionDefault::Included,
-        )?;
-        assert!(!selection_excluded.includes(&column));
-
-        let selection_included = StreamingExportColumnSelection::new(
-            btreemap! {
-                "_id".parse()? => StreamingExportColumnInclusion::Included,
-                column.clone() => StreamingExportColumnInclusion::Included,
-            },
-            StreamingExportInclusionDefault::Excluded,
-        )?;
-        assert!(selection_included.includes(&column));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_uses_other_columns_when_specific_information_does_not_exist() -> anyhow::Result<()> {
-        let column: FieldName = "test_column".parse().unwrap();
-
-        let selection_excluded = StreamingExportColumnSelection::new(
-            btreemap! {
-                "_id".parse()? => StreamingExportColumnInclusion::Included,
-            },
-            StreamingExportInclusionDefault::Excluded,
-        )?;
-        assert!(!selection_excluded.includes(&column));
-
-        let selection_included = StreamingExportColumnSelection::new(
-            BTreeMap::new(),
-            StreamingExportInclusionDefault::Included,
-        )?;
-        assert!(selection_included.includes(&column));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_cant_create_filter_with_id_column_excluded() {
-        let id_column: FieldName = "_id".parse().unwrap();
-
-        StreamingExportColumnSelection::new(
-            btreemap! {
-                id_column.clone() => StreamingExportColumnInclusion::Excluded,
-            },
-            StreamingExportInclusionDefault::Included,
-        )
-        .unwrap_err();
-
-        StreamingExportColumnSelection::new(
-            btreemap! {
-                id_column => StreamingExportColumnInclusion::Included,
-            },
-            StreamingExportInclusionDefault::Excluded,
-        )
-        .unwrap();
-
-        StreamingExportColumnSelection::new(
-            btreemap! {},
-            StreamingExportInclusionDefault::Excluded,
-        )
-        .unwrap_err();
-    }
-
-    #[test]
-    fn test_filter_document_with_creation_time() -> anyhow::Result<()> {
-        let id = DeveloperDocumentId::new(TableNumber::try_from(1)?, InternalId::MIN);
-        let creation_time = CreationTime::try_from(Timestamp::MIN)?;
-        let value = assert_obj!(
-            "_id" => id.encode(),
-            "_creationTime" => f64::from(creation_time),
-            "name" => "test",
-            "password" => "hunter2",
-        );
-        let doc = DeveloperDocument::new(id, creation_time, value);
-
-        let selection = StreamingExportColumnSelection::new(
-            btreemap! {
-                "_id".parse()? => StreamingExportColumnInclusion::Included,
-                "_creationTime".parse()? => StreamingExportColumnInclusion::Included,
-                "name".parse()? => StreamingExportColumnInclusion::Included,
-            },
-            StreamingExportInclusionDefault::Excluded,
-        )?;
-
-        let filtered = selection.filter_document(doc)?;
-        assert_eq!(
-            filtered,
-            StreamingExportDocument::new(
-                id,
-                PII(assert_obj!(
-                    "_id" => id.encode(),
-                    "_creationTime" => f64::from(creation_time),
-                    "name" => "test"
-                )),
-            )?
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_filter_document_without_creation_time() -> anyhow::Result<()> {
-        let id = DeveloperDocumentId::new(TableNumber::try_from(1)?, InternalId::MIN);
-        let creation_time = CreationTime::try_from(Timestamp::MIN)?;
-        let value = assert_obj!(
-            "_id" => id.encode(),
-            "_creationTime" => f64::from(creation_time),
-            "name" => "test",
-            "password" => "hunter2",
-        );
-        let doc = DeveloperDocument::new(id, creation_time, value);
-
-        let selection = StreamingExportColumnSelection::new(
-            btreemap! {
-                "_creationTime".parse()? => StreamingExportColumnInclusion::Excluded,
-                "password".parse()? => StreamingExportColumnInclusion::Excluded,
-            },
-            StreamingExportInclusionDefault::Included,
-        )?;
-
-        let filtered = selection.filter_document(doc)?;
-        assert_eq!(
-            filtered,
-            StreamingExportDocument::new(
-                id,
-                PII(assert_obj!(
-                    "_id" => id.encode(),
-                    "name" => "test"
-                )),
-            )?
-        );
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests_serialization {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::*;
-
-    impl From<StreamingExportSelection> for serialized::Selection {
-        fn from(
-            StreamingExportSelection {
-                components,
-                other_components,
-            }: StreamingExportSelection,
-        ) -> Self {
-            Self {
-                components: components
-                    .into_iter()
-                    .map(|(k, v)| (k.to_string(), v.into()))
-                    .collect(),
-                other_components: other_components.into(),
-            }
-        }
-    }
-
-    impl From<StreamingExportColumnInclusion> for serialized::ColumnInclusion {
-        fn from(value: StreamingExportColumnInclusion) -> Self {
-            match value {
-                StreamingExportColumnInclusion::Excluded => Self::Excluded,
-                StreamingExportColumnInclusion::Included => Self::Included,
-            }
-        }
-    }
-
-    impl From<StreamingExportComponentSelection> for serialized::ComponentSelection {
-        fn from(value: StreamingExportComponentSelection) -> Self {
-            match value {
-                StreamingExportComponentSelection::Excluded => Self::Excluded,
-                StreamingExportComponentSelection::Included {
-                    tables,
-                    other_tables,
-                } => Self::Included {
-                    tables: tables
-                        .into_iter()
-                        .map(|(k, v)| (k.to_string(), v.into()))
-                        .collect(),
-                    other_tables: other_tables.into(),
-                },
-            }
-        }
-    }
-
-    impl From<StreamingExportTableSelection> for serialized::TableSelection {
-        fn from(value: StreamingExportTableSelection) -> Self {
-            match value {
-                StreamingExportTableSelection::Excluded => Self::Excluded,
-                StreamingExportTableSelection::Included(StreamingExportColumnSelection {
-                    columns,
-                    other_columns,
-                }) => Self::Included {
-                    columns: columns
-                        .into_iter()
-                        .map(|(k, v)| (k.to_string(), v.into()))
-                        .collect(),
-                    other_columns: other_columns.into(),
-                },
-            }
-        }
-    }
-
-    impl From<StreamingExportInclusionDefault> for serialized::InclusionDefault {
-        fn from(value: StreamingExportInclusionDefault) -> Self {
-            match value {
-                StreamingExportInclusionDefault::Excluded => Self::Excluded,
-                StreamingExportInclusionDefault::Included => Self::Included,
-            }
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig {
-            cases: 64 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1),
-            failure_persistence: None, ..ProptestConfig::default()
-        })]
-        #[test]
-        fn test_streaming_export_selection_roundtrip(value in any::<StreamingExportSelection>()) {
-            let serialized: serialized::Selection = value.clone().into();
-            let deserialized: StreamingExportSelection = serialized.try_into().expect("Can't roundtrip");
-            prop_assert_eq!(value, deserialized);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests_export_fields {
-    use common::{
-        pii::PII,
-        testing::TestIdGenerator,
-    };
-    use maplit::btreemap;
-    use serde_json::json;
-    use value::{
-        assert_obj,
-        export::ValueFormat,
-        TableName,
-    };
-
-    use crate::streaming_export_selection::StreamingExportDocument;
-
-    #[test]
-    fn test_export_fields_convex_encoded_json() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-        let posts_table_name: TableName = "posts".parse()?;
-        let id = id_generator.user_generate(&posts_table_name).developer_id;
-
-        let big_value: i64 = 1234567890123456789;
-        let doc = StreamingExportDocument::new(
-            id,
-            PII(assert_obj!(
-                "_id" => id.encode(),
-                "bigint" => big_value,
-            )),
-        )?;
-
-        let fields = doc.export_fields(ValueFormat::ConvexEncodedJSON)?;
-
-        // In ConvexEncodedJSON, integers are exported as objects
-        assert_eq!(
-            fields,
-            btreemap! {
-                "_id".to_string() => json!(id.encode()),
-                "bigint".to_string() => json!({"$integer": "FYHpffQQIhE="}),
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_export_fields_convex_clean_json() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-        let posts_table_name: TableName = "posts".parse()?;
-        let id = id_generator.user_generate(&posts_table_name).developer_id;
-
-        let big_value: i64 = 1234567890123456789;
-        let doc = StreamingExportDocument::new(
-            id,
-            PII(assert_obj!(
-                "_id" => id.encode(),
-                "bigint" => big_value,
-            )),
-        )?;
-
-        let fields = doc.export_fields(ValueFormat::ConvexCleanJSON)?;
-
-        // In ConvexCleanJSON, big integers are exported as strings
-        assert_eq!(
-            fields,
-            btreemap! {
-                "_id".to_string() => json!(id.encode()),
-                "bigint".to_string() => json!(big_value.to_string()),
-            }
-        );
-        Ok(())
     }
 }

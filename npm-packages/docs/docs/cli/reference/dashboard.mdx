@@ -1,0 +1,51 @@
+---
+sidebar_position: 5
+title: "npx convex dashboard"
+sidebar_label: "npx convex dashboard"
+description: "Open the dashboard in the browser"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex dashboard`
+
+Open the dashboard in the browser
+
+## Syntax
+
+```sh
+npx convex dashboard [options]
+```
+
+## Aliases
+
+- `dash`
+
+## Options
+
+<dl>
+<dt>`--no-open`</dt>
+<dd>
+
+Don't automatically open the dashboard in the default browser
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Open the dashboard for this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Open the dashboard for a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

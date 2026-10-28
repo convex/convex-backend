@@ -10,9 +10,9 @@ Log streams enable streaming of events such as function executions and
 Axiom, Datadog, PostHog, or a custom webhook.
 
 The most recent logs produced by your Convex deployment can be viewed in the
-Dashboard [Logs page](/dashboard/deployments/logs.md), the
-[Convex CLI](/cli.md), or in the browser console, providing a quick and easy way
-to view recent logs.
+Dashboard [Logs page](/dashboard/deployments/logs.mdx), the
+[Convex CLI](/cli/overview.mdx), or in the browser console, providing a quick
+and easy way to view recent logs.
 
 Log streaming to a third-party destination like Axiom, Datadog, or PostHog
 enables storing historical logs, more powerful querying and data visualization,
@@ -69,9 +69,8 @@ Configuring a Datadog log stream requires specifying:
 
 Configuring a PostHog log stream requires specifying:
 
-- A PostHog
-  [project API key](https://us.posthog.com/settings/project#variables), found in
-  PostHog under Settings > Project > Project API Key
+- A PostHog [project token](https://us.posthog.com/settings/project), found in
+  PostHog under Settings > Project > General
 - An optional host URL. Defaults to US Cloud (`https://us.i.posthog.com`). Use
   `https://eu.i.posthog.com` for EU Cloud, or your self-hosted URL. The endpoint
   path is added automatically.
@@ -113,6 +112,7 @@ log event body falls within an acceptable time range to prevent replay attacks.
 
 ```typescript
 import { Hono } from "hono";
+import { env } from "./_generated/server";
 
 const app = new Hono();
 
@@ -138,7 +138,7 @@ app.post("/webhook", async (c) => {
 
   const hmacSecret = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(process.env.WEBHOOK_SECRET!),
+    new TextEncoder().encode(env.WEBHOOK_SECRET),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["verify"],
@@ -179,7 +179,7 @@ type-safe pipelines ingesting log events.
 All events will have the following three fields:
 
 - `topic`: string, categorizes a log event, one of
-  `["verification", "console", "function_execution", "audit_log", "concurrency_stats", "scheduler_stats", "current_storage_usage", "storage_api_bandwidth"]`
+  `["verification", "console", "function_execution", "audit_log", "concurrency_stats", "scheduler_stats", "current_storage_usage", "storage_api_bandwidth", "ai_gateway_usage"]`
 - `timestamp`: number, Unix epoch timestamp in milliseconds as an integer
 - `convex`: An object containing metadata related to your Convex deployment,
   including `deployment_name`, `deployment_type`, `project_name`, and
@@ -224,6 +224,7 @@ Example event for `console.log("Sent message!")` from a mutation:
     "function": {
       "path": "messages:send",
       "request_id": "d064ef901f7ec0b7",
+      "runtime": "convex",
       "type": "mutation"
     },
     "log_level": "LOG",
@@ -242,6 +243,9 @@ Schema:
 - `function`: object, see
   [function fields](/production/integrations/log-streams/log-streams.mdx#function-fields)
 - `execution_time_ms`: number, the time in milliseconds this function took to
+  execute
+- `user_execution_time_ms`: optional number, the time in milliseconds the user's
+  code spent executing (excludes system overhead)
 - `status`: string, one of `["success", "failure"]`
 - `error_message`: string, present for functions with status `failure`,
   containing the error and any stack trace.
@@ -267,25 +271,64 @@ Schema:
   - `job_id`: the job within the
     [`_scheduled_functions`](/scheduling/scheduled-functions#retrieving-scheduled-function-status)
     table
+- `run_reason`: string, why this function ran. One of:
+  - `"initialSubscription"`: the first run of a query a client subscribed to
+    over the WebSocket sync protocol.
+  - `"dataChange"`: a rerun of a query whose subscription was invalidated by a
+    write.
+  - `"identityChange"`: a rerun of a query caused by the client's auth identity
+    changing.
+  - `"webSocket"`: a mutation or action called by a client over the WebSocket
+    sync protocol.
+  - `"httpApi"`: called over the HTTP API, e.g. by `ConvexHttpClient`.
+  - `"httpEndpoint"`: an [HTTP action](/functions/http-actions.mdx) serving an
+    incoming request to a route in `http.ts`.
+  - `"cron"`: called by a [cron job](/scheduling/cron-jobs.mdx).
+  - `"scheduler"`: called by the
+    [scheduler](/scheduling/scheduled-functions.mdx).
+  - `"action"`: called from another function via `ctx.runQuery`,
+    `ctx.runMutation`, or `ctx.runAction`.
+  - `"tester"`: a one-off query run via the dashboard's
+    [custom query](/dashboard/deployments/data.mdx#writing-custom-queries)
+    tester or `npx convex run --inline-query`.
 - `usage`:
-  - `database_read_bytes`: number
-  - `database_write_bytes`: number, this and `database_read_bytes` make up the
-    database bandwidth used by the function
+  - `database_io_read_bytes`: number
+  - `database_io_write_bytes`: number, this and `database_io_read_bytes` make up
+    the Database I/O used by the function
   - `database_read_documents`: number, the number of documents read by the
     function
-  - `file_storage_read_bytes`: number
-  - `file_storage_write_bytes`: number, this and `file_storage_read_bytes` make
-    up the file bandwidth used by the function when reading or writing files
-    using the
-    [storage API within Convex functions](/file-storage/store-files.mdx) (e.g.
-    `ctx.storage.store()`, `ctx.storage.get()`). This does not include bandwidth
-    from clients downloading files directly from the storage HTTP API; see
+  - `database_write_documents`: number, the number of documents inserted,
+    updated, or deleted by the function
+  - `database_write_index_rows`: number, the number of index entries written by
+    the documents counted in `database_write_documents`. Each document write
+    costs one entry per database index on its table, counting the built-in
+    `by_id` and `by_creation_time` indexes, and changing an indexed field costs
+    a second entry to remove the stale one
+  - `text_search_query_bytes`: number
+  - `text_search_write_query_bytes`: number, these two fields together track
+    text search query usage
+  - `vector_search_query_bytes`: number
+  - `vector_search_write_query_bytes`: number, these two fields together track
+    vector search query usage. Combined with the `text_search_*` fields, they
+    make up the Search queries pricing metric.
+  - `file_storage_read_bytes`: number, the bytes read from file storage using
+    the [storage API within Convex functions](/file-storage/store-files.mdx)
+    (e.g. `ctx.storage.get()`). This does not include bandwidth from clients
+    downloading files directly from the storage HTTP API; see
     [`storage_api_bandwidth`](#storage_api_bandwidth-events).
-  - `vector_storage_read_bytes`: number
-  - `vector_storage_write_bytes`: number, this and `vector_storage_read_bytes`
-    make up the vector bandwidth used by the function
-  - `memory_used_mb`: number, for queries, mutations, and actions, the memory
-    used in MiB. This combined with `execution_time_ms` makes up the compute.
+  - `network_egress_bytes`: number, the bytes sent to clients or external
+    services. This contributes to Data egress alongside
+    [`storage_api_bandwidth`](#storage_api_bandwidth-events) events.
+  - `audit_log_egress_bytes`: number, the bytes egressed delivering
+    [audit logs](/production/integrations/audit-logging.mdx) to S3 (if
+    configured for a D1024 deployment).
+  - `action_memory_used_mb`: optional number (actions and HTTP actions only),
+    the memory used in MiB. This combined with `execution_time_ms` makes up
+    Action compute.
+  - `function_args_bytes`: optional number, the size of the arguments the
+    function was called with. Absent for HTTP actions.
+  - `function_returns_bytes`: optional number, the size of the value the
+    function returned. Absent for HTTP actions and for failed executions.
 
 Example event for a query:
 
@@ -297,23 +340,101 @@ Example event for a query:
       "cached": false,
       "path": "message:list",
       "request_id": "892104e63bd39d9a",
+      "runtime": "convex",
       "type": "query"
     },
     "status": "success",
+    "run_reason": "initialSubscription",
     "timestamp": 1715973841548,
     "topic": "function_execution",
     "usage": {
-      "database_read_bytes": 1077,
-      "database_write_bytes": 0,
+      "database_io_read_bytes": 1077,
+      "database_io_write_bytes": 0,
       "database_read_documents": 3,
+      "database_write_documents": 0,
+      "database_write_index_rows": 0,
       "file_storage_read_bytes": 0,
-      "file_storage_write_bytes": 0,
-      "vector_storage_read_bytes": 0,
-      "vector_storage_write_bytes": 0
+      "text_search_query_bytes": 0,
+      "text_search_write_query_bytes": 0,
+      "vector_search_query_bytes": 0,
+      "vector_search_write_query_bytes": 0,
+      "network_egress_bytes": 0,
+      "audit_log_egress_bytes": 0,
+      "function_args_bytes": 12,
+      "function_returns_bytes": 843
     }
   }
 }
 ```
+
+### `ai_gateway_usage` events
+
+These events report terminal usage for an inference made through the
+[AI Gateway](/ai-gateway/overview.mdx). They are emitted after the provider
+response has been consumed, which can be later than the related
+`function_execution` event.
+
+Schema:
+
+- `topic`: `"ai_gateway_usage"`
+- `timestamp`: Unix epoch timestamp in milliseconds when the inference ended
+- `function`: optional object containing trusted function attribution:
+  - `request_id`: optional string matching the related `function_execution`
+    event's `function.request_id`
+  - `component_path`: optional string identifying a component
+  - `path`: optional string identifying the action or HTTP action
+  - `type`: optional string, one of `["action", "http_action"]`
+- `inference_id`: string that uniquely identifies the inference. Use this field
+  to deduplicate events when processing retries.
+- `provider`: string naming the provider that reported the usage
+- `endpoint`: string, one of
+  `["chat_completions", "decisions", "embeddings", "images", "messages", "responses", "speech", "transcriptions", "videos"]`
+- `upstream_id`: optional provider request identifier
+- `model`: optional provider model identifier
+- `prompt_tokens`, `completion_tokens`, `total_tokens`: optional token counts
+- `cached_prompt_tokens`: optional number of prompt tokens served from a cache
+- `reasoning_tokens`: optional number of reasoning tokens
+- `cost`: number or `null`. This is the provider-reported charge in USD. A value
+  of `0` is a reported free inference. This value is not an invoice total.
+- `cost_unit`: `"USD"`
+- `outcome`: string, one of
+  `["completed", "no_usage", "provider_error", "upstream_error", "abandoned", "oversized"]`
+- `environment`: string, one of `["production", "staging"]`
+
+Example event:
+
+```json
+{
+  "topic": "ai_gateway_usage",
+  "timestamp": 1756400000123,
+  "function": {
+    "request_id": "892104e63bd39d9a",
+    "component_path": "agent",
+    "path": "chat.js:reply",
+    "type": "action"
+  },
+  "inference_id": "0f8c3a52-6d1e-4b7a-9c2f-4e5d6a7b8c9d",
+  "provider": "openRouter",
+  "endpoint": "messages",
+  "upstream_id": "gen-abc123",
+  "model": "anthropic/claude-sonnet-4.5",
+  "prompt_tokens": 120,
+  "completion_tokens": 48,
+  "total_tokens": 168,
+  "cached_prompt_tokens": 80,
+  "reasoning_tokens": 12,
+  "cost": 0.0024,
+  "cost_unit": "USD",
+  "outcome": "completed",
+  "environment": "production"
+}
+```
+
+Delivery uses the existing log-stream guarantees: events may be delayed,
+dropped, or duplicated. Deduplicate by deployment and `inference_id` before
+summing cost, and count unresolved records separately. In Axiom, the topic
+payload is nested under `data`, so the cost field is `data.cost`. Events contain
+usage metadata; prompts and model responses are excluded.
 
 ### Function fields
 
@@ -322,6 +443,10 @@ The following fields are added under `function` for all `console` and
 
 - `type`: string, one of `["query", "mutation", "action", "http_action"]`
 - `path`: string, e.g. `"myDir/myFile:myFunction"`, or `"POST /my_endpoint"`
+- `runtime`: string, one of `["convex", "node"]`, the
+  [runtime](/functions/runtimes.mdx) the function ran in. Queries, mutations,
+  and HTTP actions always run in the Convex runtime. `null` for actions that
+  failed with a system error before starting.
 - `cached`: optional boolean, for queries this denotes whether this event came
   from a cached function execution
 - `request_id`: string, the
@@ -377,7 +502,7 @@ For calculating billing costs:
 
 - Database Storage Bytes: `total_document_size_bytes + total_index_size_bytes`
 - File Storage: `total_file_storage_bytes + total_backup_storage_bytes`
-- Vector Storage: `total_vector_storage_bytes`
+- Search Storage: `total_vector_storage_bytes + total_text_storage_bytes`
 
 Schema:
 
@@ -388,9 +513,12 @@ Schema:
 - `total_index_size_bytes`: number, total size in bytes of all database indexes
 - `total_vector_storage_bytes`: number, total size in bytes of vector index
   storage
+- `total_text_storage_bytes`: number, total size in bytes of text index storage
 - `total_file_storage_bytes`: number, total size in bytes of file storage
 - `total_backup_storage_bytes`: number, total size in bytes of snapshot/backup
   storage
+- `total_system_table_document_size_bytes`: object, document size in bytes per
+  system virtual table (e.g. `_storage`, `_scheduled_functions`)
 
 Example event:
 
@@ -401,8 +529,13 @@ Example event:
   "total_document_size_bytes": 104857600,
   "total_index_size_bytes": 10485760,
   "total_vector_storage_bytes": 5242880,
+  "total_text_storage_bytes": 1048576,
   "total_file_storage_bytes": 52428800,
-  "total_backup_storage_bytes": 209715200
+  "total_backup_storage_bytes": 209715200,
+  "total_system_table_document_size_bytes": {
+    "_storage": 1048576,
+    "_scheduled_functions": 2097152
+  }
 }
 ```
 
@@ -486,6 +619,6 @@ stream.
 
 That's it! Your logs are now configured to stream out. If there is a log
 streaming destination that you would like to see supported,
-[please let us know](/production/contact.md)!
+[please let us know](/production/contact.mdx)!
 
 <StackPosts query="axiom" />

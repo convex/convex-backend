@@ -22,8 +22,8 @@ export function ReferralsBanner({
       <div className="flex grow items-center gap-2 py-2 md:justify-between">
         <div className="flex max-w-prose grow flex-col flex-wrap gap-2 xl:flex-row xl:items-center">
           <span className="text-sm font-medium text-balance">
-            Boost your resource usage limits by up to 5 times by sharing your
-            referral code{" "}
+            Boost your free plan resource limits by up to 5 times by sharing
+            your referral code{" "}
           </span>
           <div className="w-72">
             <CopyTextButton

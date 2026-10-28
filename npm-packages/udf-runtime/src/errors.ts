@@ -29,7 +29,7 @@ export function setupSourceMapping() {
         fileName: v8Frame.getFileName(),
         lineNumber: v8Frame.getLineNumber(),
         columnNumber: v8Frame.getColumnNumber(),
-        evalOrigin: v8Frame.getEvalOrigin(),
+        evalOrigin: v8Frame.getEvalOrigin() ?? null,
         isToplevel: v8Frame.isToplevel(),
         isEval: v8Frame.isEval(),
         isNative: v8Frame.isNative(),

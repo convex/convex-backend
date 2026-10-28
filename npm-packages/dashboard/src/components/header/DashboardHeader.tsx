@@ -3,8 +3,6 @@ import { ChevronLeftIcon } from "@radix-ui/react-icons";
 import { BreadcrumbLink } from "components/header/BreadcrumbLink/BreadcrumbLink";
 import { Header } from "components/header/Header/Header";
 import { NavBar } from "components/header/NavBar/NavBar";
-import { CreateTeamModal } from "components/header/CreateTeamModal";
-import { logEvent } from "convex-analytics";
 import { useTeams } from "api/teams";
 import { useProjectBySlug } from "api/projects";
 import {
@@ -13,11 +11,9 @@ import {
 } from "hooks/useLastViewed";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useAccessToken } from "hooks/useServerSideData";
 import { ProjectSelector } from "components/header/ProjectSelector/ProjectSelector";
-import { useCreateProjectModal } from "hooks/useCreateProjectModal";
-import { TeamResponse } from "generatedApi";
 
 import {
   PROVISION_PROD_PAGE_NAME,
@@ -45,6 +41,7 @@ const NO_TEAM_ROUTES = [
   "/accept",
   "/suspended",
   "/verify",
+  "/join-vercel-team",
 ];
 
 const NO_HEADER_ROUTES = ["/oauth/authorize/project", "/oauth/authorize/team"];
@@ -64,26 +61,14 @@ function DashboardHeaderWhenLoggedIn() {
     }
   }, [selectedProject, projectSlug, router]);
 
-  const [showCreateTeamModal, setShowCreateTeamModal] = useState(false);
-
   useRememberLastViewedTeam(selectedTeamSlug);
   useRememberLastViewedProject(projectSlug);
-
-  const [createProjectModal, showCreateProjectModal] = useCreateProjectModal();
 
   const projectSelector = (
     <ProjectSelector
       teams={teams}
       selectedProject={projectSlug ? (selectedProject ?? undefined) : undefined}
       selectedTeamSlug={selectedTeamSlug}
-      onCreateTeamClick={() => {
-        logEvent("view create team modal");
-        setShowCreateTeamModal(true);
-      }}
-      onCreateProjectClick={(t: TeamResponse) => {
-        logEvent("view create project modal");
-        showCreateProjectModal(t);
-      }}
     />
   );
   const inNoTeamRoute = NO_TEAM_ROUTES.some((r) => r === router.pathname);
@@ -94,15 +79,17 @@ function DashboardHeaderWhenLoggedIn() {
     }
     if (router.route === "/profile") {
       return (
-        <div className="flex items-center gap-2">
-          <Link
-            href="/"
-            className="flex items-center gap-1 rounded-sm px-1 py-1.5 text-xs text-content-secondary hover:bg-background-tertiary"
-          >
-            <ChevronLeftIcon />
-            Back
+        <div className="flex h-full gap-2">
+          <Link href="/" className="group flex h-full items-center">
+            <div className="flex items-center gap-1 rounded-sm px-1 py-1.5 text-xs text-content-secondary group-hover:bg-background-tertiary">
+              <ChevronLeftIcon />
+              Back
+            </div>
           </Link>
-          <BreadcrumbLink href="/profile" className="truncate">
+          <BreadcrumbLink
+            href="/profile"
+            className="flex items-center truncate"
+          >
             Profile Settings
           </BreadcrumbLink>
         </div>
@@ -116,19 +103,15 @@ function DashboardHeaderWhenLoggedIn() {
       router.route.includes(`/[project]/${PROVISION_PROD_PAGE_NAME}`) ||
       router.route.includes(`/[project]/${PROVISION_DEV_PAGE_NAME}`)
     ) {
-      return (
-        <div className="flex items-center gap-4">
-          {selectedProject && projectSelector}
-        </div>
-      );
+      return selectedProject && projectSelector;
     }
 
     return (
-      <div className="flex items-center gap-6">
+      <div className="flex h-full gap-6">
         {projectSelector}
         <NavBar
           items={[
-            { label: "Projects", href: `/t/${selectedTeamSlug}` },
+            { label: "Home", href: `/t/${selectedTeamSlug}` },
             {
               label: "Team Settings",
               href: `/t/${selectedTeamSlug}/settings`,
@@ -137,7 +120,7 @@ function DashboardHeaderWhenLoggedIn() {
           activeLabel={
             router.asPath.startsWith(`/t/${selectedTeamSlug}/settings`)
               ? "Team Settings"
-              : "Projects"
+              : "Home"
           }
         />
       </div>
@@ -167,11 +150,6 @@ function DashboardHeaderWhenLoggedIn() {
         usageBannerVariant !== null && (
           <UsageBanner team={team!} variant={usageBannerVariant} />
         )}
-
-      {showCreateTeamModal && (
-        <CreateTeamModal onClose={() => setShowCreateTeamModal(false)} />
-      )}
-      {createProjectModal}
     </div>
   );
 }

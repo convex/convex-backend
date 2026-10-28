@@ -1,12 +1,16 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
 import { ConvexStatusWidget } from "./ConvexStatusWidget";
+import { Sheet } from "@ui/Sheet";
 
 const meta: Meta<typeof ConvexStatusWidget> = {
   component: ConvexStatusWidget,
-  parameters: {
-    layout: "padded",
-    a11y: { test: "todo" },
-  },
+  decorators: [
+    (Story) => (
+      <Sheet>
+        <Story />
+      </Sheet>
+    ),
+  ],
 };
 
 export default meta;

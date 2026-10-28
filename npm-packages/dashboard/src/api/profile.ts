@@ -26,6 +26,20 @@ export function useProfileEmails() {
   return emails;
 }
 
+// Whether the account has any enrolled multi-factor authentication factors.
+// Computed from the primary email's WorkOS user, so it is independent of which
+// email the current session signed in with.
+export function useMfaStatus() {
+  const { data } = useBBQuery({
+    path: "/profile/mfa",
+    pathParams: undefined,
+    swrOptions: {
+      refreshInterval: 5000,
+    },
+  });
+  return data;
+}
+
 export function useCreateProfileEmail() {
   return useBBMutation({
     path: "/profile_emails/create",
@@ -79,24 +93,6 @@ export function useDeleteAccount() {
     path: "/delete_account",
     pathParams: undefined,
     successToast: "Account deleted.",
-    toastOnError: false,
-  });
-}
-
-export function useIdentities() {
-  const { data: identities } = useBBQuery({
-    path: "/identities",
-    pathParams: undefined,
-  });
-  return identities;
-}
-
-export function useUnlinkIdentity() {
-  return useBBMutation({
-    path: "/unlink_identity",
-    pathParams: undefined,
-    mutateKey: "/identities",
-    successToast: "Identity unlinked.",
     toastOnError: false,
   });
 }

@@ -1,15 +1,27 @@
 import { convexToJson, Value } from "../values/index.js";
 import { PaginatedWatch, Watch } from "./client.js";
 import { QueryJournal } from "../browser/sync/protocol.js";
-import { FunctionReference, getFunctionName } from "../server/api.js";
-import { RequestForQueries } from "./use_queries.js";
+import {
+  getFunctionName,
+  FunctionReference,
+  FunctionReference_future,
+} from "../server/api.js";
 import { PaginatedQueryResult } from "../browser/sync/pagination.js";
 import { SubscribeToPaginatedQueryOptions } from "../browser/sync/paginated_query_client.js";
 
 type Identifier = string;
 
+type RequestForQueriesCompat = Record<
+  Identifier,
+  {
+    query: FunctionReference<"query"> | FunctionReference_future<"query">;
+    args: Record<string, Value>;
+    paginationOptions?: SubscribeToPaginatedQueryOptions;
+  }
+>;
+
 type QueryInfo = {
-  query: FunctionReference<"query">;
+  query: FunctionReference<"query"> | FunctionReference_future<"query">;
   args: Record<string, Value>;
   watch: Watch<Value> | PaginatedWatch<Value>;
   unsubscribe: () => void;
@@ -18,7 +30,7 @@ type QueryInfo = {
 
 export interface CreateWatch {
   (
-    query: FunctionReference<"query">,
+    query: FunctionReference<"query"> | FunctionReference_future<"query">,
     args: Record<string, Value>,
     options: {
       journal?: QueryJournal;
@@ -44,16 +56,7 @@ export class QueriesObserver {
     this.listeners = new Set();
   }
 
-  setQueries(
-    newQueries: Record<
-      Identifier,
-      {
-        query: FunctionReference<"query">;
-        args: Record<string, Value>;
-        paginationOptions?: SubscribeToPaginatedQueryOptions;
-      }
-    >,
-  ) {
+  setQueries(newQueries: RequestForQueriesCompat) {
     // Add the new queries before unsubscribing from the old ones so that
     // the deduping in the `ConvexReactClient` can help if there are duplicates.
     for (const identifier of Object.keys(newQueries)) {
@@ -107,7 +110,7 @@ export class QueriesObserver {
   }
 
   getLocalResults(
-    queries: RequestForQueries,
+    queries: RequestForQueriesCompat,
   ): Record<
     Identifier,
     Value | undefined | Error | PaginatedQueryResult<Value>
@@ -173,7 +176,7 @@ export class QueriesObserver {
 
   private addQuery(
     identifier: Identifier,
-    query: FunctionReference<"query">,
+    query: FunctionReference<"query"> | FunctionReference_future<"query">,
     args: Record<string, Value>,
     {
       paginationOptions,

@@ -3,7 +3,7 @@ import { queryGeneric } from "../secretSystemTables";
 import { Id } from "../../_generated/dataModel";
 import { v } from "convex/values";
 
-export default queryGeneric({
+export default queryGeneric("ViewData")({
   args: {
     componentId: v.optional(v.union(v.string(), v.null())),
     // We don't validate with v.id here to ensure we can catch ID validation errors inside of the function.

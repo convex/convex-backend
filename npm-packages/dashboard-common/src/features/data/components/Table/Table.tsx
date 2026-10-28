@@ -10,12 +10,10 @@ import {
   useState,
 } from "react";
 import {
-  Column,
-  useBlockLayout,
-  useColumnOrder,
-  useResizeColumns,
-  useTable,
-} from "react-table";
+  ColumnDef,
+  getCoreRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
 import { FixedSizeList } from "react-window";
 import {
   Filter,
@@ -47,11 +45,12 @@ import {
   useTableContextMenuState,
 } from "@common/features/data/components/Table/TableContextMenu";
 import { TableHeader } from "@common/features/data/components/Table/TableHeader";
+import { SortOption } from "@common/features/data/components/IndexFilterBar/filterModel";
 import { useStoredColumnOrder } from "@common/features/data/components/Table/utils/useDataColumns";
 import { ViewDocument } from "@common/features/data/components/Table/ViewDocument";
 import { useDataPageSize } from "@common/features/data/components/Table/utils/useQueryFilteredTable";
 import { LoadingLogo } from "@ui/Loading";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { PermissionsContext } from "@common/lib/deploymentContext";
 import { useNents } from "@common/lib/useNents";
 import { useColumnDragAndDrop } from "@common/features/data/components/Table/utils/useColumnDragAndDrop";
 
@@ -81,13 +80,15 @@ export function Table({
   onAddDraftFilter,
   defaultDocument,
   sort,
+  getSortOption,
+  onSortColumn,
   hiddenColumns,
   onColumnOrderChange,
 }: {
   activeSchema: SchemaJson | null;
   areEditsAuthorized: boolean;
   authorizeEdits?(): void;
-  columns: Column<GenericDocument>[];
+  columns: ColumnDef<GenericDocument, any>[];
   data: GenericDocument[]; // array of row data so far
   localStorageKey?: string;
   tableName: string;
@@ -108,30 +109,25 @@ export function Table({
     order: "asc" | "desc";
     field: string;
   };
+  getSortOption: (field: string) => SortOption;
+  onSortColumn: (field: string) => void;
   hiddenColumns: string[];
   onColumnOrderChange?: (newOrder: string[]) => void;
 }) {
   const [pageSize] = useDataPageSize(componentId, tableName);
-  const { useCurrentDeployment, useHasProjectAdminPermissions } = useContext(
-    DeploymentInfoContext,
-  );
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canManageTable = useIsOperationAllowed("WriteData");
 
   const { selectedNent } = useNents();
 
   const isInUnmountedComponent = !!(
     selectedNent && selectedNent.state !== "active"
   );
-  const canManageTable =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
 
   const [storedColumnOrder, setStoredColumnOrder] =
     useStoredColumnOrder(localStorageKey);
 
-  const dataColumnNames = columns.map((c) => c.Header as string);
+  const dataColumnNames = columns.map((c) => c.id as string);
   // Filter out special columns like *select from ordering operations
   const orderableColumnNames = dataColumnNames.filter(
     (name) => name !== "*select",
@@ -142,50 +138,38 @@ export function Table({
   const visibleColumns = useMemo(
     () =>
       columns.filter(
-        (c) =>
-          c.Header === "*select" || !hiddenColumns.includes(c.Header as string),
+        (c) => c.id === "*select" || !hiddenColumns.includes(c.id as string),
       ),
     [columns, hiddenColumns],
   );
 
-  const {
-    state,
-    getTableProps,
-    getTableBodyProps,
-    headerGroups,
-    rows,
-    prepareRow,
-    setColumnOrder,
-  } = useTable(
-    {
-      columns: visibleColumns,
-      data,
-      getRowId,
-      autoResetSortBy: false,
-      initialState: {
-        columnOrder: [
-          "*select",
-          ...(storedColumnOrder || orderableColumnNames),
-        ],
-      },
-      stateReducer: (newState, action) => {
-        if (action.type === "setColumnOrder") {
-          // Filter out *select when storing the column order
-          const newOrder = newState.columnOrder.filter(
-            (col) => col !== "*select",
-          );
-          setStoredColumnOrder(newOrder);
-          // Notify parent component of the change
-          onColumnOrderChange?.(newOrder);
-        }
+  const columnOrder = [
+    "*select",
+    ...(storedColumnOrder || orderableColumnNames),
+  ];
 
-        return newState;
-      },
+  const setColumnOrder = useCallback(
+    (newColumnOrder: string[]) => {
+      // Filter out *select when storing the column order
+      const newOrder = newColumnOrder.filter((col) => col !== "*select");
+      setStoredColumnOrder(newOrder);
+      // Notify parent component of the change
+      onColumnOrderChange?.(newOrder);
     },
-    useBlockLayout,
-    useColumnOrder,
-    useResizeColumns,
+    [setStoredColumnOrder, onColumnOrderChange],
   );
+
+  const table = useReactTable({
+    columns: visibleColumns,
+    data,
+    getRowId,
+    getCoreRowModel: getCoreRowModel(),
+    columnResizeMode: "onChange",
+    state: { columnOrder },
+  });
+
+  const headerGroups = table.getHeaderGroups();
+  const { rows } = table.getRowModel();
 
   trackDataColumnChanges(
     orderableColumnNames,
@@ -197,9 +181,9 @@ export function Table({
     (item: { index: number }, newIndex: number) => {
       const { index: currentIndex } = item;
 
-      const currentItem = state.columnOrder[currentIndex];
+      const currentItem = columnOrder[currentIndex];
 
-      const newColumnOrder = [...state.columnOrder];
+      const newColumnOrder = [...columnOrder];
       newColumnOrder.splice(currentIndex, 1);
       newColumnOrder.splice(newIndex, 0, currentItem);
 
@@ -207,12 +191,21 @@ export function Table({
       const filtered = newColumnOrder.filter((col) => col !== "*select");
       setColumnOrder(["*select", ...filtered]);
     },
-    [setColumnOrder, state.columnOrder],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setColumnOrder, JSON.stringify(columnOrder)],
   );
 
-  const resetColumnWidths = useTrackColumnWidths(state, localStorageKey);
+  const resetColumnWidths = useTrackColumnWidths(table, localStorageKey);
 
-  const { isResizingColumn } = state.columnResizing;
+  const isResizingColumn =
+    table.getState().columnSizingInfo.isResizingColumn || undefined;
+
+  // Resize handlers per column so cells can offer the same resize affordance
+  // as the column header.
+  const columnResizeHandlers: Record<string, (event: unknown) => void> = {};
+  for (const header of table.getFlatHeaders()) {
+    columnResizeHandlers[header.column.id] = header.getResizeHandler();
+  }
 
   const [
     ,
@@ -265,7 +258,7 @@ export function Table({
   } = useColumnDragAndDrop({
     headerGroups,
     reorderColumns,
-    columnOrder: state.columnOrder,
+    columnOrder,
   });
 
   const onEditDocument = useCallback(
@@ -298,11 +291,11 @@ export function Table({
           onDragCancel={handleDragCancel}
         >
           <SortableContext
-            items={state.columnOrder}
+            items={columnOrder}
             strategy={horizontalListSortingStrategy}
           >
             <div
-              {...getTableProps()}
+              role="table"
               ref={tableContainerRef}
               className={classNames(
                 "flex w-full h-full overflow-y-hidden",
@@ -311,7 +304,7 @@ export function Table({
             >
               <div className="flex flex-auto flex-col">
                 <TableHeader
-                  key={state.columnOrder.join(",")}
+                  key={columnOrder.join(",")}
                   headerGroups={headerGroups}
                   isResizingColumn={isResizingColumn}
                   allRowsSelected={allRowsSelected}
@@ -321,14 +314,15 @@ export function Table({
                   topBorderAnimation={topBorderAnimation}
                   openContextMenu={openContextMenu}
                   sort={sort}
-                  activeSchema={activeSchema}
-                  tableName={tableName}
+                  getSortOption={getSortOption}
+                  onSortColumn={onSortColumn}
+                  localStorageKey={localStorageKey}
                   tableContainerRef={tableContainerRef}
                 />
                 {/* Body */}
                 <div
-                  {...getTableBodyProps()}
-                  className="mt-[-1px] w-full flex-auto"
+                  role="rowgroup"
+                  className="-mt-px w-full flex-auto"
                   id="dataTable"
                 >
                   <InfiniteScrollList
@@ -346,8 +340,8 @@ export function Table({
                         !isSelectionExhaustive && allRowsSelected === true,
                       authorizeEdits,
                       patchDocument,
-                      prepareRow,
                       rows,
+                      columnResizeHandlers,
                       tableName,
                       toggleIsRowSelected,
                       onOpenContextMenu: openContextMenu,
@@ -388,6 +382,8 @@ export function Table({
                 onAddDraftFilter={onAddDraftFilter}
                 defaultDocument={defaultDocument}
                 canManageTable={canManageTable}
+                activeSchema={activeSchema}
+                tableName={tableName}
                 resetColumns={() => {
                   setColumnOrder(["*select", ...orderableColumnNames]);
                   setStoredColumnOrder(orderableColumnNames);
@@ -401,13 +397,7 @@ export function Table({
           {activeColumn &&
             activeColumnPosition !== null &&
             (() => {
-              const columnWidth = activeColumn.getHeaderProps().style?.width;
-              const parsedWidth =
-                typeof columnWidth === "string"
-                  ? parseFloat(columnWidth)
-                  : typeof columnWidth === "number"
-                    ? columnWidth
-                    : 0;
+              const columnWidth = activeColumn.getSize();
 
               const containerWidth =
                 tableContainerRef.current?.offsetWidth || 0;
@@ -419,12 +409,12 @@ export function Table({
               // Clamp the position so the column stays within bounds
               const left = Math.max(
                 0,
-                Math.min(unclamped, containerWidth - parsedWidth),
+                Math.min(unclamped, containerWidth - columnWidth),
               );
 
               return (
                 <div
-                  className="pointer-events-none absolute top-0 rounded border border-border-selected bg-background-primary/50 shadow-lg"
+                  className="pointer-events-none absolute top-0 rounded-sm border border-border-selected bg-background-primary/50 shadow-lg"
                   style={{
                     left,
                     width: columnWidth,
@@ -454,7 +444,7 @@ export function Table({
             ref={panelRef}
             className={cn(
               "max-h-full overflow-x-auto bg-background-primary",
-              !collapsed && "min-w-[14rem]",
+              !collapsed && "min-w-56",
             )}
           >
             <ViewDocument

@@ -67,14 +67,14 @@ Learn how to query data from Convex in a Remix app.
     with the sample data you just created in `sampleData.jsonl`
     into your Convex database with the `import` command.
 
-    ```
+    ```sh
     npx convex import --table tasks sampleData.jsonl
     ```
 
   </Step>
 
   <Step title="Expose a database query">
-    Add a new file <JSDialectFileName name="tasks.ts" /> in the `convex/` folder
+    Add a new file `tasks.ts` in the `convex/` folder
     with a query function that loads the data.
 
     Exporting a query function from this file
@@ -122,4 +122,4 @@ Learn how to query data from Convex in a Remix app.
 </StepByStep>
 
 Remix uses the React web library. See the complete
-[React documentation](/client/react.mdx).
+[React documentation](/client/react/overview.mdx).

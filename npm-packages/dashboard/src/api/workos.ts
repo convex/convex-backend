@@ -51,12 +51,12 @@ async function invalidateWorkOSEnvironmentCache(deploymentName: string) {
 }
 
 export function useDeploymentWorkOSEnvironment(deploymentName?: string) {
-  const { data } = useBBQuery({
+  const { data, error } = useBBQuery({
     path: "/deployments/{deployment_name}/workos_environment",
     pathParams: { deployment_name: deploymentName || "" },
   });
 
-  return data;
+  return { data, error };
 }
 
 export function useTeamWorkOSIntegration(teamId?: string) {

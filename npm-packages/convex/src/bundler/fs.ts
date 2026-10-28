@@ -193,7 +193,18 @@ export class NodeFs implements Filesystem {
     const fd = stdFs.openSync(path, "w", mode);
     try {
       stdFs.writeFileSync(fd, contents, { encoding: "utf-8" });
-      stdFs.fsyncSync(fd);
+      try {
+        stdFs.fsyncSync(fd);
+      } catch (e: any) {
+        // fsync(2) returns EINVAL on file descriptors that don't support
+        // synchronization, e.g. FIFOs/pipes. Some integrations (such as
+        // 1Password's Local Environment File) expose `.env.local` as a
+        // FIFO so secrets can be streamed on demand; the write itself
+        // succeeded, so treat the missing sync as best-effort.
+        if (e?.code !== "EINVAL") {
+          throw e;
+        }
+      }
     } finally {
       stdFs.closeSync(fd);
     }

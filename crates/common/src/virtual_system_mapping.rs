@@ -45,43 +45,6 @@ pub trait GetDocument: Send + Sync {
     ) -> anyhow::Result<Option<ResolvedDocument>>;
 }
 
-#[cfg(any(test, feature = "testing"))]
-pub struct NoopDocMapper;
-
-#[cfg(any(test, feature = "testing"))]
-pub mod test_virtual_system_mapping {
-    use async_trait::async_trait;
-    use value::TableMapping;
-
-    use super::NoopDocMapper;
-    use crate::{
-        document::{
-            DeveloperDocument,
-            ResolvedDocument,
-        },
-        version::Version,
-        virtual_system_mapping::{
-            GetDocument,
-            VirtualSystemDocMapper,
-            VirtualSystemMapping,
-        },
-    };
-
-    #[async_trait]
-    impl VirtualSystemDocMapper for NoopDocMapper {
-        async fn system_to_virtual_doc(
-            &self,
-            _tx: &mut dyn GetDocument,
-            _virtual_system_mapping: &VirtualSystemMapping,
-            doc: ResolvedDocument,
-            _table_mapping: &TableMapping,
-            _version: Version,
-        ) -> anyhow::Result<DeveloperDocument> {
-            Ok(doc.to_developer())
-        }
-    }
-}
-
 /// Captures the relationship between a system table and a virtual table.
 ///
 /// Some virtual tables map 1-1 to system tables (e.g. _file_storage system
@@ -143,14 +106,6 @@ impl AssociatedVirtualTable {
         }
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_primary_for_test(virtual_table_name: TableName) -> Self {
-        Self::Primary {
-            virtual_table_name,
-            virtual_to_system_indexes: Default::default(),
-            doc_mapper: Arc::new(NoopDocMapper),
-        }
-    }
 }
 
 #[derive(Clone, Default)]

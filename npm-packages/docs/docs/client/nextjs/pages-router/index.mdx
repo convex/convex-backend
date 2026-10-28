@@ -8,7 +8,7 @@ description:
 ---
 
 import simpleAuthedAppTSX from "!!raw-loader!@site/../demos/nextjs-pages-router/pages/_simpleAuthedApp.tsx";
-import apiTS from "!!raw-loader!@site/../demos/nextjs-pages-router/pages/api/clicks.ts";
+import api from "!!raw-loader!@site/../demos/nextjs-pages-router/pages/api/clicks.ts";
 
 This pages covers the Pages Router variant of Next.js. Alternatively see the
 [App Router](/client/nextjs/app-router/index.mdx) version of this page.
@@ -37,15 +37,15 @@ If you're using Auth0, the helper component `ConvexProviderWithAuth0` can be
 imported from `convex/react-auth0`.
 
 <Snippet
-  title="pages/_app.jsx"
+  title="pages/_app.tsx"
   snippet="simpleAuthedApp"
   source={simpleAuthedAppTSX}
 />
 
 Custom loading and logged out views can be built with the helper
-`Authenticated`, `Unauthenticated` and `AuthLoading` components from
-`convex/react`, see the
-[Convex Next.js demo](https://github.com/get-convex/convex-demos/tree/main/nextjs-pages-router/pages/_app.jsx)
+`Authenticated`, `Unauthenticated`, `AuthLoading` and `AuthRefreshing`
+components from `convex/react`, see the
+[Convex Next.js demo](https://github.com/convex/convex-demos/tree/main/nextjs-pages-router/pages/_app.jsx)
 for an example.
 
 If only some routes of your app require login, the same helpers can be used
@@ -54,7 +54,8 @@ between all pages from `pages/_app.jsx`. Share a single
 [ConvexReactClient](/api/classes/react.ConvexReactClient) instance between pages
 to avoid needing to reconnect to Convex on client-side page navigation.
 
-Read more about authenticating users with Convex in [Authentication](/auth.mdx).
+Read more about authenticating users with Convex in
+[Authentication](/auth/overview.mdx).
 
 ## API routes
 
@@ -69,7 +70,7 @@ file to the `pages/api` directory.
 To load and edit Convex data in your endpoints, use the
 [`fetchQuery`](/api/modules/nextjs#fetchquery) function from `convex/nextjs`:
 
-<Snippet title="pages/api/clicks.js" source={apiTS} />
+<Snippet title="pages/api/clicks.ts" source={api} />
 
 ## Server-side rendering
 

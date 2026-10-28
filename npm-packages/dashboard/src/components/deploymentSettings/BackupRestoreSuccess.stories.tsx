@@ -1,6 +1,5 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import { TeamResponse } from "generatedApi";
 import { Id } from "system-udfs/convex/_generated/dataModel";
 import { BackupResponse } from "api/backups";
 import { BackupRestoreSuccess } from "./BackupRestoreStatus";
@@ -10,16 +9,6 @@ oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
 const inOneWeek = new Date();
 inOneWeek.setDate(inOneWeek.getDate() + 7);
-
-const team: TeamResponse = {
-  id: 1,
-  creator: 1,
-  slug: "team",
-  name: "Team",
-  suspended: false,
-  referralCode: "TEAM123",
-  referredBy: null,
-};
 
 const backup: BackupResponse = {
   id: 1,
@@ -54,11 +43,9 @@ const meta = {
     completedTime: new Date(),
     restoredRowsCount: 336_185,
     deployment,
-    team,
     backup,
     snapshotImportCheckpoints: undefined,
   },
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof BackupRestoreSuccess>;
 
 export default meta;

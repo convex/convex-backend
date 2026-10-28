@@ -1,0 +1,10 @@
+interface:
+  display_name: "Convex Setup Auth"
+  short_description: "Set up Convex auth, user identity mapping, and access control."
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+  brand_color: "#2563EB"
+  default_prompt: "Set up authentication for this Convex app. Figure out the provider first, then wire up the user model, identity mapping, and access control with the smallest solid implementation."
+
+policy:
+  allow_implicit_invocation: true

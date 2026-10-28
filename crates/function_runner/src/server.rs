@@ -17,18 +17,16 @@ use common::{
         ComponentName,
         Resource,
     },
+    document::udf_unix_timestamp,
     errors::JsError,
     execution_context::ExecutionContext,
     http::{
         fetch::FetchClient,
         RoutedHttpPath,
     },
+    knobs::MAX_ISOLATE_WORKERS,
     log_lines::LogLine,
-    persistence::{
-        NoopRetentionValidator,
-        PersistenceReader,
-        RetentionValidator,
-    },
+    persistence::RetentionValidator,
     query_journal::QueryJournal,
     runtime::{
         Runtime,
@@ -37,25 +35,26 @@ use common::{
     schemas::DatabaseSchema,
     types::{
         ConvexOrigin,
+        DeploymentMetadata,
         IndexId,
         ModuleEnvironment,
-        RepeatableTimestamp,
         UdfType,
     },
 };
 use database::{
     BootstrapMetadata,
-    FollowerRetentionManager,
     TableCountSnapshot,
     Transaction,
     TransactionTextSnapshot,
 };
 use file_storage::TransactionalFileStorage;
 use futures::FutureExt;
-use indexing::backend_in_memory_indexes::IndexReader;
+use indexing::index_reader::IndexReader;
 use isolate::{
-    client::EnvironmentData,
-    ActionCallbacks,
+    client::{
+        EnvironmentData,
+        IsolateWorker,
+    },
     IsolateClient,
 };
 use keybroker::{
@@ -63,6 +62,7 @@ use keybroker::{
     Identity,
 };
 use model::{
+    components::auth::propagate_component_auth,
     config::types::ModuleConfig,
     environment_variables::types::{
         EnvVarName,
@@ -72,6 +72,10 @@ use model::{
         AnalyzedModule,
         ModuleSource,
         SourceMap,
+    },
+    source_packages::{
+        types::SourcePackage,
+        upload_download::download_package,
     },
     udf_config::types::UdfConfig,
 };
@@ -93,6 +97,7 @@ use udf::{
         ValidatedHttpPath,
         ValidatedPathAndArgs,
     },
+    ActionCallbacks,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
     HttpActionRequest as HttpActionRequestInner,
@@ -115,12 +120,9 @@ use crate::{
     FunctionWrites,
 };
 
-const MAX_ISOLATE_WORKERS: usize = 128;
-
 pub struct RunRequestArgs {
-    pub instance_name: String,
     pub key_broker: FunctionRunnerKeyBroker,
-    pub reader: Arc<dyn PersistenceReader>,
+    pub index_reader: Arc<dyn IndexReader>,
     pub convex_origin: ConvexOrigin,
     pub bootstrap_metadata: BootstrapMetadata,
     pub table_count_snapshot: Arc<dyn TableCountSnapshot>,
@@ -131,14 +133,12 @@ pub struct RunRequestArgs {
     pub function_started_sender: Option<oneshot::Sender<()>>,
     pub udf_type: UdfType,
     pub identity: Identity,
-    pub ts: RepeatableTimestamp,
     pub existing_writes: FunctionWrites,
     pub default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
     pub in_memory_index_last_modified: BTreeMap<IndexId, Timestamp>,
     pub context: ExecutionContext,
-    /// If set, use this IndexReader for index scans instead of reading from
-    /// persistence directly. Used to route index reads to conductor.
-    pub index_reader_override: Option<Arc<dyn IndexReader>>,
+    pub subfunctions_in_same_isolate: bool,
+    pub deployment: DeploymentMetadata,
 }
 
 #[derive(Clone)]
@@ -164,6 +164,15 @@ pub trait StorageForDeployment<RT: Runtime>: Debug + Clone + Send + Sync + 'stat
         transaction: &mut Transaction<RT>,
         use_case: StorageUseCase,
     ) -> anyhow::Result<Arc<dyn Storage>>;
+
+    /// Reads a source package's modules out of `modules_storage`.
+    async fn download_package(
+        &self,
+        modules_storage: Arc<dyn Storage>,
+        source_package: &SourcePackage,
+    ) -> anyhow::Result<BTreeMap<CanonicalizedModulePath, ModuleConfig>> {
+        download_package(modules_storage, source_package).await
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -230,21 +239,18 @@ pub async fn validate_run_function_result(
 }
 
 impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
-    pub fn new(rt: RT, storage: S, max_percent_per_client: usize) -> anyhow::Result<Self> {
-        Self::_new(rt, storage, max_percent_per_client, MAX_ISOLATE_WORKERS)
-    }
-
-    fn _new(
+    pub fn new<W: IsolateWorker<RT>>(
         rt: RT,
         storage: S,
         max_percent_per_client: usize,
-        max_isolate_workers: usize,
+        isolate_worker: W,
     ) -> anyhow::Result<Self> {
+        let max_isolate_workers = *MAX_ISOLATE_WORKERS;
         let isolate_client = IsolateClient::new(
             rt.clone(),
             max_percent_per_client,
             max_isolate_workers,
-            None,
+            isolate_worker,
         )?;
         let index_cache = InMemoryIndexCache::new(rt.clone());
         let module_cache = ModuleCache::new(rt.clone());
@@ -258,6 +264,14 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
             code_cache,
             isolate_client,
         })
+    }
+
+    pub fn active_isolate_workers(&self) -> usize {
+        self.isolate_client.active_workers()
+    }
+
+    pub fn max_isolate_workers(&self) -> usize {
+        self.isolate_client.max_workers()
     }
 
     pub async fn shutdown(&self) -> anyhow::Result<()> {
@@ -292,9 +306,8 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
     pub async fn run_function_no_retention_check_inner(
         &self,
         RunRequestArgs {
-            instance_name,
             key_broker,
-            reader,
+            index_reader,
             convex_origin,
             bootstrap_metadata,
             table_count_snapshot,
@@ -305,12 +318,12 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
             function_started_sender,
             udf_type,
             identity,
-            ts,
             existing_writes,
             default_system_env_vars,
             in_memory_index_last_modified,
             context,
-            index_reader_override,
+            subfunctions_in_same_isolate,
+            deployment,
         }: RunRequestArgs,
         function_metadata: Option<FunctionMetadata>,
         http_action_metadata: Option<HttpActionMetadata>,
@@ -319,36 +332,20 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         FunctionOutcome,
         FunctionUsageStats,
     )> {
+        let deployment_name = deployment.name.clone();
         let usage_tracker = FunctionUsageTracker::new();
-        let retention_validator: Arc<dyn RetentionValidator> = match udf_type {
-            // Since queries and mutations are ready only, we can check the retention
-            // in at end in `validate_function_runner_result`.
-            UdfType::Query | UdfType::Mutation => Arc::new(NoopRetentionValidator {}),
-            // For actions, we have to do it inline since they have side effects.
-            UdfType::Action | UdfType::HttpAction => Arc::new(
-                FollowerRetentionManager::new_with_repeatable_ts(
-                    self.rt.clone(),
-                    reader.clone(),
-                    ts,
-                )
-                .await?,
-            ),
-        };
         let mut transaction = self
             .index_cache
             .begin_tx(
                 identity.clone(),
-                ts,
                 existing_writes,
-                reader,
-                instance_name.clone(),
+                index_reader,
+                deployment_name.clone(),
                 in_memory_index_last_modified,
                 bootstrap_metadata,
                 table_count_snapshot,
                 text_index_snapshot,
                 usage_tracker.clone(),
-                retention_validator,
-                index_reader_override,
             )
             .await?;
         let storage = self
@@ -364,13 +361,15 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         let environment_data = EnvironmentData {
             key_broker,
             default_system_env_vars,
-            file_storage,
+            file_storage: file_storage.clone(),
             module_loader: Arc::new(FunctionRunnerModuleLoader {
-                instance_name: instance_name.clone(),
+                deployment_name: deployment_name.clone(),
                 cache: self.module_cache.clone(),
                 code_cache: self.code_cache.clone(),
                 modules_storage,
+                storage: self.storage.clone(),
             }),
+            deployment,
         };
 
         match udf_type {
@@ -383,8 +382,8 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                 // `unix_timestamp` below, the UDF is only deterministic modulo this
                 // system-generated input.
                 let rng_seed = self.rt.rng().random();
-                let unix_timestamp = self.rt.unix_timestamp();
-                let (tx, outcome) = self
+                let unix_timestamp = udf_unix_timestamp(transaction.next_creation_time());
+                let (mut tx, outcome) = self
                     .isolate_client
                     .execute_udf(
                         udf_type,
@@ -396,10 +395,18 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                         rng_seed,
                         unix_timestamp,
                         0,
-                        instance_name,
+                        deployment_name,
                         function_started_sender,
+                        subfunctions_in_same_isolate,
                     )
                     .await?;
+                if matches!(&outcome, FunctionOutcome::Mutation(o) if o.result.is_err()) {
+                    tx.discard_pending_file_uploads()?;
+                } else {
+                    file_storage
+                        .upload_pending_files(&mut tx, &usage_tracker)
+                        .await?;
+                }
                 Ok((
                     Some(tx.try_into()?),
                     outcome,
@@ -421,7 +428,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                         log_line_sender,
                         context,
                         environment_data,
-                        instance_name,
+                        deployment_name,
                         function_started_sender,
                     )
                     .await?;
@@ -440,6 +447,11 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                 } = http_action_metadata.context("Missing http action metadata")?;
                 let log_line_sender =
                     log_line_sender.context("Missing log line sender for http action")?;
+                // Set the proper identity for component HTTP actions. Note that for HTTP,
+                // the component is both the caller and the callee.
+                let component_id = http_module_path.path().component;
+                let identity =
+                    propagate_component_auth(&identity, component_id, component_id.is_root());
                 let outcome = self
                     .isolate_client
                     .execute_http_action(
@@ -454,7 +466,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                         transaction,
                         context,
                         environment_data,
-                        instance_name,
+                        deployment_name,
                         function_started_sender,
                     )
                     .await?;
@@ -472,7 +484,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         udf_config: UdfConfig,
         modules: BTreeMap<CanonicalizedModulePath, ModuleConfig>,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
-        instance_name: String,
+        deployment_name: String,
     ) -> anyhow::Result<Result<BTreeMap<CanonicalizedModulePath, AnalyzedModule>, JsError>> {
         anyhow::ensure!(
             modules
@@ -482,7 +494,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         );
 
         self.isolate_client
-            .analyze(udf_config, modules, environment_variables, instance_name)
+            .analyze(udf_config, modules, environment_variables, deployment_name)
             .await
     }
 
@@ -494,7 +506,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         dependency_graph: BTreeSet<(ComponentDefinitionPath, ComponentDefinitionPath)>,
         user_environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
         system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
-        instance_name: String,
+        deployment_name: String,
     ) -> anyhow::Result<EvaluateAppDefinitionsResult> {
         anyhow::ensure!(
             app_definition.environment == ModuleEnvironment::Isolate,
@@ -514,7 +526,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                 dependency_graph,
                 user_environment_variables,
                 system_env_vars,
-                instance_name,
+                deployment_name,
             )
             .await
     }
@@ -527,7 +539,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         definition: ModuleConfig,
         args: BTreeMap<Identifier, Resource>,
         name: ComponentName,
-        instance_name: String,
+        deployment_name: String,
     ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
         self.isolate_client
             .evaluate_component_initializer(
@@ -536,7 +548,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                 definition,
                 args,
                 name,
-                instance_name,
+                deployment_name,
             )
             .await
     }
@@ -548,7 +560,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         source_map: Option<SourceMap>,
         rng_seed: [u8; 32],
         unix_timestamp: UnixTimestamp,
-        instance_name: String,
+        deployment_name: String,
     ) -> anyhow::Result<DatabaseSchema> {
         self.isolate_client
             .evaluate_schema(
@@ -556,7 +568,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                 source_map,
                 rng_seed,
                 unix_timestamp,
-                instance_name,
+                deployment_name,
             )
             .await
     }
@@ -568,7 +580,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         source_map: Option<SourceMap>,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
         explanation: &str,
-        instance_name: String,
+        deployment_name: String,
     ) -> anyhow::Result<AuthConfig> {
         self.isolate_client
             .evaluate_auth_config(
@@ -576,7 +588,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                 source_map,
                 environment_variables,
                 explanation,
-                instance_name,
+                deployment_name,
             )
             .await
     }

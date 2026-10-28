@@ -9,7 +9,7 @@ export const list = query({
     return Promise.all(
       messages.map(async (message) => {
         const { author, ...messageBody } = message;
-        const name = (await ctx.db.get(author))!.name;
+        const name = (await ctx.db.get("users", author))!.name;
         return { author: name, ...messageBody };
       }),
     );

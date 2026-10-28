@@ -1,5 +1,5 @@
 import { httpRouter } from "convex/server";
-import { httpAction, query } from "./_generated/server";
+import { env, httpAction, query } from "./_generated/server";
 
 const http = httpRouter();
 
@@ -36,7 +36,7 @@ http.route({
 export const siteUrl = query({
   args: {},
   handler: () => {
-    return process.env.CONVEX_SITE_URL!;
+    return env.CONVEX_SITE_URL;
   },
 });
 

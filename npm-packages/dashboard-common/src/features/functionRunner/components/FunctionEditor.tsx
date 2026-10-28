@@ -4,8 +4,14 @@ import classNames from "classnames";
 import { FunctionResult } from "convex/browser";
 import { useQuery } from "convex/react";
 // special case: too annoying to move convexServerTypes to a separate file right now
-import { useTheme } from "next-themes";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import udfs from "@common/udfs";
 import { Uri } from "monaco-editor/esm/vs/editor/editor.api";
 import { Button } from "@ui/Button";
@@ -14,6 +20,9 @@ import { stringifyValue } from "@common/lib/stringifyValue";
 import { SchemaJson, displaySchema } from "@common/lib/format";
 import { useRunTestFunction } from "@common/features/functionRunner/lib/client";
 import { ComponentId } from "@common/lib/useNents";
+import { useCurrentTheme } from "@common/lib/useCurrentTheme";
+import { PermissionsContext } from "@common/lib/deploymentContext";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
 import { Result } from "@common/features/functionRunner/components/Result";
 import {
   RunHistory,
@@ -178,7 +187,10 @@ export function useFunctionEditor(
   setRunHistoryItem: (item: RunHistoryItem) => void,
   onRanCustomQuery?: () => void,
 ) {
-  const { resolvedTheme: currentTheme } = useTheme();
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canRunTestQuery = useIsOperationAllowed("RunTestQuery");
+  const canViewData = useIsOperationAllowed("ViewData");
+  const currentTheme = useCurrentTheme();
   const prefersDark = currentTheme === "dark";
 
   const [prevInitialTable, setPrevInitialTable] = useState<
@@ -187,9 +199,13 @@ export function useFunctionEditor(
 
   const [code, setCode] = useState<string>();
 
-  const schemas = useQuery(udfs.getSchemas.default, {
-    componentId,
-  });
+  // Skip the schema query when the member can't view data — otherwise the
+  // backend rejects the request and the resulting throw escapes the
+  // ErrorBoundary on the next subscription notify.
+  const schemas = useQuery(
+    udfs.getSchemas.default,
+    canViewData ? { componentId } : "skip",
+  );
   const schema = useMemo(() => {
     if (schemas === undefined) {
       return undefined;
@@ -430,6 +446,15 @@ export function useFunctionEditor(
         }}
         size="sm"
         className={classNames("items-center justify-center", "w-full")}
+        disabled={!canRunTestQuery}
+        tip={
+          !canRunTestQuery ? (
+            <PermissionDeniedTip
+              message="You do not have permission to run custom queries in this deployment."
+              action="deployment:functions:runTestQuery"
+            />
+          ) : undefined
+        }
         loading={isInFlight}
         icon={<PlayIcon />}
       >

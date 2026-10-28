@@ -8,10 +8,10 @@ on:
 
 jobs:
   send:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
-      - uses: int128/datadog-actions-metrics@v1
+      - uses: int128/datadog-actions-metrics@262ee4930e40245b2d9806da14213982073ae952 # v1
         with:
           datadog-api-key: ${{ secrets.DATADOG_API_KEY }}
           collect-job-metrics: true

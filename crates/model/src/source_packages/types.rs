@@ -19,18 +19,43 @@ use value::{
     heap_size::HeapSize,
     id_v6::DeveloperDocumentId,
     sha256::Sha256Digest,
-    ConvexValue,
 };
 
 use crate::external_packages::types::ExternalDepsPackageId;
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum NodeVersion {
+    /// Node 18 is deprecated in AWS, so customers with it set will
+    /// no longer be able to update their static lambdas. This is okay because
+    /// users can update their Node version to unblock themselves. New pushes
+    /// with Node 18 are rejected by [`NodeVersion::check_supported_for_push`].
     V18x,
+    /// Node 20 is end-of-life. Existing source packages keep running on it,
+    /// but new pushes with Node 20 are rejected by
+    /// [`NodeVersion::check_supported_for_push`].
     V20x,
     V22x,
     V24x,
+}
+
+impl NodeVersion {
+    /// Rejects end-of-life versions so that new code can't be pushed with
+    /// them. Versions stay parseable so existing source packages still load.
+    pub fn check_supported_for_push(self) -> anyhow::Result<()> {
+        match self {
+            NodeVersion::V18x | NodeVersion::V20x => {
+                let version = String::from(self);
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "NodeVersionNotSupported",
+                    format!(
+                        "Node {version} is no longer supported. Upgrade to a newer Node version \
+                         (https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version)."
+                    )
+                ));
+            },
+            NodeVersion::V22x | NodeVersion::V24x => Ok(()),
+        }
+    }
 }
 
 impl FromStr for NodeVersion {
@@ -58,8 +83,45 @@ impl From<NodeVersion> for String {
     }
 }
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NodeVersionDiff {
+    pub previous_version: Option<NodeVersion>,
+    pub next_version: Option<NodeVersion>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SerializedNodeVersionDiff {
+    pub previous_version: Option<String>,
+    pub next_version: Option<String>,
+}
+
+impl TryFrom<NodeVersionDiff> for SerializedNodeVersionDiff {
+    type Error = anyhow::Error;
+
+    fn try_from(value: NodeVersionDiff) -> anyhow::Result<Self> {
+        Ok(SerializedNodeVersionDiff {
+            previous_version: value.previous_version.map(String::from),
+            next_version: value.next_version.map(String::from),
+        })
+    }
+}
+
+impl TryFrom<SerializedNodeVersionDiff> for NodeVersionDiff {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SerializedNodeVersionDiff) -> anyhow::Result<Self> {
+        Ok(NodeVersionDiff {
+            previous_version: value.previous_version.map(|s| s.parse()).transpose()?,
+            next_version: value.next_version.map(|s| s.parse()).transpose()?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Contains the metadata for a source package. Multiple [`SourcePackage`]
+/// documents may be referenced in the modules table. [`ModuleMetadata`] that
+/// reference old versions of [`SourcePackage`] are able to be read at all
+/// subsequent versions of [`SourcePackage`].
 pub struct SourcePackage {
     pub storage_key: ObjectKey,
     pub sha256: Sha256Digest,
@@ -68,18 +130,18 @@ pub struct SourcePackage {
     pub node_version: Option<NodeVersion>,
 }
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
+impl SourcePackage {
+    pub fn metadata_matches(&self, other: &SourcePackage) -> bool {
+        // We explicitly do not compare the sha256 because it also includes creation
+        // time in the hash
+        self.node_version == other.node_version
+            && self.external_deps_package_id == other.external_deps_package_id
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
 pub struct PackageSize {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "0..=i64::MAX as usize")
-    )]
     pub zipped_size_bytes: usize,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "0..=i64::MAX as usize")
-    )]
     pub unzipped_size_bytes: usize,
 }
 
@@ -111,21 +173,10 @@ impl std::fmt::Display for PackageSize {
     }
 }
 
-const MAX_ZIPPED_PACKAGES_SIZE: usize = 45_000_000; // 45 MB - Lambda gives us 50 MB so we have 5 MB wiggle room
 const MAX_UNZIPPED_PACKAGES_SIZE: usize = 230_000_000; // 230 MB - Lambda gives us 250 MB
 
 impl PackageSize {
     pub fn verify_size(&self) -> anyhow::Result<()> {
-        if self.zipped_size_bytes >= MAX_ZIPPED_PACKAGES_SIZE {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "ModulesTooLarge",
-                format!(
-                    "Total module size exceeded the zipped maximum ({} > maximum size {})",
-                    self.zipped_size_bytes.format_size(BINARY),
-                    MAX_ZIPPED_PACKAGES_SIZE.format_size(BINARY)
-                ),
-            ),);
-        }
         if self.unzipped_size_bytes >= MAX_UNZIPPED_PACKAGES_SIZE {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "ModulesTooLarge",
@@ -173,7 +224,6 @@ impl TryFrom<PackageSize> for SerializedPackageSize {
 
 codegen_convex_serialization!(PackageSize, SerializedPackageSize);
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Debug, Clone, PartialEq, Eq, Copy, PartialOrd, Ord, Hash)]
 pub struct SourcePackageId(DeveloperDocumentId);
 
@@ -189,18 +239,17 @@ impl From<DeveloperDocumentId> for SourcePackageId {
     }
 }
 
-impl From<SourcePackageId> for ConvexValue {
+impl From<SourcePackageId> for String {
     fn from(value: SourcePackageId) -> Self {
         let id: DeveloperDocumentId = value.into();
         id.into()
     }
 }
-
-impl TryFrom<ConvexValue> for SourcePackageId {
+impl TryFrom<String> for SourcePackageId {
     type Error = anyhow::Error;
 
-    fn try_from(value: ConvexValue) -> Result<Self, Self::Error> {
-        let id: DeveloperDocumentId = value.try_into()?;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let id = DeveloperDocumentId::decode(&value)?;
         Ok(SourcePackageId(id))
     }
 }
@@ -266,59 +315,3 @@ impl TryFrom<SerializedSourcePackage> for SourcePackage {
 }
 
 codegen_convex_serialization!(SourcePackage, SerializedSourcePackage);
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use common::testing::assert_roundtrips;
-    use proptest::prelude::*;
-    use value::{
-        sha256::Sha256Digest,
-        ConvexObject,
-        DeveloperDocumentId,
-    };
-
-    use super::SourcePackage;
-    use crate::{
-        external_packages::types::ExternalDepsPackageId,
-        source_packages::types::PackageSize,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_source_package_roundtrip(v in any::<SourcePackage>()) {
-            assert_roundtrips::<SourcePackage, ConvexObject>(v);
-        }
-    }
-
-    #[test]
-    fn test_frozen_source_package() {
-        let value = value::json_deserialize(r#"{
-            "externalPackageId":"k423gp2tq6nsw6ngwhkw72c3z17fkb5t",
-            "packageSize":{"unzippedSizeBytes":{"$integer":"SEUHAAAAAAA="},"zippedSizeBytes":{"$integer":"QZgBAAAAAAA="}},
-            "sha256":{"$bytes":"7WWCt6Y52N/xQ2e7Tidc6ZPAx6KAUosaxVcVcq5dbWk="},
-            "storageKey":"fcf904d2-566c-41fc-a899-870b6a66b274"
-        }"#).unwrap();
-        let parsed = SourcePackage::try_from(value).unwrap();
-        assert_eq!(
-            parsed,
-            SourcePackage {
-                storage_key: "fcf904d2-566c-41fc-a899-870b6a66b274".try_into().unwrap(),
-                sha256: Sha256Digest::from(*b"\xed\x65\x82\xb7\xa6\x39\xd8\xdf\xf1\x43\x67\xbb\x4e\x27\x5c\xe9\x93\xc0\xc7\xa2\x80\x52\x8b\x1a\xc5\x57\x15\x72\xae\x5d\x6d\x69"),
-                external_deps_package_id: Some(ExternalDepsPackageId::from(
-                    "k423gp2tq6nsw6ngwhkw72c3z17fkb5t"
-                        .parse::<DeveloperDocumentId>()
-                        .unwrap()
-                )),
-                package_size: PackageSize {
-                    zipped_size_bytes: 104513,
-                    unzipped_size_bytes: 476488,
-                },
-                node_version: None,
-            }
-        );
-    }
-}

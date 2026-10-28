@@ -9,8 +9,10 @@ license = "LicenseRef-FSL-1.1-Apache-2.0"
 doctest = false
 proc-macro = true
 
+[features]
+testing = []
+
 [dependencies]
-proc-macro2 = { workspace = true }
 quote = { workspace = true }
 syn = { workspace = true }
 

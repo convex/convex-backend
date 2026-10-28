@@ -127,8 +127,7 @@ export interface ConvexQueryClientOnlyOptions {
 }
 
 export interface ConvexQueryClientOptions
-  extends ConvexQueryClientOnlyOptions,
-    ConvexReactClientOptions {}
+  extends ConvexQueryClientOnlyOptions, ConvexReactClientOptions {}
 
 /**
  * Subscribes to events from a TanStack Query QueryClient and populates query
@@ -253,18 +252,15 @@ export class ConvexQueryClient<
       // least used elsewhere. Either trigger a query by invalidating this query
       // (only feasible if guaranteed to update before the next tick) or
       // look into a `QueryClient.setQueryError` API.
-      query?.setState(
-        {
-          error: error as Error,
-          errorUpdateCount: query.state.errorUpdateCount + 1,
-          errorUpdatedAt: Date.now(),
-          fetchFailureCount: query.state.fetchFailureCount + 1,
-          fetchFailureReason: error as Error,
-          fetchStatus: "idle",
-          status: "error",
-        },
-        { meta: "set by ConvexQueryClient" },
-      );
+      query?.setState({
+        error: error as Error,
+        errorUpdateCount: query.state.errorUpdateCount + 1,
+        errorUpdatedAt: Date.now(),
+        fetchFailureCount: query.state.fetchFailureCount + 1,
+        fetchFailureReason: error as Error,
+        fetchStatus: "idle",
+        status: "error",
+      });
     }
   }
 
@@ -333,14 +329,6 @@ export class ConvexQueryClient<
           break;
         }
         case "updated": {
-          if (
-            event.action.type === "setState" &&
-            event.action.setStateOptions?.meta === "set by ConvexQueryClient"
-          ) {
-            // This one was caused by us. This may be important to know for
-            // breaking infinite loops in the future.
-            break;
-          }
           break;
         }
         case "observerOptionsUpdated": {

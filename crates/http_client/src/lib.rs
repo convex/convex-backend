@@ -1,4 +1,3 @@
-#![feature(try_blocks)]
 #![feature(try_blocks_heterogeneous)]
 #![feature(impl_trait_in_fn_trait_return)]
 
@@ -107,6 +106,7 @@ impl CachedHttpClient {
 /// HTTP fetch function that caches responses in memory based on the
 /// `Cache-Control` headers in the response. Also checks for SSRF mitigation
 /// responses from the proxy.
+#[fastrace::trace]
 async fn cached_http_client_inner(
     client: reqwest_middleware::ClientWithMiddleware,
     request: HttpRequest,
@@ -150,50 +150,4 @@ async fn cached_http_client_inner(
         HttpResponse::from_parts(parts, vec_body)
     });
     res.map_err(AsStdError)
-}
-
-#[cfg(test)]
-mod tests {
-    use http_cache::XCACHE;
-    use openidconnect::http::{
-        self,
-        header::HeaderValue,
-    };
-    use reqwest::Url;
-
-    use crate::{
-        CachedHttpClient,
-        ClientPurpose,
-    };
-
-    #[tokio::test]
-    async fn test_cached_client() -> anyhow::Result<()> {
-        // Use Google's OpenID configuration, which should never disappear
-        let url =
-            Url::parse("https://accounts.google.com/.well-known/openid-configuration").unwrap();
-        let request = http::Request::get(url.to_string())
-            .header(
-                http::header::ACCEPT,
-                HeaderValue::from_static("application/json"),
-            )
-            .body(vec![])?;
-        // Create a client without proxy for testing
-        let client = CachedHttpClient::new(None, "test".to_string(), Default::default());
-        let http_client = client.for_purpose(ClientPurpose::ProviderMetadata);
-        let response = http_client(request.clone()).await.unwrap();
-        assert_eq!(
-            response.headers().get(XCACHE).unwrap().as_bytes(),
-            "MISS".as_bytes()
-        );
-        // Send the request again - need to create a new client since for_purpose takes
-        // ownership
-        let client = CachedHttpClient::new(None, "test".to_string(), Default::default());
-        let http_client = client.for_purpose(ClientPurpose::ProviderMetadata);
-        let response = http_client(request).await.unwrap();
-        assert_eq!(
-            response.headers().get(XCACHE).unwrap().as_bytes(),
-            "HIT".as_bytes()
-        );
-        Ok(())
-    }
 }

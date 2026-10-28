@@ -1,7 +1,7 @@
 import { createRouter } from '@tanstack/react-router'
 import { ConvexQueryClient } from '@convex-dev/react-query'
 import { QueryClient } from '@tanstack/react-query'
-import { routerWithQueryClient } from '@tanstack/react-router-with-query'
+import { setupRouterSsrQueryIntegration } from '@tanstack/react-router-ssr-query'
 import { ConvexProvider, ConvexReactClient } from 'convex/react'
 import { routeTree } from './routeTree.gen'
 import { DefaultCatchBoundary } from './components/DefaultCatchBoundary'
@@ -27,24 +27,22 @@ export function getRouter() {
   })
   convexQueryClient.connect(queryClient)
 
-  const router = routerWithQueryClient(
-    createRouter({
-      routeTree,
-      defaultPreload: 'intent',
-      scrollRestoration: true,
-      defaultErrorComponent: DefaultCatchBoundary,
-      defaultNotFoundComponent: () => <NotFound />,
-      context: { queryClient },
-      Wrap: ({ children }) => {
-        return (
-          <ConvexProvider client={convexQueryClient.convexClient}>
-            {children}
-          </ConvexProvider>
-        )
-      },
-    }),
-    queryClient,
-  )
+  const router = createRouter({
+    routeTree,
+    defaultPreload: 'intent',
+    scrollRestoration: true,
+    defaultErrorComponent: DefaultCatchBoundary,
+    defaultNotFoundComponent: () => <NotFound />,
+    context: { queryClient },
+    Wrap: ({ children }) => {
+      return (
+        <ConvexProvider client={convexQueryClient.convexClient}>
+          {children}
+        </ConvexProvider>
+      )
+    },
+  })
+  setupRouterSsrQueryIntegration({ router, queryClient })
 
   return router
 }

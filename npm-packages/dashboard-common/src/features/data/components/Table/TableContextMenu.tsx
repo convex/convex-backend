@@ -3,6 +3,7 @@ import {
   EnterFullScreenIcon,
   ExternalLinkIcon,
   FileIcon,
+  FileTextIcon,
   MixerHorizontalIcon,
   Pencil1Icon,
   ResetIcon,
@@ -14,13 +15,15 @@ import { GenericDocument } from "convex/server";
 import { Value, convexToJson } from "convex/values";
 import {
   Filter,
+  FilterByBuiltin,
+  FilterByType,
   typeOf,
 } from "system-udfs/convex/_system/frontend/lib/filters";
 import { UrlObject } from "url";
 import { Key } from "@ui/KeyboardShortcut";
+import type { Option } from "@ui/Combobox";
 import { ContextMenu } from "@common/features/data/components/ContextMenu";
 import { PopupState } from "@common/features/data/lib/useToolPopup";
-import { operatorOptions } from "@common/features/data/components/FilterEditor/FilterEditor";
 import {
   ActionHotkeysProps,
   OpenContextMenu,
@@ -30,6 +33,9 @@ import {
 import { stringifyValue } from "@common/lib/stringifyValue";
 import { useNents } from "@common/lib/useNents";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
+import { SchemaJson } from "@common/lib/format";
+import { documentValidatorForTable } from "@common/features/data/components/Table/utils/validators";
 
 export function useTableContextMenuState(): {
   contextMenuState: TableContextMenuState | null;
@@ -71,6 +77,8 @@ export type TableContextMenuProps = {
   resetColumns: () => void;
   canManageTable: boolean;
   isProtectedDeployment: boolean;
+  activeSchema: SchemaJson | null;
+  tableName: string;
 };
 
 export function TableContextMenu({
@@ -84,6 +92,8 @@ export function TableContextMenu({
   resetColumns,
   canManageTable,
   isProtectedDeployment,
+  activeSchema,
+  tableName,
 }: TableContextMenuProps) {
   const { selectedNent } = useNents();
   const isInUnmountedComponent = !!(
@@ -181,6 +191,13 @@ export function TableContextMenu({
           {state.selectedCell && !state.selectedCell.rowId && (
             <>
               <hr className="my-1" />
+              <ColumnSchemaAction
+                activeSchema={activeSchema}
+                tableName={tableName}
+                columnName={state.selectedCell.column}
+                setPopup={setPopup}
+                close={close}
+              />
               <ContextMenu.Item
                 icon={<ResetIcon aria-hidden="true" />}
                 label="Reset column positions and widths"
@@ -194,6 +211,19 @@ export function TableContextMenu({
     </ContextMenu>
   );
 }
+
+const operatorOptions: Readonly<
+  Option<(FilterByType | FilterByBuiltin)["op"]>[]
+> = [
+  { value: "eq", label: "equals" },
+  { value: "neq", label: "not equal" },
+  { value: "gt", label: ">" },
+  { value: "lt", label: "<" },
+  { value: "gte", label: ">=" },
+  { value: "lte", label: "<=" },
+  { value: "type", label: "is type" },
+  { value: "notype", label: "is not type" },
+];
 
 function showFilter(
   operator: (typeof operatorOptions)[number]["value"],
@@ -335,6 +365,7 @@ function CellActions({
                     : "Go to Reference",
                 disabled: false,
                 tip: null,
+                blankTarget: false,
               }
             : {
                 action: viewCb,
@@ -370,11 +401,14 @@ function CellActions({
               </div>
             ),
             disabled: disableEdit,
-            tip: isInUnmountedComponent
-              ? "Cannot edit documents in an unmounted component."
-              : !canManageTable
-                ? "You do not have permission to edit data in production."
-                : null,
+            tip: isInUnmountedComponent ? (
+              "Cannot edit documents in an unmounted component."
+            ) : !canManageTable ? (
+              <PermissionDeniedTip
+                message="You do not have permission to edit data in this deployment."
+                action="deployment:data:write"
+              />
+            ) : null,
           },
         ]
       : null;
@@ -391,6 +425,7 @@ function CellActions({
           disabled={action.disabled}
           tip={action.tip}
           tipSide="right"
+          blankTarget={"blankTarget" in action ? action.blankTarget : undefined}
         />
       ))}
       {filterAction}
@@ -537,8 +572,12 @@ function DocumentActions({
       disabled: disableEditDoc,
       tip: isInUnmountedComponent
         ? "Cannot edit documents in an unmounted component."
-        : !canManageTable &&
-          "You do not have permission to edit data in production.",
+        : !canManageTable && (
+            <PermissionDeniedTip
+              message="You do not have permission to edit data in this deployment."
+              action="deployment:data:write"
+            />
+          ),
       tipSide: "right",
       action: editDocCb,
     },
@@ -548,8 +587,12 @@ function DocumentActions({
       disabled: disableEditDoc,
       tip: isInUnmountedComponent
         ? "Cannot delete documents in an unmounted component."
-        : !canManageTable &&
-          "You do not have permission to edit data in production.",
+        : !canManageTable && (
+            <PermissionDeniedTip
+              message="You do not have permission to delete data in this deployment."
+              action="deployment:data:write"
+            />
+          ),
       tipSide: "right",
       danger: true,
       action: () => {
@@ -583,5 +626,47 @@ function DocumentActions({
         />
       ))}
     </>
+  );
+}
+
+// Header action to open a side panel with the schema for the clicked column.
+// Only rendered when the column is actually defined in the table's schema.
+function ColumnSchemaAction({
+  activeSchema,
+  tableName,
+  columnName,
+  setPopup,
+  close,
+}: {
+  activeSchema: SchemaJson | null;
+  tableName: string;
+  columnName: string;
+  setPopup: PopupState["setPopup"];
+  close: () => void;
+}) {
+  const documentValidator =
+    activeSchema && documentValidatorForTable(activeSchema, tableName);
+  const hasFieldSchema =
+    documentValidator?.type === "object" &&
+    documentValidator.value[columnName] !== undefined;
+
+  if (columnName === "*select" || !hasFieldSchema) {
+    return null;
+  }
+
+  return (
+    <ContextMenu.Item
+      icon={<FileTextIcon aria-hidden="true" />}
+      label={
+        <div className="flex items-center gap-1">
+          View schema for <code>{columnName}</code>
+        </div>
+      }
+      tipSide="right"
+      action={() => {
+        setPopup({ type: "viewSchema", tableName, highlightField: columnName });
+        close();
+      }}
+    />
   );
 }

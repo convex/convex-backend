@@ -3,12 +3,11 @@ import { useMemo } from "react";
 import groupBy from "lodash/groupBy";
 import sumBy from "lodash/sumBy";
 import { toNumericUTC } from "@common/lib/format";
-import { Bar, Legend, Rectangle } from "recharts";
+import { Bar, Rectangle, ReferenceArea } from "recharts";
 import { useProjectById } from "api/projects";
 import { UsageNoDataError } from "./TeamUsageError";
 import { QuantityType, formatQuantity } from "./lib/formatQuantity";
 import { DailyChart } from "./DailyChart";
-import { DailyChartDetailView } from "./DailyChartDetailView";
 
 // When there is only a data point, we have to set the bar width manually to make it appear (https://github.com/recharts/recharts/issues/3640).
 // This value has been measured manually on a desktop screen size, but it should also look good in other contexts where there is only one bar.
@@ -47,16 +46,14 @@ function TableDisplayName({
 
   if (isLoading) {
     return (
-      <span className="inline-block h-4 w-32 animate-pulse rounded bg-content-tertiary" />
+      <span className="inline-block h-4 w-32 animate-pulse rounded-sm bg-content-tertiary" />
     );
   }
 
   const projectName = project?.name ? (
     project.name
   ) : (
-    <span className="text-content-secondary">
-      Deleted Project ({projectId})
-    </span>
+    <span className="opacity-70">Deleted Project ({projectId})</span>
   );
 
   return (
@@ -82,7 +79,7 @@ function TableTooltipItem({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <svg className="size-3 flex-shrink-0" viewBox="0 0 50 50" aria-hidden>
+      <svg className="size-3 shrink-0" viewBox="0 0 50 50" aria-hidden>
         <circle cx="25" cy="25" r="25" className={color} />
       </svg>
       <span className="tabular-nums">
@@ -163,95 +160,64 @@ function TableChartTooltip({
   );
 }
 
-// Component for rendering a single table legend item
-function TableLegendItem({
-  projectId,
-  tableName,
-  color,
-  total,
-}: {
-  projectId: number | "_rest";
-  tableName: string;
-  color: string;
-  total: number;
-}) {
-  if (total <= 0) return null;
-
-  return (
-    <span className="flex items-center gap-2">
-      <svg className="w-4 flex-shrink-0" viewBox="0 0 50 50" aria-hidden>
-        <circle cx="25" cy="25" r="25" className={color} />
-      </svg>
-      <span className="max-w-80 truncate">
-        <TableDisplayName projectId={projectId} tableName={tableName} />
-      </span>
-    </span>
-  );
-}
-
 // Detail item that includes project ID and table name
 interface TableDetailItem {
   projectId: number | "_rest";
   tableName: string;
   value: number;
+  sortValue?: number;
   color: string;
 }
 
-// Component wrapper to render detail view with table names including project names
-function TableChartDetailView({
-  date,
-  items,
+// Inline detail row for a table
+function TableDetailRow({
+  item,
+  total,
   quantityType,
-  onBack,
 }: {
-  date: number;
-  items: TableDetailItem[];
+  item: TableDetailItem;
+  total: number;
   quantityType: QuantityType;
-  onBack: () => void;
 }) {
-  // Convert TableDetailItem[] to the format expected by DailyChartDetailView
-  const detailItems = items.map((item) => {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const { project } = useProjectById(
-      item.projectId === "_rest" ? undefined : item.projectId,
-    );
-
-    let displayName: string;
-    if (item.projectId === "_rest" && item.tableName === "_rest") {
-      displayName = "All other tables";
-    } else if (item.projectId === "_rest") {
-      displayName = item.tableName;
-    } else {
-      const projectName =
-        project?.name || `Deleted Project (${item.projectId})`;
-      displayName = `${projectName} / ${item.tableName}`;
-    }
-
-    return {
-      name: displayName,
-      value: item.value,
-      color: item.color,
-    };
-  });
+  const percentage = total > 0 ? (item.value / total) * 100 : 0;
 
   return (
-    <DailyChartDetailView
-      date={date}
-      items={detailItems}
-      quantityType={quantityType}
-      onBack={onBack}
-    />
+    <div className="flex items-center justify-between gap-4 rounded-sm px-2 py-1 text-sm hover:bg-slate-900/5 dark:hover:bg-white/5">
+      <span className="flex min-w-0 items-center gap-2">
+        <span
+          className="size-2.5 shrink-0 rounded-full"
+          style={{
+            backgroundColor: `var(--color-${item.color.replace("fill-", "")})`,
+          }}
+        />
+        <span className="truncate">
+          <TableDisplayName
+            projectId={item.projectId}
+            tableName={item.tableName}
+          />
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-3 tabular-nums">
+        <span>{formatQuantity(item.value, quantityType)}</span>
+        <span className="w-12 text-right opacity-70">
+          {percentage.toFixed(1)}%
+        </span>
+      </span>
+    </div>
   );
 }
 
 export function UsageByTableChart({
   rows,
   quantityType = "unit",
+  isGauge = false,
   selectedDate,
   setSelectedDate,
 }: {
   rows: DailyMetricByTable[];
   quantityType?: QuantityType;
+  /** If true, total shows the most recent day's value instead of summing all days */
+  isGauge?: boolean;
   selectedDate: number | null;
   setSelectedDate: (date: number | null) => void;
 }) {
@@ -313,12 +279,24 @@ export function UsageByTableChart({
 
     const totals = Object.fromEntries(tableTotals.map((t) => [t.key, t.total]));
 
+    // For gauge metrics, compute totals from the most recent day
+    let displayTotals = totals;
+    if (isGauge && filledData.length > 0) {
+      const lastDay = filledData[filledData.length - 1];
+      displayTotals = Object.fromEntries(
+        stackTableKeys.map(({ key }) => [
+          key,
+          (lastDay[`table_${key}`] as number) || 0,
+        ]),
+      );
+    }
+
     return {
       chartData: filledData,
       tableKeys: stackTableKeys,
-      totalByTable: totals,
+      totalByTable: displayTotals,
     };
-  }, [rows]);
+  }, [rows, isGauge]);
 
   const colorMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -329,48 +307,54 @@ export function UsageByTableChart({
     return map;
   }, [tableKeys]);
 
-  // Get detail items for selected date
+  // Items for the inline list: show day values when a date is selected, totals otherwise
   const detailItems = useMemo((): TableDetailItem[] => {
-    if (selectedDate === null) return [];
-
-    const dataPoint = chartData.find((d) => d.dateNumeric === selectedDate);
-    if (!dataPoint) return [];
+    if (selectedDate !== null) {
+      const dataPoint = chartData.find((d) => d.dateNumeric === selectedDate);
+      if (dataPoint) {
+        return tableKeys.map(({ key, projectId, tableName }, index) => {
+          const color = TABLE_COLORS[index % TABLE_COLORS.length];
+          return {
+            projectId,
+            tableName,
+            value: (dataPoint[`table_${key}`] as number) || 0,
+            sortValue: totalByTable[key] || 0,
+            color,
+          };
+        });
+      }
+    }
 
     return tableKeys.map(({ key, projectId, tableName }, index) => {
       const color = TABLE_COLORS[index % TABLE_COLORS.length];
       return {
         projectId,
         tableName,
-        value: (dataPoint[`table_${key}`] as number) || 0,
+        value: totalByTable[key] || 0,
         color,
       };
     });
-  }, [selectedDate, chartData, tableKeys]);
+  }, [selectedDate, chartData, tableKeys, totalByTable]);
+
+  const detailTotal = useMemo(
+    () => detailItems.reduce((sum, item) => sum + item.value, 0),
+    [detailItems],
+  );
 
   if (!rows.some((row) => row.value > 0)) {
     return <UsageNoDataError />;
   }
 
   return (
-    <div
-      className={`relative overflow-hidden transition-all duration-300 ${
-        selectedDate !== null ? "h-[32rem]" : "h-56"
-      }`}
-    >
-      {/* Background chart (slides out to left when detail view is shown) */}
-      <div
-        className="absolute inset-0 transition-transform duration-300 ease-in-out"
-        style={{
-          transform:
-            selectedDate !== null ? "translateX(-100%)" : "translateX(0)",
-        }}
-      >
+    <div className="flex flex-col gap-4">
+      <div className="h-56">
         <DailyChart
           data={chartData}
           quantityType={quantityType}
           showCategoryInTooltip
           colorMap={colorMap}
           yAxisWidth={quantityType === "actionCompute" ? 80 : 60}
+          hideTooltip={selectedDate !== null}
           customTooltip={(props) => (
             <TableChartTooltip
               {...props}
@@ -387,7 +371,7 @@ export function UsageByTableChart({
                 key={key}
                 dataKey={`table_${key}`}
                 className={color}
-                name={` `} // Space for consistent tooltip formatting
+                name={` `}
                 barSize={chartData.length === 1 ? SINGLE_BAR_WIDTH : undefined}
                 isAnimationActive={false}
                 stackId="stack"
@@ -396,67 +380,55 @@ export function UsageByTableChart({
                 onClick={(data) => {
                   const cd = data as any;
                   if (cd?.dateNumeric) {
-                    setSelectedDate(cd.dateNumeric);
+                    setSelectedDate(
+                      cd.dateNumeric === selectedDate ? null : cd.dateNumeric,
+                    );
                   }
                 }}
                 onKeyDown={(data, _idx, event) => {
                   if (event.key === "Enter") {
                     const cd = data as any;
                     if (cd?.dateNumeric) {
-                      setSelectedDate(cd.dateNumeric);
+                      setSelectedDate(
+                        cd.dateNumeric === selectedDate ? null : cd.dateNumeric,
+                      );
                     }
                   }
                 }}
-                shape={(props: any) => <Rectangle {...props} />}
+                shape={(props: any) => {
+                  const { dateNumeric } = props;
+                  const isDimmed =
+                    selectedDate !== null && selectedDate !== dateNumeric;
+
+                  return <Rectangle {...props} opacity={isDimmed ? 0.3 : 1} />;
+                }}
               />
             );
           })}
-          {selectedDate === null && (
-            <Legend
-              content={() => (
-                <div
-                  className="scrollbar flex max-h-20 flex-wrap gap-3 overflow-y-auto"
-                  style={{
-                    paddingLeft: `${quantityType === "actionCompute" ? 92 : 72}px`,
-                  }}
-                >
-                  {tableKeys.map(({ key, projectId, tableName }, index) => {
-                    const color = TABLE_COLORS[index % TABLE_COLORS.length];
-                    const total = totalByTable[key] || 0;
-
-                    return (
-                      <TableLegendItem
-                        key={key}
-                        projectId={projectId}
-                        tableName={tableName}
-                        color={color}
-                        total={total}
-                      />
-                    );
-                  })}
-                </div>
-              )}
+          {selectedDate !== null && (
+            <ReferenceArea
+              x1={selectedDate - MS_IN_DAY / 2}
+              x2={selectedDate + MS_IN_DAY / 2}
+              fill="currentColor"
+              fillOpacity={0.06}
+              ifOverflow="hidden"
             />
           )}
         </DailyChart>
       </div>
 
-      {/* Detail view (slides in from right) */}
-      <div
-        className="absolute inset-0 transition-transform duration-300 ease-in-out"
-        style={{
-          transform:
-            selectedDate !== null ? "translateX(0)" : "translateX(100%)",
-        }}
-      >
-        {selectedDate !== null && (
-          <TableChartDetailView
-            date={selectedDate}
-            items={detailItems}
-            quantityType={quantityType}
-            onBack={() => setSelectedDate(null)}
-          />
-        )}
+      <div className="flex flex-col gap-1">
+        {detailItems
+          .filter((item) => (item.sortValue ?? item.value) > 0)
+          .sort((a, b) => (b.sortValue ?? b.value) - (a.sortValue ?? a.value))
+          .map((item, index) => (
+            <TableDetailRow
+              key={index}
+              item={item}
+              total={detailTotal}
+              quantityType={quantityType}
+            />
+          ))}
       </div>
     </div>
   );

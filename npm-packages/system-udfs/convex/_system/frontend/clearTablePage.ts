@@ -1,10 +1,10 @@
 import { Cursor } from "convex/server";
-import { mutationGeneric } from "../server";
+import { mutationGeneric, writeAuditLog } from "../server";
 import { v } from "convex/values";
 
 export const MAX_CLEAR_ROWS = 4000;
 
-export default mutationGeneric({
+export default mutationGeneric("WriteData")({
   args: {
     componentId: v.optional(v.union(v.string(), v.null())),
     tableName: v.string(),
@@ -43,6 +43,13 @@ export default mutationGeneric({
       });
 
     await Promise.all(documents.map((doc) => db.delete(doc._id)));
+
+    if (documents.length > 0) {
+      await writeAuditLog("delete_documents", {
+        table: tableName,
+        document_ids: documents.map((doc) => doc._id),
+      });
+    }
 
     return {
       deleted: documents.length,

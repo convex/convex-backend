@@ -1,3 +1,6 @@
+#![feature(try_blocks)]
+#![feature(try_blocks_heterogeneous)]
+
 // Run with: `cargo bench -p database --bench is_stale --features testing`
 
 use std::{
@@ -7,6 +10,8 @@ use std::{
 
 use anyhow::Result;
 use common::{
+    bootstrap_model::index::database_index::IndexedFields,
+    document::PackedDocument,
     document_index_keys::{
         DocumentIndexKeys,
         SearchValueTokens,
@@ -40,16 +45,23 @@ use criterion::{
     Criterion,
 };
 use database::{
+    test_helpers::DbFixtures,
     write_log::{
         new_write_log,
-        DocumentIndexKeysUpdate,
         LogWriter,
+        OrderedDocumentWrites,
+        PackedDocumentUpdate,
+        PendingWrites,
         WriteSource,
     },
     ReadSet,
+    Snapshot,
+    TestFacingModel,
+    TransactionLimits,
     TransactionReadSet,
 };
 use maplit::btreemap;
+use runtime::prod::ProdRuntime;
 use search::{
     query::TextQueryTerm,
     FilterConditionRead,
@@ -57,7 +69,10 @@ use search::{
     TextQueryTermRead,
 };
 use tokio::runtime::Runtime;
-use value::val;
+use value::{
+    assert_obj,
+    val,
+};
 
 fn create_test_setup() -> Result<(
     LogWriter,
@@ -97,24 +112,14 @@ fn create_write_log_with_standard_index_writes(num_writes: usize) -> Result<(Log
             26 + ((i * 7) % 75)
         };
 
-        let index_key = IndexKey::new(vec![val!(value as i64)], id.into());
+        let index_key = IndexKey::new(vec![val!(value as i64)], id.developer_id);
         let document_keys =
-            DocumentIndexKeys::with_standard_index_for_test(index_name.clone(), index_key);
+            DocumentIndexKeys::with_standard_index_for_test(id, index_name.clone(), index_key);
 
-        let writes = vec![(
-            id,
-            DocumentIndexKeysUpdate {
-                id,
-                old_document_keys: None,
-                new_document_keys: Some(document_keys),
-            },
-            None,
-        )];
-
-        log_writer.append(
+        log_writer.append_document(
             Timestamp::must((1001 + i) as i32),
-            writes.into(),
-            WriteSource::unknown(),
+            document_keys,
+            WriteSource::system("bench"),
         );
     }
 
@@ -128,7 +133,12 @@ fn create_write_log_with_standard_index_writes(num_writes: usize) -> Result<(Log
         start: StartIncluded(start_key.into()),
         end: End::Excluded(end_key.into()),
     };
-    reads.record_indexed_directly(index_name, vec![field_path].try_into()?, target_interval)?;
+    reads.record_indexed_directly(
+        index_name,
+        vec![field_path].try_into()?,
+        target_interval,
+        &TransactionLimits::default(),
+    )?;
     let read_set = reads.into_read_set();
 
     Ok((log_writer, read_set))
@@ -233,26 +243,17 @@ fn create_write_log_with_search_index_writes(num_writes: usize) -> Result<(LogWr
         let text_words_unique: HashSet<CompactString> =
             text_words.into_iter().map(|a| a.into()).collect();
         let document_keys = DocumentIndexKeys::with_search_index_for_test_with_filters(
+            id,
             index_name.clone(),
             search_field,
             SearchValueTokens::from(text_words_unique),
             filter_values,
         );
 
-        let writes = vec![(
-            id,
-            DocumentIndexKeysUpdate {
-                id,
-                old_document_keys: None,
-                new_document_keys: Some(document_keys),
-            },
-            None,
-        )];
-
-        log_writer.append(
+        log_writer.append_document(
             Timestamp::must((1001 + i) as i32),
-            writes.into(),
-            WriteSource::unknown(),
+            document_keys,
+            WriteSource::system("bench"),
         );
     }
 
@@ -287,6 +288,115 @@ fn create_write_log_with_search_index_writes(num_writes: usize) -> Result<(LogWr
     let read_set = reads.into_read_set();
 
     Ok((log_writer, read_set))
+}
+
+/// A backlog of commits to stage in `PendingWrites`, plus a read set covering
+/// one document in the same table that none of them wrote.
+///
+/// `PendingWrites` both stages commits and conflict-checks against them on the
+/// committer thread, so the two are benchmarked from one fixture.
+struct PendingWritesFixture {
+    snapshot: Snapshot,
+    commits: Vec<(Timestamp, OrderedDocumentWrites)>,
+    read_set: ReadSet,
+}
+
+impl PendingWritesFixture {
+    async fn new(rt: ProdRuntime, num_commits: usize, docs_per_commit: usize) -> Result<Self> {
+        let DbFixtures { db, .. } = DbFixtures::new(&rt).await?;
+        let table_name: TableName = "test_table".parse()?;
+
+        let mut tx = db.begin_system().await?;
+        let mut documents = Vec::new();
+        for i in 0..(num_commits * docs_per_commit + 1) {
+            let value = i as i64;
+            documents.push(
+                TestFacingModel::new(&mut tx)
+                    .insert_and_get(table_name.clone(), assert_obj!("value" => value))
+                    .await?,
+            );
+        }
+        db.commit(tx).await?;
+
+        let read_document = documents.pop().expect("no documents inserted");
+        let commits = documents
+            .chunks(docs_per_commit)
+            .enumerate()
+            .map(|(commit, documents)| {
+                let writes: OrderedDocumentWrites = documents
+                    .iter()
+                    .map(|document| PackedDocumentUpdate {
+                        id: document.id(),
+                        old_document: None,
+                        new_document: Some(PackedDocument::pack(document)),
+                    })
+                    .collect();
+                (Timestamp::must(1000 + commit as i32), writes)
+            })
+            .collect();
+
+        let mut reads = TransactionReadSet::new();
+        reads.record_indexed_directly(
+            TabletIndexName::by_id(read_document.id().tablet_id),
+            IndexedFields::by_id(),
+            Interval::prefix(
+                IndexKey::new(vec![], read_document.developer_id())
+                    .to_bytes()
+                    .into(),
+            ),
+            &TransactionLimits::default(),
+        )?;
+
+        Ok(Self {
+            snapshot: db.latest_snapshot()?,
+            commits,
+            read_set: reads.into_read_set(),
+        })
+    }
+
+    fn stage(&self) -> PendingWrites {
+        let mut pending_writes = PendingWrites::new();
+        for (ts, writes) in &self.commits {
+            pending_writes.push_back(
+                *ts,
+                writes.clone(),
+                WriteSource::system("bench"),
+                self.snapshot.clone(),
+            );
+        }
+        pending_writes
+    }
+}
+
+fn bench_pending_writes(c: &mut Criterion) {
+    let tokio_rt = Runtime::new().expect("Failed to create Tokio runtime");
+    let rt = ProdRuntime::new(&tokio_rt);
+    let fixtures: Vec<_> = [1, 10, 50, 100]
+        .into_iter()
+        .map(|num_commits| {
+            let fixture = tokio_rt
+                .block_on(PendingWritesFixture::new(rt.clone(), num_commits, 10))
+                .expect("Failed to create test setup");
+            (num_commits, fixture)
+        })
+        .collect();
+
+    let mut group = c.benchmark_group("pending_writes_push_back");
+    for (num_commits, fixture) in &fixtures {
+        group.bench_function(BenchmarkId::from_parameter(num_commits), |b| {
+            b.iter_with_large_drop(|| fixture.stage())
+        });
+    }
+    group.finish();
+
+    let mut group = c.benchmark_group("pending_writes_is_stale");
+    for (num_commits, fixture) in &fixtures {
+        let pending_writes = fixture.stage();
+        group.bench_function(BenchmarkId::from_parameter(num_commits), |b| {
+            b.iter(|| pending_writes.is_stale(&fixture.read_set))
+        });
+    }
+    group.finish();
 }
 
 fn bench_is_stale_standard_index(c: &mut Criterion) {
@@ -366,6 +476,7 @@ fn bench_is_stale_no_conflict(c: &mut Criterion) {
                     index_name,
                     vec![field_path].try_into().unwrap(),
                     Interval::empty(),
+                    &TransactionLimits::default(),
                 )
                 .unwrap();
             let read_set = reads.into_read_set();
@@ -393,6 +504,7 @@ criterion_group!(
     benches,
     bench_is_stale_standard_index,
     bench_is_stale_search_index,
-    bench_is_stale_no_conflict
+    bench_is_stale_no_conflict,
+    bench_pending_writes
 );
 criterion_main!(benches);

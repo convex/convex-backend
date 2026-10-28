@@ -127,7 +127,6 @@ export const Button = forwardRef<HTMLElement, ButtonProps>(function Button(
       {/* eslint-disable-next-line react/forbid-elements */}
       <button
         id={id}
-        // eslint-disable-next-line react/button-has-type
         type={type ?? "button"}
         tabIndex={0}
         onClick={onClick}
@@ -184,7 +183,7 @@ const button = tv({
     },
     accent: {
       none: "border",
-      inline: "",
+      inline: "border border-transparent",
     },
     disabled: {
       true: "cursor-not-allowed opacity-50 disabled:cursor-not-allowed disabled:opacity-50",
@@ -202,7 +201,7 @@ const button = tv({
       xs: "p-1",
       sm: "p-1.5",
       md: "px-4 py-3",
-      lg: "rounded-lg px-6 py-[1.125rem]",
+      lg: "rounded-lg px-6 py-4.5",
     },
   },
   compoundVariants: [

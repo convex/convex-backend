@@ -8,10 +8,14 @@ import { DirectorySidebar } from "@common/features/functions/components/Director
 import { FunctionSummary } from "@common/features/functions/components/FunctionSummary";
 import { PerformanceGraphs } from "@common/features/functions/components/PerformanceGraphs";
 import { SingleGraph } from "@common/features/functions/components/SingleGraph";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 import { SidebarDetailLayout } from "@common/layouts/SidebarDetailLayout";
 import { EmptySection } from "@common/elements/EmptySection";
 import { DeploymentPageTitle } from "@common/elements/DeploymentPageTitle";
+import { NoPermissionMessage } from "@common/elements/NoPermissionMessage";
 import { Tab } from "@ui/Tab";
 import {
   TabGroup as HeadlessTabGroup,
@@ -23,6 +27,21 @@ import { Sheet } from "@ui/Sheet";
 import { FunctionLogs } from "./FunctionLogs";
 
 export function FunctionsView() {
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewData = useIsOperationAllowed("ViewData");
+
+  if (!canViewData) {
+    return (
+      <>
+        <DeploymentPageTitle title="Functions" />
+        <NoPermissionMessage
+          message="You do not have permission to view functions in this deployment."
+          missingPermission="deployment:data:view"
+        />
+      </>
+    );
+  }
+
   return (
     <>
       <DeploymentPageTitle title="Functions" />
@@ -46,8 +65,8 @@ function Functions() {
   let content: React.ReactNode;
   if (!currentOpenFunction) {
     content = (
-      <div className="flex h-full w-full items-center justify-center">
-        <Sheet className="m-8 flex h-fit w-fit max-w-[48ch] items-center gap-4 text-balance">
+      <div className="flex size-full items-center justify-center">
+        <Sheet className="m-8 flex size-fit max-w-[48ch] items-center gap-4 text-balance">
           <ArrowLeftIcon
             className="size-8 min-w-8 text-content-primary"
             aria-hidden
@@ -65,7 +84,7 @@ function Functions() {
           onChange={setSelectedTabIndex}
           className="flex min-h-0 grow flex-col"
         >
-          <div className="sticky top-0 z-10 scrollbar min-h-fit overflow-x-auto bg-background-secondary">
+          <div className="sticky top-0 z-10 scrollbar shrink-0 overflow-x-auto overflow-y-hidden bg-background-secondary">
             <div className="flex-none px-6 pt-4">
               <FunctionSummary currentOpenFunction={currentOpenFunction} />
             </div>
@@ -75,7 +94,7 @@ function Functions() {
             </div>
           </div>
 
-          <HeadlessTabPanels className="scrollbar flex w-full max-w-[110rem] min-w-0 grow overflow-x-auto p-6">
+          <HeadlessTabPanels className="scrollbar flex min-h-0 w-full max-w-440 min-w-0 grow flex-col overflow-auto p-6">
             <HeadlessTabPanel className="grow">
               <PerformanceGraphs />
             </HeadlessTabPanel>
@@ -105,7 +124,7 @@ function Functions() {
 
 export function EmptyFunctions() {
   return (
-    <div className="relative h-full w-full animate-fadeIn overflow-hidden">
+    <div className="relative size-full animate-fadeIn overflow-hidden">
       {/* Background example */}
       <div
         className="pointer-events-none absolute inset-0 select-none"
@@ -115,9 +134,9 @@ export function EmptyFunctions() {
         }}
         inert
       >
-        <div className="flex h-full w-full flex-col">
+        <div className="flex size-full flex-col">
           {/* Example Function Summary */}
-          <div className="sticky top-0 z-10 mb-6 bg-background-secondary">
+          <div className="sticky top-0 z-10 mb-6 shrink-0 bg-background-secondary">
             <div className="flex-none px-6 pt-4">
               <div className="flex items-center gap-4">
                 <div className="flex flex-col gap-1">
@@ -135,9 +154,6 @@ export function EmptyFunctions() {
             <div className="-ml-2 flex gap-2 border-b px-6">
               <div className="border-b-2 border-content-primary px-3 py-2 text-sm">
                 Statistics
-              </div>
-              <div className="px-3 py-2 text-sm text-content-secondary">
-                Code
               </div>
               <div className="px-3 py-2 text-sm text-content-secondary">
                 Logs
@@ -302,7 +318,7 @@ export function EmptyFunctions() {
 
       {/* Main content */}
       <div className="absolute inset-0 flex items-center justify-center">
-        <Sheet className="m-6 h-fit w-fit bg-background-secondary/90 p-2 backdrop-blur-[2px]">
+        <Sheet className="m-6 size-fit bg-background-secondary/90 p-2 backdrop-blur-[2px]">
           <EmptySection
             Icon={CodeIcon}
             color="yellow"

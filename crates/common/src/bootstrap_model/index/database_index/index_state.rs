@@ -9,6 +9,7 @@ use super::{
     DatabaseIndexBackfillState,
     SerializedDatabaseIndexBackfillState,
 };
+use crate::types::IndexWriteMode;
 
 /// Represents the state of an index.
 /// Table scan index for a newly created table starts at `Enabled`. All
@@ -16,7 +17,6 @@ use super::{
 /// `Enabled` by the index backfill routine. Disabled indexes are not
 /// implicitly transitioned to any other state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum DatabaseIndexState {
     // We are backfilling this index. All new writes should update the index.
     Backfilling(DatabaseIndexBackfillState),
@@ -45,6 +45,18 @@ impl DatabaseIndexState {
                 *staged = staged_new;
             },
             Self::Enabled => {},
+        }
+    }
+
+    /// `retention_started` means index backfill has inserted the existing
+    /// entries, so writes can use `ScanComplete` while retention catches
+    /// up.
+    pub fn write_mode(&self) -> IndexWriteMode {
+        match self {
+            Self::Backfilling(backfill) if !backfill.retention_started => IndexWriteMode::Scanning,
+            Self::Backfilling(_) | Self::Backfilled { .. } | Self::Enabled => {
+                IndexWriteMode::ScanComplete
+            },
         }
     }
 }

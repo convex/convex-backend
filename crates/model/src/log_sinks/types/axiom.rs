@@ -1,10 +1,14 @@
 use std::{
+    collections::BTreeSet,
     fmt,
     str::FromStr,
 };
 
 use common::{
-    log_streaming::LogEventFormatVersion,
+    log_streaming::{
+        LogEventFormatVersion,
+        LogTopic,
+    },
     pii::PII,
 };
 use serde::{
@@ -21,13 +25,15 @@ pub const VALID_AXIOM_INGEST_URLS: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AxiomConfig {
     pub api_key: PII<String>,
     pub dataset_name: String,
     pub attributes: Vec<AxiomAttribute>,
     pub version: LogEventFormatVersion,
     pub ingest_url: Option<String>,
+    /// The set of topics this log stream is subscribed to. `None` means the
+    /// stream is subscribed to all topics, including ones added in the future.
+    pub topics: Option<BTreeSet<LogTopic>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -38,6 +44,8 @@ pub struct SerializedAxiomConfig {
     pub attributes: Vec<SerializedAxiomAttribute>,
     pub version: Option<String>,
     pub ingest_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topics: Option<Vec<String>>,
 }
 
 impl From<AxiomConfig> for SerializedAxiomConfig {
@@ -52,6 +60,7 @@ impl From<AxiomConfig> for SerializedAxiomConfig {
                 .collect(),
             version: Some(value.version.to_string()),
             ingest_url: value.ingest_url,
+            topics: super::serialize_topics(value.topics),
         }
     }
 }
@@ -78,6 +87,7 @@ impl TryFrom<SerializedAxiomConfig> for AxiomConfig {
                 .collect(),
             version,
             ingest_url: value.ingest_url,
+            topics: super::deserialize_topics(value.topics)?,
         })
     }
 }
@@ -89,7 +99,6 @@ impl fmt::Display for AxiomConfig {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, ToSchema)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AxiomAttribute {
     pub key: String,
     pub value: String,

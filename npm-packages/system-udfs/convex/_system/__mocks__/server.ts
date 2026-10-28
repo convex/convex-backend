@@ -32,41 +32,59 @@ import {
 
 import { DefaultFunctionArgs } from "convex/server";
 
+import { DeploymentOp } from "../server";
+
 type FunctionDefinition = {
   args: Record<string, GenericValidator>;
   returns?: GenericValidator;
   handler: (ctx: any, args: DefaultFunctionArgs) => any;
 };
 
-export const queryGeneric = baseQueryGeneric;
-const mutationGenericWithoutComponent = baseMutationGeneric;
-export const actionGeneric = baseActionGeneric;
-export const internalQueryGeneric = baseInternalQueryGeneric;
-export const internalMutationGeneric = baseInternalMutationGeneric;
-export const internalActionGeneric = baseInternalActionGeneric;
+// Mock version: ignores `operation` and passes through to the base registrar.
 
-export const mutationGeneric = ((functionDefinition: FunctionDefinition) => {
-  return mutationGenericWithoutComponent({
-    args: functionDefinition.args,
-    returns: functionDefinition.returns,
-    handler: async (ctx: any, args: any) => {
-      if (
-        "componentId" in args &&
-        args.componentId !== null &&
-        args.componentId !== undefined
-      ) {
-        const ref = currentSystemUdfInComponent(args.componentId);
-        return await ctx.runMutation(ref, { ...args, componentId: null });
-      }
-      return functionDefinition.handler(ctx, args);
-    },
-  });
-}) as typeof baseMutationGeneric;
+function ignoringOperation<T extends (...args: any[]) => any>(
+  wrapper: T,
+): (operation: DeploymentOp) => T {
+  return (_operation: DeploymentOp) => wrapper;
+}
+
+export const queryGeneric = ignoringOperation(baseQueryGeneric);
+const mutationGenericWithoutComponent = ignoringOperation(baseMutationGeneric);
+export const actionGeneric = ignoringOperation(baseActionGeneric);
+export const internalQueryGeneric = ignoringOperation(baseInternalQueryGeneric);
+export const internalMutationGeneric = ignoringOperation(
+  baseInternalMutationGeneric,
+);
+export const internalActionGeneric = ignoringOperation(
+  baseInternalActionGeneric,
+);
+
+export const mutationGeneric = (
+  operation: DeploymentOp,
+): typeof baseMutationGeneric => {
+  return ((functionDefinition: FunctionDefinition) => {
+    return mutationGenericWithoutComponent(operation)({
+      args: functionDefinition.args,
+      returns: functionDefinition.returns,
+      handler: async (ctx: any, args: any) => {
+        if (
+          "componentId" in args &&
+          args.componentId !== null &&
+          args.componentId !== undefined
+        ) {
+          const ref = currentSystemUdfInComponent(args.componentId);
+          return await ctx.runMutation(ref, { ...args, componentId: null });
+        }
+        return functionDefinition.handler(ctx, args);
+      },
+    });
+  }) as typeof baseMutationGeneric;
+};
 
 // Specific to this schema.
-export const query = baseQuery;
-export const mutation = baseMutation;
-export const action = baseAction;
-export const internalQuery = baseInternalQuery;
-export const internalMutation = baseInternalMutation;
-export const internalAction = baseInternalAction;
+export const query = ignoringOperation(baseQuery);
+export const mutation = ignoringOperation(baseMutation);
+export const action = ignoringOperation(baseAction);
+export const internalQuery = ignoringOperation(baseInternalQuery);
+export const internalMutation = ignoringOperation(baseInternalMutation);
+export const internalAction = ignoringOperation(baseInternalAction);

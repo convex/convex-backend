@@ -45,9 +45,9 @@ export const m = mutation({
   handler: async (ctx, args) => {
     const normalizedId = ctx.db.normalizeId("empty", args.branded);
     if (normalizedId === null) {
-      return await ctx.db.get(await ctx.db.insert("empty", {}));
+      return await ctx.db.get("empty", await ctx.db.insert("empty", {}));
     }
-    return await ctx.db.get(normalizedId);
+    return await ctx.db.get("empty", normalizedId);
   },
 });
 

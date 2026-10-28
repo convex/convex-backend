@@ -16,7 +16,10 @@ use common::{
         ComponentName,
         ComponentPath,
     },
-    knobs::TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
+    knobs::{
+        SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES,
+        TRANSACTION_MAX_USER_WRITE_SIZE_BYTES,
+    },
     types::{
         FieldName,
         FullyQualifiedObjectKey,
@@ -28,7 +31,6 @@ use futures::{
         self,
         BoxStream,
     },
-    AsyncBufReadExt,
     AsyncReadExt,
     StreamExt,
     TryStreamExt,
@@ -61,8 +63,10 @@ use storage::{
 };
 use storage_zip_reader::StorageZipArchive;
 use tokio::io::{
+    AsyncBufRead,
     AsyncBufReadExt as _,
     AsyncRead,
+    AsyncReadExt as _,
     BufReader,
 };
 use tokio_util::io::ReaderStream;
@@ -71,7 +75,10 @@ use value::{
     TableName,
 };
 
-use crate::snapshot_import::import_error::ImportError;
+use crate::snapshot_import::{
+    import_error::ImportError,
+    metrics::log_snapshot_import_found_legacy_generated_schema,
+};
 
 pub type ImportDocumentStream = BoxStream<'static, anyhow::Result<JsonValue>>;
 pub type ImportStorageFileStream =
@@ -129,9 +136,17 @@ fn map_csv_error(e: csv_async::Error) -> anyhow::Error {
         csv_async::ErrorKind::UnequalLengths { pos, .. } => {
             ImportError::CsvRowMissingFields(pos_line(pos)).into()
         },
-        // IO and Seek are errors from the underlying stream.
-        csv_async::ErrorKind::Io(_)
-        | csv_async::ErrorKind::Seek
+        csv_async::ErrorKind::Io(source) => {
+            let metadata = source
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<ImportError>())
+                .map(ImportError::error_metadata);
+            match metadata {
+                Some(metadata) => anyhow::Error::from(e).context(metadata),
+                None => e.into(),
+            }
+        },
+        csv_async::ErrorKind::Seek
         // We're not using serde for CSV parsing, so these errors are unexpected
         | csv_async::ErrorKind::Serialize(_)
         | csv_async::ErrorKind::Deserialize { .. }
@@ -161,27 +176,29 @@ pub async fn parse_import_file(
             parse_csv_import(stream_body().await?).boxed(),
         )),
         ImportFormat::JsonLines(table_name) => {
-            let mut reader = stream_body().await?.into_reader();
+            let mut reader = BufReader::new(stream_body().await?.into_tokio_reader());
             Ok(ParsedImport::single_table(
                 component_path,
                 table_name,
                 try_stream_block!({
-                    let mut line = String::new();
+                    let mut line = Vec::new();
                     let mut lineno = 1;
-                    while reader
-                        .read_line(&mut line)
-                        .await
-                        .map_err(ImportError::NotUtf8)?
-                        > 0
+                    while let Some(line) = read_bounded_line(
+                        &mut reader,
+                        &mut line,
+                        *SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES,
+                        lineno,
+                        |e| ImportError::NotUtf8(e).into(),
+                    )
+                    .await?
                     {
                         // Check for UTF-8 BOM at the start of the first line
                         if lineno == 1 && line.as_bytes().starts_with(&[0xEF, 0xBB, 0xBF]) {
                             anyhow::bail!(ImportError::Utf8BomNotSupported);
                         }
-                        let v: serde_json::Value = serde_json::from_str(&line)
+                        let v: serde_json::Value = serde_json::from_str(line)
                             .map_err(|e| ImportError::JsonInvalidRow(lineno, e))?;
                         yield v;
-                        line.clear();
                         lineno += 1;
                     }
                 })
@@ -225,8 +242,8 @@ pub async fn parse_import_file(
                     parse_documents_jsonl_table_name(&entry.name, &base_component_path)?
                 {
                     if table_name.is_system()
-                        && table_name != *TABLES_TABLE
-                        && table_name != *FILE_STORAGE_VIRTUAL_TABLE
+                        && table_name != TABLES_TABLE
+                        && table_name != FILE_STORAGE_VIRTUAL_TABLE
                     {
                         tracing::info!("Skipping system table entry {}", entry.name);
                         continue;
@@ -279,9 +296,84 @@ pub async fn parse_import_file(
     }
 }
 
+#[try_stream(ok = Vec<u8>, error = io::Error)]
+async fn limit_csv_records(mut reader: impl AsyncRead + Unpin, max_record_bytes: usize) {
+    // Match csv-async's default parser settings so validation observes the same
+    // record boundaries and escapes before csv-async grows its record buffers.
+    let mut parser = csv_core::Reader::new();
+    let mut chunk = [0; 8192];
+    let mut decoded = [0; 8192];
+    let mut ends = [0; 128];
+    let mut record_bytes = 0;
+    let mut record_number = 1;
+    let mut pending_cr = None;
+    loop {
+        let len = reader.read(&mut chunk).await?;
+        let mut input = &chunk[..len];
+        // An empty input flushes the final field and record at EOF.
+        while !input.is_empty() || len == 0 {
+            // csv-core reports a record at CR; the optional LF can arrive in
+            // the next read and contributes to the preceding record's length.
+            if let Some(previous_bytes) = pending_cr.take()
+                && input.first() == Some(&b'\n')
+            {
+                if previous_bytes >= max_record_bytes {
+                    Err(io::Error::other(ImportError::CsvRecordTooLarge {
+                        record_number: record_number - 1,
+                        limit: max_record_bytes,
+                    }))?;
+                }
+                let _ = parser.read_record(&input[..1], &mut decoded, &mut ends);
+                input = &input[1..];
+                continue;
+            }
+            // Empty physical lines are skipped by the CSV parser.
+            if record_bytes == 0 {
+                let blank_bytes = input
+                    .iter()
+                    .take_while(|&&b| b == b'\r' || b == b'\n')
+                    .count();
+                if blank_bytes > 0 {
+                    let _ = parser.read_record(&input[..blank_bytes], &mut decoded, &mut ends);
+                    input = &input[blank_bytes..];
+                    continue;
+                }
+            }
+            let (result, consumed, ..) = parser.read_record(input, &mut decoded, &mut ends);
+            let ended_with_cr = input[..consumed].last() == Some(&b'\r');
+            input = &input[consumed..];
+            record_bytes += consumed;
+            if record_bytes > max_record_bytes {
+                Err(io::Error::other(ImportError::CsvRecordTooLarge {
+                    record_number,
+                    limit: max_record_bytes,
+                }))?;
+            }
+            match result {
+                csv_core::ReadRecordResult::End => return Ok(()),
+                csv_core::ReadRecordResult::Record => {
+                    pending_cr = ended_with_cr.then_some(record_bytes);
+                    record_bytes = 0;
+                    record_number += 1;
+                },
+                csv_core::ReadRecordResult::InputEmpty => break,
+                csv_core::ReadRecordResult::OutputFull
+                | csv_core::ReadRecordResult::OutputEndsFull => {},
+            }
+        }
+        yield chunk[..len].to_vec();
+    }
+}
+
 #[try_stream(ok = JsonValue, error = anyhow::Error)]
 async fn parse_csv_import(reader: storage::StorageGetStream) {
-    let mut reader = csv_async::AsyncReader::from_reader(reader.into_reader());
+    let reader = limit_csv_records(
+        reader.into_tokio_reader(),
+        *SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES,
+    )
+    .boxed()
+    .into_async_read();
+    let mut reader = csv_async::AsyncReader::from_reader(reader);
     if !reader.has_headers() {
         // TODO: this will never happen.
         anyhow::bail!(ImportError::CsvMissingHeaders);
@@ -404,21 +496,49 @@ fn parse_documents_jsonl_table_name(
     parse_table_filename(filename, base_component_path, &DOCUMENTS_PATTERN)
 }
 
+async fn read_bounded_line<'a>(
+    reader: &mut (impl AsyncBufRead + Unpin),
+    line: &'a mut Vec<u8>,
+    limit: usize,
+    line_number: u64,
+    map_io_error: impl Fn(io::Error) -> anyhow::Error,
+) -> anyhow::Result<Option<&'a str>> {
+    line.clear();
+    // One byte of lookahead distinguishes a line at the limit from an oversized
+    // line, including when the final line has no newline.
+    let bytes_read = reader
+        .take((limit as u64).saturating_add(1))
+        .read_until(b'\n', line)
+        .await
+        .map_err(&map_io_error)?;
+    if bytes_read > limit {
+        anyhow::bail!(ImportError::JsonLineTooLarge { line_number, limit });
+    }
+    if bytes_read == 0 {
+        return Ok(None);
+    }
+    let line = std::str::from_utf8(line)
+        .map_err(|e| map_io_error(io::Error::new(io::ErrorKind::InvalidData, e)))?;
+    Ok(Some(line))
+}
+
 #[try_stream(ok = JsonValue, error = anyhow::Error)]
 async fn parse_documents_jsonl(reader: impl AsyncRead + Unpin) {
-    let mut line = String::new();
+    let mut line = Vec::new();
     let mut lineno = 1;
     let mut reader = BufReader::new(reader);
-    while reader
-        .read_line(&mut line)
-        .await
-        .map_err(map_zip_io_error)?
-        > 0
+    while let Some(line) = read_bounded_line(
+        &mut reader,
+        &mut line,
+        *SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES,
+        lineno,
+        map_zip_io_error,
+    )
+    .await?
     {
         let v: serde_json::Value =
-            serde_json::from_str(&line).map_err(|e| ImportError::JsonInvalidRow(lineno, e))?;
+            serde_json::from_str(line).map_err(|e| ImportError::JsonInvalidRow(lineno, e))?;
         yield v;
-        line.clear();
         lineno += 1;
     }
 }
@@ -427,18 +547,24 @@ async fn parse_generated_schema<T: ShapeConfig>(
     filename: &str,
     entry_reader: impl tokio::io::AsyncRead + Unpin,
 ) -> anyhow::Result<GeneratedSchema<T>> {
-    let mut line = String::new();
+    let mut line = Vec::new();
     let mut lineno = 1;
     let mut entry_reader = BufReader::new(entry_reader);
-    entry_reader
-        .read_line(&mut line)
-        .await
-        .map_err(ImportError::NotUtf8)?;
+    let first_line = read_bounded_line(
+        &mut entry_reader,
+        &mut line,
+        *SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES,
+        lineno,
+        |e| ImportError::NotUtf8(e).into(),
+    )
+    .await?
+    .unwrap_or("");
     let inferred_type_json: serde_json::Value =
-        serde_json::from_str(&line).map_err(|e| ImportError::JsonInvalidRow(lineno, e))?;
+        serde_json::from_str(first_line).map_err(|e| ImportError::JsonInvalidRow(lineno, e))?;
     if inferred_type_json.as_str() == Some("uniform") {
         return Ok(GeneratedSchema::Uniform);
     }
+    log_snapshot_import_found_legacy_generated_schema();
     let inferred_type = Shape::from_str(inferred_type_json.as_str().with_context(|| {
         ImportError::InvalidConvexValue(
             lineno,
@@ -451,17 +577,19 @@ async fn parse_generated_schema<T: ShapeConfig>(
             format!("cannot parse {filename}: {e:#}"),
         )
     })?;
-    line.clear();
     lineno += 1;
     let mut overrides = BTreeMap::new();
-    while entry_reader
-        .read_line(&mut line)
-        .await
-        .map_err(ImportError::NotUtf8)?
-        > 0
+    while let Some(line) = read_bounded_line(
+        &mut entry_reader,
+        &mut line,
+        *SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES,
+        lineno,
+        |e| ImportError::NotUtf8(e).into(),
+    )
+    .await?
     {
         let mut v: serde_json::Value =
-            serde_json::from_str(&line).map_err(|e| ImportError::JsonInvalidRow(lineno, e))?;
+            serde_json::from_str(line).map_err(|e| ImportError::JsonInvalidRow(lineno, e))?;
         let o = v.as_object_mut().with_context(|| {
             ImportError::InvalidConvexValue(lineno, anyhow::anyhow!("overrides should be object"))
         })?;
@@ -480,7 +608,6 @@ async fn parse_generated_schema<T: ShapeConfig>(
             export_context,
         );
 
-        line.clear();
         lineno += 1;
     }
     let generated_schema = GeneratedSchema::LegacyInferred {
@@ -496,111 +623,4 @@ pub fn parse_csv_cell(s: &str) -> JsonValue {
         return json!(r);
     }
     json!(s)
-}
-
-#[cfg(test)]
-mod tests {
-    use common::components::ComponentPath;
-
-    use crate::snapshot_import::parse::{
-        parse_documents_jsonl_table_name,
-        parse_storage_filename,
-        parse_table_filename,
-        GENERATED_SCHEMA_PATTERN,
-    };
-
-    #[test]
-    fn test_filename_regex() -> anyhow::Result<()> {
-        let (_, table_name) =
-            parse_documents_jsonl_table_name("users/documents.jsonl", &ComponentPath::root())?
-                .unwrap();
-        assert_eq!(table_name, "users".parse()?);
-        // Regression test, checking that the '.' is escaped.
-        assert!(
-            parse_documents_jsonl_table_name("users/documentsxjsonl", &ComponentPath::root())?
-                .is_none()
-        );
-        // When an export is unzipped and re-zipped, sometimes there's a prefix.
-        let (_, table_name) = parse_documents_jsonl_table_name(
-            "snapshot/users/documents.jsonl",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(table_name, "users".parse()?);
-        let (_, table_name) = parse_table_filename(
-            "users/generated_schema.jsonl",
-            &ComponentPath::root(),
-            &GENERATED_SCHEMA_PATTERN,
-        )?
-        .unwrap();
-        assert_eq!(table_name, "users".parse()?);
-        let (_, storage_id) = parse_storage_filename(
-            "_storage/kg2ah8mk1xtg35g7zyexyc96e96yr74f.gif",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&storage_id.to_string(), "kg2ah8mk1xtg35g7zyexyc96e96yr74f");
-        let (_, storage_id) = parse_storage_filename(
-            "snapshot/_storage/kg2ah8mk1xtg35g7zyexyc96e96yr74f.gif",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&storage_id.to_string(), "kg2ah8mk1xtg35g7zyexyc96e96yr74f");
-        // No file extension.
-        let (_, storage_id) = parse_storage_filename(
-            "_storage/kg2ah8mk1xtg35g7zyexyc96e96yr74f",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&storage_id.to_string(), "kg2ah8mk1xtg35g7zyexyc96e96yr74f");
-        Ok(())
-    }
-
-    #[test]
-    fn test_component_path_regex() -> anyhow::Result<()> {
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "_components/waitlist/tbl/documents.jsonl",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&String::from(component_path), "waitlist");
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "some/parentdir/_components/waitlist/tbl/documents.jsonl",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&String::from(component_path), "waitlist");
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "_components/waitlist/_components/ratelimit/tbl/documents.jsonl",
-            &ComponentPath::root(),
-        )?
-        .unwrap();
-        assert_eq!(&String::from(component_path), "waitlist/ratelimit");
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "_components/waitlist/_components/ratelimit/tbl/documents.jsonl",
-            &"friendship".parse()?,
-        )?
-        .unwrap();
-        assert_eq!(
-            &String::from(component_path),
-            "friendship/waitlist/ratelimit"
-        );
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        let (component_path, table_name) = parse_documents_jsonl_table_name(
-            "tbl/documents.jsonl",
-            &"waitlist/ratelimit".parse()?,
-        )?
-        .unwrap();
-        assert_eq!(&String::from(component_path), "waitlist/ratelimit");
-        assert_eq!(&table_name.to_string(), "tbl");
-
-        Ok(())
-    }
 }

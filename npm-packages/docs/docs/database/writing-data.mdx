@@ -8,6 +8,8 @@ import insertExample from "!!raw-loader!@site/../private-demos/snippets/convex/w
 import patchExample from "!!raw-loader!@site/../private-demos/snippets/convex/writingDataPatch.ts";
 import replaceExample from "!!raw-loader!@site/../private-demos/snippets/convex/writingDataReplace.ts";
 import deleteExample from "!!raw-loader!@site/../private-demos/snippets/convex/writingDataDelete.ts";
+import transactionMetricsExample from "!!raw-loader!@site/../private-demos/snippets/convex/clearTasks.ts";
+import transactionLimitsExample from "!!raw-loader!@site/../private-demos/snippets/convex/transactionLimits.ts";
 import { ComponentCardList } from "@site/src/components/ComponentCard";
 
 [Mutations](/functions/mutation-functions.mdx) can insert, update, and remove
@@ -18,10 +20,9 @@ data from database tables.
 You can create new documents in the database with the
 [`db.insert`](/api/interfaces/server.GenericDatabaseWriter#insert) method:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={insertExample}
-  sourceJS={insertExample}
+  source={insertExample}
   highlightPatterns={["db.insert"]}
 />
 
@@ -31,7 +32,7 @@ document.
 The same types of values that can be passed into and returned from
 [queries](/functions/query-functions.mdx) and
 [mutations](/functions/mutation-functions.mdx) can be written into the database.
-See [Data Types](/database/types.md) for the full list of supported types.
+See [Data Types](/database/types.mdx) for the full list of supported types.
 
 The `insert` method returns a globally unique ID for the newly inserted
 document.
@@ -46,10 +47,9 @@ methods:
    document. New fields are added. Existing fields are overwritten. Fields set
    to `undefined` are removed.
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={patchExample}
-  sourceJS={patchExample}
+  source={patchExample}
   highlightPatterns={["db.patch"]}
 />
 
@@ -57,10 +57,9 @@ methods:
    method will replace the existing document entirely, potentially removing
    existing fields:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={replaceExample}
-  sourceJS={replaceExample}
+  source={replaceExample}
   highlightPatterns={["db.replace"]}
 />
 
@@ -69,10 +68,9 @@ methods:
 Given an existing document ID the document can be removed from the table with
 the [`db.delete`](/api/interfaces/server.GenericDatabaseWriter#delete) method.
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={deleteExample}
-  sourceJS={deleteExample}
+  source={deleteExample}
   highlightPatterns={["db.delete"]}
 />
 
@@ -169,3 +167,37 @@ When using [paginated queries](/database/pagination), pass `maximumBytesRead` or
 [`PaginationOptions`](/api/interfaces/server.PaginationOptions) to limit how
 much data a single page reads. This is especially useful when filtering for rare
 items where a low `numItems` won't bound execution time.
+
+### Checking transaction headroom
+
+Use `ctx.meta.getTransactionMetrics()` to check how much capacity remains in the
+current transaction. Each field returns `{ used, remaining }`.
+
+<Snippet
+  title="convex/clearTasks.ts"
+  source={transactionMetricsExample}
+  highlightPatterns={["getTransactionMetrics"]}
+/>
+
+### Limiting nested transactions
+
+When calling a nested query or mutation via `ctx.runQuery` or `ctx.runMutation`,
+pass a `transactionLimits` option to cap how much of the parent's budget the
+nested call can consume. Each field is relative to the current consumption and
+cannot exceed the parent's remaining capacity. You can use this to reserve space
+for work after the nested function call, even if the child reads or writes too
+much. Note: the limit determines when a nested transaction will fail, but the
+actual consumption tracked will count the overage, so you may end up with
+slightly less reserved space, depending how big the document was that exceeded
+the limit.
+
+<Snippet
+  title="convex/transactionLimits.ts"
+  source={transactionLimitsExample}
+  highlightPatterns={["transactionLimits", "RESERVE_"]}
+/>
+
+The available fields match those on `TransactionMetrics`: `bytesRead`,
+`bytesWritten`, `databaseQueries`, `documentsRead`, `documentsWritten`,
+`functionsScheduled`, and `scheduledFunctionArgsBytes`. Any omitted field
+inherits the parent's current limit.

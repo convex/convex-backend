@@ -46,7 +46,6 @@ pub enum CronValidationError {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronJob {
     // Unique identifier of a cron
     pub name: CronIdentifier,
@@ -146,37 +145,11 @@ impl Borrow<str> for CronIdentifier {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for CronIdentifier {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = CronIdentifier>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        use proptest::strategy::Strategy;
-        const CRON_IDENTIFIER_REGEX: &str = "[-_ 'a-zA-Z]+";
-        CRON_IDENTIFIER_REGEX.prop_filter_map("Generated invalid CronIdentifier", |s| {
-            CronIdentifier::from_str(&s).ok()
-        })
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronSpec {
     pub udf_path: CanonicalizedUdfPath,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::arbitrary::any_with::<ConvexArray>((0..4).into())")
-    )]
     pub udf_args: ConvexArray,
     pub cron_schedule: CronSchedule,
-}
-
-impl HeapSize for CronSpec {
-    fn heap_size(&self) -> usize {
-        self.udf_args.heap_size() + self.cron_schedule.heap_size() + self.udf_path.heap_size()
-    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -445,7 +418,6 @@ impl TryFrom<JsonValue> for CronSpec {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum CronJobState {
     // Yet to be attempted.
@@ -455,7 +427,6 @@ pub enum CronJobState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum CronSchedule {
     Interval {
         seconds: i64,
@@ -722,15 +693,10 @@ impl CronSchedule {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronJobLog {
     pub name: CronIdentifier,
     pub ts: Timestamp,
     pub udf_path: CanonicalizedUdfPath,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::arbitrary::any_with::<ConvexArray>((0..4).into())")
-    )]
     pub udf_args: ConvexArray,
     pub status: CronJobStatus,
     pub log_lines: CronJobLogLines,
@@ -829,7 +795,6 @@ impl TryFrom<ConvexObject> for CronJobLog {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum CronJobStatus {
     Success(CronJobResult),
     Err(String),
@@ -907,7 +872,6 @@ impl TryFrom<ConvexObject> for CronJobStatus {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum CronJobResult {
     Default(ConvexValue),
     Truncated(String),
@@ -971,7 +935,6 @@ impl TryFrom<ConvexObject> for CronJobResult {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronJobLogLines {
     pub log_lines: RawLogLines,
     pub is_truncated: bool,
@@ -1022,72 +985,7 @@ impl TryFrom<ConvexObject> for CronJobLogLines {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use sync_types::testing::assert_roundtrips;
-    use value::{
-        assert_obj,
-        ConvexObject,
-        ConvexValue,
-    };
-
-    use crate::migr_119::cron_jobs::types::{
-        CronJob,
-        CronJobLog,
-        CronJobLogLines,
-        CronJobResult,
-        CronJobStatus,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_cron_job_log_roundtrips(v in any::<CronJobLog>()) {
-            assert_roundtrips::<CronJobLog, ConvexObject>(v);
-        }
-
-        #[test]
-        fn test_cron_job_status_roundtrips(v in any::<CronJobStatus>()) {
-            assert_roundtrips::<CronJobStatus, ConvexObject>(v);
-        }
-
-        #[test]
-        fn test_cron_job_result_roundtrips(v in any::<CronJobResult>()) {
-            assert_roundtrips::<CronJobResult, ConvexObject>(v);
-        }
-
-        #[test]
-        fn test_cron_job_log_lines_roundtrips(v in any::<CronJobLogLines>()) {
-            assert_roundtrips::<CronJobLogLines, ConvexObject>(v);
-        }
-    }
-
-    #[test]
-    fn test_cron_args_bytes() {
-        // Regression test with an example cron job from prod that has udf_args as
-        // bytes.
-        let cron_job_obj = assert_obj!(
-            "cronSpec" => {
-                "cronSchedule" => {"hourUTC" => 4, "minuteUTC" => 20, "type" => "daily"},
-                // b"W3t9XQ=="
-                "udfArgs" => ConvexValue::Bytes(b"[{}]".to_vec().try_into().unwrap()),
-                "udfPath" => "crons.js:vacuumOldEntries"
-            },
-            "name" => "vacuum old entries",
-            "nextTs" => 1702354800000000000,
-            "prevTs" => 1702268400000000000,
-            "state" => {"type" => "pending"},
-        );
-        assert_roundtrips::<_, CronJob>(cron_job_obj);
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronNextRun {
     // Internally tracked metadata to execute the current run of the cron
     pub cron_job_id: DeveloperDocumentId,

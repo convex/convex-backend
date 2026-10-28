@@ -6,7 +6,7 @@ import { Callout } from "@ui/Callout";
 import { useReferralState } from "api/referrals";
 import { Loading } from "@ui/Loading";
 import { CopyTextButton } from "@common/elements/CopyTextButton";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { ReferralsBenefits } from "./ReferralsBenefits";
 import { ReferralProgress } from "./ReferralProgress";
 
@@ -52,9 +52,10 @@ export function ReferralsInner({
               Thank you for subscribing to Convex!
             </p>
             <p className="max-w-prose">
-              As a paid plan subscriber, you won’t get additional resources for
-              referring friends or being referred by someone, but your friends
-              can still get free Convex resources by using your referral link.
+              Referral benefits only apply on the free plan, so your team no
+              longer receives additional resources from referring friends or
+              being referred. Your friends can still get free Convex resources
+              by using your referral link below.
             </p>
           </div>
         </Callout>
@@ -65,14 +66,11 @@ export function ReferralsInner({
         <p className="mt-1 max-w-prose">
           Each time you refer someone, both of your teams get the following
           benefits on top of your{" "}
-          <Link
-            href="https://www.convex.dev/pricing"
-            target="_blank"
-            className="text-content-link hover:underline"
-          >
+          <Link href="https://www.convex.dev/pricing" target="_blank">
             free plan limits
           </Link>
-          .
+          . Referral benefits only apply while your team is on the free plan —
+          they no longer apply if you upgrade to a paid plan.
         </p>
 
         <div className="my-4 flex items-center gap-4">

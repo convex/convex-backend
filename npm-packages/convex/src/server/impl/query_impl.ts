@@ -41,9 +41,7 @@ type SerializedQuery = {
   operators: Array<QueryOperator>;
 };
 
-export class QueryInitializerImpl
-  implements QueryInitializer<GenericTableInfo>
-{
+export class QueryInitializerImpl implements QueryInitializer<GenericTableInfo> {
   private tableName: string;
 
   constructor(tableName: string) {

@@ -1,12 +1,36 @@
+[unstable]
+bindeps = true
+
 [env]
 CARGO_WORKSPACE_ROOT = { value = "", relative = true }
 CHRONO_TZ_TIMEZONE_FILTER = "US/Pacific"
+# Custom rusty_v8 build: V8 14.9.207.26 base with leaptiering dispatch-handle UAF
+# fixes (JSFunction 8e1b07549b03 + FeedbackCell e4f0cfdd659) plus these backports:
+#   - 5e34aa5c30c turboshaft store-store-elimination backedge revisit (never
+#     upstreamed to a release branch; prime fix for the residual corruption family
+#     that produced context/regexp/SFI wrong-object crashes on v149.2.3)
+#   - ac7cb13b60b turboshaft mark array initializing stores as initializing
+#     (bug 527385397 / CVE-2026-15132) — same store-elimination GC-safety family
+#   - 35580b908ad SharedFunctionInfo publication race (bug 511219512)
+#   - 2f3fea02141 regexp peephole stale offsets (bug 511290389)
+#   - f55c4ff2410 regexp RegExpData TOCTOU (bug 513568918)
+#   - e0562d87ad9 sort receiver elements-kind agreement in Maglev/TurboFan
+#     (bug 542403045 / CVE-2026-85046)
+#   - 7b1590f7418 concurrent ThinString read in NewConsString (bug 519664497)
+#     — acquire-load map read on the TurboFan background thread
+# NB: we stay on the .26 base rather than bumping to 14.9.207.39 — the .39 v8 tree
+# collides with this rusty_v8 build harness (duplicate gn arg cppgc_enable_api_checks);
+# a base bump needs a matching harness and is deferred. Built by convex/rusty_v8
+# @ tag v149.2.11; pinned by rev via [patch.crates-io] so the mirror download URL
+# (…/v149.2.11/…) is content-stable and reproducible.
+RUSTY_V8_MIRROR = "https://github.com/convex/rusty_v8/releases/download"
+# ada-url's build script compiles Ada with the static CRT (/MT) under MSVC, but
+# V8 and the other C++ dependencies link the dynamic CRT (/MD), and the linker
+# rejects the mix. cc-rs passes CXXFLAGS after its own CRT flag, so this /MD wins.
+CXXFLAGS_x86_64_pc_windows_msvc = "-MD"
 
 [target.aarch64-unknown-linux-gnu]
-rustflags = ["-Ctarget-cpu=neoverse-n1", "-Cforce-frame-pointers=yes"]
-
-[target.aarch64-apple-darwin]
-rustflags = ["-Ctarget-cpu=apple-m1"]
+rustflags = ["-Cforce-frame-pointers=yes"]
 
 [target.x86_64-pc-windows-msvc]
 # FORCE:MULTIPLE is a bit sketchy. v8 and rocksdb both export the same symbol.

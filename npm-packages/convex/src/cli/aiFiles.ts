@@ -1,22 +1,26 @@
 import path from "path";
 import { Command } from "@commander-js/extra-typings";
+import { chalkStderr } from "chalk";
+import { logMessage } from "../bundler/log.js";
 import { oneoffContext } from "../bundler/context.js";
 import { readProjectConfig } from "./lib/config.js";
 import { functionsDir } from "./lib/utils/utils.js";
 import {
-  updateAiFiles,
+  installAiFiles,
   enableAiFiles,
-  removeAiFiles,
   disableAiFiles,
-  statusAiFiles,
-} from "./lib/ai/index.js";
+  removeAiFiles,
+} from "./lib/aiFiles/index.js";
+import { statusAiFiles } from "./lib/aiFiles/status.js";
+import { writeAiFilesConfig } from "./lib/config.js";
 
 async function resolveProjectPaths() {
   const ctx = await oneoffContext({});
   const { configPath, projectConfig } = await readProjectConfig(ctx);
   const convexDir = path.resolve(functionsDir(configPath, projectConfig));
   const projectDir = path.resolve(path.dirname(configPath));
-  return { projectDir, convexDir };
+  const aiFilesConfig = projectConfig.aiFiles;
+  return { ctx, projectDir, convexDir, aiFilesConfig, projectConfig };
 }
 
 const aiInstall = new Command("install")
@@ -26,61 +30,104 @@ const aiInstall = new Command("install")
       "  - convex/_generated/ai/guidelines.md\n" +
       "  - AGENTS.md (Convex section only)\n" +
       "  - CLAUDE.md (Convex section only)\n" +
-      "  - Agent skills (installed to each coding agent's native path)\n\n" +
-      "Files you have edited yourself are detected via content hashing and skipped\n" +
-      "rather than silently overwritten.",
+      "  - Agent skills (installed to each coding agent's native path, configured via convex.json)",
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await updateAiFiles(projectDir, convexDir);
+    const { ctx, projectDir, convexDir, aiFilesConfig } =
+      await resolveProjectPaths();
+
+    const result = await installAiFiles({
+      projectDir,
+      convexDir,
+      aiFilesConfig,
+    });
+
+    if (result.kind === "error") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: result.message,
+      });
+    }
+
+    logMessage(`${chalkStderr.green("✔")} Convex AI files installed.`);
   });
 
 const aiEnable = new Command("enable")
-  .summary("Enable Convex AI file staleness/install messages")
+  .summary("Enable Convex AI files")
   .description(
-    "Re-enables AI file staleness/install messages by writing\n" +
-      "`aiFiles.disableStalenessMessage: false` to `convex.json`, then installs\n" +
-      "or refreshes the managed AI files.",
+    "Re-enables Convex AI files by writing `aiFiles.enabled: true` to\n" +
+      "`convex.json`, then installs or refreshes the managed AI files.",
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await enableAiFiles(projectDir, convexDir);
+    const { projectDir, convexDir, aiFilesConfig } =
+      await resolveProjectPaths();
+
+    const newAiFilesConfig = await enableAiFiles({
+      projectDir,
+      convexDir,
+      aiFilesConfig,
+    });
+
+    await writeAiFilesConfig({ projectDir, aiFiles: newAiFilesConfig });
   });
 
 const aiUpdate = new Command("update")
   .summary("Update Convex AI files to the latest version")
   .description(
-    "Updates the following files if they exist and have not been locally modified:\n" +
+    "Updates the following to their latest versions:\n" +
       "  - convex/_generated/ai/guidelines.md\n" +
       "  - AGENTS.md (Convex section only)\n" +
       "  - CLAUDE.md (Convex section only)\n" +
-      "  - Agent skills (installed to each coding agent's native path)\n\n" +
-      "Files you have edited yourself are detected via content hashing and skipped\n" +
-      "rather than silently overwritten.\n\n" +
-      "Does not change `aiFiles.disableStalenessMessage` in `convex.json`.\n" +
-      "Run `npx convex ai-files enable` to enable staleness/install messages.",
+      "  - Agent skills (installed to each coding agent's native path, configured via convex.json)",
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await updateAiFiles(projectDir, convexDir);
+    const { ctx, projectDir, convexDir, aiFilesConfig } =
+      await resolveProjectPaths();
+
+    const result = await installAiFiles({
+      projectDir,
+      convexDir,
+      aiFilesConfig,
+    });
+
+    if (result.kind === "error") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: result.message,
+      });
+    }
+
+    logMessage(`${chalkStderr.green("✔")} Convex AI files updated.`);
   });
 
 const aiDisable = new Command("disable")
-  .summary("Suppress AI file staleness/install messages without removing files")
+  .summary("Disable Convex AI files without removing them")
   .description(
-    "Writes a suppression marker into `convex.json` (`aiFiles.disableStalenessMessage`) so\n" +
-      "`npx convex dev` stops suggesting you install AI files.\n\n" +
+    "Writes `aiFiles.enabled: false` to `convex.json` so `npx convex dev`\n" +
+      "stops prompting to install AI files and suppresses staleness messages.\n\n" +
       "Files already installed are left untouched - use `npx convex ai-files remove`\n" +
       "if you also want to delete them.\n\n" +
       "Run `npx convex ai-files enable` to re-enable at any time.",
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await disableAiFiles(projectDir, convexDir);
+    const { projectDir, aiFilesConfig } = await resolveProjectPaths();
+
+    const newAiFilesConfig = disableAiFiles(aiFilesConfig);
+
+    await writeAiFilesConfig({
+      projectDir,
+      aiFiles: newAiFilesConfig,
+    });
+
+    logMessage(
+      `${chalkStderr.green(`✔`)} Convex AI files disabled. Run ${chalkStderr.bold(`npx convex ai-files enable`)} to re-enable.`,
+    );
   });
 
 const aiStatus = new Command("status")
@@ -97,8 +144,10 @@ const aiStatus = new Command("status")
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await statusAiFiles(projectDir, convexDir);
+    const { projectDir, convexDir, aiFilesConfig } =
+      await resolveProjectPaths();
+
+    await statusAiFiles({ projectDir, convexDir, aiFilesConfig });
   });
 
 const aiRemove = new Command("remove")
@@ -107,17 +156,24 @@ const aiRemove = new Command("remove")
     "Removes the following:\n" +
       "  - convex/_generated/ai/ directory (guidelines.md, ai-files.state.json)\n" +
       "  - Convex sections from AGENTS.md and CLAUDE.md\n" +
-      "  - Agent skills installed by `convex ai-files install`\n\n" +
+      "  - Agent skills installed by `npx convex ai-files install`\n\n" +
       "If removing the managed section leaves AGENTS.md or CLAUDE.md empty, the\n" +
       "empty file is deleted. Otherwise the rest of the file is kept.\n\n" +
       "Skills installed from other sources are not affected.\n\n" +
       "Note: after `remove`, `npx convex dev` will suggest reinstalling AI files.\n" +
-      "Use `npx convex ai-files disable` to suppress that prompt without deleting files.",
+      "Use `npx convex ai-files disable` to opt out entirely without deleting files.",
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir } = await resolveProjectPaths();
-    await removeAiFiles(projectDir, convexDir);
+    const { ctx, projectDir, convexDir } = await resolveProjectPaths();
+    const result = await removeAiFiles({ projectDir, convexDir });
+    if (result.kind === "error") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: result.message,
+      });
+    }
   });
 
 export const aiFiles = new Command("ai-files")

@@ -41,7 +41,7 @@ use futures::{
     future::BoxFuture,
     FutureExt,
 };
-use indexing::backend_in_memory_indexes::BatchKey;
+use indexing::index_reader::BatchKey;
 use maplit::btreemap;
 use value::{
     val,
@@ -304,7 +304,7 @@ impl<RT: Runtime> DeveloperQuery<RT> {
             QuerySource::FullTableScan(ref full_table_scan) => {
                 let table_name = full_table_scan.table_name.clone();
                 anyhow::ensure!(
-                    &table_name != &*INDEX_TABLE,
+                    &table_name != &INDEX_TABLE,
                     "`_index` can't be queried via .collect() since it doesn't have \
                      by_creation_time index. Please query via by_id index."
                 );

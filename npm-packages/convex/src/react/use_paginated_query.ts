@@ -163,9 +163,20 @@ export function usePaginatedQuery<Query extends PaginatedQueryReference>(
   query: Query,
   args: PaginatedQueryArgs<Query> | "skip",
   options: { initialNumItems: number },
+): UsePaginatedQueryReturnType<Query>;
+
+export function usePaginatedQuery<Query extends PaginatedQueryReference>(
+  query: Query,
+  args: PaginatedQueryArgs<Query> | "skip",
+  options: { initialNumItems: number },
 ): UsePaginatedQueryReturnType<Query> {
-  const { user } = usePaginatedQueryInternal(query, args, options);
-  return user;
+  const { user: positionalResult } = usePaginatedQueryInternal(
+    query,
+    args,
+    options,
+    true,
+  );
+  return positionalResult as unknown as UsePaginatedQueryReturnType<Query>;
 }
 
 /** @internal */
@@ -186,8 +197,9 @@ export function usePaginatedQueryInternal<
     initialNumItems: number;
     [includePage]?: boolean;
   },
+  throwOnError: boolean = true,
 ): {
-  user: UsePaginatedQueryReturnType<Query>;
+  user: UsePaginatedQueryInternalResult<PaginatedQueryItem<Query>>;
   internal: { state: UsePaginatedQueryState };
 } {
   if (
@@ -261,9 +273,10 @@ export function usePaginatedQueryInternal<
   const resultsObject = useQueries(currState.queries);
 
   const isIncludingPageKeys = options[includePage] ?? false;
-  const [results, maybeLastResult]: [
+  const [results, maybeLastResult, maybeError]: [
     Value[],
     undefined | PaginationResult<Value>,
+    undefined | Error,
   ] = useMemo(() => {
     let currResult = undefined;
 
@@ -294,9 +307,12 @@ export function usePaginatedQueryInternal<
               currResult.message,
           );
           setState(createInitialState);
-          return [[], undefined];
+          return [[], undefined, undefined];
         } else {
-          throw currResult;
+          if (throwOnError) {
+            throw currResult;
+          }
+          return [allItems, undefined, currResult];
         }
       }
       const ongoingSplit = currState.ongoingSplits[pageKey];
@@ -328,7 +344,7 @@ export function usePaginatedQueryInternal<
         // If pageStatus is 'SplitRequired', it means the server was not able to
         // fetch the full page. So we stop results before the incomplete
         // page and return 'LoadingMore' while the page is splitting.
-        return [allItems, undefined];
+        return [allItems, undefined, undefined];
       }
       allItems.push(
         ...(isIncludingPageKeys
@@ -339,7 +355,7 @@ export function usePaginatedQueryInternal<
           : currResult.page),
       );
     }
-    return [allItems, currResult];
+    return [allItems, currResult, undefined];
   }, [
     resultsObject,
     currState.pageKeys,
@@ -348,15 +364,26 @@ export function usePaginatedQueryInternal<
     createInitialState,
     logger,
     isIncludingPageKeys,
+    throwOnError,
   ]);
 
   const statusObject = useMemo(() => {
+    if (maybeError !== undefined) {
+      return {
+        status: "Error",
+        isLoading: false,
+        error: maybeError,
+        loadMore: () => {
+          // Intentional noop.
+        },
+      } as const;
+    }
     if (maybeLastResult === undefined) {
       if (currState.nextPageKey === 1) {
         return {
           status: "LoadingFirstPage",
           isLoading: true,
-          loadMore: (_numItems: number) => {
+          loadMore: () => {
             // Intentional noop.
           },
         } as const;
@@ -411,7 +438,7 @@ export function usePaginatedQueryInternal<
         }
       },
     } as const;
-  }, [maybeLastResult, currState.nextPageKey]);
+  }, [maybeError, maybeLastResult, currState.nextPageKey]);
 
   return {
     user: {
@@ -497,6 +524,19 @@ export type UsePaginatedQueryResult<Item> = {
       isLoading: false;
     }
 );
+
+/**
+ * @internal
+ */
+export type UsePaginatedQueryInternalResult<Item> =
+  | UsePaginatedQueryResult<Item>
+  | {
+      results: Item[];
+      status: "Error";
+      isLoading: false;
+      error: Error;
+      loadMore: (numItems: number) => void;
+    };
 
 /**
  * The possible pagination statuses in {@link UsePaginatedQueryResult}.

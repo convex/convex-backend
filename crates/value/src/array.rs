@@ -1,4 +1,5 @@
 use std::{
+    self,
     fmt,
     hash::{
         Hash,
@@ -12,29 +13,29 @@ use sync_types::types::SerializedArgs;
 
 use super::size::Size;
 use crate::{
-    heap_size::{
-        HeapSize,
-        WithHeapSize,
-    },
     size::{
+        array_size,
         check_nesting,
         check_system_size,
     },
     utils::display_sequence,
+    walk::ConvexValueType,
     ConvexValue,
+    MAX_NESTING,
+    MAX_SIZE,
 };
 
 const MAX_ARRAY_LEN: usize = 8192;
 
-/// Wrapper on `Vec<Value>` that enforces size limits.
+/// Wrapper on `Vec<ConvexValue>` that enforces size limits.
 #[derive(Clone)]
 pub struct ConvexArray {
     // Precomputed `1 + size(v1) + ... + size(vN) + 1`
-    size: usize,
+    size: u32,
     // Precomputed `1 + max(nesting(v1), ..., nesting(vN))`.
-    nesting: usize,
+    nesting: u8,
 
-    items: WithHeapSize<Vec<ConvexValue>>,
+    items: Box<[ConvexValue]>,
 }
 
 impl ConvexArray {
@@ -42,13 +43,15 @@ impl ConvexArray {
         Self {
             size: 2,
             nesting: 1,
-            items: WithHeapSize::default(),
+            items: Box::new([]),
         }
     }
 
     pub fn into_serialized_args(&self) -> anyhow::Result<SerializedArgs> {
-        let serialized = self.json_serialize()?;
-        Ok(SerializedArgs::from_slice(serialized.as_bytes())?)
+        let serialized = serde_json::value::to_raw_value(&crate::json_value::SerializeValue::new(
+            ConvexValueType::<&ConvexValue>::Array(self),
+        ))?;
+        Ok(SerializedArgs::from_raw(serialized))
     }
 }
 
@@ -70,34 +73,40 @@ impl<'a> IntoIterator for &'a ConvexArray {
     }
 }
 
+pub(crate) fn check_array_len(len: usize) -> anyhow::Result<()> {
+    if len > MAX_ARRAY_LEN {
+        anyhow::bail!(ErrorMetadata::bad_request(
+            "ArrayTooLong",
+            format!("Array length is too long ({len} > maximum length {MAX_ARRAY_LEN})"),
+        ));
+    }
+    Ok(())
+}
+
 impl TryFrom<Vec<ConvexValue>> for ConvexArray {
     type Error = anyhow::Error;
 
     fn try_from(items: Vec<ConvexValue>) -> anyhow::Result<Self> {
-        if items.len() > MAX_ARRAY_LEN {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "ArrayTooLong",
-                format!(
-                    "Array length is too long ({} > maximum length {MAX_ARRAY_LEN})",
-                    items.len()
-                ),
-            ));
-        }
-        let size = 1 + items.iter().map(|v| v.size()).sum::<usize>() + 1;
+        check_array_len(items.len())?;
+        let size = array_size(&items);
         check_system_size(size)?;
         let nesting = 1 + items.iter().map(|v| v.nesting()).max().unwrap_or(0);
         check_nesting(nesting)?;
+        const {
+            assert!(MAX_SIZE <= u32::MAX as usize);
+            assert!(MAX_NESTING <= u8::MAX as usize);
+        }
         Ok(Self {
-            size,
-            nesting,
-            items: items.into(),
+            size: size as u32,
+            nesting: nesting as u8,
+            items: items.into_boxed_slice(),
         })
     }
 }
 
 impl From<ConvexArray> for Vec<ConvexValue> {
     fn from(array: ConvexArray) -> Self {
-        array.items.into()
+        array.items.into_vec()
     }
 }
 
@@ -146,32 +155,11 @@ impl Eq for ConvexArray {}
 
 impl Size for ConvexArray {
     fn size(&self) -> usize {
-        self.size
+        self.size as usize
     }
 
     fn nesting(&self) -> usize {
-        self.nesting
-    }
-}
-
-impl HeapSize for ConvexArray {
-    fn heap_size(&self) -> usize {
-        self.items.heap_size()
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for ConvexArray {
-    type Parameters = proptest::collection::SizeRange;
-
-    type Strategy = impl proptest::strategy::Strategy<Value = ConvexArray>;
-
-    fn arbitrary_with(args: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        prop::collection::vec(any::<ConvexValue>(), args)
-            .prop_filter_map("Vec wasn't a valid Convex value", |s| {
-                Self::try_from(s).ok()
-            })
+        self.nesting as usize
     }
 }
 

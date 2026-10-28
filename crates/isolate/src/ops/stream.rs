@@ -13,17 +13,17 @@ use serde::Serialize;
 use serde_bytes::ByteBuf;
 use uuid::Uuid;
 
-use super::OpProvider;
+use super::V8OpProvider;
 use crate::{
     environment::{
         helpers::resolve_promise,
-        IsolateEnvironment,
+        V8IsolateEnvironment,
     },
     execution_scope::ExecutionScope,
     request_scope::StreamListener,
 };
 
-pub fn async_op_stream_read_part<'b, P: OpProvider<'b>>(
+pub fn async_op_stream_read_part<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     args: v8::FunctionCallbackArguments,
     resolver: v8::Global<v8::PromiseResolver>,
@@ -33,12 +33,12 @@ pub fn async_op_stream_read_part<'b, P: OpProvider<'b>>(
 }
 
 #[convex_macro::v8_op]
-pub fn op_stream_create<'b, P: OpProvider<'b>>(provider: &mut P) -> anyhow::Result<Uuid> {
+pub fn op_stream_create<'b, P: V8OpProvider<'b>>(provider: &mut P) -> anyhow::Result<Uuid> {
     provider.create_stream()
 }
 
 #[convex_macro::v8_op]
-pub fn op_stream_extend<'b, P: OpProvider<'b>>(
+pub fn op_stream_extend<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     id: Uuid,
     bytes: Option<ByteBuf>,
@@ -47,7 +47,9 @@ pub fn op_stream_extend<'b, P: OpProvider<'b>>(
     provider.extend_stream(id, bytes.map(|b| b.into_vec().into()), new_done)
 }
 
-impl<'a, 's: 'a, 'i: 'a, RT: Runtime, E: IsolateEnvironment<RT>> ExecutionScope<'a, 's, 'i, RT, E> {
+impl<'a, 's: 'a, 'i: 'a, RT: Runtime, E: V8IsolateEnvironment<RT>>
+    ExecutionScope<'a, 's, 'i, RT, E>
+{
     pub fn error_stream(&mut self, id: uuid::Uuid, error: anyhow::Error) -> anyhow::Result<()> {
         let state = self.state_mut()?;
         state.streams.insert(id, Err(error));

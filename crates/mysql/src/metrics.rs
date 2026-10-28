@@ -1,6 +1,7 @@
 use common::{
     persistence::PersistenceGlobalKey,
     pool_stats::ConnectionPoolStats,
+    types::Timestamp,
 };
 use metrics::{
     log_counter_with_labels,
@@ -22,6 +23,8 @@ use mysql_async::{
     Value,
 };
 use prometheus::VMHistogramVec;
+
+use crate::MaintenanceRound;
 
 fn cluster_name_label(cluster_name: &str) -> StaticMetricLabel {
     StaticMetricLabel::new("cluster_name", cluster_name.to_owned())
@@ -148,7 +151,7 @@ impl<'a> QueryIndexStats<'a> {
     }
 }
 register_convex_counter!(
-    MYSQL_QUERY_INDEX_SQL_STATEMENTS,
+    pub(crate) MYSQL_QUERY_INDEX_SQL_STATEMENTS,
     "Number of index query SQL statements",
     &["cluster_name"]
 );
@@ -459,18 +462,42 @@ register_convex_counter!(
     &["name", "cluster_name"]
 );
 
-pub fn log_query_result(row: &Row, labels: Vec<StaticMetricLabel>) {
-    log_counter_with_labels(&MYSQL_QUERY_RESULT_TOTAL, 1, labels.clone());
-    let mut total_data_size = 0;
-    for i in 0..row.len() {
-        // Only counts size from BLOBs because the interface doesn't allow
-        // generic parsing. All JsonValues are BLOBs though so this is almost
-        // everything.
-        if let Some(Value::Bytes(col)) = row.as_ref(i) {
-            total_data_size += col.len();
+pub fn log_query_result(labels: Vec<StaticMetricLabel>) -> LogQueryResult {
+    LogQueryResult {
+        labels,
+        rows: 0,
+        data_size: 0,
+    }
+}
+
+pub struct LogQueryResult {
+    labels: Vec<StaticMetricLabel>,
+    rows: u64,
+    data_size: u64,
+}
+
+impl LogQueryResult {
+    pub fn add_row(&mut self, row: &Row) {
+        self.rows += 1;
+        for i in 0..row.len() {
+            // Only counts size from BLOBs because the interface doesn't allow
+            // generic parsing. All JsonValues are BLOBs though so this is almost
+            // everything.
+            if let Some(Value::Bytes(col)) = row.as_ref(i) {
+                self.data_size += col.len() as u64;
+            }
         }
     }
-    log_counter_with_labels(&MYSQL_QUERY_RESULT_BYTES, total_data_size as u64, labels);
+}
+impl Drop for LogQueryResult {
+    fn drop(&mut self) {
+        log_counter_with_labels(&MYSQL_QUERY_RESULT_TOTAL, self.rows, self.labels.clone());
+        log_counter_with_labels(
+            &MYSQL_QUERY_RESULT_BYTES,
+            self.data_size,
+            self.labels.clone(),
+        );
+    }
 }
 
 register_convex_counter!(
@@ -522,6 +549,11 @@ register_convex_gauge!(
 register_convex_gauge!(
     MYSQL_POOL_CONNECTIONS_IN_POOL_INFO,
     "Gauge of active connections that currently belong to the pool.",
+    &["cluster_name"],
+);
+register_convex_gauge!(
+    MYSQL_POOL_CONNECTIONS_IN_USE_INFO,
+    "Gauge of connections currently checked out from the pool and owned by the application.",
     &["cluster_name"],
 );
 register_convex_gauge!(
@@ -583,6 +615,7 @@ pub fn log_pool_metrics(cluster_name: &str, metrics: &mysql_async::Metrics) {
     }
     mysql_metric!(connection_count, MYSQL_POOL_CONNECTION_COUNT_INFO);
     mysql_metric!(connections_in_pool, MYSQL_POOL_CONNECTIONS_IN_POOL_INFO);
+    mysql_metric!(connections_in_use, MYSQL_POOL_CONNECTIONS_IN_USE_INFO);
     mysql_metric!(active_wait_requests, MYSQL_POOL_ACTIVE_WAIT_REQUESTS_INFO);
     mysql_metric!(create_failed, MYSQL_POOL_CREATE_FAILED_TOTAL);
     mysql_metric!(
@@ -609,5 +642,81 @@ pub fn log_pool_metrics(cluster_name: &str, metrics: &mysql_async::Metrics) {
     mysql_metric!(
         connection_returned_to_pool,
         MYSQL_POOL_CONNECTION_RETURNED_TO_POOL_TOTAL
+    );
+}
+
+register_convex_gauge!(
+    INDEXES_LOG_LOOKAHEAD_SECONDS,
+    "How far past now the newest existing V6 index log bucket reaches. A commit past it fails, so \
+     this must stay comfortably positive.",
+    &["cluster_name"]
+);
+register_convex_gauge!(
+    INDEXES_LOG_OLDEST_KEPT_AGE_SECONDS,
+    "Age of the oldest snapshot the V6 index log buckets are advertised to serve",
+    &["cluster_name"]
+);
+register_convex_gauge!(
+    INDEXES_LOG_BUCKET_TABLES,
+    "Number of V6 index log bucket tables present",
+    &["cluster_name"]
+);
+register_convex_gauge!(
+    INDEXES_LOG_MAINTENANCE_LAST_SUCCESS_UNIX_SECONDS,
+    "Unix timestamp of the last successful V6 index log maintenance round",
+    &["cluster_name"]
+);
+register_convex_counter!(
+    INDEXES_LOG_BUCKETS_CREATED_TOTAL,
+    "Number of V6 index log bucket CREATE statements that succeeded. Counts statements, not table \
+     transitions: the DDL is idempotent, so two conductors racing one round each count the table.",
+    &["cluster_name"]
+);
+register_convex_counter!(
+    INDEXES_LOG_BUCKETS_DROPPED_TOTAL,
+    "Number of V6 index log bucket DROP statements that succeeded. Counts statements, not table \
+     transitions; see the created counter.",
+    &["cluster_name"]
+);
+
+pub fn log_indexes_log_bucket_created(cluster_name: &str) {
+    log_counter_with_labels(
+        &INDEXES_LOG_BUCKETS_CREATED_TOTAL,
+        1,
+        vec![cluster_name_label(cluster_name)],
+    );
+}
+
+pub fn log_indexes_log_bucket_dropped(cluster_name: &str) {
+    log_counter_with_labels(
+        &INDEXES_LOG_BUCKETS_DROPPED_TOTAL,
+        1,
+        vec![cluster_name_label(cluster_name)],
+    );
+}
+
+/// These series exist only on conductors running V6, so an alert on index log
+/// maintenance has to key off the series rather than the conductor job.
+pub fn log_indexes_log_maintenance(cluster_name: &str, round: &MaintenanceRound, now: Timestamp) {
+    let labels = vec![cluster_name_label(cluster_name)];
+    log_gauge_with_labels(
+        &INDEXES_LOG_LOOKAHEAD_SECONDS,
+        round.created_through_ts.secs_since_f64(now),
+        labels.clone(),
+    );
+    log_gauge_with_labels(
+        &INDEXES_LOG_OLDEST_KEPT_AGE_SECONDS,
+        now.secs_since_f64(round.oldest_kept_ts),
+        labels.clone(),
+    );
+    log_gauge_with_labels(
+        &INDEXES_LOG_BUCKET_TABLES,
+        round.bucket_count as f64,
+        labels.clone(),
+    );
+    log_gauge_with_labels(
+        &INDEXES_LOG_MAINTENANCE_LAST_SUCCESS_UNIX_SECONDS,
+        now.secs_since_f64(Timestamp::MIN),
+        labels,
     );
 }

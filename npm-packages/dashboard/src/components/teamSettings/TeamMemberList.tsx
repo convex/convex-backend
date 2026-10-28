@@ -1,4 +1,8 @@
-import { TeamResponse, InvitationResponse, TeamMember } from "generatedApi";
+import { TeamResponse } from "generatedApi";
+import {
+  InvitationResponse,
+  TeamMember,
+} from "@convex-dev/platform/managementApi";
 
 import { Sheet } from "@ui/Sheet";
 import { LoadingTransition } from "@ui/Loading";
@@ -6,11 +10,14 @@ import { TextInput } from "@ui/TextInput";
 import { useState } from "react";
 import {
   useUpdateTeamMemberRole,
+  useHasCustomRolePermission,
   useIsCurrentMemberTeamAdmin,
+  useListCustomRoles,
   useProjectRoles,
   useUpdateProjectRoles,
 } from "api/roles";
-import { useRemoveTeamMember } from "api/teams";
+import { MEMBER_RESOURCE } from "lib/permissions";
+import { useRemoveTeamMember, useTeamEntitlements } from "api/teams";
 import { useProfile } from "api/profile";
 import { useCancelInvite, useCreateInvite } from "api/invitations";
 import sortBy from "lodash/sortBy";
@@ -51,7 +58,44 @@ export function TeamMemberList({
   const onCreateInvite = useCreateInvite(team.id);
   const onCancelInvite = useCancelInvite(team.id);
 
-  const hasAdminPermissions = useIsCurrentMemberTeamAdmin();
+  // All member-management actions are admin-only by default; custom roles
+  // need an explicit grant per-action.
+  const isTeamAdmin = useIsCurrentMemberTeamAdmin();
+  const canUpdateRoleCustom = useHasCustomRolePermission(
+    team.id,
+    "member:updateRole",
+    MEMBER_RESOURCE,
+    false,
+  );
+  const canRemoveMemberCustom = useHasCustomRolePermission(
+    team.id,
+    "member:remove",
+    MEMBER_RESOURCE,
+    false,
+  );
+  const canInviteCustom = useHasCustomRolePermission(
+    team.id,
+    "member:invite",
+    MEMBER_RESOURCE,
+    false,
+  );
+  const canCancelInviteCustom = useHasCustomRolePermission(
+    team.id,
+    "member:cancelInvitation",
+    MEMBER_RESOURCE,
+    false,
+  );
+  const canUpdateRole = isTeamAdmin || canUpdateRoleCustom;
+  const canRemoveMember = isTeamAdmin || canRemoveMemberCustom;
+  const canInvite = isTeamAdmin || canInviteCustom;
+  const canCancelInvite = isTeamAdmin || canCancelInviteCustom;
+
+  const entitlements = useTeamEntitlements(team.id);
+  const customRolesEnabled = entitlements?.customRolesEnabled ?? false;
+  const { data: customRolesData } = useListCustomRoles(
+    customRolesEnabled ? team.id : undefined,
+  );
+  const customRoles = customRolesData?.items ?? [];
 
   const { projectRoles } = useProjectRoles();
 
@@ -62,7 +106,7 @@ export function TeamMemberList({
       <Sheet className="min-w-[20rem]">
         <div className="mb-4 flex w-full items-center justify-between gap-2">
           <h3 className="grow">Team Members</h3>
-          <div className="w-[12rem]">
+          <div className="w-48">
             <TextInput
               type="search"
               id="memberSearch"
@@ -83,9 +127,12 @@ export function TeamMemberList({
                   members={members}
                   canChangeRole={false}
                   myProfile={profile}
+                  customRoles={customRoles}
+                  customRolesEnabled={customRolesEnabled}
                   onChangeRole={onChangeRole}
                   onRemoveMember={onRemoveMember}
-                  hasAdminPermissions={hasAdminPermissions}
+                  canUpdateRole={canUpdateRole}
+                  canRemoveMember={canRemoveMember}
                   projectRoles={projectRoles?.filter(
                     (role) => role.memberId === me.id,
                   )}
@@ -109,9 +156,12 @@ export function TeamMemberList({
                     members={members}
                     canChangeRole
                     myProfile={profile}
+                    customRoles={customRoles}
+                    customRolesEnabled={customRolesEnabled}
                     onChangeRole={onChangeRole}
                     onRemoveMember={onRemoveMember}
-                    hasAdminPermissions={hasAdminPermissions}
+                    canUpdateRole={canUpdateRole}
+                    canRemoveMember={canRemoveMember}
                     projectRoles={projectRoles?.filter(
                       (role) => role.memberId === member.id,
                     )}
@@ -127,7 +177,7 @@ export function TeamMemberList({
         <Sheet>
           <div className="mb-4 flex w-full items-center justify-between gap-2">
             <h3 className="grow">Pending Invitations</h3>
-            <div className="w-[12rem]">
+            <div className="w-48">
               <TextInput
                 type="search"
                 id="inviteSearch"
@@ -149,7 +199,9 @@ export function TeamMemberList({
                 <TeamMemberInviteListItem
                   key={`invite${idx}`}
                   invite={invite}
-                  hasAdminPermissions={hasAdminPermissions}
+                  teamSlug={team.slug}
+                  canInvite={canInvite}
+                  canCancelInvite={canCancelInvite}
                   onCreateInvite={onCreateInvite}
                   onCancelInvite={onCancelInvite}
                 />

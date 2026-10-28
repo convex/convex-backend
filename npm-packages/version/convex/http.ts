@@ -3,7 +3,7 @@ import {
   FunctionReference,
   httpRouter,
 } from "convex/server";
-import { ActionCtx, httpAction } from "./_generated/server";
+import { ActionCtx, env, httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { generateMessage } from "./util/message";
 import { extractVersionFromHeader } from "./util/convexClientHeader";
@@ -12,6 +12,11 @@ import {
   shouldUseOldCursorRules,
 } from "./util/oldCursorRules";
 import { hashSha256 } from "./util/hash";
+import {
+  AgentSkillCatalogResponse,
+  AgentSkillManifestRequest,
+  validateAgentSkillManifestRequest,
+} from "../agentSkillManifestShared";
 
 const http = httpRouter();
 
@@ -45,6 +50,40 @@ type VersionResponse = {
   agentSkillsSha: string | null;
 };
 
+function getAgentSkillStatus({
+  isDeleted,
+  deletedAt,
+}: {
+  isDeleted: boolean;
+  deletedAt: number | undefined;
+}) {
+  if (!isDeleted) return { kind: "active" } as const;
+  if (deletedAt === undefined) {
+    console.error(
+      "Deleted agent skill catalog entry is missing deletedAt; omitting it from /v1/agent_skills",
+    );
+    return null;
+  }
+  return { kind: "deleted", deletedAt } as const;
+}
+
+function validateAgentSkillSyncAuth(req: Request) {
+  const expectedToken = env.AGENT_SKILLS_SYNC_TOKEN;
+  if (!expectedToken) {
+    console.error("AGENT_SKILLS_SYNC_TOKEN is not configured");
+    return new Response("Server is not configured for agent skill sync", {
+      status: 500,
+    });
+  }
+
+  const authHeader = req.headers.get("Authorization");
+  if (authHeader !== `Bearer ${expectedToken}`) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
+  return null;
+}
+
 http.route({
   path: "/v1/version",
   method: "GET",
@@ -53,12 +92,12 @@ http.route({
     const convexClientHeader = req.headers.get("Convex-Client");
     const clientVersion = extractVersionFromHeader(convexClientHeader);
 
-    const [npmVersionData, cursorRulesData, guidelinesData, agentSkillsData] =
+    const [npmVersionData, cursorRulesData, guidelinesData, latestSnapshot] =
       await Promise.all([
         getCachedOrRefresh(ctx, internal.npm),
         getCursorRulesForVersion(ctx, clientVersion),
         getCachedOrRefresh(ctx, internal.guidelines),
-        getCachedOrRefresh(ctx, internal.agentSkills),
+        ctx.runQuery(internal.agentSkillManifest.getLatestSnapshot, {}),
       ]);
 
     const message = npmVersionData
@@ -70,7 +109,7 @@ http.route({
         message,
         cursorRulesHash: cursorRulesData?.hash ?? null,
         guidelinesHash: guidelinesData?.hash ?? null,
-        agentSkillsSha: agentSkillsData?.sha ?? null,
+        agentSkillsSha: latestSnapshot?.repoSha ?? null,
       } satisfies VersionResponse),
       {
         status: 200,
@@ -80,6 +119,102 @@ http.route({
         },
       },
     );
+  }),
+});
+
+http.route({
+  path: "/v1/agent_skills",
+  method: "GET",
+  handler: httpAction(async (ctx) => {
+    const [latestSnapshot, skills] = await Promise.all([
+      ctx.runQuery(internal.agentSkillManifest.getLatestSnapshot, {}),
+      ctx.runQuery(internal.agentSkillManifest.listAll, {}),
+    ]);
+
+    return new Response(
+      JSON.stringify({
+        latestRepoSha: latestSnapshot?.repoSha ?? null,
+        skills: skills.flatMap((skill) => {
+          const status = getAgentSkillStatus({
+            isDeleted: skill.isDeleted,
+            deletedAt: skill.deletedAt,
+          });
+          if (status === null) return [];
+
+          return [
+            {
+              skillName: skill.skillName,
+              status,
+              hash: skill.currentHash,
+              lastSeenRepoSha: skill.lastSeenRepoSha,
+              lastSeenAt: skill.lastSeenAt,
+            },
+          ];
+        }),
+      } satisfies AgentSkillCatalogResponse),
+      {
+        status: 200,
+        headers: {
+          ...COMMON_HEADERS,
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  }),
+});
+
+/**
+ * This gets called by the convex/agent-skills CI pipeline to sync the agent skill catalog
+ * with the latest skills from the convex/agent-skills repo.
+ */
+http.route({
+  path: "/v1/agent_skills/publish",
+  method: "POST",
+  handler: httpAction(async (ctx, req) => {
+    const authError = validateAgentSkillSyncAuth(req);
+    if (authError) return authError;
+
+    let json: unknown;
+    try {
+      json = await req.json();
+    } catch {
+      return new Response("Invalid JSON body", { status: 400 });
+    }
+
+    const payloadResult = validateAgentSkillManifestRequest(json);
+    if (payloadResult.kind === "error") {
+      return new Response(payloadResult.message, { status: 400 });
+    }
+    const payload: AgentSkillManifestRequest = payloadResult.data;
+
+    try {
+      const snapshot = await ctx.runMutation(
+        internal.agentSkillManifest.ingest,
+        {
+          repoSha: payload.repoSha,
+          skills: payload.skills,
+        },
+      );
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          repoSha: snapshot.repoSha,
+          manifestHash: snapshot.manifestHash,
+          skillCount: snapshot.skills.length,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    } catch (error) {
+      console.error("Failed to ingest agent skill manifest:", error);
+      return new Response("Failed to ingest agent skill manifest", {
+        status: 500,
+      });
+    }
   }),
 });
 
@@ -147,6 +282,17 @@ http.route({
 
 http.route({
   path: "/v1/version",
+  method: "OPTIONS",
+  handler: httpAction(async () => {
+    return new Response(null, {
+      status: 200,
+      headers: COMMON_HEADERS,
+    });
+  }),
+});
+
+http.route({
+  path: "/v1/agent_skills",
   method: "OPTIONS",
   handler: httpAction(async () => {
     return new Response(null, {

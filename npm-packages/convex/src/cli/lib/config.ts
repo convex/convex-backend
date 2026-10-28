@@ -1,5 +1,7 @@
 import { chalkStderr } from "chalk";
 import path from "path";
+// eslint-disable-next-line no-restricted-imports
+import { promises as nodeFs } from "fs";
 import { z } from "zod";
 import { Context } from "../../bundler/context.js";
 import { TypescriptCompiler } from "./typecheck.js";
@@ -40,6 +42,7 @@ import {
 } from "./localDeployment/errors.js";
 import { debugIsolateBundlesSerially } from "../../bundler/debugBundle.js";
 import { DeploymentType } from "./api.js";
+import { isAnonymousDeployment } from "./deployment.js";
 export { productionProvisionHost, provisionHost } from "./utils/utils.js";
 
 /** Type representing WorkOS AuthKit integration configuration. */
@@ -102,8 +105,16 @@ export interface ProjectConfig {
 
   // Convex AI files user preferences.
   aiFiles?: {
-    // When true, suppresses AI files install/staleness nags.
+    // When false, disables all AI files prompts and staleness messages.
+    enabled?: boolean;
+    // @deprecated use `enabled` instead.
     disableStalenessMessage?: boolean;
+    // Configuration for agent skills installed by Convex.
+    skills?: {
+      // List of agents to install skills for (e.g. 'claude-code', 'codex', 'cursor').
+      // Defaults to ['claude-code', 'codex'].
+      agents?: string[];
+    };
   };
 }
 
@@ -131,9 +142,9 @@ export function usesTypeScriptCodegen(projectConfig: ProjectConfig): boolean {
   return projectConfig.codegen.fileType === "ts";
 }
 
-/** Whether the new component API import style should be used (default is false) */
+/** Whether the new component API import style should be used */
 export function usesComponentApiImports(projectConfig: ProjectConfig): boolean {
-  return projectConfig.codegen.legacyComponentApi === false;
+  return projectConfig.codegen.legacyComponentApi !== true;
 }
 
 /**
@@ -289,7 +300,13 @@ const BundlerSchema = z.object({
 });
 
 const AiFilesSchema = z.object({
-  disableStalenessMessage: z.boolean().default(false),
+  enabled: z.boolean().optional(),
+  disableStalenessMessage: z.boolean().optional(),
+  skills: z
+    .object({
+      agents: z.array(z.string()).optional(),
+    })
+    .optional(),
 });
 
 const refineToObject = <T extends z.ZodTypeAny>(schema: T) =>
@@ -553,9 +570,7 @@ export async function readProjectConfig(ctx: Context): Promise<{
           staticApi: false,
           staticDataModel: false,
         },
-        aiFiles: {
-          disableStalenessMessage: false,
-        },
+        aiFiles: {},
       },
       configPath: configName(),
     };
@@ -658,7 +673,7 @@ export async function configFromProjectConfig(
   }
   const modules = convexResult.modules;
   modules.push(...nodeResult.modules);
-  modules.push(...(await bundleAuthConfig(ctx, baseDir)));
+  modules.push(...(await bundleAuthConfig(ctx, baseDir)).modules);
 
   const nodeDependencies: NodeDependency[] = [];
   for (const [moduleName, moduleVersion] of nodeResult.externalDependencies) {
@@ -743,12 +758,10 @@ export async function readConfig(
 /**
  * Ensure the functions directory exists.
  *
- * Note: This function no longer writes to or deletes `convex.json`. The config
- * file is now treated as user-owned and is not modified by the CLI. This allows
- * users to maintain their preferred formatting and any comments they may add
- * (if we later support JSONC parsing).
+ * Note: convex.json is treated as user-owned and is not modified by the CLI.
+ * Use writeAiFilesConfig() to explicitly patch the aiFiles section.
  */
-export async function writeProjectConfig(
+export async function ensureConvexFunctionsDir(
   ctx: Context,
   projectConfig: ProjectConfig,
 ) {
@@ -899,6 +912,49 @@ export function diffConfig(
   return { diffString: diff };
 }
 
+export function setEnvVarsInstructions(
+  names: string[],
+  deploymentName: string | null,
+  deploymentType: DeploymentType | undefined,
+  deploymentUrl: string | undefined,
+): string {
+  // Name cloud deployments explicitly: without a flag `env set` targets the
+  // project's default dev deployment, which may not be where this push went
+  // (e.g. `npx convex dev --deployment <other dev deployment>`). Local and
+  // anonymous deployments are always the default target.
+  let deploymentFlag = "";
+  if (
+    deploymentName !== null &&
+    deploymentType !== "local" &&
+    deploymentType !== "anonymous"
+  ) {
+    deploymentFlag = ` --deployment ${deploymentName}`;
+  } else if (deploymentType === "prod") {
+    deploymentFlag = " --prod";
+  } else if (deploymentName === null && deploymentUrl !== undefined) {
+    // Pushes via `--url`/`--admin-key` or self-hosted env vars have no
+    // deployment name. The admin key stays a placeholder to keep it out of
+    // terminal output.
+    deploymentFlag = ` --url ${deploymentUrl} --admin-key <admin key>`;
+  }
+  const commands = (names.length > 0 ? names : ["<NAME>"]).map(
+    (name) =>
+      `    ${chalkStderr.bold(`npx convex env set${deploymentFlag} ${name} <value>`)}`,
+  );
+  let instructions = `Set ${names.length > 1 ? "them" : "it"} with:\n\n${commands.join("\n")}\n`;
+  // Anonymous deployments are only reachable from the local dashboard, which
+  // `deploymentDashboardUrlPage` can't address.
+  if (deploymentName !== null && !isAnonymousDeployment(deploymentName)) {
+    const variableQuery = names.length === 1 ? `?var=${names[0]}` : "";
+    const dashboardUrl = deploymentDashboardUrlPage(
+      deploymentName,
+      `/settings/environment-variables${variableQuery}`,
+    );
+    instructions += `\nor in the dashboard:\n\n    ${chalkStderr.bold(dashboardUrl)}\n`;
+  }
+  return instructions;
+}
+
 /** Handle an error from
  * legacy push path:
  * - /api/push_config
@@ -922,7 +978,7 @@ export async function handlePushConfigError(
         deploymentNotice: string;
       }
     | undefined,
-  _deploymentType: DeploymentType | undefined,
+  deploymentType: DeploymentType | undefined,
 ): Promise<never> {
   const data: ErrorData | undefined =
     error instanceof ThrowingFetchError ? error.serverErrorData : undefined;
@@ -953,26 +1009,49 @@ export async function handlePushConfigError(
       `Environment variable ${chalkStderr.bold(
         variableName,
       )} is used in auth config file but ` + `its value was not set.`;
-    let setEnvVarInstructions =
-      "Go set it in the dashboard or using `npx convex env set`";
-
-    // If `npx convex dev` is running using --url there might not be a configured deployment
-    if (deploymentName !== null) {
-      const variableQuery =
-        variableName !== undefined ? `?var=${variableName}` : "";
-      const dashboardUrl = deploymentDashboardUrlPage(
-        deploymentName,
-        `/settings/environment-variables${variableQuery}`,
-      );
-      setEnvVarInstructions = `Go to:\n\n    ${chalkStderr.bold(
-        dashboardUrl,
-      )}\n\n  to set it up. `;
-    }
     await ctx.crash({
       exitCode: 1,
       errorType: "invalid filesystem or env vars",
       errForSentry: error,
-      printedMessage: envVarMessage + "\n" + setEnvVarInstructions,
+      printedMessage:
+        envVarMessage +
+        "\n" +
+        setEnvVarsInstructions(
+          variableName !== undefined ? [variableName] : [],
+          deploymentName,
+          deploymentType,
+          deployment?.deploymentUrl,
+        ),
+    });
+  }
+
+  if (data?.code === "MissingEnvironmentVariables") {
+    const errorMessage = data.message || "(no error message given)";
+    const [, namesList] = errorMessage.match(/are not set: ([^.]+)\./) ?? [];
+    const names = namesList?.split(", ") ?? [];
+    const envVarMessage =
+      names.length === 0
+        ? errorMessage
+        : names.length === 1
+          ? `Environment variable ${chalkStderr.bold(names[0])} is ` +
+            `declared as required in convex.config.ts but its value was not set.`
+          : `Environment variables ${names
+              .map((name) => chalkStderr.bold(name))
+              .join(", ")} are declared as required in convex.config.ts ` +
+            `but their values were not set.`;
+    await ctx.crash({
+      exitCode: 1,
+      errorType: "invalid filesystem or env vars",
+      errForSentry: error,
+      printedMessage:
+        envVarMessage +
+        "\n" +
+        setEnvVarsInstructions(
+          names,
+          deploymentName,
+          deploymentType,
+          deployment?.deploymentUrl,
+        ),
     });
   }
 
@@ -1005,4 +1084,53 @@ export async function handlePushConfigError(
 
   logFailure(defaultMessage);
   return await logAndHandleFetchError(ctx, error);
+}
+
+export type AiFilesProjectConfig = NonNullable<ProjectConfig["aiFiles"]>;
+
+function tryParseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+function toRecord(val: unknown): Record<string, unknown> {
+  if (val !== null && typeof val === "object" && !Array.isArray(val))
+    return val as Record<string, unknown>;
+  return {};
+}
+
+/**
+ * Write the `aiFiles` section of `convex.json`, preserving all other keys.
+ * Writes the given object as-is with no merging or default logic.
+ * If `aiFiles` is undefined, the key is removed from the file.
+ */
+export async function writeAiFilesConfig({
+  projectDir,
+  aiFiles,
+}: {
+  projectDir: string;
+  aiFiles: AiFilesProjectConfig | undefined;
+}): Promise<void> {
+  const filePath = path.join(projectDir, "convex.json");
+  const raw = await nodeFs.readFile(filePath, "utf8").catch(() => null);
+  const base = toRecord(raw !== null ? tryParseJson(raw) : {});
+
+  const { $schema, aiFiles: _existing, ...rest } = base;
+
+  const hasContent = aiFiles !== undefined && Object.keys(aiFiles).length > 0;
+
+  const next: Record<string, unknown> = {
+    $schema: $schema ?? "node_modules/convex/schemas/convex.schema.json",
+    ...rest,
+    ...(hasContent ? { aiFiles } : {}),
+  };
+
+  await nodeFs.writeFile(
+    filePath,
+    JSON.stringify(next, null, 2) + "\n",
+    "utf8",
+  );
 }

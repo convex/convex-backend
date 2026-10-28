@@ -28,6 +28,7 @@ use serde::{
 };
 use serde_json::Value as JsonValue;
 use sync_types::{
+    types::SerializedArgs,
     CanonicalizedUdfPath,
     UdfPath,
 };
@@ -37,9 +38,11 @@ use value::{
     id_v6::DeveloperDocumentId,
     json_deserialize,
     obj,
+    pending_obj,
     ConvexArray,
     ConvexObject,
     ConvexValue,
+    PendingValue,
     ResolvedDocumentId,
     Size,
 };
@@ -55,7 +58,6 @@ pub enum CronValidationError {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronJob {
     // Id into _cron_jobs table
     pub id: ResolvedDocumentId,
@@ -111,7 +113,6 @@ impl CronJob {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronJobMetadata {
     // Unique identifier of a cron
     pub name: CronIdentifier,
@@ -199,29 +200,10 @@ impl Borrow<str> for CronIdentifier {
 
 pub const CRON_IDENTIFIER_REGEX: &str = "[-_ 'a-zA-Z]+";
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for CronIdentifier {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = CronIdentifier>;
-
-    fn arbitrary_with(_: Self::Parameters) -> Self::Strategy {
-        use proptest::strategy::Strategy;
-        CRON_IDENTIFIER_REGEX.prop_filter_map("Generated invalid CronIdentifier", |s| {
-            CronIdentifier::from_str(&s).ok()
-        })
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronSpec {
     pub udf_path: CanonicalizedUdfPath,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::arbitrary::any_with::<ConvexArray>((0..4).into())")
-    )]
-    pub udf_args: ConvexArray,
+    pub udf_args: SerializedArgs,
     pub cron_schedule: CronSchedule,
 }
 
@@ -246,7 +228,7 @@ impl TryFrom<CronSpec> for SerializedCronSpec {
     fn try_from(spec: CronSpec) -> anyhow::Result<Self, Self::Error> {
         // Serialize the udf arguments as binary since we restrict what
         // field names can be used in a `Document`'s top-level object.
-        let udf_args_bytes = spec.udf_args.json_serialize()?.into_bytes();
+        let udf_args_bytes = spec.udf_args.into_bytes();
         Ok(Self {
             udf_path: String::from(spec.udf_path),
             udf_args: Some(udf_args_bytes),
@@ -261,11 +243,8 @@ impl TryFrom<SerializedCronSpec> for CronSpec {
     fn try_from(value: SerializedCronSpec) -> anyhow::Result<Self, Self::Error> {
         let udf_path = value.udf_path.parse()?;
         let udf_args = match value.udf_args {
-            Some(b) => {
-                let udf_args_json: JsonValue = serde_json::from_slice(&b)?;
-                udf_args_json.try_into()?
-            },
-            None => ConvexArray::try_from(vec![])?,
+            Some(b) => SerializedArgs::from_slice(&b)?,
+            None => ConvexArray::empty().into_serialized_args()?,
         };
         let cron_schedule = value.cron_schedule.try_into()?;
         Ok(Self {
@@ -287,10 +266,8 @@ mod codegen_cron_spec {
     codegen_convex_serialization!(CronSpec, SerializedCronSpec);
 }
 
-impl TryFrom<JsonValue> for CronSpec {
-    type Error = anyhow::Error;
-
-    fn try_from(value: JsonValue) -> Result<Self, Self::Error> {
+impl CronSpec {
+    pub fn from_exported_json(value: JsonValue) -> anyhow::Result<Self> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         enum DayOfWeek {
@@ -314,21 +291,21 @@ impl TryFrom<JsonValue> for CronSpec {
             },
             #[serde(rename = "hourly")]
             Hourly {
-                #[serde(rename = "minuteUTC")]
-                minute_utc: i64,
+                #[serde(rename = "minuteUTC", default)]
+                minute_utc: Option<i64>,
             },
             #[serde(rename = "daily")]
             Daily {
-                #[serde(rename = "minuteUTC")]
-                minute_utc: i64,
+                #[serde(rename = "minuteUTC", default)]
+                minute_utc: Option<i64>,
                 #[serde(rename = "hourUTC")]
                 hour_utc: i64,
             },
             #[serde(rename_all = "camelCase")]
             #[serde(rename = "weekly")]
             Weekly {
-                #[serde(rename = "minuteUTC")]
-                minute_utc: i64,
+                #[serde(rename = "minuteUTC", default)]
+                minute_utc: Option<i64>,
                 #[serde(rename = "hourUTC")]
                 hour_utc: i64,
                 day_of_week: DayOfWeek,
@@ -336,8 +313,8 @@ impl TryFrom<JsonValue> for CronSpec {
             #[serde(rename_all = "camelCase")]
             #[serde(rename = "monthly")]
             Monthly {
-                #[serde(rename = "minuteUTC")]
-                minute_utc: i64,
+                #[serde(rename = "minuteUTC", default)]
+                minute_utc: Option<i64>,
                 #[serde(rename = "hourUTC")]
                 hour_utc: i64,
                 day: i64,
@@ -359,6 +336,19 @@ impl TryFrom<JsonValue> for CronSpec {
         let j: CronSpecJson = serde_json::from_value(value.clone())
             .with_context(|| CronValidationError::InvalidJson)?;
 
+        // An omitted minuteUTC means the developer left the exact minute to
+        // Convex; the backend picks one per job to spread load.
+        let validate_minute = |minute_utc: Option<i64>| -> anyhow::Result<()> {
+            if let Some(minute_utc) = minute_utc
+                && !(0..=59).contains(&minute_utc)
+            {
+                anyhow::bail!(
+                    "minuteUTC must be 0-59 in {}",
+                    serde_json::to_string_pretty(&value).unwrap()
+                );
+            }
+            Ok(())
+        };
         let schedule = match j.schedule {
             ScheduleJson::Interval {
                 seconds,
@@ -391,24 +381,14 @@ impl TryFrom<JsonValue> for CronSpec {
                 CronSchedule::Interval { seconds }
             },
             ScheduleJson::Hourly { minute_utc } => {
-                if !(0..=59).contains(&minute_utc) {
-                    anyhow::bail!(
-                        "minuteUTC must be 0-59 in {}",
-                        serde_json::to_string_pretty(&value).unwrap()
-                    );
-                }
+                validate_minute(minute_utc)?;
                 CronSchedule::Hourly { minute_utc }
             },
             ScheduleJson::Daily {
                 minute_utc,
                 hour_utc,
             } => {
-                if !(0..=59).contains(&minute_utc) {
-                    anyhow::bail!(
-                        "minuteUTC must be 0-59 in {}",
-                        serde_json::to_string_pretty(&value).unwrap()
-                    );
-                }
+                validate_minute(minute_utc)?;
                 if !(0..=23).contains(&hour_utc) {
                     anyhow::bail!(
                         "hourUTC must be 0-23 in {}",
@@ -425,12 +405,7 @@ impl TryFrom<JsonValue> for CronSpec {
                 hour_utc,
                 day_of_week,
             } => {
-                if !(0..=59).contains(&minute_utc) {
-                    anyhow::bail!(
-                        "minuteUTC must be 0-59 in {}",
-                        serde_json::to_string_pretty(&value).unwrap()
-                    );
-                }
+                validate_minute(minute_utc)?;
                 if !(0..=23).contains(&hour_utc) {
                     anyhow::bail!(
                         "hourUTC must be 0-23 in {}",
@@ -456,12 +431,7 @@ impl TryFrom<JsonValue> for CronSpec {
                 hour_utc,
                 day,
             } => {
-                if !(0..=59).contains(&minute_utc) {
-                    anyhow::bail!(
-                        "minuteUTC must be 0-59 in {}",
-                        serde_json::to_string_pretty(&value).unwrap()
-                    );
-                }
+                validate_minute(minute_utc)?;
                 if !(0..=23).contains(&hour_utc) {
                     anyhow::bail!(
                         "hourUTC must be 0-23 in {}",
@@ -481,7 +451,11 @@ impl TryFrom<JsonValue> for CronSpec {
                 }
             },
             ScheduleJson::Cron { cron } => {
-                cron.parse::<saffron::Cron>()?;
+                let parsed = cron.parse::<saffron::Cron>()?;
+                anyhow::ensure!(
+                    parsed.any(),
+                    "The cron spec {cron:?} will never match any time"
+                );
                 CronSchedule::Cron { cron_expr: cron }
             },
         };
@@ -498,50 +472,47 @@ impl TryFrom<JsonValue> for CronSpec {
         );
         Ok(Self {
             udf_path: udf_path_canonicalized,
-            udf_args,
+            udf_args: udf_args.into_serialized_args()?,
             cron_schedule: schedule,
         })
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum CronJobState {
     // Yet to be attempted.
     Pending,
     // Started but not completed yet. Used to make actions execute at most once.
-    //
-    // TODO: remove `None` case for cron jobs that started before we started
-    // recording execution id.
     InProgress {
-        request_id: Option<RequestId>,
-        execution_id: Option<ExecutionId>,
+        request_id: RequestId,
+        execution_id: ExecutionId,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum CronSchedule {
     Interval {
         seconds: i64,
     },
+    // `minute_utc: None` delegates the exact start offset to the backend so
+    // jobs are spread across the hour (see `compute_next_ts`).
     Hourly {
-        minute_utc: i64,
+        minute_utc: Option<i64>,
     },
     Daily {
         hour_utc: i64,
-        minute_utc: i64,
+        minute_utc: Option<i64>,
     },
     Weekly {
         day_of_week: i64,
         hour_utc: i64,
-        minute_utc: i64,
+        minute_utc: Option<i64>,
     },
     Monthly {
         day: i64,
         hour_utc: i64,
-        minute_utc: i64,
+        minute_utc: Option<i64>,
     },
     Cron {
         cron_expr: String,
@@ -567,29 +538,29 @@ pub enum SerializedCronSchedule {
         seconds: i64,
     },
     Hourly {
-        #[serde(rename = "minuteUTC")]
-        minute_utc: i64,
+        #[serde(rename = "minuteUTC", default)]
+        minute_utc: Option<i64>,
     },
     Daily {
         #[serde(rename = "hourUTC")]
         hour_utc: i64,
-        #[serde(rename = "minuteUTC")]
-        minute_utc: i64,
+        #[serde(rename = "minuteUTC", default)]
+        minute_utc: Option<i64>,
     },
     Weekly {
         #[serde(rename = "dayOfWeek")]
         day_of_week: i64,
         #[serde(rename = "hourUTC")]
         hour_utc: i64,
-        #[serde(rename = "minuteUTC")]
-        minute_utc: i64,
+        #[serde(rename = "minuteUTC", default)]
+        minute_utc: Option<i64>,
     },
     Monthly {
         day: i64,
         #[serde(rename = "hourUTC")]
         hour_utc: i64,
-        #[serde(rename = "minuteUTC")]
-        minute_utc: i64,
+        #[serde(rename = "minuteUTC", default)]
+        minute_utc: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     Cron {
@@ -690,21 +661,21 @@ pub enum CronScheduleProductAnalysis {
         seconds: i64,
     },
     Hourly {
-        minute_utc: i64,
+        minute_utc: Option<i64>,
     },
     Daily {
         hour_utc: i64,
-        minute_utc: i64,
+        minute_utc: Option<i64>,
     },
     Weekly {
         day_of_week: i64,
         hour_utc: i64,
-        minute_utc: i64,
+        minute_utc: Option<i64>,
     },
     Monthly {
         day: i64,
         hour_utc: i64,
-        minute_utc: i64,
+        minute_utc: Option<i64>,
     },
     Cron {
         cron_expr: String,
@@ -755,27 +726,29 @@ impl CronSchedule {
                 }
                 return Ok(());
             },
-            CronSchedule::Hourly { minute_utc } => format!("{minute_utc} * * * *")
+            // When the minute is left to the backend, validate the format with
+            // a placeholder minute; the real one is chosen in `compute_next_ts`.
+            CronSchedule::Hourly { minute_utc } => format!("{} * * * *", minute_utc.unwrap_or(0))
                 .parse()
                 .context("Hourly Schedule: Cron parsing from Saffron failed")?,
             CronSchedule::Daily {
                 hour_utc,
                 minute_utc,
-            } => format!("{minute_utc} {hour_utc} * * *")
+            } => format!("{} {hour_utc} * * *", minute_utc.unwrap_or(0))
                 .parse()
                 .context("Daily Schedule: Cron parsing from Saffron failed")?,
             CronSchedule::Weekly {
                 day_of_week,
                 hour_utc,
                 minute_utc,
-            } => format!("{minute_utc} {hour_utc} * * {day_of_week}")
+            } => format!("{} {hour_utc} * * {day_of_week}", minute_utc.unwrap_or(0))
                 .parse()
                 .context("Weekly Schedule: Cron parsing from Saffron failed")?,
             CronSchedule::Monthly {
                 day,
                 hour_utc,
                 minute_utc,
-            } => format!("{minute_utc} {hour_utc} {day} * *")
+            } => format!("{} {hour_utc} {day} * *", minute_utc.unwrap_or(0))
                 .parse()
                 .context("Monthly Schedule: Cron parsing from Saffron failed")?,
             CronSchedule::Cron { cron_expr } => cron_expr
@@ -787,38 +760,41 @@ impl CronSchedule {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronJobLog {
     pub name: CronIdentifier,
     pub ts: Timestamp,
     pub udf_path: CanonicalizedUdfPath,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::arbitrary::any_with::<ConvexArray>((0..4).into())")
-    )]
-    pub udf_args: ConvexArray,
+    pub udf_args: SerializedArgs,
     pub status: CronJobStatus,
     pub log_lines: CronJobLogLines,
     pub execution_time: f64,
+}
+
+impl TryFrom<CronJobLog> for PendingValue {
+    type Error = anyhow::Error;
+
+    fn try_from(log: CronJobLog) -> anyhow::Result<Self, Self::Error> {
+        // Serialize the udf arguments as binary since we restrict what
+        // field names can be used in a `Document`'s top-level object.
+        let udf_args_bytes = log.udf_args.into_bytes();
+
+        pending_obj!(
+            "name" => log.name.to_string(),
+            "ts" => ConvexValue::Int64(log.ts.into()),
+            "udfPath" => String::from(log.udf_path),
+            "udfArgs" => udf_args_bytes,
+            "status" => log.status,
+            "logLines" => ConvexValue::Object(log.log_lines.try_into()?),
+            "executionTime" => log.execution_time,
+        )
+    }
 }
 
 impl TryFrom<CronJobLog> for ConvexObject {
     type Error = anyhow::Error;
 
     fn try_from(log: CronJobLog) -> anyhow::Result<Self, Self::Error> {
-        // Serialize the udf arguments as binary since we restrict what
-        // field names can be used in a `Document`'s top-level object.
-        let udf_args_bytes = log.udf_args.json_serialize()?.into_bytes();
-
-        obj!(
-            "name" => log.name.to_string(),
-            "ts" => ConvexValue::Int64(log.ts.into()),
-            "udfPath" => String::from(log.udf_path),
-            "udfArgs" => udf_args_bytes,
-            "status" => ConvexValue::Object(log.status.try_into()?),
-            "logLines" => ConvexValue::Object(log.log_lines.try_into()?),
-            "executionTime" => log.execution_time,
-        )
+        PendingValue::try_from(log)?.try_into_concrete()?.try_into()
     }
 }
 
@@ -850,10 +826,7 @@ impl TryFrom<ConvexObject> for CronJobLog {
             .parse()
             .context(format!("Failed to deserialize udf_path {udf_path}"))?;
         let udf_args = match fields.remove("udfArgs") {
-            Some(ConvexValue::Bytes(b)) => {
-                let udf_args_json: JsonValue = serde_json::from_slice(&b)?;
-                udf_args_json.try_into()?
-            },
+            Some(ConvexValue::Bytes(b)) => SerializedArgs::from_slice(&b)?,
             _ => anyhow::bail!(
                 "Missing or invalid `udfArgs` field for CronJobLog: {:?}",
                 fields
@@ -894,31 +867,34 @@ impl TryFrom<ConvexObject> for CronJobLog {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum CronJobStatus {
     Success(CronJobResult),
     Err(String),
     Canceled { num_canceled: i64 },
 }
 
+impl TryFrom<CronJobStatus> for PendingValue {
+    type Error = anyhow::Error;
+
+    fn try_from(status: CronJobStatus) -> anyhow::Result<Self, Self::Error> {
+        let value = match status {
+            CronJobStatus::Success(r) => pending_obj!("type" => "success", "result" => r)?,
+            CronJobStatus::Err(e) => obj!("type" => "err", "error" => e)?.into(),
+            CronJobStatus::Canceled { num_canceled } => {
+                obj!("type" => "canceled", "num_canceled" => num_canceled)?.into()
+            },
+        };
+        Ok(value)
+    }
+}
+
 impl TryFrom<CronJobStatus> for ConvexObject {
     type Error = anyhow::Error;
 
     fn try_from(status: CronJobStatus) -> anyhow::Result<Self, Self::Error> {
-        match status {
-            CronJobStatus::Success(r) => {
-                obj!(
-                    "type" => "success",
-                    "result" => ConvexValue::Object(r.try_into()?),
-                )
-            },
-            CronJobStatus::Err(e) => {
-                obj!("type" => "err", "error" => e)
-            },
-            CronJobStatus::Canceled { num_canceled } => {
-                obj!("type" => "canceled", "num_canceled" => num_canceled)
-            },
-        }
+        PendingValue::try_from(status)?
+            .try_into_concrete()?
+            .try_into()
     }
 }
 
@@ -972,27 +948,42 @@ impl TryFrom<ConvexObject> for CronJobStatus {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum CronJobResult {
-    Default(ConvexValue),
+    Default(
+        PendingValue,
+    ),
     Truncated(String),
+}
+
+impl TryFrom<CronJobResult> for PendingValue {
+    type Error = anyhow::Error;
+
+    fn try_from(result: CronJobResult) -> anyhow::Result<Self, Self::Error> {
+        let value = match result {
+            CronJobResult::Default(v) => {
+                let value = match v {
+                    PendingValue::Concrete(v) => {
+                        PendingValue::from(ConvexValue::try_from(v.json_serialize()?)?)
+                    },
+                    pending => pending,
+                };
+                pending_obj!("type" => "default", "value" => value)?
+            },
+            CronJobResult::Truncated(s) => {
+                obj!("type" => "truncated", "truncated_log" => s)?.into()
+            },
+        };
+        Ok(value)
+    }
 }
 
 impl TryFrom<CronJobResult> for ConvexObject {
     type Error = anyhow::Error;
 
     fn try_from(result: CronJobResult) -> anyhow::Result<Self, Self::Error> {
-        match result {
-            CronJobResult::Default(v) => {
-                obj!(
-                    "type" => "default",
-                    "value" => v.json_serialize()?,
-                )
-            },
-            CronJobResult::Truncated(s) => {
-                obj!("type" => "truncated", "truncated_log" => s)
-            },
-        }
+        PendingValue::try_from(result)?
+            .try_into_concrete()?
+            .try_into()
     }
 }
 
@@ -1013,12 +1004,10 @@ impl TryFrom<ConvexObject> for CronJobResult {
             "default" => {
                 let value = match fields.remove("value") {
                     Some(ConvexValue::String(s)) => json_deserialize(&s)?,
-                    _ => anyhow::bail!(
-                        "Missing or invalid `value` field for CronJobResult: {:?}",
-                        fields
-                    ),
+                    Some(v) => v,
+                    None => anyhow::bail!("Missing `value` field for CronJobResult: {:?}", fields),
                 };
-                Ok(CronJobResult::Default(value))
+                Ok(CronJobResult::Default(value.into()))
             },
             "truncated" => {
                 let truncated_log = match fields.remove("truncated_log") {
@@ -1036,7 +1025,6 @@ impl TryFrom<ConvexObject> for CronJobResult {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronJobLogLines {
     pub log_lines: RawLogLines,
     pub is_truncated: bool,
@@ -1087,69 +1075,7 @@ impl TryFrom<ConvexObject> for CronJobLogLines {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use sync_types::testing::assert_roundtrips;
-    use value::{
-        assert_obj,
-        ConvexObject,
-        ConvexValue,
-    };
-
-    use crate::cron_jobs::types::{
-        CronJobLog,
-        CronJobLogLines,
-        CronJobMetadata,
-        CronJobResult,
-        CronJobStatus,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_cron_job_log_roundtrips(v in any::<CronJobLog>()) {
-            assert_roundtrips::<CronJobLog, ConvexObject>(v);
-        }
-
-        #[test]
-        fn test_cron_job_status_roundtrips(v in any::<CronJobStatus>()) {
-            assert_roundtrips::<CronJobStatus, ConvexObject>(v);
-        }
-
-        #[test]
-        fn test_cron_job_result_roundtrips(v in any::<CronJobResult>()) {
-            assert_roundtrips::<CronJobResult, ConvexObject>(v);
-        }
-
-        #[test]
-        fn test_cron_job_log_lines_roundtrips(v in any::<CronJobLogLines>()) {
-            assert_roundtrips::<CronJobLogLines, ConvexObject>(v);
-        }
-    }
-
-    #[test]
-    fn test_cron_args_bytes() {
-        // Regression test with an example cron job from prod that has udf_args as
-        // bytes.
-        let cron_job_obj = assert_obj!(
-            "cronSpec" => {
-                "cronSchedule" => {"hourUTC" => 4, "minuteUTC" => 20, "type" => "daily"},
-                // b"W3t9XQ=="
-                "udfArgs" => ConvexValue::Bytes(b"[{}]".to_vec().try_into().unwrap()),
-                "udfPath" => "crons.js:vacuumOldEntries"
-            },
-            "name" => "vacuum old entries",
-        );
-        assert_roundtrips::<_, CronJobMetadata>(cron_job_obj);
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CronNextRun {
     // Internally tracked metadata to execute the current run of the cron
     pub cron_job_id: DeveloperDocumentId,

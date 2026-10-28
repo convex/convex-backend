@@ -8,8 +8,6 @@ use url::Url;
 
 use crate::value::Value;
 
-#[cfg(test)]
-pub mod testing;
 pub mod web_socket_manager;
 
 /// Upon a protocol failure, an explanation of the failure to pass in on

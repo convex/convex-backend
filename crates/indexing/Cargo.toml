@@ -16,30 +16,51 @@ testing = [
     "runtime/testing",
     "value/testing",
 ]
+# Enable to run shuttle-based concurrency tests.
+# Activates shuttle-aware replacements for dashmap, parking_lot, and moka so
+# shuttle can explore all thread interleavings deterministically.
+shuttle-testing = [
+    "dep:shuttle",
+    "dep:shuttle_dashmap",
+    "shuttle_dashmap/shuttle",
+    "dep:shuttle_parking_lot",
+    "shuttle_parking_lot/shuttle",
+    "moka/shuttle-testing",
+]
 
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 common = { workspace = true }
+dashmap = { workspace = true }
 derive_more = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
 futures = { workspace = true }
+futures-async-stream = { workspace = true }
 imbl = { workspace = true }
+interval_map = { workspace = true }
 itertools = { workspace = true }
 metrics = { workspace = true }
+moka = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
+shuttle = { version = "0.9", optional = true }
+shuttle_dashmap = { package = "shuttle-dashmap", git = "https://github.com/awslabs/shuttle", rev = "91e3cae8f73c2be3934960c46f8494a7ca981867", version = "6", optional = true }
+shuttle_parking_lot = { package = "shuttle-parking_lot", git = "https://github.com/awslabs/shuttle", rev = "91e3cae8f73c2be3934960c46f8494a7ca981867", version = "0.12", optional = true }
 tracing = { workspace = true }
 value = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 divan = { workspace = true }
 errors = { workspace = true, features = ["testing"] }
 maplit = { workspace = true }
 metrics = { workspace = true, features = ["testing"] }
 must-let = { workspace = true }
 runtime = { workspace = true, features = ["testing"] }
+shuttle = { version = "0.9" }
 value = { workspace = true, features = ["testing"] }
 
 [[bench]]

@@ -6,9 +6,14 @@ use std::{
 use criterion::{
     criterion_group,
     criterion_main,
+    BenchmarkId,
     Criterion,
 };
-use value::InternalId;
+use value::{
+    DeveloperDocumentId,
+    InternalId,
+    TableNumber,
+};
 
 // As of 11/16/2022 on an 14" MBP (M1 Max):
 //
@@ -22,6 +27,20 @@ pub fn benchmark_encode(c: &mut Criterion) {
     c.bench_function("v5::encode", |b| b.iter(|| String::from(black_box(v5))));
 }
 
+pub fn benchmark_encode_v6(c: &mut Criterion) {
+    for table_number in [1u32, 10000, 0xfffff] {
+        let id = DeveloperDocumentId::new(
+            TableNumber::try_from(table_number).unwrap(),
+            InternalId([0xba; 16]),
+        );
+        c.bench_with_input(BenchmarkId::new("v6::encode", id), &id, |b, i| {
+            b.iter(|| {
+                black_box(i.encode_into(&mut Default::default()));
+            })
+        });
+    }
+}
+
 pub fn benchmark_decode(c: &mut Criterion) {
     let v5 = String::from(InternalId([0xba; 16]));
     c.bench_function("v5::decode", |b| {
@@ -29,5 +48,10 @@ pub fn benchmark_decode(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, benchmark_encode, benchmark_decode);
+criterion_group!(
+    benches,
+    benchmark_encode,
+    benchmark_encode_v6,
+    benchmark_decode
+);
 criterion_main!(benches);

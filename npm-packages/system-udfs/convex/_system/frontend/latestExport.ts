@@ -1,6 +1,6 @@
 import { Export } from "./common";
 import { queryGeneric, queryPrivateSystem } from "../secretSystemTables";
-export default queryPrivateSystem({
+export default queryPrivateSystem("ViewBackups")({
   args: {},
   handler: async function ({ db }): Promise<Export | null> {
     return await db
@@ -11,7 +11,7 @@ export default queryPrivateSystem({
   },
 });
 
-export const latestCloudExport = queryPrivateSystem({
+export const latestCloudExport = queryPrivateSystem("ViewBackups")({
   args: {},
   handler: async function ({ db }): Promise<Export | null> {
     return await db
@@ -22,7 +22,7 @@ export const latestCloudExport = queryPrivateSystem({
   },
 });
 
-export const canExportFileStorage = queryGeneric({
+export const canExportFileStorage = queryGeneric("ViewBackups")({
   args: {},
   handler: async (ctx) => {
     // Allow files to be exported if the `_storage` table number matches

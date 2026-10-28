@@ -1,15 +1,18 @@
 import {
   PlusIcon,
   TableIcon,
-  MixerHorizontalIcon,
   ChevronDownIcon,
   DotsVerticalIcon,
 } from "@radix-ui/react-icons";
 import { useContext, useEffect, useRef, useState } from "react";
 import { CreateNewTable } from "@common/features/data/components/DataSidebar";
 import { EmptySection } from "@common/elements/EmptySection";
+import { IndexIcon } from "@common/elements/icons";
 import { useNents } from "@common/lib/useNents";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 import { useTableMetadata } from "@common/lib/useTableMetadata";
 import { Loading } from "@ui/Loading";
 import { Button } from "@ui/Button";
@@ -38,18 +41,10 @@ export function EmptyDataContent({
 }) {
   const { selectedNent } = useNents();
 
-  const {
-    useCurrentDeployment,
-    useHasProjectAdminPermissions,
-    useLogDeploymentEvent,
-  } = useContext(DeploymentInfoContext);
+  const { useLogDeploymentEvent } = useContext(DeploymentInfoContext);
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
 
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const canAddDocuments =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
+  const canAddDocuments = useIsOperationAllowed("WriteData");
   const tableMetadata = useTableMetadata();
   const log = useLogDeploymentEvent();
 
@@ -83,7 +78,7 @@ export function EmptyDataContent({
   }
 
   return (
-    <div className="relative h-full w-full animate-fadeIn">
+    <div className="relative size-full animate-fadeIn">
       {/* Background table example */}
       {sized}
       <div
@@ -93,7 +88,7 @@ export function EmptyDataContent({
             "linear-gradient(to bottom, rgba(0,0,0,0.6) 0%, rgb(0,0,0,0.3) 30%, transparent 85%)",
         }}
       >
-        <div className="flex h-full w-full flex-col">
+        <div className="flex size-full flex-col">
           {/* Example DataToolbar */}
           {noTables && (
             <div className="mb-2 flex flex-col" inert>
@@ -119,7 +114,7 @@ export function EmptyDataContent({
             </div>
           )}
 
-          {/* Example DataFilters */}
+          {/* Example IndexFilterBar */}
           <div
             className="flex w-full flex-col gap-2 rounded-t border border-b-0 bg-background-secondary/50 p-2"
             inert
@@ -130,12 +125,10 @@ export function EmptyDataContent({
                   <Button
                     size="xs"
                     variant="neutral"
-                    className="w-fit border border-border-transparent text-xs"
-                    icon={<MixerHorizontalIcon className="size-3.5" />}
+                    className="h-6 w-fit border border-border-transparent px-1.5 font-mono text-xs"
+                    icon={<IndexIcon kind="database" className="size-3.5" />}
                   >
-                    <div className="flex items-center gap-2">
-                      <span>Filter & Sort</span>
-                    </div>
+                    by_creation_time
                     <ChevronDownIcon />
                   </Button>
                 </div>
@@ -150,11 +143,11 @@ export function EmptyDataContent({
 
           {/* Table */}
           <div
-            className="flex h-full w-full flex-col overflow-hidden rounded-sm rounded-t-none border bg-background-secondary"
+            className="flex size-full flex-col overflow-hidden rounded-sm rounded-t-none border bg-background-secondary"
             inert
             ref={tableContainerRef}
           >
-            <table className="h-full w-full table-fixed">
+            <table className="size-full table-fixed">
               <thead>
                 <tr className="border-b bg-background-secondary">
                   {EXAMPLE_COLUMNS.map((col) => (
@@ -174,7 +167,6 @@ export function EmptyDataContent({
                 {Array.from({ length: fakeRowsCount }).map((_, i) => (
                   <tr key={i} className="group">
                     {EXAMPLE_COLUMNS.map((col) => (
-                      // eslint-disable-next-line jsx-a11y/control-has-associated-label
                       <td
                         key={col}
                         className="border-r px-2.5 group-last:border-b-0 last:border-r-0"
@@ -198,7 +190,7 @@ export function EmptyDataContent({
         <Sheet
           padding={false}
           className={cn(
-            "h-fit w-fit bg-background-secondary/90 backdrop-blur-[2px]",
+            "size-fit bg-background-secondary/90 backdrop-blur-[2px]",
             width > 320 ? "m-6 p-2" : "m-0 p-0",
           )}
         >
@@ -236,7 +228,7 @@ export function EmptyDataContent({
                         selectedNent && selectedNent.state !== "active"
                           ? "Cannot add documents in an unmounted component."
                           : !canAddDocuments &&
-                            "You do not have permission to add documents in production."
+                            "You do not have permission to add documents in this deployment."
                       }
                       icon={<PlusIcon aria-hidden="true" />}
                     >

@@ -39,13 +39,28 @@ if [ "$CONTEXT" = "deploy-preview" ]; then
   # main. This answers "does this PR touch docs?" without being affected by
   # stale CACHED_COMMIT_REF values or unrelated changes on main.
   echo "Mode:    deploy-preview (merge-base with origin/main)"
-  git fetch origin main --depth=1 2>/dev/null
+  # Fetch main's full history so merge-base can reach the PR's fork point. Avoid
+  # --depth=1: it grafts main's tip shallow, leaving merge-base nothing to find.
+  # --unshallow recovers an already-shallow cache; on a complete repo it errors
+  # and falls through to a normal fetch.
+  git fetch origin main --unshallow 2>/dev/null || git fetch origin main 2>/dev/null
   base=$(git merge-base HEAD origin/main 2>/dev/null)
 else
-  # Branch deploy (main, docs-prod): compare against the previous commit to
-  # check whether this specific merge changed any docs-relevant files.
-  echo "Mode:    branch-deploy (HEAD~1)"
-  base="HEAD~1"
+  # Branch deploy (main, docs-prod): compare against the last successfully
+  # deployed commit. CACHED_COMMIT_REF is set by Netlify to the SHA of the
+  # most recent build that completed; this catches all changes since that
+  # deploy, not just the latest single commit.
+  #
+  # If CACHED_COMMIT_REF is missing or equals COMMIT_REF (no prior cache),
+  # we can't diff meaningfully, so force the build.
+  echo "Mode:    branch-deploy (CACHED_COMMIT_REF)"
+  if [ -z "$CACHED_COMMIT_REF" ] || [ "$CACHED_COMMIT_REF" = "$COMMIT_REF" ]; then
+    echo ""
+    echo "No usable cached commit (CACHED_COMMIT_REF=${CACHED_COMMIT_REF:-<empty>}), proceeding with build"
+    echo "========================================"
+    exit 1
+  fi
+  base="$CACHED_COMMIT_REF"
 fi
 
 # Resolve both refs to full SHAs for unambiguous logging.

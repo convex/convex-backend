@@ -43,6 +43,7 @@ export function Snippet({ value, monospace, className, copying }: Props) {
           variant="neutral"
           inline
           icon={<CopyIcon />}
+          title="Copy"
         />
       )}
     </div>

@@ -9,7 +9,11 @@ use std::{
     str::FromStr,
 };
 
-use value::TableNumber;
+use anyhow::Context as _;
+use value::{
+    TableNumber,
+    MAX_NESTING,
+};
 
 use crate::{
     array::ArrayShape,
@@ -118,7 +122,7 @@ impl<T: ShapeConfig> FromStr for StructuralShape<T> {
 
     /// Inverse of Display.
     fn from_str(s: &str) -> anyhow::Result<Self> {
-        let (t, suffix) = Self::parse_prefix_union(s)?;
+        let (t, suffix) = Self::parse_prefix_union(s, MAX_NESTING)?;
         if !suffix.is_empty() {
             anyhow::bail!("unexpected token at '{suffix}'");
         }
@@ -128,11 +132,11 @@ impl<T: ShapeConfig> FromStr for StructuralShape<T> {
 
 impl<C: ShapeConfig> StructuralShape<C> {
     /// Helper for from_str
-    fn parse_prefix_union(s: &str) -> anyhow::Result<(Self, &str)> {
+    fn parse_prefix_union(s: &str, max_nesting: usize) -> anyhow::Result<(Self, &str)> {
         let mut union_builder = BTreeSet::new();
         let mut suffix = s;
         loop {
-            let (part, end) = Self::parse_prefix(suffix)?;
+            let (part, end) = Self::parse_prefix(suffix, max_nesting)?;
             union_builder.insert(part);
             if let Some(stripped) = end.strip_prefix(" | ") {
                 suffix = stripped;
@@ -151,8 +155,12 @@ impl<C: ShapeConfig> StructuralShape<C> {
         Ok((union, suffix))
     }
 
-    fn parse_value_with_terminator(suffix: &mut &str, terminator: &str) -> anyhow::Result<Self> {
-        let (value, end) = Self::parse_prefix_union(suffix)?;
+    fn parse_value_with_terminator(
+        suffix: &mut &str,
+        terminator: &str,
+        max_nesting: usize,
+    ) -> anyhow::Result<Self> {
+        let (value, end) = Self::parse_prefix_union(suffix, max_nesting)?;
         if !end.starts_with(terminator) {
             anyhow::bail!("unexpected token at '{end}'. expected '{terminator}'");
         }
@@ -173,7 +181,7 @@ impl<C: ShapeConfig> StructuralShape<C> {
     }
 
     /// Helper for from_str_structural
-    fn parse_prefix(s: &str) -> anyhow::Result<(Self, &str)> {
+    fn parse_prefix(s: &str, max_nesting: usize) -> anyhow::Result<(Self, &str)> {
         let units = [
             ("never", ShapeEnum::Never),
             ("null", ShapeEnum::Null),
@@ -196,6 +204,7 @@ impl<C: ShapeConfig> StructuralShape<C> {
             }
         }
         if let Some(mut suffix) = s.strip_prefix('{') {
+            let max_nesting = max_nesting.checked_sub(1).context("shape too nested")?;
             let mut fields = BTreeMap::new();
             while !suffix.starts_with('}') {
                 let field = Self::parse_identifier_with_terminator(&mut suffix, ": ")?;
@@ -209,7 +218,7 @@ impl<C: ShapeConfig> StructuralShape<C> {
                     "cannot parse object key '{field}'"
                 );
                 let field_str = &field[1..field.len() - 1];
-                let value_shape = Self::parse_value_with_terminator(&mut suffix, "")?;
+                let value_shape = Self::parse_value_with_terminator(&mut suffix, "", max_nesting)?;
                 let object_field = ObjectField {
                     value_shape,
                     optional,
@@ -230,11 +239,16 @@ impl<C: ShapeConfig> StructuralShape<C> {
             let table_number = TableNumber::try_from(number.parse::<u32>()?)?;
             Ok((Self::new(ShapeEnum::Id(table_number)), suffix))
         } else if let Some(mut suffix) = s.strip_prefix("array<") {
-            let value = Self::parse_value_with_terminator(&mut suffix, ">")?;
+            let value = Self::parse_value_with_terminator(
+                &mut suffix,
+                ">",
+                max_nesting.checked_sub(1).context("shape too nested")?,
+            )?;
             Ok((Self::new(ShapeEnum::Array(ArrayShape::new(value))), suffix))
         } else if let Some(mut suffix) = s.strip_prefix("record<") {
-            let key = Self::parse_value_with_terminator(&mut suffix, ", ")?;
-            let value = Self::parse_value_with_terminator(&mut suffix, ">")?;
+            let max_nesting = max_nesting.checked_sub(1).context("shape too nested")?;
+            let key = Self::parse_value_with_terminator(&mut suffix, ", ", max_nesting)?;
+            let value = Self::parse_value_with_terminator(&mut suffix, ">", max_nesting)?;
             Ok((
                 Self::new(ShapeEnum::Record(RecordShape::new(key, value))),
                 suffix,
@@ -246,47 +260,6 @@ impl<C: ShapeConfig> StructuralShape<C> {
             Ok((Self::new(StringLiteralShape::shape_of(literal)), suffix))
         } else {
             anyhow::bail!("unexpected token at '{s}'");
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod test_from_str_structural {
-
-    use std::str::FromStr;
-
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use crate::{
-        testing::SmallTestConfig,
-        Shape,
-        StructuralShape,
-    };
-
-    #[test]
-    fn test_from_str_structural_union() -> anyhow::Result<()> {
-        // Regression test: used to panic.
-        let input = r#"{"location": {"city": string, "country": string} | {"country": string}} | {"name": string, "location": {"city": string, "country": string} | {"country": string}}"#;
-        let _t = StructuralShape::<SmallTestConfig>::from_str(input)?;
-        Ok(())
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig {
-            failure_persistence: None, cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1),  ..ProptestConfig::default()
-        })]
-        #[test]
-        fn shape_to_string_roundtrips_structural(
-            t in any::<StructuralShape<SmallTestConfig>>()
-        ) {
-            let shape_string = t.to_string();
-            let shape_from_strng = Shape::from_str(&shape_string).unwrap();
-
-            prop_assert_eq!(&t, &shape_from_strng);
-
-            let another_round = Shape::from_str(&shape_from_strng.to_string()).unwrap();
-            prop_assert_eq!(&shape_from_strng, &another_round);
         }
     }
 }

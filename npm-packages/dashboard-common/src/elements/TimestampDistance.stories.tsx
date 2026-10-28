@@ -1,14 +1,16 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { TimestampDistance } from "@common/elements/TimestampDistance";
+import { Sheet } from "@ui/Sheet";
 
 const meta = {
   component: TimestampDistance,
-  render: (args) => (
-    <div className="m-auto w-fit">
-      <TimestampDistance {...args}>TimestampDistance content</TimestampDistance>
-    </div>
-  ),
-  parameters: { a11y: { test: "todo" } },
+  decorators: [
+    (Story) => (
+      <Sheet>
+        <Story />
+      </Sheet>
+    ),
+  ],
 } satisfies Meta<typeof TimestampDistance>;
 
 export default meta;

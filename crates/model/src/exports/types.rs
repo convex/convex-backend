@@ -15,7 +15,6 @@ use sync_types::Timestamp;
 use value::codegen_convex_serialization;
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 /// The export state machine. A new export starts as `Requested` and the valid
 /// transitions are:
 ///
@@ -47,10 +46,6 @@ pub enum Export {
         /// Expiration timestamp in nanos
         expiration_ts: u64,
         progress_message: Option<String>,
-        #[cfg_attr(
-            any(test, feature = "testing"),
-            proptest(strategy = "proptest::option::of(arbitrary_resumption_token())")
-        )]
         resumption_token: Option<serde_json::Map<String, serde_json::Value>>,
     },
     Completed {
@@ -86,18 +81,6 @@ pub enum Export {
         component: ComponentId,
         requestor: ExportRequestor,
     },
-}
-
-#[cfg(any(test, feature = "testing"))]
-fn arbitrary_resumption_token(
-) -> impl proptest::strategy::Strategy<Value = serde_json::Map<String, serde_json::Value>> {
-    use proptest::{
-        collection::btree_map,
-        prelude::*,
-    };
-    use value::FieldName;
-    btree_map(any::<FieldName>(), any::<String>(), 0..4)
-        .prop_map(|obj| obj.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -348,7 +331,6 @@ impl Export {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ExportFormat {
     /// zip file containing a CleanJsonl for each table, and sidecar type info.
     Zip { include_storage: bool },
@@ -376,11 +358,24 @@ impl From<SerializedExportFormat> for ExportFormat {
     }
 }
 
+impl ExportFormat {
+    /// The format string recorded in deployment audit log events.
+    pub fn audit_log_format(&self) -> &'static str {
+        match self {
+            ExportFormat::Zip {
+                include_storage: true,
+            } => "zip_with_storage",
+            ExportFormat::Zip {
+                include_storage: false,
+            } => "zip",
+        }
+    }
+}
+
 codegen_convex_serialization!(ExportFormat, SerializedExportFormat);
 
 #[derive(Copy, Clone, Debug, PartialEq, strum::EnumString, strum::Display)]
 #[strum(serialize_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ExportRequestor {
     /// The snapshot export feature in the CLI/Dashboard
     SnapshotExport,

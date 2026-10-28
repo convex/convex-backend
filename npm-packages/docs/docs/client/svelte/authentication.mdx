@@ -1,0 +1,216 @@
+---
+title: "Authentication"
+sidebar_label: "Authentication"
+sidebar_position: 20
+description:
+  "Add authentication to a Convex Svelte app with setupAuth and useAuth,
+  including SSR initial state and adapters for Convex Auth and Convex Better
+  Auth."
+pagination_next: client/svelte/sveltekit-server-rendering
+---
+
+`convex-svelte` works with any authentication provider through two functions:
+`setupAuth()` passes the provider's state to the Convex client, and `useAuth()`
+reads it in components. The [auth adapters](#auth-adapters) below call
+`setupAuth()` for you for specific auth systems. For how authentication works in
+Convex in general, including hosted providers and OpenID Connect, see
+[Authentication](/auth/overview.mdx).
+
+## setupAuth / useAuth
+
+`setupAuth()` takes a **reactive getter** that returns the auth provider's
+state, and keeps the Convex client's token in sync with it: it sets the token on
+sign-in and token refresh, and clears it on sign-out. It's the Svelte
+counterpart of React's `ConvexProviderWithAuth`.
+
+```svelte title="src/routes/+layout.svelte"
+<script lang="ts">
+  import { setupConvex, setupAuth } from "convex-svelte";
+  import { PUBLIC_CONVEX_URL } from "$app/env/public"; // SvelteKit 2: "$env/static/public"
+
+  setupConvex(PUBLIC_CONVEX_URL);
+
+  // The getter is reactive: when its values change, setupAuth updates
+  // the client's token.
+  setupAuth(() => ({
+    isLoading: false,
+    isAuthenticated: !!session,
+    fetchAccessToken: async ({ forceRefreshToken }) => {
+      if (!session) return null;
+      return await getTokenFromYourAuthProvider({ forceRefreshToken });
+    },
+  }));
+</script>
+```
+
+`useAuth()` reads the resulting state in any child component:
+
+```svelte
+<script lang="ts">
+  import { useAuth, useQuery } from "convex-svelte";
+  import { api } from "../convex/_generated/api.js";
+
+  const auth = useAuth();
+
+  const user = useQuery(api.users.getActive, () =>
+    auth.isAuthenticated ? {} : "skip",
+  );
+</script>
+
+{#if auth.isLoading}
+  Checking authentication...
+{:else if !auth.isAuthenticated}
+  Please sign in.
+{:else}
+  Welcome, {user.data?.name}!
+{/if}
+```
+
+When the provider's `isAuthenticated` changes from `true` to `false` because the
+user signs out, `setupAuth()` clears the client's token and
+`useAuth().isAuthenticated` becomes `false`. You don't clean anything up
+yourself.
+
+## SSR initial state
+
+Pass `initialState` so the server render, and the first render in the browser,
+already know whether the user is signed in:
+
+```svelte title="src/routes/+layout.svelte"
+<script lang="ts">
+  import { setupConvex, setupAuth } from "convex-svelte";
+  import { PUBLIC_CONVEX_URL } from "$app/env/public"; // SvelteKit 2: "$env/static/public"
+
+  let { data } = $props(); // from +layout.server.ts
+
+  setupConvex(PUBLIC_CONVEX_URL);
+  setupAuth(
+    () => ({
+      isLoading: session.isPending,
+      isAuthenticated: !!session.data,
+      fetchAccessToken: async ({ forceRefreshToken }) =>
+        getToken({ forceRefreshToken }),
+    }),
+    { initialState: { isAuthenticated: data.isAuthenticated } },
+  );
+</script>
+```
+
+The server state is trusted until the client-side auth flow settles, then the
+client takes over. For authenticated server-side data fetching, see
+[Server hooks](/client/svelte/sveltekit-server-rendering.mdx#server-hooks).
+
+## Waiting for auth before the first queries
+
+When the server reports a signed-in user, `setupAuth()` sets the token before
+any query subscribes, so the first queries already run authenticated. For a
+signed-out user nothing waits.
+
+Convex's `expectAuth` client option holds every request until the first token is
+sent. Prefer `initialState` in SvelteKit apps: `expectAuth` only acts before the
+first sign-in, leaves signed-out users with a client that never sends anything,
+and makes a universal load that calls `convexLoad()` without `{ fetch }` wait
+during hydration for auth that only the root layout sets up.
+
+To keep a whole members-only area from querying without auth, render it only
+while `useAuth()` reports a signed-in user:
+
+```svelte title="src/routes/(app)/+layout.svelte"
+<script lang="ts">
+  import { useAuth } from "convex-svelte";
+
+  let { children } = $props();
+  const auth = useAuth();
+</script>
+
+{#if auth.isAuthenticated}
+  {@render children()}
+{:else if auth.isLoading}
+  Checking authentication...
+{:else}
+  Please sign in.
+{/if}
+```
+
+Components inside the block don't exist while `auth.isAuthenticated` is `false`,
+so none of their queries run, and they unmount when the user signs out. With
+`initialState: { isAuthenticated: true }`, the flag is `true` from the first
+render, before Convex has confirmed the token. Queries in the area still wait
+for the token, because `setupAuth()` hands it to the client before any query
+subscribes. Redirect signed-out users in `handle` (`hooks.server.ts`) as well,
+so they never reach the area. These steps shape what users see; Convex functions
+that return private data must still check the user themselves.
+
+## Auth adapters
+
+`setupAuth()` lets you connect any provider by hand. An adapter does that for a
+specific auth system: it calls `setupAuth()` for you, and `useAuth()` works
+without further setup.
+
+### Convex Auth
+
+[Convex Auth](/auth/convex-auth.mdx) is Convex's own auth library.
+Authentication runs on your Convex deployment, without a third-party service.
+
+For Svelte, the community-maintained
+[`@mmailaender/convex-auth-svelte`](https://github.com/mmailaender/convex-auth-svelte)
+connects Convex Auth to `setupAuth()` and `useAuth()`, with SvelteKit SSR
+support.
+
+### Convex Better Auth
+
+[Convex Better Auth](https://labs.convex.dev/better-auth) connects the
+[Better Auth](https://www.better-auth.com) library to Convex.
+
+For Svelte, the community-maintained
+[`@mmailaender/convex-better-auth-svelte`](https://github.com/mmailaender/convex-better-auth-svelte)
+provides `createSvelteAuthClient()`. It calls `setupAuth()` with a reactive
+session getter, so `useAuth()` from either package works, and it supports
+SvelteKit SSR.
+
+[Convex Better Auth UI](https://github.com/mmailaender/Convex-Better-Auth-UI)
+(community-maintained) adds shadcn-style components for sign-in and for user and
+organization management, for SvelteKit and Next.js. They're copied into your
+project, so you can change their code.
+
+### Hosted providers
+
+Convex also works with hosted identity platforms that issue OpenID Connect JWTs,
+such as [Clerk](/auth/clerk.mdx), [WorkOS AuthKit](/auth/authkit/index.mdx) and
+[Auth0](/auth/auth0.mdx). There are no dedicated `convex-svelte` wrappers for
+these yet, so in a Svelte app you integrate them through the low-level
+[`setupAuth()`](#setupauth--useauth) pattern: return the provider's reactive
+auth state (`isLoading`, `isAuthenticated`, `fetchAccessToken`) from the getter.
+
+## Low-level: client.setAuth()
+
+You can also use `client.setAuth()` directly for custom integrations:
+
+```svelte
+<script lang="ts">
+  import { useConvexClient } from "convex-svelte";
+
+  const client = useConvexClient();
+
+  client.setAuth(
+    async () => {
+      return await getAuthToken();
+    },
+    (isAuthenticated) => {
+      console.log("Auth state changed:", isAuthenticated);
+    },
+  );
+</script>
+```
+
+## API reference
+
+Authentication exports from `convex-svelte`:
+
+| Export                          | Kind     | Description                                                                         |
+| ------------------------------- | -------- | ----------------------------------------------------------------------------------- |
+| `setupAuth(provider, options?)` | Function | Set up reactive authentication. Keeps the client's token in sync with the provider. |
+| `useAuth()`                     | Function | Read auth state (`isLoading`, `isAuthenticated`) from context.                      |
+| `ConvexAuthProvider`            | Type     | Auth provider state: `isLoading`, `isAuthenticated`, `fetchAccessToken`.            |
+| `SetupAuthOptions`              | Type     | Options for `setupAuth`: `initialState` for SSR hydration.                          |
+| `UseAuthReturn`                 | Type     | Return type of `useAuth`: `isLoading`, `isAuthenticated`.                           |

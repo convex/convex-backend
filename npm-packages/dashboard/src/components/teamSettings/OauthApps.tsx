@@ -2,16 +2,21 @@ import React, { useState } from "react";
 import { Sheet } from "@ui/Sheet";
 import { Button } from "@ui/Button";
 import { TextInput } from "@ui/TextInput";
-import { useIsCurrentMemberTeamAdmin } from "api/roles";
+import {
+  useHasCustomRolePermission,
+  useIsCurrentMemberTeamAdmin,
+} from "api/roles";
 import { OauthAppResponse } from "generatedApi";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
+import { OAUTH_APPLICATION_RESOURCE } from "lib/permissions";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import {
   PlusIcon,
   EyeNoneIcon,
   EyeOpenIcon,
-  InfoCircledIcon,
   DotsVerticalIcon,
   QuestionMarkCircledIcon,
-  ExternalLinkIcon,
+  PersonIcon,
 } from "@radix-ui/react-icons";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import {
@@ -27,14 +32,16 @@ import * as Yup from "yup";
 import { Loading, LoadingTransition } from "@ui/Loading";
 import { CopyTextButton } from "dashboard-common/src/elements/CopyTextButton";
 import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { Menu, MenuItem } from "@ui/Menu";
 import { cn } from "@ui/cn";
 import { toast } from "@common/lib/utils";
 
 import { captureException, captureMessage } from "@sentry/nextjs";
 import { useProfile } from "api/profile";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { TimestampDistance } from "@common/elements/TimestampDistance";
+import { formatNumberCompact } from "@common/lib/format";
 
 // Utility function to validate URLs without side effects
 function isValidOauthRedirectUri(uri: string): boolean {
@@ -99,11 +106,17 @@ const VERIFICATION_REQUEST_SCHEMA = Yup.object({
     .min(10, "Description must be at least 10 characters")
     .max(2000, "Description must be at most 2000 characters")
     .required("Description is required"),
+  appUrl: Yup.string()
+    .url("Must be a valid URL (including https://)")
+    .max(2000, "URL must be at most 2000 characters")
+    .required(
+      "A link where the Convex team can test your application is required",
+    ),
 });
 
 // Handler for verification request submission
 async function handleVerificationRequest(
-  description: string,
+  values: { description: string; appUrl: string },
   app: OauthAppResponse,
   teamId: number,
   setVerificationError: (error: string) => void,
@@ -121,9 +134,10 @@ async function handleVerificationRequest(
 Team ID: ${teamId}
 Client ID: ${app.clientId}
 App Name: ${app.appName}
+Application URL (for testing): ${values.appUrl}
 
 Description:
-${description}
+${values.description}
 
 Please review this OAuth application for verification.`,
       teamId,
@@ -267,7 +281,7 @@ function VerificationRequestForm({
   error,
 }: {
   app: OauthAppResponse;
-  onSubmit: (description: string) => Promise<void>;
+  onSubmit: (values: { description: string; appUrl: string }) => Promise<void>;
   loading: boolean;
   error?: string;
 }) {
@@ -280,10 +294,10 @@ function VerificationRequestForm({
 
   return (
     <Formik
-      initialValues={{ description: "" }}
+      initialValues={{ description: "", appUrl: "" }}
       validationSchema={VERIFICATION_REQUEST_SCHEMA}
       onSubmit={async (values, { setSubmitting }) => {
-        await onSubmit(values.description);
+        await onSubmit(values);
         setSubmitting(false);
       }}
     >
@@ -329,7 +343,23 @@ function VerificationRequestForm({
             )}
           </label>
 
-          <div className="rounded border bg-blue-50 p-3 dark:bg-blue-900/20">
+          <TextInput
+            id="app-url"
+            name="appUrl"
+            label="Application URL"
+            description="A link where the Convex team can access and test your application. A working application is required for verification."
+            placeholder="https://example.com"
+            value={values.appUrl}
+            onChange={handleChange}
+            error={
+              touched.appUrl && typeof errors.appUrl === "string"
+                ? errors.appUrl
+                : undefined
+            }
+            required
+          />
+
+          <div className="mt-4 rounded-sm border bg-blue-50 p-3 dark:bg-blue-900/20">
             <p className="text-sm text-content-secondary">
               <strong>Note:</strong> The Convex team will review your request
               and respond to you at{" "}
@@ -360,15 +390,97 @@ function VerificationRequestForm({
   );
 }
 
+// Shows how many distinct teams have authorized the app. For unverified apps,
+// it shows progress toward the connected-teams limit and warns as it fills up.
+function AuthorizedTeamCount({ app }: { app: OauthAppResponse }) {
+  const count = app.authorizedTeamCount;
+  const limit = app.unverifiedTeamLimit;
+  const atLimit = !app.verified && count >= limit;
+  const nearLimit = !app.verified && !atLimit && count >= limit * 0.8;
+
+  return (
+    <Tooltip
+      tip={
+        app.verified
+          ? `${count} ${count === 1 ? "team has" : "teams have"} authorized this application.`
+          : `${count} of ${limit} teams have authorized this application. Unverified applications can be authorized by up to ${limit} teams. Verify your application to remove this limit.`
+      }
+      side="right"
+    >
+      <div
+        className={cn(
+          "flex items-center gap-1 rounded-sm border p-1 text-xs text-content-secondary",
+          atLimit && "bg-background-errorSecondary text-content-error",
+          nearLimit &&
+            "border-yellow-700 bg-yellow-100/50 text-yellow-700 dark:border-yellow-200 dark:bg-yellow-900/50 dark:text-yellow-200",
+        )}
+      >
+        <PersonIcon />
+        {app.verified
+          ? `${formatNumberCompact(count)} ${count === 1 ? "team" : "teams"}`
+          : `${formatNumberCompact(count)} / ${formatNumberCompact(limit)} teams`}
+      </div>
+    </Tooltip>
+  );
+}
+
 export function OauthApps({ teamId }: { teamId: number }) {
-  const { data: oauthApps, isLoading } = useTeamOauthApps(teamId);
+  const canView = useHasCustomRolePermission(
+    teamId,
+    "oauthApplication:view",
+    OAUTH_APPLICATION_RESOURCE,
+    true,
+  );
   const isAdmin = useIsCurrentMemberTeamAdmin();
+  // OAuth-app mutations are admin-only by default; custom roles need an
+  // explicit grant per action.
+  const canCreateCustom = useHasCustomRolePermission(
+    teamId,
+    "oauthApplication:create",
+    OAUTH_APPLICATION_RESOURCE,
+    false,
+  );
+  const canUpdateCustom = useHasCustomRolePermission(
+    teamId,
+    "oauthApplication:update",
+    OAUTH_APPLICATION_RESOURCE,
+    false,
+  );
+  const canDeleteCustom = useHasCustomRolePermission(
+    teamId,
+    "oauthApplication:delete",
+    OAUTH_APPLICATION_RESOURCE,
+    false,
+  );
+  const canRegenerateSecretCustom = useHasCustomRolePermission(
+    teamId,
+    "oauthApplication:generateClientSecret",
+    OAUTH_APPLICATION_RESOURCE,
+    false,
+  );
+  const canCreate = isAdmin || canCreateCustom === true;
+  const canUpdate = isAdmin || canUpdateCustom === true;
+  const canDelete = isAdmin || canDeleteCustom === true;
+  const canRegenerateSecret = isAdmin || canRegenerateSecretCustom === true;
+
+  const { data: oauthApps, isLoading } = useTeamOauthApps(teamId);
   const registerOauthApp = useRegisterOauthApp(teamId);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [registerError, setRegisterError] = useState("");
 
+  if (canView === false) {
+    return (
+      <Sheet className="max-w-fit">
+        <NoPermissionMessage
+          message="You do not have permission to view OAuth applications."
+          missingPermission="oauthApplication:view"
+        />
+      </Sheet>
+    );
+  }
+
   return (
-    <Sheet className="max-w-fit">
+    <Sheet>
       {createModalOpen && (
         <Modal
           onClose={() => setCreateModalOpen(false)}
@@ -413,7 +525,7 @@ export function OauthApps({ teamId }: { teamId: number }) {
           />
         </Modal>
       )}
-      <LoadingTransition loadingProps={{ className: "w-[28.125rem] h-80" }}>
+      <LoadingTransition loadingProps={{ className: "h-80 w-full" }}>
         {isLoading ? null : oauthApps && oauthApps.length ? (
           <div className="flex flex-col gap-4">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
@@ -423,19 +535,21 @@ export function OauthApps({ teamId }: { teamId: number }) {
                   href="https://docs.convex.dev/platform-apis/oauth-applications"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex w-fit items-center gap-1 text-content-link hover:underline"
+                  externalIcon
                 >
-                  <ExternalLinkIcon />
                   Learn more about OAuth applications
                 </Link>
               </p>
               <Button
                 size="xs"
                 icon={<PlusIcon />}
-                disabled={!isAdmin}
+                disabled={!canCreate}
                 tip={
-                  !isAdmin
-                    ? "Only team admins can create OAuth apps."
+                  !canCreate
+                    ? permissionDeniedTip(
+                        "You do not have permission to create OAuth apps.",
+                        "oauthApplication:create",
+                      )
                     : undefined
                 }
                 onClick={() => setCreateModalOpen(true)}
@@ -448,7 +562,9 @@ export function OauthApps({ teamId }: { teamId: number }) {
                 <OauthAppListItem
                   key={app.clientId}
                   app={app}
-                  isAdmin={isAdmin}
+                  canUpdate={canUpdate}
+                  canDelete={canDelete}
+                  canRegenerateSecret={canRegenerateSecret}
                   oauthAppSchema={OAUTH_APP_SCHEMA}
                   teamId={teamId}
                 />
@@ -475,9 +591,8 @@ export function OauthApps({ teamId }: { teamId: number }) {
                     href="https://docs.convex.dev/platform-apis/oauth-applications"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex w-fit items-center gap-1 text-content-link hover:underline"
+                    externalIcon
                   >
-                    <ExternalLinkIcon />
                     Learn more about OAuth applications
                   </Link>
                 </p>
@@ -486,9 +601,8 @@ export function OauthApps({ teamId }: { teamId: number }) {
                     href="https://docs.convex.dev/platform-apis"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex w-fit items-center gap-1 text-content-link hover:underline"
+                    externalIcon
                   >
-                    <ExternalLinkIcon />
                     Learn more about Convex Platform APIs
                   </Link>
                 </p>
@@ -498,6 +612,15 @@ export function OauthApps({ teamId }: { teamId: number }) {
               size="sm"
               icon={<PlusIcon />}
               onClick={() => setCreateModalOpen(true)}
+              disabled={!canCreate}
+              tip={
+                !canCreate
+                  ? permissionDeniedTip(
+                      "You do not have permission to create OAuth apps.",
+                      "oauthApplication:create",
+                    )
+                  : undefined
+              }
             >
               Create Your First Application
             </Button>
@@ -510,12 +633,16 @@ export function OauthApps({ teamId }: { teamId: number }) {
 
 function OauthAppListItem({
   app,
-  isAdmin,
+  canUpdate,
+  canDelete,
+  canRegenerateSecret,
   oauthAppSchema,
   teamId,
 }: {
   app: OauthAppResponse;
-  isAdmin: boolean;
+  canUpdate: boolean;
+  canDelete: boolean;
+  canRegenerateSecret: boolean;
   oauthAppSchema: any;
   teamId: number;
 }) {
@@ -547,14 +674,14 @@ function OauthAppListItem({
   const [regenerateSecretError, setRegenerateSecretError] = useState("");
 
   return (
-    <div className="scrollbar flex w-full flex-col gap-2 overflow-x-auto rounded border bg-background-secondary p-3">
+    <div className="scrollbar flex w-full flex-col gap-2 overflow-x-auto rounded-sm border bg-background-secondary p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-3">
           <h4>{app.appName}</h4>
           <Tooltip
             tip={
               !app.verified
-                ? "This app is not verified yet. You may test this app by authorizing it to the team that registered it. To allow this app to work for other teams, you must request verification."
+                ? `This app is not verified yet. Unverified apps can be authorized by up to ${app.unverifiedTeamLimit} teams. Verify your app to remove this limit and let an unlimited number of teams connect.`
                 : undefined
             }
             side="right"
@@ -570,6 +697,7 @@ function OauthAppListItem({
               {!app.verified && <QuestionMarkCircledIcon />}
             </div>
           </Tooltip>
+          <AuthorizedTeamCount app={app} />
         </div>
         <div className="flex items-center gap-2">
           <TimestampDistance date={new Date(app.createTime)} prefix="Created" />
@@ -585,10 +713,13 @@ function OauthAppListItem({
             {!app.verified ? (
               <MenuItem
                 action={() => setVerificationModalOpen(true)}
-                disabled={!isAdmin}
+                disabled={!canUpdate}
                 tip={
-                  !isAdmin
-                    ? "Only team admins can request verification."
+                  !canUpdate
+                    ? permissionDeniedTip(
+                        "You do not have permission to request verification.",
+                        "oauthApplication:update",
+                      )
                     : undefined
                 }
                 tipSide="right"
@@ -598,9 +729,14 @@ function OauthAppListItem({
             ) : null}
             <MenuItem
               action={() => setEditModalOpen(true)}
-              disabled={!isAdmin}
+              disabled={!canUpdate}
               tip={
-                !isAdmin ? "Only team admins can edit OAuth apps." : undefined
+                !canUpdate
+                  ? permissionDeniedTip(
+                      "You do not have permission to edit OAuth apps.",
+                      "oauthApplication:update",
+                    )
+                  : undefined
               }
               tipSide="right"
             >
@@ -608,10 +744,13 @@ function OauthAppListItem({
             </MenuItem>
             <MenuItem
               action={() => setShowRegenerateSecret(true)}
-              disabled={!isAdmin}
+              disabled={!canRegenerateSecret}
               tip={
-                !isAdmin
-                  ? "Only team admins can regenerate the client secret."
+                !canRegenerateSecret
+                  ? permissionDeniedTip(
+                      "You do not have permission to regenerate the client secret.",
+                      "oauthApplication:generateClientSecret",
+                    )
                   : undefined
               }
               tipSide="right"
@@ -621,9 +760,14 @@ function OauthAppListItem({
             <MenuItem
               action={() => setShowDelete(true)}
               variant="danger"
-              disabled={!isAdmin}
+              disabled={!canDelete}
               tip={
-                !isAdmin ? "Only team admins can delete OAuth apps." : undefined
+                !canDelete
+                  ? permissionDeniedTip(
+                      "You do not have permission to delete OAuth apps.",
+                      "oauthApplication:delete",
+                    )
+                  : undefined
               }
               tipSide="right"
             >
@@ -664,11 +808,11 @@ function OauthAppListItem({
           <div className="text-xs break-all">
             <div className="flex items-center gap-1 leading-6 font-semibold">
               Client Secret
-              <Tooltip tip="Only team admins can see the client secret.">
-                <InfoCircledIcon />
-              </Tooltip>
+              <HelpTooltip>
+                Only team admins can see the client secret.
+              </HelpTooltip>
             </div>
-            <span className="text-xs leading-6.5">
+            <span className="text-xs/6.5">
               •••••••••••••••••••••••••••••••••
             </span>
           </div>
@@ -678,7 +822,7 @@ function OauthAppListItem({
         <span className="leading-6 font-semibold">Redirect URIs</span>
         <ul className="list-inside list-disc">
           {app.redirectUris.map((uri: string, i: number) => (
-            <li key={i} className="max-w-prose break-all">
+            <li key={i} className="break-all">
               {uri}
             </li>
           ))}
@@ -773,9 +917,9 @@ function OauthAppListItem({
         >
           <VerificationRequestForm
             app={app}
-            onSubmit={(description) =>
+            onSubmit={(values) =>
               handleVerificationRequest(
-                description,
+                values,
                 app,
                 teamId,
                 setVerificationError,

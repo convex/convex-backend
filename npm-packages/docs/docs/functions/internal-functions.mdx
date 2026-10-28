@@ -6,11 +6,11 @@ description: "Functions that can only be called by other Convex functions"
 
 import Definition from "!!raw-loader!@site/../private-demos/snippets/convex/plans.ts";
 import Call from "!!raw-loader!@site/../private-demos/snippets/convex/internalFunctionsCall.ts";
-import DefinitionWithoutValidationTS from "!!raw-loader!@site/../private-demos/snippets/convex/internalFunctionsDefinitionWithoutValidation.ts";
-import DefinitionWithoutValidationJS from "!!raw-loader!@site/../private-demos/snippets/convex/internalFunctionsDefinitionWithoutValidationJS.js";
+import DefinitionWithoutValidation from "!!raw-loader!@site/../private-demos/snippets/convex/internalFunctionsDefinitionWithoutValidation.ts";
 
-Internal functions can only be called by other [functions](/functions.mdx) and
-cannot be called directly from a [Convex client](/client/react.mdx).
+Internal functions can only be called by other
+[functions](/functions/overview.mdx) and cannot be called directly from a
+[Convex client](/client/react/overview.mdx).
 
 By default your Convex functions are public and accessible to clients. Public
 functions may be called by malicious users in ways that cause surprising
@@ -36,18 +36,17 @@ Leverage internal functions by:
 - Scheduling them to run periodically from
   [cron jobs](/scheduling/cron-jobs.mdx)
 - Running them using the
-  [Dashboard](/dashboard/deployments/functions.md#running-functions)
-- Running them from the [CLI](/cli.md#run-convex-functions)
+  [Dashboard](/dashboard/deployments/functions.mdx#running-functions)
+- Running them from the [CLI](/cli/reference/run.mdx)
 
 ## Defining internal functions
 
 An internal function is defined using `internalQuery`, `internalMutation`, or
 `internalAction`. For example:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/plans.ts"
-  sourceTS={Definition}
-  sourceJS={Definition}
+  source={Definition}
   highlightPatterns={["internalMutation"]}
 />
 
@@ -59,12 +58,7 @@ of the database.
 
 <Details summary="Internal function without argument validation">
 
-<TSAndJSSnippet
-  title="convex/plans.ts"
-  sourceTS={DefinitionWithoutValidationTS}
-  sourceJS={DefinitionWithoutValidationJS}
-  highlightPatterns={[": {"]}
-/>
+<Snippet title="convex/plans.ts" source={DefinitionWithoutValidation} />
 
 </Details>
 
@@ -76,7 +70,7 @@ mutation using the [`internal`](/generated-api/api#internal) object.
 For example, consider this public `upgrade` action that calls the internal
 `plans.markPlanAsProfessional` mutation we defined above:
 
-<TSAndJSSnippet title="convex/changes.ts" sourceTS={Call} sourceJS={Call} />
+<Snippet title="convex/changes.ts" source={Call} />
 
 In this example a user should not be able to directly call
 `internal.plans.markPlanAsProfessional` without going through the `upgrade`

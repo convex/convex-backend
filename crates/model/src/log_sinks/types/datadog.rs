@@ -1,10 +1,14 @@
 use std::{
+    collections::BTreeSet,
     fmt,
     str::FromStr,
 };
 
 use common::{
-    log_streaming::LogEventFormatVersion,
+    log_streaming::{
+        LogEventFormatVersion,
+        LogTopic,
+    },
     pii::PII,
 };
 use serde::{
@@ -15,7 +19,6 @@ use utoipa::ToSchema;
 
 /// The Datadog deployment locations, used to construct URLs
 #[derive(Serialize, Deserialize, Eq, PartialEq, Debug, Clone, Copy, ToSchema)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum DatadogSiteLocation {
     US1,
     US3,
@@ -78,13 +81,15 @@ impl fmt::Display for DatadogSiteLocation {
 
 /// The main configuration required for Datadog HTTP API
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct DatadogConfig {
     pub site_location: DatadogSiteLocation,
     pub dd_api_key: PII<String>,
     pub dd_tags: Vec<String>,
     pub version: LogEventFormatVersion,
     pub service: Option<String>,
+    /// The set of topics this log stream is subscribed to. `None` means the
+    /// stream is subscribed to all topics, including ones added in the future.
+    pub topics: Option<BTreeSet<LogTopic>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -95,6 +100,8 @@ pub struct SerializedDatadogConfig {
     pub dd_tags: Vec<String>,
     pub version: Option<String>,
     pub service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topics: Option<Vec<String>>,
 }
 
 impl From<DatadogConfig> for SerializedDatadogConfig {
@@ -105,6 +112,7 @@ impl From<DatadogConfig> for SerializedDatadogConfig {
             dd_tags: value.dd_tags,
             version: Some(value.version.to_string()),
             service: value.service,
+            topics: super::serialize_topics(value.topics),
         }
     }
 }
@@ -127,6 +135,7 @@ impl TryFrom<SerializedDatadogConfig> for DatadogConfig {
             dd_tags: value.dd_tags,
             version,
             service: value.service,
+            topics: super::deserialize_topics(value.topics)?,
         })
     }
 }
@@ -134,37 +143,5 @@ impl TryFrom<SerializedDatadogConfig> for DatadogConfig {
 impl fmt::Display for DatadogConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DatadogConfig {{ version: {:?}, ... }}", self.version)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DatadogSiteLocation;
-
-    #[test]
-    fn datadog_site_location_serialize() {
-        let json = r#""US1""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::US1);
-
-        let json = r#""US3""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::US3);
-
-        let json = r#""US5""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::US5);
-
-        let json = r#""EU""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::EU);
-
-        let json = r#""US1_FED""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::US1_FED);
-
-        let json = r#""AP1""#;
-        let dsl: DatadogSiteLocation = serde_json::from_str(json).unwrap();
-        assert_eq!(dsl, DatadogSiteLocation::AP1);
     }
 }

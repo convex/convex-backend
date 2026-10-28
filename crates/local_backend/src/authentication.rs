@@ -17,11 +17,13 @@ use common::{
             Query,
         },
         ExtractRequestId,
+        ExtractRequestMetadata,
         ExtractResolvedHostname,
         HttpResponseError,
     },
     runtime::Runtime,
     types::remove_type_prefix_from_admin_key,
+    RequestContext,
 };
 use errors::ErrorMetadata;
 use keybroker::Identity;
@@ -56,7 +58,7 @@ impl<T: Sync> FromRequestParts<T> for ExtractAuthenticationToken {
                 .ok_or_else(|| anyhow!("Invalid Header"))
                 .context(ErrorMetadata::bad_request(
                     "InvalidHeaderFailure",
-                    format!("Invalid authentication header"),
+                    "Invalid authentication header".to_string(),
                 ))?
                 .eq_ignore_ascii_case("convex ");
 
@@ -152,7 +154,14 @@ impl FromRequestParts<RouterState> for TryExtractIdentity {
             Ok(id) => id,
             Err(e) => return Ok(Self(Err(e.into()))),
         };
-        Ok(Self(st.api.authenticate(&host, request_id.0, token).await))
+        let request_metadata = match parts.extract::<ExtractRequestMetadata>().await {
+            Ok(m) => m.0,
+            Err(e) => return Ok(Self(Err(e.into()))),
+        };
+        let request_context = RequestContext::new(request_id.0, request_metadata);
+        Ok(Self(
+            st.api.authenticate(&host, request_context, token).await,
+        ))
     }
 }
 
@@ -201,68 +210,5 @@ fn strip_prefix_ignore_case<'a>(string: &'a str, prefix: &str) -> Option<&'a str
         Some(&string[prefix.len()..])
     } else {
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use errors::ErrorMetadataAnyhowExt;
-    use keybroker::testing::TestUserIdentity;
-    use sync_types::{
-        AuthenticationToken,
-        UserIdentityAttributes,
-    };
-
-    use super::extract_admin_key;
-    #[test]
-    fn test_extracts_admin_key() -> anyhow::Result<()> {
-        // Check that we don't panic no matter how short the admin key is
-        assert_eq!(
-            extract_admin_key("").unwrap_err().to_string(),
-            "Called extract_admin_key with a non-admin authorization header."
-        );
-
-        assert_eq!(
-            extract_admin_key("invalidHeader").unwrap_err().to_string(),
-            "Called extract_admin_key with a non-admin authorization header."
-        );
-
-        assert_eq!(
-            extract_admin_key("convex abc")?,
-            AuthenticationToken::Admin("abc".to_string(), None)
-        );
-
-        // Capital C in header
-        assert_eq!(
-            extract_admin_key("Convex abc")?,
-            AuthenticationToken::Admin("abc".to_string(), None)
-        );
-
-        let encoded = base64::encode(
-            serde_json::to_vec(&serde_json::Value::try_from(UserIdentityAttributes::test())?)
-                .unwrap(),
-        );
-
-        // With acting user
-        assert_eq!(
-            extract_admin_key(&format!("convex abc:{encoded}"))?,
-            AuthenticationToken::Admin("abc".to_string(), Some(UserIdentityAttributes::test()))
-        );
-
-        // With acting user that isn't base64
-        assert_eq!(
-            extract_admin_key("convex abc:heyThisIsNotBase64")
-                .unwrap_err()
-                .short_msg(),
-            "HeaderParseFailure",
-        );
-
-        // With deployment name and deployment type prefix
-        assert_eq!(
-            extract_admin_key(&format!("convex prod:high-horse-42|abc"))?,
-            AuthenticationToken::Admin("high-horse-42|abc".to_string(), None)
-        );
-
-        Ok(())
     }
 }

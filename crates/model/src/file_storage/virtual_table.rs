@@ -96,7 +96,6 @@ impl VirtualSystemDocMapper for FileStorageDocMapper {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 struct PublicFileMetadata {
     sha256: String,               // Hex-encoded Sha256 of contents
     size: f64,                    // Size of file in storage

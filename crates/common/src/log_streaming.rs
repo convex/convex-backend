@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt,
     fmt::Display,
     str::FromStr,
@@ -29,11 +30,73 @@ use crate::{
         UnixTimestamp,
     },
     types::{
+        FunctionCaller,
         ModuleEnvironment,
+        QueryInvocation,
         UdfType,
         UdfTypeJson,
     },
+    RequestMetadata,
 };
+
+/// Why a function was executed.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum FunctionRunReason {
+    /// First execution of a query a client subscribed to.
+    InitialSubscription,
+    /// The query's subscription was no longer valid, so the query re-ran.
+    DataChange,
+    /// The client's auth identity changed, which reruns every query in the
+    /// client's query set.
+    IdentityChange,
+    /// A mutation or action invoked by a client over the WebSocket sync
+    /// protocol.
+    WebSocket,
+    /// Invoked via the HTTP API (e.g. `ConvexHttpClient`).
+    HttpApi,
+    /// An HTTP action serving an incoming request to a route in `http.ts`.
+    HttpEndpoint,
+    /// Invoked from a cron job.
+    Cron,
+    /// Invoked from a scheduled function.
+    Scheduler,
+    /// Invoked from an action via `ctx.runQuery`, `ctx.runMutation`, or
+    /// `ctx.runAction`.
+    Action,
+    /// Invoked by the custom function tester (e.g. in the dashboard).
+    Tester,
+}
+
+impl FunctionRunReason {
+    /// `query_invocation` is `Some` exactly for queries, and distinguishes a
+    /// first run from a rerun of an existing subscription.
+    pub fn new(caller: &FunctionCaller, query_invocation: Option<QueryInvocation>) -> Self {
+        let caller_reason = match caller {
+            FunctionCaller::SyncWorker(_) => Self::WebSocket,
+            FunctionCaller::HttpApi(_) => Self::HttpApi,
+            FunctionCaller::HttpEndpoint => Self::HttpEndpoint,
+            FunctionCaller::Tester(_) => Self::Tester,
+            FunctionCaller::Cron => Self::Cron,
+            FunctionCaller::Scheduler { .. } => Self::Scheduler,
+            FunctionCaller::Action { .. } => Self::Action,
+        };
+        match query_invocation {
+            None => caller_reason,
+            Some(QueryInvocation::Invalidated) => Self::DataChange,
+            Some(QueryInvocation::IdentityChange) => Self::IdentityChange,
+            // Every caller other than a sync worker runs a query once rather
+            // than holding a subscription to it.
+            Some(QueryInvocation::Fresh) => {
+                if caller_reason == Self::WebSocket {
+                    Self::InitialSubscription
+                } else {
+                    caller_reason
+                }
+            },
+        }
+    }
+}
 
 /// Public worker for the LogManager.
 #[async_trait]
@@ -62,45 +125,69 @@ pub struct LogEvent {
 pub struct AggregatedFunctionUsageStats {
     pub database_read_bytes: u64,
     pub database_write_bytes: u64,
+    pub database_io_read_bytes: u64,
+    pub database_io_write_bytes: u64,
     pub database_read_documents: u64,
+    pub database_write_documents: u64,
+    pub database_write_index_rows: u64,
     pub storage_read_bytes: u64,
     pub storage_write_bytes: u64,
     pub vector_index_read_bytes: u64,
     pub vector_index_write_bytes: u64,
-    pub text_index_write_bytes: u64,
+    pub text_index_write_query_bytes: u64,
+    pub text_index_query_bytes: u64,
+    pub vector_index_read_query_bytes: u64,
+    pub vector_index_write_query_bytes: u64,
+    pub network_egress_bytes: u64,
     pub memory_used_mb: u64,
+    pub args_bytes: Option<u64>,
     pub return_bytes: Option<u64>,
+    pub audit_log_egress_bytes: u64,
 }
 
-#[derive(Serialize, Debug, Clone)]
-pub struct OccInfo {
-    pub table_name: Option<String>,
-    pub document_id: Option<String>,
-    pub write_source: Option<String>,
-    pub retry_count: u64,
-}
+pub use errors::OccInfo;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct OccInfoJson {
     pub table_name: Option<String>,
     pub document_id: Option<String>,
     pub write_source: Option<String>,
-    pub retry_count: u64,
+    pub component_path: Option<String>,
+    pub retry_count: Option<u64>,
+}
+
+impl From<OccInfo> for OccInfoJson {
+    fn from(info: OccInfo) -> Self {
+        Self {
+            table_name: info.table_name,
+            document_id: info.document_id,
+            write_source: info.write_source,
+            component_path: info.component_path,
+            retry_count: info.retry_count,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStatsJson {
     pub database_read_bytes: u64,
     pub database_write_bytes: u64,
+    pub database_io_read_bytes: u64,
+    pub database_io_write_bytes: u64,
     pub database_read_documents: u64,
+    pub database_write_documents: u64,
+    pub database_write_index_rows: u64,
     pub storage_read_bytes: u64,
     pub storage_write_bytes: u64,
     pub vector_index_read_bytes: u64,
     pub vector_index_write_bytes: u64,
+    pub text_index_query_bytes: u64,
+    pub text_index_write_query_bytes: u64,
+    pub vector_index_read_query_bytes: u64,
+    pub vector_index_write_query_bytes: u64,
+    pub network_egress_bytes: u64,
     pub memory_used_mb: u64,
 }
 
@@ -123,6 +210,97 @@ pub struct FunctionConcurrencyStats {
 // - add it to the docs
 //
 // Also consider getting rid of the V1 format!
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
+pub struct AiGatewayFunctionEventSource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub component_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub function_type: Option<String>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+pub enum AiGatewayProvider {
+    #[serde(rename = "openRouter")]
+    #[strum(serialize = "openRouter")]
+    OpenRouter,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, strum::EnumString,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AiGatewayEndpoint {
+    ChatCompletions,
+    Decisions,
+    Embeddings,
+    Images,
+    Messages,
+    Responses,
+    Speech,
+    Transcriptions,
+    Videos,
+}
+
+/// Combines the response outcome with usage availability.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    strum::EnumString,
+    strum::IntoStaticStr,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AiGatewayOutcome {
+    /// Finished with usage reported.
+    Completed,
+    /// Finished without usage; cost may still be recoverable via `upstream_id`.
+    NoUsage,
+    /// Upstream returned a non-success HTTP status.
+    ProviderError,
+    /// Transport failed while reading the body. Earlier chunks may contain
+    /// an `upstream_id` for cost recovery.
+    UpstreamError,
+    /// Shutdown cancelled the read. Retains any usage and upstream ID received
+    /// before cancellation; the provider may still have charged.
+    Abandoned,
+    /// Buffer ceiling discarded unparsed bytes that may have held usage.
+    /// Recovery is via `upstream_id` from earlier chunks only.
+    Oversized,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, strum::EnumString,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+#[derive(clap::ValueEnum, strum::IntoStaticStr)]
+pub enum AiGatewayEnvironment {
+    Production,
+    Staging,
+}
+
 #[derive(Debug, Clone)]
 pub enum StructuredLogEvent {
     /// Topic for verification logs. These are issued on sink startup and are
@@ -140,9 +318,12 @@ pub enum StructuredLogEvent {
         source: FunctionEventSource,
         error: Option<JsError>,
         execution_time: Duration,
+        user_execution_time: Option<Duration>,
         usage_stats: AggregatedFunctionUsageStats,
         occ_info: Option<OccInfo>,
+        will_retry: bool,
         scheduler_info: Option<SchedulerInfo>,
+        run_reason: FunctionRunReason,
     },
     /// Topic for exceptions. These happen when a UDF raises an exception from
     /// JS
@@ -151,6 +332,7 @@ pub enum StructuredLogEvent {
         user_identifier: Option<sync_types::UserIdentifier>,
         source: FunctionEventSource,
         udf_server_version: Option<semver::Version>,
+        request_metadata: RequestMetadata,
     },
     /// Topic for deployment audit logs. These are issued when developers
     /// interact with a deployment.
@@ -173,8 +355,10 @@ pub enum StructuredLogEvent {
         total_document_size_bytes: u64,
         total_index_size_bytes: u64,
         total_vector_storage_bytes: u64,
+        total_text_storage_bytes: u64,
         total_file_storage_bytes: u64,
         total_backup_storage_bytes: u64,
+        total_system_table_document_size_bytes: BTreeMap<String, u64>,
     },
     /// Topic for function concurrency metrics. These are periodic snapshots of
     /// running and queued functions for each function type.
@@ -191,6 +375,33 @@ pub enum StructuredLogEvent {
         storage_id: String,
         egress_bytes: u64,
     },
+    /// Terminal usage reported by the AI gateway after an inference response
+    /// has been drained.
+    AiGatewayUsage {
+        function: Option<AiGatewayFunctionEventSource>,
+        inference_id: String,
+        provider: AiGatewayProvider,
+        endpoint: AiGatewayEndpoint,
+        upstream_id: Option<String>,
+        model: Option<String>,
+        prompt_tokens: Option<u64>,
+        completion_tokens: Option<u64>,
+        total_tokens: Option<u64>,
+        cached_prompt_tokens: Option<u64>,
+        reasoning_tokens: Option<u64>,
+        cost: Option<f64>,
+        outcome: AiGatewayOutcome,
+        environment: AiGatewayEnvironment,
+    },
+    /// Topic for log stream egress. Emitted when a log sink sends a batch
+    /// of events to an external service, reporting the egress bytes used.
+    LogStreamEgress {
+        egress_bytes: u64,
+    },
+    /// Topic for user-defined audit logs emitted via `audit.log` in UDFs.
+    CustomAudit {
+        body: JsonValue,
+    },
     // User-specified topics -- not yet implemented.
     // See here for more details: https://www.notion.so/Log-Streaming-in-Convex-19a1dfadd6924c33b29b2796b0f5b2e2
     // User {
@@ -199,8 +410,86 @@ pub enum StructuredLogEvent {
     // },
 }
 
+// The set of topics that a `StructuredLogEvent` can belong to. Each variant of
+// `StructuredLogEvent` maps to exactly one `LogTopic` via
+// `StructuredLogEvent::topic`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    ToSchema,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum LogTopic {
+    Verification,
+    Console,
+    FunctionExecution,
+    Exception,
+    AuditLog,
+    SchedulerStats,
+    ScheduledJobLag,
+    CurrentStorageUsage,
+    ConcurrencyStats,
+    StorageApiBandwidth,
+    AiGatewayUsage,
+    LogStreamEgress,
+    CustomAudit,
+}
+
+impl LogTopic {
+    /// The topics that can be configured on a log stream subscription.
+    pub const SUBSCRIBABLE: &'static [LogTopic] = &[
+        LogTopic::Console,
+        LogTopic::FunctionExecution,
+        LogTopic::AuditLog,
+        LogTopic::SchedulerStats,
+        LogTopic::ScheduledJobLag,
+        LogTopic::CurrentStorageUsage,
+        LogTopic::ConcurrencyStats,
+        LogTopic::StorageApiBandwidth,
+        LogTopic::AiGatewayUsage,
+        LogTopic::LogStreamEgress,
+        LogTopic::CustomAudit,
+    ];
+
+    /// Whether this topic can be configured on a log stream subscription.
+    pub fn is_subscribable(&self) -> bool {
+        Self::SUBSCRIBABLE.contains(self)
+    }
+}
+
+impl StructuredLogEvent {
+    pub fn topic(&self) -> LogTopic {
+        match self {
+            StructuredLogEvent::Verification => LogTopic::Verification,
+            StructuredLogEvent::Console { .. } => LogTopic::Console,
+            StructuredLogEvent::FunctionExecution { .. } => LogTopic::FunctionExecution,
+            StructuredLogEvent::Exception { .. } => LogTopic::Exception,
+            StructuredLogEvent::DeploymentAuditLog { .. } => LogTopic::AuditLog,
+            StructuredLogEvent::SchedulerStats { .. } => LogTopic::SchedulerStats,
+            StructuredLogEvent::ScheduledJobLag { .. } => LogTopic::ScheduledJobLag,
+            StructuredLogEvent::CurrentStorageUsage { .. } => LogTopic::CurrentStorageUsage,
+            StructuredLogEvent::ConcurrencyStats { .. } => LogTopic::ConcurrencyStats,
+            StructuredLogEvent::StorageApiBandwidth { .. } => LogTopic::StorageApiBandwidth,
+            StructuredLogEvent::AiGatewayUsage { .. } => LogTopic::AiGatewayUsage,
+            StructuredLogEvent::LogStreamEgress { .. } => LogTopic::LogStreamEgress,
+            StructuredLogEvent::CustomAudit { .. } => LogTopic::CustomAudit,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, ToSchema)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum LogEventFormatVersion {
     V1,
     V2,
@@ -227,48 +516,12 @@ impl Display for LogEventFormatVersion {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-#[allow(clippy::derivable_impls)]
-impl Default for LogEventFormatVersion {
-    fn default() -> Self {
-        Self::V2
-    }
-}
-
 /// Structured log
 impl LogEvent {
     pub fn default_for_verification<RT: Runtime>(runtime: &RT) -> anyhow::Result<Self> {
         Ok(Self {
             event: StructuredLogEvent::Verification,
             timestamp: runtime.unix_timestamp(),
-        })
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn sample_exception<RT: Runtime>(runtime: &RT) -> anyhow::Result<Self> {
-        use sync_types::UserIdentifier;
-
-        let source = FunctionEventSource {
-            context: ExecutionContext::new_for_test(),
-            component_path: ComponentPath::test_user(),
-            udf_path: "test".to_string(),
-            udf_type: UdfType::Action,
-            module_environment: ModuleEnvironment::Isolate,
-            cached: None,
-            mutation_queue_length: None,
-            mutation_retry_count: None,
-        };
-        Ok(Self {
-            timestamp: runtime.unix_timestamp(),
-            event: StructuredLogEvent::Exception {
-                error: JsError::from_frames_for_test(
-                    "test_message",
-                    vec!["test_frame_1", "test_frame_2"],
-                ),
-                user_identifier: Some(UserIdentifier("test|user".to_string())),
-                source,
-                udf_server_version: Some(semver::Version::new(1, 5, 1)),
-            },
         })
     }
 
@@ -324,15 +577,19 @@ impl LogEvent {
                     source,
                     error,
                     execution_time,
+                    user_execution_time,
                     usage_stats,
                     occ_info: _,
+                    will_retry: _,
                     scheduler_info: _,
+                    run_reason: _,
                 } => {
                     let (reason, status) = match error {
                         Some(err) => (Some(err.to_string()), "failure"),
                         None => (None, "success"),
                     };
                     let execution_time_ms = execution_time.as_millis();
+                    let user_execution_time_ms = user_execution_time.map(|d| d.as_millis());
                     serialize_map!({
                         "_timestamp": ms,
                         "_topic":  "_execution_record",
@@ -342,10 +599,14 @@ impl LogEvent {
                         "status": status,
                         "reason": reason,
                         "executionTimeMs": execution_time_ms,
+                        "userExecutionTimeMs": user_execution_time_ms,
                         "databaseReadBytes": usage_stats.database_read_bytes,
                         "databaseWriteBytes": usage_stats.database_write_bytes,
+                        "databaseIoReadBytes": usage_stats.database_io_read_bytes,
+                        "databaseIoWriteBytes": usage_stats.database_io_write_bytes,
                         "storageReadBytes": usage_stats.storage_read_bytes,
                         "storageWriteBytes": usage_stats.storage_write_bytes,
+                        "networkEgressBytes": usage_stats.network_egress_bytes,
                     })
                 },
                 StructuredLogEvent::Exception {
@@ -353,6 +614,7 @@ impl LogEvent {
                     user_identifier,
                     source,
                     udf_server_version,
+                    request_metadata: _,
                 } => {
                     let message = &error.message;
                     let frames: Option<Vec<String>> = error
@@ -398,16 +660,20 @@ impl LogEvent {
                     total_document_size_bytes,
                     total_index_size_bytes,
                     total_vector_storage_bytes,
+                    total_text_storage_bytes,
                     total_file_storage_bytes,
                     total_backup_storage_bytes,
+                    total_system_table_document_size_bytes,
                 } => serialize_map!({
                     "_timestamp": ms,
                     "_topic": "_current_storage_usage",
                     "total_document_size_bytes": total_document_size_bytes,
                     "total_index_size_bytes": total_index_size_bytes,
                     "total_vector_storage_bytes": total_vector_storage_bytes,
+                    "total_text_storage_bytes": total_text_storage_bytes,
                     "total_file_storage_bytes": total_file_storage_bytes,
                     "total_backup_storage_bytes": total_backup_storage_bytes,
+                    "total_system_table_document_size_bytes": total_system_table_document_size_bytes,
                 }),
                 StructuredLogEvent::ConcurrencyStats {
                     query,
@@ -433,6 +699,52 @@ impl LogEvent {
                     "storage_id": storage_id,
                     "egress_bytes": egress_bytes
                 }),
+                StructuredLogEvent::AiGatewayUsage {
+                    function,
+                    inference_id,
+                    provider,
+                    endpoint,
+                    upstream_id,
+                    model,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    cached_prompt_tokens,
+                    reasoning_tokens,
+                    cost,
+                    outcome,
+                    environment,
+                } => serialize_map!({
+                    "_timestamp": ms,
+                    "_topic": "_ai_gateway_usage",
+                    "function": function,
+                    "inference_id": inference_id,
+                    "provider": provider,
+                    "endpoint": endpoint,
+                    "upstream_id": upstream_id,
+                    "model": model,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "cached_prompt_tokens": cached_prompt_tokens,
+                    "reasoning_tokens": reasoning_tokens,
+                    "cost": cost,
+                    "cost_unit": "USD",
+                    "outcome": outcome,
+                    "environment": environment,
+                }),
+                StructuredLogEvent::LogStreamEgress { egress_bytes } => serialize_map!({
+                    "_timestamp": ms,
+                    "_topic": "_log_stream_egress",
+                    "egress_bytes": egress_bytes
+                }),
+                StructuredLogEvent::CustomAudit { body } => {
+                    serialize_map!({
+                        "_timestamp": ms,
+                        "_topic": "_custom_audit",
+                        "body": body
+                    })
+                },
             },
             LogEventFormatVersion::V2 => match &self.event {
                 StructuredLogEvent::Verification => {
@@ -468,9 +780,12 @@ impl LogEvent {
                     source,
                     error,
                     execution_time,
+                    user_execution_time,
                     usage_stats,
                     occ_info,
+                    will_retry,
                     scheduler_info,
+                    run_reason,
                 } => {
                     let function_source = source.to_json_map();
                     let (status, error_message) = match error {
@@ -481,13 +796,25 @@ impl LogEvent {
                     struct Usage {
                         database_read_bytes: u64,
                         database_write_bytes: u64,
+                        database_io_read_bytes: u64,
+                        database_io_write_bytes: u64,
                         database_read_documents: u64,
+                        database_write_documents: u64,
+                        database_write_index_rows: u64,
                         file_storage_read_bytes: u64,
                         file_storage_write_bytes: u64,
                         vector_storage_read_bytes: u64,
                         vector_storage_write_bytes: u64,
+                        text_search_query_bytes: u64,
+                        text_search_write_query_bytes: u64,
+                        vector_search_query_bytes: u64,
+                        vector_search_write_query_bytes: u64,
+                        network_egress_bytes: u64,
                         memory_used_mb: u64,
                         action_memory_used_mb: Option<u64>,
+                        audit_log_egress_bytes: u64,
+                        function_args_bytes: Option<u64>,
+                        function_returns_bytes: Option<u64>,
                     }
                     let action_memory_used_mb = if source.udf_type == UdfType::Action
                         || source.udf_type == UdfType::HttpAction
@@ -496,25 +823,42 @@ impl LogEvent {
                     } else {
                         None
                     };
+                    let user_execution_time_ms = user_execution_time.map(|d| d.as_millis());
                     serialize_map!({
                         "timestamp": ms,
                         "topic": "function_execution",
                         "function": function_source,
                         "execution_time_ms": execution_time.as_millis(),
+                        "user_execution_time_ms": user_execution_time_ms,
                         "status": status,
                         "error_message": error_message,
                         "occ_info": occ_info,
+                        "will_retry": will_retry,
                         "scheduler_info": scheduler_info,
+                        "run_reason": run_reason,
                         "usage": Usage {
                             database_read_bytes: usage_stats.database_read_bytes,
                             database_write_bytes: usage_stats.database_write_bytes,
+                            database_io_read_bytes: usage_stats.database_io_read_bytes,
+                            database_io_write_bytes: usage_stats.database_io_write_bytes,
                             database_read_documents: usage_stats.database_read_documents,
+                            database_write_documents: usage_stats.database_write_documents,
+                            database_write_index_rows: usage_stats.database_write_index_rows,
                             file_storage_read_bytes: usage_stats.storage_read_bytes,
                             file_storage_write_bytes: usage_stats.storage_write_bytes,
                             vector_storage_read_bytes: usage_stats.vector_index_read_bytes,
                             vector_storage_write_bytes: usage_stats.vector_index_write_bytes,
+                            text_search_query_bytes: usage_stats.text_index_query_bytes,
+                            text_search_write_query_bytes: usage_stats.text_index_write_query_bytes,
+                            vector_search_query_bytes: usage_stats.vector_index_read_query_bytes,
+                            vector_search_write_query_bytes: usage_stats
+                                .vector_index_write_query_bytes,
+                            network_egress_bytes: usage_stats.network_egress_bytes,
                             memory_used_mb: usage_stats.memory_used_mb,
                             action_memory_used_mb,
+                            audit_log_egress_bytes: usage_stats.audit_log_egress_bytes,
+                            function_args_bytes: usage_stats.args_bytes,
+                            function_returns_bytes: usage_stats.return_bytes,
                         }
                     })
                 },
@@ -525,6 +869,7 @@ impl LogEvent {
                     user_identifier,
                     source,
                     udf_server_version,
+                    request_metadata: _,
                 } => {
                     let message = &error.message;
                     let frames: Option<Vec<String>> = error
@@ -574,8 +919,10 @@ impl LogEvent {
                     total_document_size_bytes,
                     total_index_size_bytes,
                     total_vector_storage_bytes,
+                    total_text_storage_bytes,
                     total_file_storage_bytes,
                     total_backup_storage_bytes,
+                    total_system_table_document_size_bytes,
                 } => {
                     serialize_map!({
                         "timestamp": ms,
@@ -583,8 +930,10 @@ impl LogEvent {
                         "total_document_size_bytes": total_document_size_bytes,
                         "total_index_size_bytes": total_index_size_bytes,
                         "total_vector_storage_bytes": total_vector_storage_bytes,
+                        "total_text_storage_bytes": total_text_storage_bytes,
                         "total_file_storage_bytes": total_file_storage_bytes,
                         "total_backup_storage_bytes": total_backup_storage_bytes,
+                        "total_system_table_document_size_bytes": total_system_table_document_size_bytes,
                     })
                 },
                 StructuredLogEvent::ConcurrencyStats {
@@ -615,20 +964,68 @@ impl LogEvent {
                         "egress_bytes": egress_bytes
                     })
                 },
+                StructuredLogEvent::AiGatewayUsage {
+                    function,
+                    inference_id,
+                    provider,
+                    endpoint,
+                    upstream_id,
+                    model,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    cached_prompt_tokens,
+                    reasoning_tokens,
+                    cost,
+                    outcome,
+                    environment,
+                } => {
+                    serialize_map!({
+                        "timestamp": ms,
+                        "topic": "ai_gateway_usage",
+                        "function": function,
+                        "inference_id": inference_id,
+                        "provider": provider,
+                        "endpoint": endpoint,
+                        "upstream_id": upstream_id,
+                        "model": model,
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": total_tokens,
+                        "cached_prompt_tokens": cached_prompt_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "cost": cost,
+                        "cost_unit": "USD",
+                        "outcome": outcome,
+                        "environment": environment,
+                    })
+                },
+                StructuredLogEvent::LogStreamEgress { egress_bytes } => {
+                    serialize_map!({
+                        "timestamp": ms,
+                        "topic": "log_stream_egress",
+                        "egress_bytes": egress_bytes
+                    })
+                },
+                StructuredLogEvent::CustomAudit { body } => {
+                    serialize_map!({
+                        "timestamp": ms,
+                        "topic": "custom_audit",
+                        "body": body
+                    })
+                },
             },
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum EventSource {
     Function(FunctionEventSource),
     System,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct FunctionEventSource {
     pub context: ExecutionContext,
     pub component_path: ComponentPath,
@@ -647,20 +1044,6 @@ pub struct FunctionEventSource {
 }
 
 impl FunctionEventSource {
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_for_test() -> Self {
-        Self {
-            context: ExecutionContext::new_for_test(),
-            component_path: ComponentPath::test_user(),
-            udf_path: "path/to/file:myFunction".to_string(),
-            udf_type: UdfType::Mutation,
-            module_environment: ModuleEnvironment::Isolate,
-            cached: None,
-            mutation_queue_length: None,
-            mutation_retry_count: None,
-        }
-    }
-
     pub fn to_json_map(&self) -> serde_json::Map<String, JsonValue> {
         let udf_type = match self.udf_type {
             UdfType::Query => "query",
@@ -668,9 +1051,15 @@ impl FunctionEventSource {
             UdfType::Action => "action",
             UdfType::HttpAction => "http_action",
         };
+        let runtime = match self.module_environment {
+            ModuleEnvironment::Isolate => Some("convex"),
+            ModuleEnvironment::Node => Some("node"),
+            ModuleEnvironment::Invalid => None,
+        };
         let JsonValue::Object(mut fields) = json!({
             "path": self.udf_path,
             "type": udf_type,
+            "runtime": runtime,
             "cached": self.cached,
             "request_id": self.context.request_id.to_string(),
             "mutation_queue_length": self.mutation_queue_length,
@@ -700,7 +1089,6 @@ impl HeapSize for FunctionEventSource {
 
 // Types for the /api/stream_function_logs
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 #[serde(tag = "kind")]
 pub enum FunctionExecutionJson {
     #[serde(rename_all = "camelCase")]
@@ -714,6 +1102,7 @@ pub enum FunctionExecutionJson {
         caller: String,
         parent_execution_id: Option<String>,
         execution_time: f64,
+        user_execution_time: Option<f64>,
         success: Option<JsonValue>,
         error: Option<String>,
         request_id: String,
@@ -721,6 +1110,7 @@ pub enum FunctionExecutionJson {
         usage_stats: UsageStatsJson,
         return_bytes: Option<f64>,
         occ_info: Option<OccInfoJson>,
+        will_retry: bool,
         execution_timestamp: f64,
         identity_type: String,
         environment: String,
@@ -738,7 +1128,6 @@ pub enum FunctionExecutionJson {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StreamUdfExecutionResponse {
     pub entries: Vec<FunctionExecutionJson>,
@@ -746,7 +1135,6 @@ pub struct StreamUdfExecutionResponse {
 }
 
 #[derive(Deserialize, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct StreamFunctionLogs {
     pub cursor: f64,
@@ -755,514 +1143,6 @@ pub struct StreamFunctionLogs {
 }
 
 #[derive(Deserialize, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 pub struct StreamUdfExecutionQueryArgs {
     pub cursor: f64,
-}
-
-#[cfg(test)]
-mod tests {
-    use serde::{
-        Deserialize,
-        Serialize,
-    };
-    use serde_json::{
-        json,
-        Value as JsonValue,
-    };
-    use utoipa::{
-        OpenApi,
-        ToSchema,
-    };
-
-    use crate::{
-        components::ComponentPath,
-        execution_context::ExecutionContext,
-        log_lines::{
-            LogLevel,
-            LogLineStructured,
-        },
-        log_streaming::{
-            AggregatedFunctionUsageStats,
-            FunctionEventSource,
-            LogEvent,
-            LogEventFormatVersion,
-            OccInfo,
-            SchedulerInfo,
-            StructuredLogEvent,
-        },
-        runtime::UnixTimestamp,
-        types::{
-            ModuleEnvironment,
-            UdfType,
-        },
-    };
-
-    #[test]
-    fn test_serialization_of_console_log_event() -> anyhow::Result<()> {
-        let timestamp = UnixTimestamp::from_millis(1000);
-        let context = ExecutionContext::new_for_test();
-        let request_id = context.request_id.clone();
-        let event = LogEvent {
-            timestamp,
-            event: StructuredLogEvent::Console {
-                source: FunctionEventSource {
-                    context,
-                    component_path: ComponentPath::test_user(),
-                    udf_path: "test:test".to_string(),
-                    udf_type: UdfType::Query,
-                    module_environment: ModuleEnvironment::Isolate,
-                    cached: Some(true),
-                    mutation_queue_length: None,
-                    mutation_retry_count: None,
-                },
-                log_line: LogLineStructured::new_developer_log_line(
-                    LogLevel::Log,
-                    vec!["my test log".to_string()],
-                    timestamp,
-                ),
-            },
-        };
-
-        // Test serialization
-        let fields: serde_json::Map<String, JsonValue> =
-            event.to_json_map(LogEventFormatVersion::default())?;
-        let value = serde_json::to_value(&fields)?;
-        assert_eq!(
-            value,
-            json!({
-                "topic": "console",
-                "timestamp": 1000,
-                "function": json!({
-                    "path": "test:test",
-                    "type": "query",
-                    "cached": true,
-                    "request_id": request_id.to_string(),
-                    "mutation_queue_length": null,
-                    "mutation_retry_count": null
-                }),
-                "log_level": "LOG",
-                "message": "my test log",
-                "is_truncated": false,
-                "system_code": JsonValue::Null
-            })
-        );
-        Ok(())
-    }
-
-    // Utoipa schemas for log stream events which are for documentation only.
-    // They are cursorily tested to check they can be used to parse some
-    // event log output.
-    //
-    // These types need to be updated manually.
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct ConsoleLogEvent {
-        timestamp: u64,
-        #[schema(inline)]
-        function: SchemaFunctionEventSource,
-        log_level: String,
-        message: String,
-        is_truncated: bool,
-        system_code: Option<String>,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct SchemaFunctionEventSource {
-        path: String,
-        r#type: String,
-        cached: Option<bool>,
-        request_id: String,
-        mutation_queue_length: Option<usize>,
-        mutation_retry_count: Option<usize>,
-        component_path: Option<String>,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct SchemaOccInfo {
-        table_name: Option<String>,
-        document_id: Option<String>,
-        write_source: Option<String>,
-        retry_count: u64,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct SchemaSchedulerInfo {
-        job_id: String,
-    }
-
-    // Additional log event schemas
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct VerificationEvent {
-        timestamp: u64,
-        message: String, // "Convex connection test"
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct FunctionExecutionEvent {
-        timestamp: u64,
-        #[schema(inline)]
-        function: SchemaFunctionEventSource,
-        execution_time_ms: u64,
-        status: String, // "success" or "failure"
-        error_message: Option<String>,
-        #[schema(inline)]
-        occ_info: Option<SchemaOccInfo>,
-        #[schema(inline)]
-        scheduler_info: Option<SchemaSchedulerInfo>,
-        #[schema(inline)]
-        usage: UsageStats,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct UsageStats {
-        database_read_bytes: u64,
-        database_write_bytes: u64,
-        database_read_documents: u64,
-        file_storage_read_bytes: u64,
-        file_storage_write_bytes: u64,
-        vector_storage_read_bytes: u64,
-        vector_storage_write_bytes: u64,
-        action_memory_used_mb: Option<u64>,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct DeploymentAuditLogEvent {
-        timestamp: u64,
-        audit_log_action: String,
-        audit_log_metadata: String, // JSON-stringified metadata
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct SchedulerStatsEvent {
-        timestamp: u64,
-        lag_seconds: u64,
-        num_running_jobs: u64,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct ScheduledJobLagEvent {
-        timestamp: u64,
-        lag_seconds: u64,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct StorageUsageEvent {
-        timestamp: u64,
-        total_document_size_bytes: u64,
-        total_index_size_bytes: u64,
-        total_vector_storage_bytes: u64,
-        total_file_storage_bytes: u64,
-        total_backup_storage_bytes: u64,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[allow(dead_code)]
-    struct StorageApiBandwidthEvent {
-        timestamp: u64,
-        storage_id: String,
-        egress_bytes: u64,
-    }
-
-    // Union type for all log events, discriminated by topic field
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    #[serde(tag = "topic")]
-    #[allow(dead_code)]
-    enum LogStreamEvent {
-        #[serde(rename = "console")]
-        Console(ConsoleLogEvent),
-        #[serde(rename = "verification")]
-        Verification(VerificationEvent),
-        #[serde(rename = "function_execution")]
-        FunctionExecution(FunctionExecutionEvent),
-        #[serde(rename = "audit_log")]
-        DeploymentAuditLog(DeploymentAuditLogEvent),
-        #[serde(rename = "scheduler_stats")]
-        SchedulerStats(SchedulerStatsEvent),
-        #[serde(rename = "scheduled_job_lag")]
-        ScheduledJobLag(ScheduledJobLagEvent),
-        #[serde(rename = "current_storage_usage")]
-        CurrentStorageUsage(StorageUsageEvent),
-        #[serde(rename = "storage_api_bandwidth")]
-        StorageApiBandwidth(StorageApiBandwidthEvent),
-    }
-
-    #[test]
-    fn test_v2_events_deserialize_to_schemas() -> anyhow::Result<()> {
-        let verification_json = serde_json::to_value(
-            &LogEvent {
-                timestamp: UnixTimestamp::from_millis(1000),
-                event: StructuredLogEvent::Verification,
-            }
-            .to_json_map(LogEventFormatVersion::V2)?,
-        )?;
-        let _: LogStreamEvent = serde_json::from_value(verification_json)?;
-
-        let console_json = serde_json::to_value(
-            &LogEvent {
-                timestamp: UnixTimestamp::from_millis(2000),
-                event: StructuredLogEvent::Console {
-                    source: FunctionEventSource {
-                        context: ExecutionContext::new_for_test(),
-                        component_path: ComponentPath::test_user(),
-                        udf_path: "test:console".to_string(),
-                        udf_type: UdfType::Query,
-                        module_environment: ModuleEnvironment::Isolate,
-                        cached: Some(true),
-                        mutation_queue_length: None,
-                        mutation_retry_count: None,
-                    },
-                    log_line: LogLineStructured {
-                        messages: vec!["test console log".to_string()].into(),
-                        level: LogLevel::Log,
-                        is_truncated: false,
-                        timestamp: UnixTimestamp::from_millis(2000),
-                        system_metadata: None,
-                    },
-                },
-            }
-            .to_json_map(LogEventFormatVersion::V2)?,
-        )?;
-        let _: LogStreamEvent = serde_json::from_value(console_json)?;
-
-        let function_execution_json = serde_json::to_value(
-            &LogEvent {
-                timestamp: UnixTimestamp::from_millis(3000),
-                event: StructuredLogEvent::FunctionExecution {
-                    source: FunctionEventSource {
-                        context: ExecutionContext::new_for_test(),
-                        component_path: ComponentPath::test_user(),
-                        udf_path: "test:function".to_string(),
-                        udf_type: UdfType::Mutation,
-                        module_environment: ModuleEnvironment::Isolate,
-                        cached: None,
-                        mutation_queue_length: Some(2),
-                        mutation_retry_count: Some(0),
-                    },
-                    error: None,
-                    execution_time: std::time::Duration::from_millis(100),
-                    usage_stats: AggregatedFunctionUsageStats {
-                        database_read_bytes: 512,
-                        database_write_bytes: 256,
-                        database_read_documents: 3,
-                        storage_read_bytes: 0,
-                        storage_write_bytes: 0,
-                        vector_index_read_bytes: 0,
-                        vector_index_write_bytes: 0,
-                        text_index_write_bytes: 0,
-                        memory_used_mb: 0,
-                        return_bytes: Some(64),
-                    },
-                    occ_info: Some(OccInfo {
-                        table_name: Some("test_table".to_string()),
-                        document_id: Some("doc123".to_string()),
-                        write_source: Some("mutation".to_string()),
-                        retry_count: 1,
-                    }),
-                    scheduler_info: Some(SchedulerInfo {
-                        job_id: "scheduled_job_456".to_string(),
-                    }),
-                },
-            }
-            .to_json_map(LogEventFormatVersion::V2)?,
-        )?;
-        let _: LogStreamEvent = serde_json::from_value(function_execution_json)?;
-
-        let mut metadata = serde_json::Map::new();
-        metadata.insert(
-            "action".to_string(),
-            serde_json::Value::String("deploy".to_string()),
-        );
-        let audit_log_json = serde_json::to_value(
-            &LogEvent {
-                timestamp: UnixTimestamp::from_millis(4000),
-                event: StructuredLogEvent::DeploymentAuditLog {
-                    action: "schema_push".to_string(),
-                    metadata,
-                },
-            }
-            .to_json_map(LogEventFormatVersion::V2)?,
-        )?;
-        let _: LogStreamEvent = serde_json::from_value(audit_log_json)?;
-
-        let scheduler_stats_json = serde_json::to_value(
-            &LogEvent {
-                timestamp: UnixTimestamp::from_millis(5000),
-                event: StructuredLogEvent::SchedulerStats {
-                    lag_seconds: std::time::Duration::from_secs(10),
-                    num_running_jobs: 25,
-                },
-            }
-            .to_json_map(LogEventFormatVersion::V2)?,
-        )?;
-        let _: LogStreamEvent = serde_json::from_value(scheduler_stats_json)?;
-
-        let job_lag_json = serde_json::to_value(
-            &LogEvent {
-                timestamp: UnixTimestamp::from_millis(6000),
-                event: StructuredLogEvent::ScheduledJobLag {
-                    lag_seconds: std::time::Duration::from_secs(5),
-                },
-            }
-            .to_json_map(LogEventFormatVersion::V2)?,
-        )?;
-        let _: LogStreamEvent = serde_json::from_value(job_lag_json)?;
-
-        let storage_bandwidth_json = serde_json::to_value(
-            &LogEvent {
-                timestamp: UnixTimestamp::from_millis(7000),
-                event: StructuredLogEvent::StorageApiBandwidth {
-                    storage_id: "storage-uuid-123".to_string(),
-                    egress_bytes: 2048,
-                },
-            }
-            .to_json_map(LogEventFormatVersion::V2)?,
-        )?;
-        let _: LogStreamEvent = serde_json::from_value(storage_bandwidth_json)?;
-
-        Ok(())
-    }
-
-    // OpenAPI document for function execution API (for /api/stream_function_logs)
-    use crate::{
-        log_lines::{
-            LogLevelJson,
-            LogLineJson,
-            SystemLogMetadataJson,
-        },
-        log_streaming::{
-            FunctionExecutionJson,
-            OccInfoJson,
-            StreamFunctionLogs,
-            StreamUdfExecutionQueryArgs,
-            StreamUdfExecutionResponse,
-            UsageStatsJson,
-        },
-        types::UdfTypeJson,
-    };
-
-    #[derive(utoipa::OpenApi)]
-    #[openapi(
-        info(
-            title = "Convex Function Logs API",
-            version = "1.0.0",
-            description = "Schema definitions for /api/stream_function_logs and \
-                           /api/stream_udf_execution endpoints"
-        ),
-        components(schemas(
-            FunctionExecutionJson,
-            StreamUdfExecutionResponse,
-            StreamFunctionLogs,
-            StreamUdfExecutionQueryArgs,
-            LogLineJson,
-            LogLevelJson,
-            SystemLogMetadataJson,
-            UsageStatsJson,
-            UdfTypeJson,
-            OccInfoJson,
-        ))
-    )]
-    struct FunctionLogsApiDoc;
-
-    #[test]
-    fn test_function_logs_api_schema_matches() -> anyhow::Result<()> {
-        use std::{
-            fs,
-            path::Path,
-        };
-
-        const SCHEMA_FILE: &str = "../../npm-packages/convex/function-logs-openapi.json";
-
-        // Generate OpenAPI spec using utoipa
-        let openapi_spec = FunctionLogsApiDoc::openapi();
-        let current_schema = openapi_spec.to_pretty_json()?;
-
-        // Check if file exists and compare
-        if Path::new(SCHEMA_FILE).exists() {
-            let existing_schema = fs::read_to_string(SCHEMA_FILE)?;
-            if existing_schema.trim() != current_schema.trim() {
-                // Write updated schema
-                fs::write(SCHEMA_FILE, &current_schema)?;
-                panic!(
-                    "{SCHEMA_FILE} does not match current schema. This test automatically updated \
-                     the file so you can run again: `cargo test -p common \
-                     test_function_logs_api_schema_matches`"
-                );
-            }
-        } else {
-            // Create directory if it doesn't exist
-            if let Some(parent) = Path::new(SCHEMA_FILE).parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(SCHEMA_FILE, &current_schema)?;
-            panic!(
-                "Created new {SCHEMA_FILE}. Run the test again to verify: `cargo test -p common \
-                 test_function_logs_api_schema_matches`"
-            );
-        }
-
-        Ok(())
-    }
-
-    // OpenAPI document for log stream events (for external sinks)
-    #[derive(utoipa::OpenApi)]
-    #[openapi(
-        info(
-            title = "Convex Log Stream Events",
-            version = "2.0.0",
-            description = "Schema definitions for Convex log stream events"
-        ),
-        components(schemas(LogStreamEvent))
-    )]
-    struct LogStreamApiDoc;
-
-    #[test]
-    fn test_log_stream_api_schema_matches() -> anyhow::Result<()> {
-        use std::{
-            fs,
-            path::Path,
-        };
-
-        const SCHEMA_FILE: &str = "../../npm-packages/@convex-dev/platform/log-stream-openapi.json";
-
-        // Generate OpenAPI spec using utoipa
-        let openapi_spec = LogStreamApiDoc::openapi();
-        let current_schema = openapi_spec.to_pretty_json()?;
-
-        // Check if file exists and compare
-        if Path::new(SCHEMA_FILE).exists() {
-            let existing_schema = fs::read_to_string(SCHEMA_FILE)?;
-            if existing_schema.trim() != current_schema.trim() {
-                // Write updated schema
-                fs::write(SCHEMA_FILE, &current_schema)?;
-                panic!(
-                    "{SCHEMA_FILE} does not match current schema. This test automatically updated \
-                     the file so you can run again: `cargo test -p common \
-                     test_log_stream_api_schema_matches`"
-                );
-            }
-        } else {
-            // Create directory if it doesn't exist
-            if let Some(parent) = Path::new(SCHEMA_FILE).parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(SCHEMA_FILE, &current_schema)?;
-            panic!(
-                "Created new {SCHEMA_FILE}. Run the test again to verify: `cargo test -p common \
-                 test_log_stream_api_schema_matches`"
-            );
-        }
-
-        Ok(())
-    }
 }

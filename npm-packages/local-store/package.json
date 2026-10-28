@@ -21,6 +21,6 @@
     "@types/node-fetch": "^2.6.1",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.0"
   }
 }

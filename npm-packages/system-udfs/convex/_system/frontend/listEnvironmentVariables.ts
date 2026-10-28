@@ -1,6 +1,6 @@
 import { Doc } from "../../_generated/dataModel";
 import { queryPrivateSystem } from "../secretSystemTables";
-export default queryPrivateSystem({
+export default queryPrivateSystem("ViewEnvironmentVariables")({
   args: {},
   handler: async ({ db }): Promise<Doc<"_environment_variables">[]> => {
     return await db

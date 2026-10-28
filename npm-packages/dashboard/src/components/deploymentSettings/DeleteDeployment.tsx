@@ -1,7 +1,6 @@
 import React, { useContext, useState } from "react";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import { useQuery } from "convex/react";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useRouter } from "next/router";
 import { Sheet } from "@ui/Sheet";
 import { Button } from "@ui/Button";
@@ -11,8 +10,18 @@ import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { LoadingTransition } from "@ui/Loading";
 import udfs from "@common/udfs";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { permissionDenial, useSystemQuery } from "@common/lib/useSystemQuery";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
 import { useDeleteDeployment } from "api/deployments";
-import { useHasProjectAdminPermissions } from "api/roles";
+import {
+  useHasCustomRolePermission,
+  useHasProjectAdminPermissions,
+} from "api/roles";
+import { useCurrentTeam } from "api/teams";
+import { useCurrentProject } from "api/projects";
+import { deploymentResource } from "lib/permissions";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
+import { DEPLOYMENT_SETTINGS_SECTIONS } from "lib/sectionAnchors";
 
 export function DeleteDeployment() {
   const { useCurrentDeployment, deploymentsURI } = useContext(
@@ -26,9 +35,29 @@ export function DeleteDeployment() {
   const hasAdminPermissions = useHasProjectAdminPermissions(
     deployment?.projectId,
   );
+  const team = useCurrentTeam();
+  const project = useCurrentProject();
+  const resource =
+    project && deployment && deployment.kind === "cloud"
+      ? deploymentResource(project, {
+          id: deployment.id,
+          deploymentType: deployment.deploymentType,
+          creator: deployment.creator ?? null,
+        })
+      : undefined;
+  // Built-in developers can delete non-prod deployments; admins can
+  // delete anything; custom-role members need an explicit
+  // `deployment:delete` grant regardless of deployment type (custom
+  // roles deny by default).
+  const isProd = deploymentType === "prod";
+  const canDeleteCustom = useHasCustomRolePermission(
+    team?.id,
+    "deployment:delete",
+    resource,
+    !isProd,
+  );
 
-  // Only admin users can delete production deployments
-  const canDelete = deploymentType !== "prod" || hasAdminPermissions;
+  const canDelete = hasAdminPermissions || canDeleteCustom === true;
 
   if (!deployment) {
     return null;
@@ -37,7 +66,7 @@ export function DeleteDeployment() {
   // Local deployments are automatically cleaned up
   if (isLocal) {
     return (
-      <Sheet>
+      <Sheet id={DEPLOYMENT_SETTINGS_SECTIONS.deleteDeployment.id}>
         <div className="flex w-full flex-col gap-4">
           <h3>Delete Deployment</h3>
           <div className="flex max-w-prose flex-col gap-2">
@@ -52,7 +81,7 @@ export function DeleteDeployment() {
   }
 
   return (
-    <Sheet>
+    <Sheet id={DEPLOYMENT_SETTINGS_SECTIONS.deleteDeployment.id}>
       <div className="flex w-full flex-col gap-4 lg:grid lg:grid-cols-[1fr_auto]">
         <h3>Delete Deployment</h3>
         <div className="flex items-start lg:row-span-2">
@@ -62,7 +91,10 @@ export function DeleteDeployment() {
             disabled={!canDelete}
             tip={
               !canDelete
-                ? "You do not have permission to delete production deployments."
+                ? permissionDeniedTip(
+                    "You do not have permission to delete this deployment.",
+                    "deployment:delete",
+                  )
                 : ""
             }
           >
@@ -83,10 +115,7 @@ export function DeleteDeployment() {
             <span className="font-semibold">
               Consider creating and downloading a backup before deleting.
             </span>{" "}
-            <Link
-              href={`${deploymentsURI}/settings/backups`}
-              className="text-content-link hover:underline"
-            >
+            <Link href={`${deploymentsURI}/settings/backups`}>
               Go to Backups
             </Link>
           </p>
@@ -111,20 +140,33 @@ function DeleteDeploymentModal({
     name: string;
     deploymentType: string;
     projectId: number;
+    reference?: string;
   };
   onClose: () => void;
 }) {
   const router = useRouter();
-  const numFiles = useQuery(udfs.fileStorageV2.numFiles, {
+  const files = useSystemQuery(udfs.fileStorageV2.numFiles, {
     componentId: null,
   });
-  const numDocuments = useQuery(udfs.tableSize.sizeOfAllTables, {
+  const documents = useSystemQuery(udfs.tableSize.sizeOfAllTables, {
     componentId: null,
   });
 
-  const doneLoading = numFiles !== undefined && numDocuments !== undefined;
+  const doneLoading =
+    files.status !== "pending" && documents.status !== "pending";
+  // Counts are unavailable to a member without `deployment:data:view`, so ask
+  // for the acknowledgement rather than assuming the deployment is empty.
   const showAdditionalConfirmation =
-    (numFiles || 0) > 0 || (numDocuments || 0) > 0;
+    files.status !== "success" ||
+    documents.status !== "success" ||
+    files.data > 0 ||
+    documents.data > 0;
+  // A dropped connection or a backend error leaves the counts unavailable
+  // too, so only blame permissions when that's what actually happened.
+  const countsDenied =
+    (files.status === "error" && permissionDenial(files.error) !== null) ||
+    (documents.status === "error" &&
+      permissionDenial(documents.error) !== null);
   const isProd = deployment.deploymentType === "prod";
 
   const [acceptedConsequences, setAcceptedConsequences] = useState(false);
@@ -148,9 +190,7 @@ function DeleteDeploymentModal({
     deployment.deploymentType.charAt(0).toUpperCase() +
     deployment.deploymentType.slice(1);
 
-  const validationText = isProd
-    ? `Delete ${deploymentTypeLabel} deployment and all data`
-    : `Delete deployment and all data`;
+  const validationText = `Delete ${deployment.reference ?? deploymentTypeLabel} and all data`;
 
   return (
     <ConfirmationDialog
@@ -178,9 +218,10 @@ function DeleteDeploymentModal({
 
               {showAdditionalConfirmation && (
                 <Callout className="flex flex-col gap-2">
-                  <div className="flex items-start gap-2">
-                    <ExclamationTriangleIcon className="mt-1" />
-                    <div className="flex flex-col gap-1">
+                  {files.status === "success" &&
+                  documents.status === "success" ? (
+                    <div className="flex items-start gap-2">
+                      <ExclamationTriangleIcon className="mt-1" />
                       <div className="flex flex-col gap-1">
                         <span>
                           This deployment contains data
@@ -196,20 +237,30 @@ function DeleteDeploymentModal({
                         <ul className="ml-4 flex list-disc flex-col gap-1">
                           <li>
                             <span className="font-semibold">
-                              {numDocuments?.toLocaleString() ?? 0} Documents
+                              {documents.data.toLocaleString()} Documents
                             </span>{" "}
                             stored across all tables.
                           </li>
                           <li>
                             <span className="font-semibold">
-                              {numFiles?.toLocaleString() ?? 0} Files
+                              {files.data.toLocaleString()} Files
                             </span>{" "}
                             stored.
                           </li>
                         </ul>
                       </div>
                     </div>
-                  </div>
+                  ) : countsDenied ? (
+                    <NoPermissionMessage
+                      message="You do not have permission to read this deployment's data, so its contents can't be listed here."
+                      missingPermission="deployment:data:view"
+                    />
+                  ) : (
+                    <Callout variant="error">
+                      This deployment's data could not be loaded, so its
+                      contents can't be listed here.
+                    </Callout>
+                  )}
                   <label className="flex gap-2 text-sm">
                     <Checkbox
                       className="mt-0.5"

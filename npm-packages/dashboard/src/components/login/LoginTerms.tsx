@@ -4,6 +4,7 @@ import { LoadingLogo } from "@ui/Loading";
 import { useAcceptOptIns, useHasOptedIn } from "api/optins";
 import { useRouter } from "next/router";
 import { ChangeEvent, useEffect, useState } from "react";
+import { Link } from "@ui/Link";
 
 // TODO get these from the server once there are more of them
 const OPT_IN_MESSAGES: Record<
@@ -11,14 +12,14 @@ const OPT_IN_MESSAGES: Record<
   { text: string; linkText: string; linkUrl: string }
 > = {
   tos: {
-    text: "I’ve read and accept the terms and conditions of the",
-    linkText: "Master Subscription Agreement",
-    linkUrl: "https://www.convex.dev/legal/msa",
+    text: "I’ve read and accept the",
+    linkText: "Terms of Service",
+    linkUrl: "https://www.convex.dev/legal/tos",
   },
 };
 type OptInName = keyof typeof OPT_IN_MESSAGES;
 
-function CheckboxLine({
+export function CheckboxLine({
   optInName,
   toggle,
 }: {
@@ -50,14 +51,9 @@ function CheckboxLine({
       >
         <span>
           {text}{" "}
-          <a
-            href={linkUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="underline"
-          >
+          <Link href={linkUrl} target="_blank" rel="noreferrer">
             {linkText}
-          </a>
+          </Link>
           .
         </span>
       </label>

@@ -1,4 +1,5 @@
 import { GenericId, v } from "convex/values";
+import { env } from "../_generated/server";
 import {
   ActionBuilder,
   anyApi,
@@ -64,6 +65,7 @@ const schema = defineSchema({
     team: v.string(),
     user: v.string(),
   })
+    // eslint-disable-next-line @convex-dev/no-duplicate-indexes
     .index("by_team", ["team"])
     .index("by_team_and_user", ["team", "user"]),
   teams: defineTable({
@@ -117,6 +119,8 @@ declare const OMIT_ME: any;
   // ❌
   const tomsMessages = ctx.db
     .query("messages")
+    // @skipNextLine
+    // eslint-disable-next-line @convex-dev/no-filter-in-query -- snippet intentionally demonstrates an inefficient pattern
     .filter((q) => q.eq(q.field("author"), "Tom"))
     .collect();
   // @skipNextLine
@@ -640,13 +644,21 @@ declare const movieId: GenericId<"movies">;
 // @skipNextLine
 {
   // ❌
+  // @skipNextLine
+  // eslint-disable-next-line @convex-dev/explicit-table-ids
   await ctx.db.get(movieId);
+  // @skipNextLine
+  // eslint-disable-next-line @convex-dev/explicit-table-ids
   await ctx.db.patch(movieId, { title: "Whiplash" });
+  // @skipNextLine
+  // eslint-disable-next-line @convex-dev/explicit-table-ids
   await ctx.db.replace(movieId, {
     title: "Whiplash",
     director: "Damien Chazelle",
     votes: 0,
   });
+  // @skipNextLine
+  // eslint-disable-next-line @convex-dev/explicit-table-ids
   await ctx.db.delete(movieId);
 
   // ✅            vvvvvvvv
@@ -684,3 +696,22 @@ declare const movieId: GenericId<"movies">;
   // @skipNextLine
 }
 // @snippet end dateInQueries
+
+// @snippet start typedEnv
+// @skipNextLine
+declare const body: string;
+// ❌ The typo compiles, and reads as "not configured": notifications silently
+// stop being sent
+// @skipNextLine
+// eslint-disable-next-line @convex-dev/no-process-env
+const webhookUrl_OMIT_1 = process.env.SLACK_WEBOOK_URL;
+if (webhookUrl_OMIT_1 !== undefined) {
+  await fetch(webhookUrl_OMIT_1, { method: "POST", body });
+}
+
+// ✅ The typo would be a build error, and the type says the variable is optional
+const webhookUrl_OMIT_2 = env.SLACK_WEBHOOK_URL;
+if (webhookUrl_OMIT_2 !== undefined) {
+  await fetch(webhookUrl_OMIT_2, { method: "POST", body });
+}
+// @snippet end typedEnv

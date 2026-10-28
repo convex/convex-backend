@@ -115,18 +115,11 @@ pub const AUTH_CONFIG_FILE_NAME: &str = "auth.config.js";
 /// metadata isn't written to a table but is instead normalized and represented
 /// by state in the other metadata tables.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct ConfigMetadata {
     /// The local directory on the client containing modules.
     pub functions: String,
     /// Authentication info. Empty if this instance has not set up
     /// authentication.
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "proptest::collection::vec(proptest::prelude::any::<AuthInfo>(), 0..4)"
-        )
-    )]
     pub auth_info: Vec<AuthInfo>,
 }
 
@@ -136,14 +129,6 @@ impl ConfigMetadata {
         Self {
             functions: "convex/".to_string(),
             auth_info: vec![],
-        }
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn test_example() -> Self {
-        Self {
-            functions: "convex/".to_string(),
-            auth_info: vec![AuthInfo::test_example()],
         }
     }
 
@@ -223,10 +208,6 @@ impl TryFrom<ConvexObject> for ConfigMetadata {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct ConfigDiff {
     pub auth_diff: AuthDiff,
     pub udf_server_version_diff: Option<UdfServerVersionDiff>,
@@ -280,26 +261,8 @@ impl TryFrom<SerializedConfigDiff> for ConfigDiff {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct ConfigIndexDiff {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::vec(
-            proptest::prelude::any::<String>(),
-            0..4,
-        )")
-    )]
     pub added: Vec<String>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::vec(
-            proptest::prelude::any::<String>(),
-            0..4,
-        )")
-    )]
     pub dropped: Vec<String>,
 }
 
@@ -321,10 +284,6 @@ impl From<IndexDiff> for ConfigIndexDiff {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct UdfServerVersionDiff {
     pub previous_version: String,
     pub next_version: String,
@@ -349,10 +308,6 @@ impl TryFrom<ConvexObject> for UdfServerVersionDiff {
     }
 }
 
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, Default)
-)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModuleDiff {
     pub added: Vec<String>,
@@ -386,10 +341,6 @@ impl ModuleDiff {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct CronDiff {
     pub added: Vec<String>,
     pub updated: Vec<String>,

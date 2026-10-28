@@ -1,5 +1,8 @@
 use anyhow::Context;
-use common::runtime::Runtime;
+use common::{
+    http::fetch::FetchAborted,
+    runtime::Runtime,
+};
 use errors::ErrorMetadata;
 use futures::{
     stream::BoxStream,
@@ -7,17 +10,23 @@ use futures::{
 };
 
 use super::task_executor::TaskExecutor;
-use crate::environment::action::task::{
-    FormPart,
-    FormPartFile,
-    TaskResponse,
+use crate::{
+    convert_v8::{
+        DOMException,
+        DOMExceptionName,
+    },
+    environment::action::task::{
+        FormPart,
+        FormPartFile,
+        TaskResponse,
+    },
 };
 
-// The maximum size of a multipart form body is 20 MiB.
-// Matches Response body size limit (HTTP_ACTION_BODY_LIMIT) for simplicity.
-// Multipart forms are parsed in memory (because FormData allows accessing
-// entries in arbitrary order), so this limit protects the server from
-// running out of memory.
+// The maximum size of a multipart form body is 20 MiB. Multipart forms are
+// parsed in memory (because FormData allows accessing entries in arbitrary
+// order), so this limit protects the server from running out of memory. Other
+// HTTP action request bodies are streamed to the isolate and have no size
+// limit in the backend.
 pub const MULTIPART_BODY_LIMIT: u64 = 20 << 20;
 
 impl<RT: Runtime> TaskExecutor<RT> {
@@ -34,11 +43,18 @@ impl<RT: Runtime> TaskExecutor<RT> {
             while let Some(chunk) = stream.next().await {
                 match chunk {
                     Err(e) => {
+                        let error = match e.downcast::<FetchAborted>() {
+                            Ok(aborted) => {
+                                DOMException::new(aborted.to_string(), DOMExceptionName::AbortError)
+                                    .into()
+                            },
+                            Err(e) => {
+                                ErrorMetadata::bad_request("StreamFailed", e.to_string()).into()
+                            },
+                        };
                         _ = self.task_retval_sender.send(TaskResponse::StreamExtend {
                             stream_id,
-                            chunk: Err(
-                                ErrorMetadata::bad_request("StreamFailed", e.to_string()).into()
-                            ),
+                            chunk: Err(error),
                         });
                         return Err(());
                     },
@@ -95,12 +111,7 @@ impl<RT: Runtime> TaskExecutor<RT> {
                 Some(file_name) => {
                     let file_name = Some(file_name.to_string());
                     let content_type = field.content_type().map(|c| c.to_string());
-                    let data = field
-                        .bytes()
-                        .await
-                        .map_err(map_multer_error)?
-                        .to_vec()
-                        .into();
+                    let data = field.bytes().await.map_err(map_multer_error)?;
                     (
                         Some(FormPartFile {
                             content_type,

@@ -1,0 +1,64 @@
+---
+title: "Usage and Billing"
+sidebar_label: "Usage & Billing"
+sidebar_position: 3
+description: "See what your AI Gateway requests cost and how Convex bills them"
+---
+
+import { Screenshot } from "@site/src/components/Screenshot";
+
+The gateway records the project and function behind every request automatically.
+You don't need to set anything up.
+
+## Seeing your usage
+
+The [team usage page](https://dashboard.convex.dev/team/settings/usage) has an
+AI Gateway section that shows daily spend per project. Open it from the AI
+Gateway card on the usage summary.
+
+<Screenshot
+  story="docs/pages/TeamUsage#AI Gateway"
+  alt="AI Gateway daily spend on the team usage page"
+/>
+
+To see which functions spent the money, scroll to the breakdown by function and
+pick the **AI** tab. It lists spend per function.
+
+See the [usage page docs](/dashboard/teams/teams.mdx#usage) for the rest of the
+page.
+
+## Usage limits
+
+Set daily or monthly AI Gateway limits for a cloud deployment from **Settings →
+Usage Limits**. Choose the **AI Gateway** metric and set a disable threshold in
+dollars. Deployments other than development deployments also support warning
+thresholds. Reaching the disable threshold disables the whole deployment, not
+just AI Gateway requests.
+
+<Screenshot
+  story="docs/pages/project/deployment/settings/UsageLimits"
+  alt="Deployment usage limits, including AI Gateway spending thresholds"
+/>
+
+See [Usage limits](/production/usage-limits.mdx) for thresholds and reset
+windows.
+
+## How billing works
+
+We charge the same rates as [OpenRouter](https://openrouter.ai/models). Price
+per token depends on the model, when you use it, and whether the tokens are
+cached. Image and video prices depend on the model and generation options, such
+as resolution and duration. Voice models charge per character of input, per
+second of audio, or per token. Cancelling a video request after submission can
+still incur its generation cost. The charge appears as an AI Gateway line item
+on your Convex invoice, in dollars.
+
+[Spending limits](/dashboard/teams/teams.mdx#spending-limits) apply to AI
+Gateway spend like any other usage. Set a limit on the team billing page to cap
+what your team pays per month.
+
+Requests from a project-connected local deployment are attributed to that
+project's team and count toward the same team spending limit. Local deployments
+do not have a separate deployment-level live usage meter. Spending-limit state
+is checked when the gateway credential is minted, so an in-flight request or an
+already issued short-lived credential may finish after the limit is reached.

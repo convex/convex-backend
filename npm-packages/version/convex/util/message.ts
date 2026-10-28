@@ -27,6 +27,12 @@ export function generateMessage(
     return null;
   }
 
+  // 1.33.1 was published after we forgot to bump some clients off 1.33.0.
+  // Don't show an update nag for this specific patch transition.
+  if (semver.eq(current, "1.33.0") && semver.eq(latest, "1.33.1")) {
+    return null;
+  }
+
   // Check if an update is available
   if (semver.gte(currentVersion, latestVersion)) {
     return null; // No update needed
@@ -37,7 +43,7 @@ export function generateMessage(
 
   // Format the message with chalk
   const message = `${chalk.cyan(`A ${updateType} update is available for Convex`)} ${chalk.dim(`(${currentVersion} → ${latestVersion})`)}
-${chalk.dim("Changelog:")} ${chalk.underline("https://github.com/get-convex/convex-js/blob/main/CHANGELOG.md#changelog")}`;
+${chalk.dim("Changelog:")} ${chalk.underline("https://github.com/convex/convex-js/blob/main/CHANGELOG.md#changelog")}`;
 
   return message;
 }

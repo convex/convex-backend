@@ -1,4 +1,4 @@
-import { Form, Formik, getIn, useFormikContext } from "formik";
+import { Form, Formik, FormikTouched, getIn, useFormikContext } from "formik";
 
 import {
   ClipboardCopyIcon,
@@ -51,6 +51,13 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
   updateEnvironmentVariables,
   initialFormValues,
   hasAdminPermissions,
+  disabledTip,
+  canCreate,
+  canEdit,
+  canDelete,
+  disabledTipForCreate,
+  disabledTipForEdit,
+  disabledTipForDelete,
   onEnvironmentVariablesAdded,
   renderDisplayExtra,
   renderEditExtra,
@@ -65,7 +72,21 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
     modifications: { oldEnvVar: T; newEnvVar: T }[],
     deletions: T[],
   ) => Promise<void>;
+  /** Default gate for create/edit/delete; per-action props below override
+   *  it when the underlying actions need distinct grants (e.g. project
+   *  defaults split into `:create` / `:update` / `:delete`). */
   hasAdminPermissions: boolean;
+  /** Overrides the default disabled-button tips when the member can't
+   *  manage env vars. Pass a `permissionDeniedTip(...)` result here to
+   *  surface the missing role action; omit for the project-defaults
+   *  caller (which falls back to a plain string). */
+  disabledTip?: React.ReactNode;
+  canCreate?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
+  disabledTipForCreate?: React.ReactNode;
+  disabledTipForEdit?: React.ReactNode;
+  disabledTipForDelete?: React.ReactNode;
   onEnvironmentVariablesAdded?: (count: number) => void;
   /** Render content below the name when displaying (not editing) */
   renderDisplayExtra?: (props: { envVar: T }) => React.ReactNode;
@@ -96,11 +117,19 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
     newVars: initialFormValues ?? [],
     deletedVars: [],
   };
+  const initialTouched = {
+    newVars: initialValues.newVars.map(({ name, value }) =>
+      name !== "" || value !== ""
+        ? ({ name: true, value: true } as FormikTouched<T>)
+        : ({} as FormikTouched<T>),
+    ),
+  } as FormikTouched<FormState<T>>;
 
   return (
     <Formik
       enableReinitialize
       initialValues={initialValues}
+      initialTouched={initialTouched}
       onSubmit={async (values, helpers) => {
         await updateEnvironmentVariables(
           values.newVars,
@@ -190,7 +219,12 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
     >
       <EnvironmentVariablesForm
         environmentVariables={environmentVariables}
-        hasAdminPermissions={hasAdminPermissions}
+        canCreate={canCreate ?? hasAdminPermissions}
+        canEdit={canEdit ?? hasAdminPermissions}
+        canDelete={canDelete ?? hasAdminPermissions}
+        disabledTipForCreate={disabledTipForCreate ?? disabledTip}
+        disabledTipForEdit={disabledTipForEdit ?? disabledTip}
+        disabledTipForDelete={disabledTipForDelete ?? disabledTip}
         renderDisplayExtra={renderDisplayExtra}
         renderEditExtra={renderEditExtra}
         initEnvVar={initEnvVar}
@@ -202,14 +236,24 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
 
 function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
   environmentVariables,
-  hasAdminPermissions,
+  canCreate,
+  canEdit,
+  canDelete,
+  disabledTipForCreate,
+  disabledTipForEdit,
+  disabledTipForDelete,
   renderDisplayExtra,
   renderEditExtra,
   initEnvVar,
   envVarKey,
 }: {
   environmentVariables: Array<T> | undefined;
-  hasAdminPermissions: boolean;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  disabledTipForCreate?: React.ReactNode;
+  disabledTipForEdit?: React.ReactNode;
+  disabledTipForDelete?: React.ReactNode;
   renderDisplayExtra?: (props: { envVar: T }) => React.ReactNode;
   renderEditExtra?: (props: { formKey: string; envVar: T }) => React.ReactNode;
   initEnvVar: (envVar: { name: string; value: string }) => T;
@@ -220,7 +264,7 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
   // Remove elements from editedVars/deletedVars that refer to variables that
   // don’t exist anymore. This can be caused by a realtime update
   // of `environmentVariables` (see CX-5439).
-  const prevEnvironmentVariables = useRef<Array<T>>();
+  const prevEnvironmentVariables = useRef<Array<T> | undefined>(undefined);
   useEffect(() => {
     if (
       !environmentVariables ||
@@ -281,7 +325,10 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
               <EnvironmentVariableListItem
                 key={envVarKey ? envVarKey(value) : value.name}
                 environmentVariable={value}
-                hasAdminPermissions={hasAdminPermissions}
+                canEdit={canEdit}
+                canDelete={canDelete}
+                disabledTipForEdit={disabledTipForEdit}
+                disabledTipForDelete={disabledTipForDelete}
                 renderDisplayExtra={renderDisplayExtra}
                 renderEditExtra={renderEditExtra}
               />
@@ -290,7 +337,8 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
 
           <NewEnvVars
             existingEnvVars={environmentVariables}
-            hasAdminPermissions={hasAdminPermissions}
+            canCreate={canCreate}
+            disabledTipForCreate={disabledTipForCreate}
             renderEditExtra={renderEditExtra}
             initEnvVar={initEnvVar}
           />
@@ -383,13 +431,19 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
   environmentVariable,
   onEdit,
   onDelete,
-  hasAdminPermissions,
+  canEdit,
+  canDelete,
+  disabledTipForEdit,
+  disabledTipForDelete,
   renderDisplayExtra,
 }: {
   environmentVariable: T;
   onEdit: () => void;
   onDelete: () => void;
-  hasAdminPermissions: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  disabledTipForEdit?: React.ReactNode;
+  disabledTipForDelete?: React.ReactNode;
   renderDisplayExtra?: (props: { envVar: T }) => React.ReactNode;
 }) {
   const formState = useFormikContext<FormState<T>>();
@@ -406,6 +460,7 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
       <div className="flex min-h-(--env-var-contents-height) min-w-0 items-center gap-1 font-mono">
         <Button
           tip={showValue ? "Hide" : "Show"}
+          aria-label={showValue ? "Hide" : "Show"}
           type="button"
           onClick={() => setShowValue(!showValue)}
           variant="neutral"
@@ -432,25 +487,48 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
       <div className="flex h-(--env-var-contents-height) justify-between gap-2">
         <Button
           tip={
-            !hasAdminPermissions
-              ? "You do not have permission to edit environment variables."
+            !canEdit
+              ? (disabledTipForEdit ??
+                "You do not have permission to edit environment variables.")
               : "Edit"
           }
+          aria-label="Edit"
           type="button"
           onClick={() => onEdit()}
           variant="neutral"
           icon={<Pencil2Icon />}
-          disabled={formState.isSubmitting || !hasAdminPermissions}
+          disabled={formState.isSubmitting || !canEdit}
         />
         <Button
-          tip="Copy Value"
+          tip="Copy Name and Value"
+          aria-label="Copy Name and Value"
           type="button"
           onClick={async () => {
-            await copyTextToClipboard(environmentVariable.value);
-            toast(
-              "success",
-              "Environment variable value copied to the clipboard.",
+            const { formatted, warning } = formatEnvValueForDotfile(
+              environmentVariable.value,
             );
+            await copyTextToClipboard(
+              `${environmentVariable.name}=${formatted}`,
+            );
+            if (warning) {
+              toast(
+                "warning",
+                <div className="space-y-1">
+                  <div>
+                    Environment variable copied to the clipboard with the
+                    following warning:
+                  </div>
+                  <div>
+                    <code>{environmentVariable.name}</code>: {warning}
+                  </div>
+                </div>,
+              );
+            } else {
+              toast(
+                "success",
+                "Environment variable name and value copied to the clipboard.",
+              );
+            }
           }}
           variant="neutral"
           icon={<ClipboardCopyIcon />}
@@ -458,15 +536,17 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
         />
         <Button
           tip={
-            !hasAdminPermissions
-              ? "You do not have permission to delete environment variables."
+            !canDelete
+              ? (disabledTipForDelete ??
+                "You do not have permission to delete environment variables.")
               : "Delete"
           }
+          aria-label="Delete"
           type="button"
           onClick={() => onDelete()}
           variant="danger"
           icon={<MinusCircledIcon />}
-          disabled={formState.isSubmitting || !hasAdminPermissions}
+          disabled={formState.isSubmitting || !canDelete}
         />
       </div>
     </div>
@@ -531,7 +611,7 @@ function EnvironmentVariableName<T extends BaseEnvironmentVariable>({
 const EnvVarName = z
   .string()
   .min(1, "Environment variable name is required.")
-  .max(40, "Environment variable name cannot exceed 40 characters.")
+  .max(256, "Environment variable name cannot exceed 256 characters.")
   .refine(
     (n) => /^[a-zA-Z_]+[a-zA-Z0-9_]*$/.test(n),
     "Name must start with a letter and only contain letters, numbers, and underscores.",
@@ -539,7 +619,6 @@ const EnvVarName = z
 
 const EnvVarValue = z
   .string()
-  .min(1, "Environment variable value is required.")
   .max(8192, "Environment variable value cannot be larger than 8KB");
 
 function EditEnvVarForm<T extends BaseEnvironmentVariable>({
@@ -603,12 +682,18 @@ function EnvironmentVariableListItem<
   T extends { name: string; value: string },
 >({
   environmentVariable,
-  hasAdminPermissions,
+  canEdit,
+  canDelete,
+  disabledTipForEdit,
+  disabledTipForDelete,
   renderDisplayExtra,
   renderEditExtra,
 }: {
   environmentVariable: T;
-  hasAdminPermissions: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  disabledTipForEdit?: React.ReactNode;
+  disabledTipForDelete?: React.ReactNode;
   renderDisplayExtra?: (props: { envVar: T }) => React.ReactNode;
   renderEditExtra?: (props: { formKey: string; envVar: T }) => React.ReactNode;
 }) {
@@ -665,7 +750,10 @@ function EnvironmentVariableListItem<
 
   return (
     <DisplayEnvVar
-      hasAdminPermissions={hasAdminPermissions}
+      canEdit={canEdit}
+      canDelete={canDelete}
+      disabledTipForEdit={disabledTipForEdit}
+      disabledTipForDelete={disabledTipForDelete}
       environmentVariable={environmentVariable}
       onEdit={() => {
         void formState.setFieldValue("editedVars", [
@@ -689,12 +777,14 @@ function EnvironmentVariableListItem<
 
 function NewEnvVars<T extends BaseEnvironmentVariable>({
   existingEnvVars,
-  hasAdminPermissions,
+  canCreate,
+  disabledTipForCreate,
   renderEditExtra,
   initEnvVar,
 }: {
   existingEnvVars: Array<T>;
-  hasAdminPermissions: boolean;
+  canCreate: boolean;
+  disabledTipForCreate?: React.ReactNode;
   renderEditExtra?: (props: { formKey: string; envVar: T }) => React.ReactNode;
   initEnvVar: (envVar: { name: string; value: string }) => T;
 }) {
@@ -768,10 +858,11 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
               ]);
             }}
             icon={<PlusCircledIcon />}
-            disabled={!hasAdminPermissions}
+            disabled={!canCreate}
             tip={
-              !hasAdminPermissions
-                ? "You do not have permission to add new environment variables."
+              !canCreate
+                ? (disabledTipForCreate ??
+                  "You do not have permission to add new environment variables.")
                 : undefined
             }
           >
@@ -907,6 +998,7 @@ function NewEnvVar<T extends BaseEnvironmentVariable>({
 
       <Button
         tip="Remove"
+        aria-label="Remove"
         type="button"
         onClick={() => {
           onDelete();
@@ -945,6 +1037,7 @@ function EnvVarNameInput({
     <TextInput
       id={id}
       className="font-mono"
+      label="Name"
       labelHidden
       disabled={formState.isSubmitting}
       {...formState.getFieldProps(formKey)}
@@ -977,6 +1070,8 @@ function EnvVarValueInput({
   const hasLeadingOrTrailingWhitespace =
     value.length > 0 && value !== value.trim();
   const hasReturnCharacter = value.includes("\n");
+  const emptyStringWarning =
+    touched && value === "" ? "This value is an empty string." : "";
 
   // Build whitespace warning message
   let whitespaceWarning = "";
@@ -1026,12 +1121,17 @@ function EnvVarValueInput({
           hint: error,
           hintStyle: "error" as const,
         }
-      : whitespaceWarning
+      : emptyStringWarning
         ? {
-            hint: whitespaceWarning,
+            hint: emptyStringWarning,
             hintStyle: "warning" as const,
           }
-        : { hint: null, hintStyle: null };
+        : whitespaceWarning
+          ? {
+              hint: whitespaceWarning,
+              hintStyle: "warning" as const,
+            }
+          : { hint: null, hintStyle: null };
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1050,6 +1150,7 @@ function EnvVarValueInput({
         <textarea
           ref={textareaRef}
           id={id}
+          aria-label="Value"
           className={cn(
             "block min-h-(--env-var-contents-height) w-full",
             "resize-none",
@@ -1087,7 +1188,7 @@ function EnvVarValueInput({
       {hint && (
         <p
           className={cn(
-            "mt-1 flex max-w-full animate-fadeInFromLoading gap-1 text-xs break-words",
+            "mt-1 flex max-w-full animate-fadeInFromLoading gap-1 text-xs wrap-break-word",
             hintStyle === "error"
               ? "text-content-errorSecondary"
               : "text-content-warning",

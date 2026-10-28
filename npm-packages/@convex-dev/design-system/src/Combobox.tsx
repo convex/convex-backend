@@ -1,5 +1,5 @@
 import { omit, isEqual } from "lodash-es";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Combobox as HeadlessCombobox,
   ComboboxButton as HeadlessComboboxButton,
@@ -13,9 +13,17 @@ import { cn } from "@ui/cn";
 import fuzzy from "fuzzy";
 import { Button, ButtonProps } from "@ui/Button";
 import { createPortal } from "react-dom";
-import { usePopper } from "react-popper";
+import {
+  useFloating,
+  autoUpdate,
+  offset as offsetMiddleware,
+  flip,
+  shift,
+} from "@floating-ui/react";
+import { usePortalContainer } from "./PortalContainer";
 import { Tooltip } from "./Tooltip";
 import { Spinner } from "./Spinner";
+import { useIsNarrowScreen } from "./useIsNarrowScreen";
 
 const { test } = fuzzy;
 
@@ -82,13 +90,16 @@ export function Combobox<T>({
   icon?: React.ReactNode;
 }) {
   const [query, setQuery] = useState("");
+  const portalContainer = usePortalContainer();
   const [referenceElement, setReferenceElement] =
     useState<HTMLDivElement | null>(null);
   const [popperElement, setPopperElement] = useState<HTMLDivElement | null>(
     null,
   );
 
-  // Force tabindex to 0
+  // Force tabindex to 0 - HeadlessUI sets tabIndex={-1} on the button when
+  // a ComboboxInput exists, but our input is inside the portal and only
+  // rendered when open.
   useEffect(() => {
     if (referenceElement?.children[0]) {
       (referenceElement.children[0] as HTMLElement).tabIndex = 0;
@@ -96,22 +107,28 @@ export function Combobox<T>({
   }, [referenceElement]);
 
   const [isOpen, setIsOpen] = useState(false);
+  const wasOpen = useRef(false);
+  const isNarrow = useIsNarrowScreen();
 
-  const { styles, attributes, update } = usePopper(
-    referenceElement,
-    popperElement,
-    {
-      placement: "bottom-start",
-      modifiers: [
-        {
-          name: "offset",
-          options: {
-            offset: [0, 4], // x, y offset in pixels
-          },
-        },
-      ],
-    },
-  );
+  // Restore focus to the button when the dropdown closes
+  useEffect(() => {
+    if (
+      wasOpen.current &&
+      !isOpen &&
+      document.activeElement === document.body
+    ) {
+      const button = referenceElement?.querySelector("button");
+      button?.focus();
+    }
+    wasOpen.current = isOpen;
+  }, [isOpen, referenceElement]);
+
+  const { floatingStyles } = useFloating({
+    placement: "bottom-start",
+    middleware: [offsetMiddleware(4), flip(), shift()],
+    whileElementsMounted: autoUpdate,
+    elements: { reference: referenceElement, floating: popperElement },
+  });
 
   // Calculate width based on optionsWidth prop
   const getOptionsWidth = () => {
@@ -143,18 +160,17 @@ export function Combobox<T>({
     isEqual(selectedOption, o.value),
   );
 
-  // Update popper position when dropdown opens
+  // Reset the filter when the dropdown opens
   useEffect(() => {
     if (isOpen) {
-      void update?.();
       void onFilterChange?.("");
     }
-  }, [isOpen, update, onFilterChange]);
+  }, [isOpen, onFilterChange]);
 
   return (
     <HeadlessCombobox
       value={
-        options.find((o) => isEqual(selectedOption, o.value))?.value || null
+        selectedOptionData ? selectedOptionData.value : (selectedOption ?? null)
       }
       onChange={(option) => {
         setSelectedOption(option);
@@ -220,21 +236,23 @@ export function Combobox<T>({
                   >
                     {icon}
                     <div className="truncate">
-                      {!!Option && !!selectedOptionData ? (
-                        <Option
-                          inButton
-                          label={selectedOptionData.label}
-                          value={selectedOptionData.value}
-                          disabled={selectedOptionData.disabled}
-                        />
-                      ) : (
-                        selectedOptionData?.label || (
-                          <span className="text-content-tertiary">
-                            {selectedOption && unknownLabel(selectedOption)}
-                          </span>
+                      {selectedOptionData ? (
+                        Option ? (
+                          <Option
+                            inButton
+                            label={selectedOptionData.label}
+                            value={selectedOptionData.value}
+                            disabled={selectedOptionData.disabled}
+                          />
+                        ) : (
+                          selectedOptionData.label
                         )
-                      )}
-                      {!selectedOptionData && (
+                      ) : selectedOption !== null &&
+                        selectedOption !== undefined ? (
+                        <span className="text-content-tertiary">
+                          {unknownLabel(selectedOption)}
+                        </span>
+                      ) : (
                         <span className="text-content-tertiary">
                           {placeholder}
                         </span>
@@ -254,19 +272,30 @@ export function Combobox<T>({
               {open &&
                 createPortal(
                   <div
-                    ref={setPopperElement}
-                    style={{
-                      ...styles.popper,
-                      width: getOptionsWidth(),
-                    }}
-                    {...attributes.popper}
-                    className="z-50"
+                    ref={isNarrow ? undefined : setPopperElement}
+                    style={
+                      isNarrow
+                        ? undefined
+                        : { ...floatingStyles, width: getOptionsWidth() }
+                    }
+                    className={
+                      isNarrow ? "fixed inset-0 z-50 flex items-end" : "z-50"
+                    }
                   >
+                    {isNarrow && (
+                      <div
+                        className="absolute inset-0 bg-black/50"
+                        aria-hidden="true"
+                      />
+                    )}
                     <HeadlessComboboxOptions
                       modal={false}
                       static
                       className={cn(
-                        "mt-1 scrollbar max-h-[14.75rem] overflow-auto rounded-md border bg-background-secondary pb-1 text-xs shadow-sm",
+                        "scrollbar overflow-auto border bg-background-secondary",
+                        isNarrow
+                          ? "relative max-h-[70dvh] w-full rounded-t-xl pb-2 text-sm shadow-xl"
+                          : "mt-1 max-h-59 rounded-md pb-1 text-xs shadow-sm",
                       )}
                       ref={(el) => {
                         el?.scrollTo?.(0, 0);
@@ -276,7 +305,17 @@ export function Combobox<T>({
                         <div className="border-b p-1 pb-2">{optionsHeader}</div>
                       )}
                       <div className="min-w-fit">
-                        {!disableSearch && (
+                        {disableSearch ? (
+                          // Hidden input to enable keyboard navigation
+                          // (arrow keys, Enter, Escape) via HeadlessUI
+                          <HeadlessComboboxInput
+                            onChange={() => {}}
+                            value=""
+                            autoFocus
+                            className="sr-only"
+                            aria-hidden
+                          />
+                        ) : (
                           <div className="sticky top-0 z-10 flex w-full items-center gap-2 border-b bg-background-secondary px-3 pt-1">
                             {isLoadingOptions ? (
                               <div className="animate-fadeInFromLoading">
@@ -326,6 +365,7 @@ export function Combobox<T>({
                                     label={option.label}
                                     value={option.value}
                                     inButton={false}
+                                    disabled={option.disabled}
                                   />
                                 ) : (
                                   option.label
@@ -374,7 +414,7 @@ export function Combobox<T>({
                       </div>
                     </HeadlessComboboxOptions>
                   </div>,
-                  document.body,
+                  portalContainer ?? document.body,
                 )}
             </div>
           </>

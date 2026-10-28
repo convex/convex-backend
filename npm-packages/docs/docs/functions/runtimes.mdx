@@ -77,6 +77,84 @@ library isn't supported, you can use an action with the
 - [CryptoKey](https://developer.mozilla.org/en-US/docs/Web/API/CryptoKey)
 - [SubtleCrypto](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto)
 
+#### Timing APIs
+
+- [`performance.now()`](https://developer.mozilla.org/en-US/docs/Web/API/Performance/now)
+- [Performance](https://developer.mozilla.org/en-US/docs/Web/API/Performance)
+- [PerformanceEntry](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceEntry)
+- [PerformanceMark](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceMark)
+- [PerformanceMeasure](https://developer.mozilla.org/en-US/docs/Web/API/PerformanceMeasure)
+
+:::warning
+
+Note that there are additional
+[restrictions](#using-randomness-and-time-in-queries-and-mutations) on the
+Performance API when used in queries.
+
+:::
+
+#### Node APIs
+
+A few Node.js APIs are available in the default runtime. If you need more than
+these, see the [Node.js runtime](#nodejs-runtime).
+
+If you are using TypeScript, you may need to add a dev dependency on
+`@types/node` to access these APIs. For TypeScript 6+ you'll also need to add
+`"types": ["node"]` to your `convex/tsconfig.json` file (if not already
+present).
+
+- [process.env](https://nodejs.org/api/process.html#processenv) (see the
+  [Environment variables](/production/environment-variables.mdx) docs)
+- [AsyncLocalStorage](https://nodejs.org/api/async_context.html#class-asynclocalstorage)
+- [AsyncResource](https://nodejs.org/api/async_context.html#class-asyncresource)
+
+:::note
+
+Data in `AsyncLocalStorage` does not propagate into calls to `ctx.runMutation`,
+`ctx.runQuery` or `ctx.runAction`. If you want values to propagate into those
+calls, you'll need to manually pass them as arguments.
+
+:::
+
+### Running WebAssembly
+
+The default Convex runtime supports the
+[WebAssembly API](https://developer.mozilla.org/en-US/docs/WebAssembly),
+including
+[`WebAssembly.instantiate`](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/instantiate_static),
+[`WebAssembly.Module`](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/Module),
+and
+[`WebAssembly.Instance`](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/Instance).
+WebAssembly can run in all kinds of Convex functions. The compiled WebAssembly
+module counts toward the
+[bundle size limit](/functions/bundling#code-size-limits) for your `convex/`
+directory.
+
+You can instantiate a module from bytes at runtime, but the simplest way to get
+a module is to import a `.wasm` file directly. The bundler compiles it and gives
+you a
+[`WebAssembly.Module`](https://developer.mozilla.org/en-US/docs/WebAssembly/Reference/JavaScript_interface/Module)
+as the default export:
+
+```ts
+import wasmModule from "./add.wasm"; // a compiled WebAssembly.Module
+
+const instance = await WebAssembly.instantiate(wasmModule, {});
+const add = instance.exports.add as (a: number, b: number) => number;
+add(1, 2); // 3
+```
+
+To import WebAssembly files from TypeScript, you will need to add an ambient
+declaration so the import typechecks:
+
+```ts
+// convex/wasm.d.ts
+declare module "*.wasm" {
+  const mod: WebAssembly.Module;
+  export default mod;
+}
+```
+
 ### Restrictions on queries and mutations
 
 Query and mutation functions are further **restricted by the runtime to be
@@ -97,9 +175,9 @@ Convex provides a "seeded" strong pseudo-random number generator
 at `Math.random()` so that it can guarantee the determinism of your function.
 The random number generator's seed is an implicit parameter to your function.
 Multiple calls to `Math.random()` in one function call will return different
-random values. Note that Convex does not reevaluate the JavaScript modules on
-every function run, so a call to `Math.random()` stored in a global variable
-will not change between function runs.
+random values. However, a call to `Math.random()` stored in a global variable
+will not change between function runs, because during import-time, the random
+number generator's seed is fixed to a value set at the most recent deployment.
 
 To ensure the logic within your function is reproducible, the system time used
 globally (outside of any function) is "frozen" at deploy time, while the system
@@ -122,6 +200,12 @@ export const updateSomething = mutation({
   },
 });
 ```
+
+Likewise, `performance.now()` is fixed to same result during query function
+execution. However, `performance.now()` will increment inside mutations.
+[`Performance.timeOrigin`](https://developer.mozilla.org/en-US/docs/Web/API/Performance/timeOrigin)
+is fixed to the deploy timestamp, both globally and during execution for all
+functions (except for in the [Node.js runtime](#nodejs-runtime)).
 
 ### Actions
 
@@ -171,14 +255,14 @@ Note that argument size limits are lower (5MiB instead of 16MiB).
 ### Node.js version configuration
 
 By default, all actions ran in the Node.js environment are executed in
-Node.js 20. This version is configurable in the
-[convex.json](/production/project-configuration.mdx#configuring-the-nodejs-version)
-file. We currently support Node.js 20 and 22.
+Node.js 24. This version is configurable in the
+[convex.json](/config/convex-json.mdx#configuring-the-nodejs-version) file. We
+currently support Node.js 22 and 24.
 
 When pushing a new Node.js version to the server, the new code for your
 functions may be executed in the old Node.js version for up a few minutes.
 
 Note: This configuration is not supported when running the self-hosted Convex
 backend. The node version that is specified in the
-[.nvmrc](https://github.com/get-convex/convex-backend/blob/main/.nvmrc) will be
-used instead.
+[.nvmrc](https://github.com/convex/convex-backend/blob/main/.nvmrc) will be used
+instead.

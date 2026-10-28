@@ -6,7 +6,7 @@ hide_table_of_contents: true
 sidebar_position: 600
 ---
 
-Learn how to query data from Convex in a Android Kotlin project.
+Learn how to query data from Convex in an Android Kotlin project.
 
 This quickstart assumes that you have Android Studio, node and npm installed. If
 you don’t have those tools, take time to install them first.
@@ -44,7 +44,7 @@ you don’t have those tools, take time to install them first.
   <Step title="Configure your dependencies">
     Add the following entries to the `:app` `build.gradle.kts` file (ignore IDE
     suggestion to move them to version catalog for now, if present).
-    
+
     Ensure that you sync Gradle when all of the above is complete (Android
     Studio should prompt you to do so).
 
@@ -71,10 +71,10 @@ you don’t have those tools, take time to install them first.
   </Step>
 
   <Step title="Install the Convex Backend">
-    Open a terminal in your Android Studio instance and install the Convex 
+    Open a terminal in your Android Studio instance and install the Convex
     client and server library.
 
-    ```bash
+    ```sh
     npm init -y
     npm install convex
     ```
@@ -84,13 +84,13 @@ you don’t have those tools, take time to install them first.
   <Step title="Start Convex">
     Start a Convex dev deployment. Follow the command line instructions.
 
-    ```bash
+    ```sh
     npx convex dev
     ```
 
   </Step>
 
-  <Step title="Create a sample data for your database">
+  <Step title="Create sample data for your database">
     Create a new `sampleData.jsonl` file with these contents.
 
     ```json
@@ -104,14 +104,14 @@ you don’t have those tools, take time to install them first.
   <Step title="Add the sample data to your database">
     Open another terminal tab and run.
 
-    ```bash
+    ```sh
     npx convex import --table tasks sampleData.jsonl
     ```
 
   </Step>
 
   <Step title="Expose a database query">
-    Create a `tasks.ts` file in your `convex/` directory with the following 
+    Create a `tasks.ts` file in your `convex/` directory with the following
     contents.
 
     ```tsx
@@ -128,7 +128,7 @@ you don’t have those tools, take time to install them first.
   </Step>
 
   <Step title="Create a data class">
-    Add a new `data class` to your `MainActivity` to support the task data 
+    Add a new `data class` to your `MainActivity` to support the task data
     defined above. Import whatever it asks you to.
 
     ```kotlin
@@ -231,4 +231,4 @@ you don’t have those tools, take time to install them first.
 
 </StepByStep>
 
-See the complete [Android Kotlin documentation](/client/android.md).
+See the complete [Android Kotlin documentation](/client/android/overview.mdx).

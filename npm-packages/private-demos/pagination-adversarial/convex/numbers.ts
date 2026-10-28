@@ -29,7 +29,7 @@ export const reset = mutation({
   handler: async (ctx) => {
     const allNumbers = await ctx.db.query("numbers").collect();
     for (const number of allNumbers) {
-      await ctx.db.delete(number._id);
+      await ctx.db.delete("numbers", number._id);
     }
     await ctx.db.insert("numbers", { number: 0, id: crypto.randomUUID() });
     await ctx.db.insert("numbers", { number: 75, id: crypto.randomUUID() });

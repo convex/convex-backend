@@ -1,32 +1,32 @@
 version = 1
-revision = 2
-requires-python = ">=3.13.0, <3.14"
+revision = 3
+requires-python = "==3.14.*"
 
 [[package]]
 name = "convex"
 version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/57/98/9c8928ff73560b08769bb60611c56066dc12b2fdeecb519bc4cf4fe89ac0/convex-0.6.0.tar.gz", hash = "sha256:5f149f2b5ac4f6f341aa303ce1166e9f176796b1ba665c633ff34982ccfd7250", size = 184970, upload_time = "2024-03-05T21:38:01.362Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/57/98/9c8928ff73560b08769bb60611c56066dc12b2fdeecb519bc4cf4fe89ac0/convex-0.6.0.tar.gz", hash = "sha256:5f149f2b5ac4f6f341aa303ce1166e9f176796b1ba665c633ff34982ccfd7250", size = 184970, upload-time = "2024-03-05T21:38:01.362Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/4a/3c20b8e6c0d574d3dc890ab60ddd4bb440901476f213fce8f50c59439406/convex-0.6.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:d5197bccc6b835375e4764783045f7acdbc9764b7fc6e9dfcdd22b29e74a9f83", size = 1235843, upload_time = "2024-03-05T21:37:26.01Z" },
-    { url = "https://files.pythonhosted.org/packages/da/b5/f1af7e6db135340e77cdf948e4dfe0b53c804320f359b51a8a9a61278c01/convex-0.6.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:c8026544099cc3395065cf25c0b4daac38b901b05083ec953c3130b047ff41a8", size = 1206540, upload_time = "2024-03-05T21:37:28.443Z" },
-    { url = "https://files.pythonhosted.org/packages/e1/62/b23d9493f6a6cfe4dc93971fb50d96bffeacc9110b511f5f5516872b78d1/convex-0.6.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7b66fe64600e9c9000f333410877c2d5917dc072082ce041dc101323bbee1f97", size = 26954172, upload_time = "2024-03-05T21:37:31.79Z" },
-    { url = "https://files.pythonhosted.org/packages/dc/4c/157c186c544847c6faee29ab482135d1fdfeffd197f516975041fe73f646/convex-0.6.0-cp39-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:491af59ca21470fdefc1a6eaf1d046599c014748c5a568405eaef1a14f7c2531", size = 20757013, upload_time = "2024-03-05T21:37:35.486Z" },
-    { url = "https://files.pythonhosted.org/packages/06/28/06c5e322e66fcb2c355816b4b2b0e178b9bdfe6ae9cd82f692bf2d3af830/convex-0.6.0-cp39-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:b1c2aa28c853708734da74a000bddabf8a6cc848a8b7c4b22f6061422baa101d", size = 26913802, upload_time = "2024-03-05T21:37:42.091Z" },
-    { url = "https://files.pythonhosted.org/packages/0f/73/d431a30fe85b0a32cd5d182b3ebe376c7f68bfec407fa264c99c9acffa21/convex-0.6.0-cp39-abi3-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:2aba425b3e2ab72421ec6079b32ec9827240eb8b7c2244c9a59e2d20b63dcf67", size = 26637072, upload_time = "2024-03-05T21:37:46.038Z" },
-    { url = "https://files.pythonhosted.org/packages/7b/c0/851952439395161fcd754217d4fd4c61e89efc9b277ffe4c043da6bb66a5/convex-0.6.0-cp39-abi3-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:1d0f967c8a40cc9b1317bcf944f262dadff7b079d7e960629d070b3058984199", size = 29500233, upload_time = "2024-03-05T21:37:50.58Z" },
-    { url = "https://files.pythonhosted.org/packages/b8/c9/5a2981f78b0e9072b57537a9a85bcee9c6aaf42a467ba414549b948a7b26/convex-0.6.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9cf518bb23990dd2fd20f1f52903fb8632dd2457c9f536bddfb3d33497555bdc", size = 27811666, upload_time = "2024-03-05T21:37:54.67Z" },
-    { url = "https://files.pythonhosted.org/packages/ba/1f/ab59bc2f39671a1b8e52d515b29816d7088dc28de6e09543b6379f71efe6/convex-0.6.0-cp39-abi3-win32.whl", hash = "sha256:4a7ef61334c27caa883614e20b7ff1dd98dabe7ad3007cbf6e26010ff30d7962", size = 834334, upload_time = "2024-03-05T21:37:57.539Z" },
-    { url = "https://files.pythonhosted.org/packages/1a/49/3220c52d2cde79ad030edd4afd9476863a23c86dca5a66dbae4c3cb9a7c8/convex-0.6.0-cp39-abi3-win_amd64.whl", hash = "sha256:671f332f3d6165ed2577d76f95f4fb167f2244f5c6d7ecfb6b2ecff8eec71e1f", size = 846502, upload_time = "2024-03-05T21:37:59.586Z" },
+    { url = "https://files.pythonhosted.org/packages/41/4a/3c20b8e6c0d574d3dc890ab60ddd4bb440901476f213fce8f50c59439406/convex-0.6.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:d5197bccc6b835375e4764783045f7acdbc9764b7fc6e9dfcdd22b29e74a9f83", size = 1235843, upload-time = "2024-03-05T21:37:26.01Z" },
+    { url = "https://files.pythonhosted.org/packages/da/b5/f1af7e6db135340e77cdf948e4dfe0b53c804320f359b51a8a9a61278c01/convex-0.6.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:c8026544099cc3395065cf25c0b4daac38b901b05083ec953c3130b047ff41a8", size = 1206540, upload-time = "2024-03-05T21:37:28.443Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/62/b23d9493f6a6cfe4dc93971fb50d96bffeacc9110b511f5f5516872b78d1/convex-0.6.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7b66fe64600e9c9000f333410877c2d5917dc072082ce041dc101323bbee1f97", size = 26954172, upload-time = "2024-03-05T21:37:31.79Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/4c/157c186c544847c6faee29ab482135d1fdfeffd197f516975041fe73f646/convex-0.6.0-cp39-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:491af59ca21470fdefc1a6eaf1d046599c014748c5a568405eaef1a14f7c2531", size = 20757013, upload-time = "2024-03-05T21:37:35.486Z" },
+    { url = "https://files.pythonhosted.org/packages/06/28/06c5e322e66fcb2c355816b4b2b0e178b9bdfe6ae9cd82f692bf2d3af830/convex-0.6.0-cp39-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:b1c2aa28c853708734da74a000bddabf8a6cc848a8b7c4b22f6061422baa101d", size = 26913802, upload-time = "2024-03-05T21:37:42.091Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/73/d431a30fe85b0a32cd5d182b3ebe376c7f68bfec407fa264c99c9acffa21/convex-0.6.0-cp39-abi3-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:2aba425b3e2ab72421ec6079b32ec9827240eb8b7c2244c9a59e2d20b63dcf67", size = 26637072, upload-time = "2024-03-05T21:37:46.038Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/c0/851952439395161fcd754217d4fd4c61e89efc9b277ffe4c043da6bb66a5/convex-0.6.0-cp39-abi3-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:1d0f967c8a40cc9b1317bcf944f262dadff7b079d7e960629d070b3058984199", size = 29500233, upload-time = "2024-03-05T21:37:50.58Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/c9/5a2981f78b0e9072b57537a9a85bcee9c6aaf42a467ba414549b948a7b26/convex-0.6.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9cf518bb23990dd2fd20f1f52903fb8632dd2457c9f536bddfb3d33497555bdc", size = 27811666, upload-time = "2024-03-05T21:37:54.67Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/1f/ab59bc2f39671a1b8e52d515b29816d7088dc28de6e09543b6379f71efe6/convex-0.6.0-cp39-abi3-win32.whl", hash = "sha256:4a7ef61334c27caa883614e20b7ff1dd98dabe7ad3007cbf6e26010ff30d7962", size = 834334, upload-time = "2024-03-05T21:37:57.539Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/49/3220c52d2cde79ad030edd4afd9476863a23c86dca5a66dbae4c3cb9a7c8/convex-0.6.0-cp39-abi3-win_amd64.whl", hash = "sha256:671f332f3d6165ed2577d76f95f4fb167f2244f5c6d7ecfb6b2ecff8eec71e1f", size = 846502, upload-time = "2024-03-05T21:37:59.586Z" },
 ]
 
 [[package]]
 name = "python-dotenv"
-version = "1.0.0"
+version = "1.2.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/31/06/1ef763af20d0572c032fa22882cfbfb005fba6e7300715a37840858c919e/python-dotenv-1.0.0.tar.gz", hash = "sha256:a8df96034aae6d2d50a4ebe8216326c61c3eb64836776504fcca410e5937a3ba", size = 37399, upload_time = "2023-02-24T06:46:37.282Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/2f/62ea1c8b593f4e093cc1a7768f0d46112107e790c3e478532329e434f00b/python_dotenv-1.0.0-py3-none-any.whl", hash = "sha256:f5971a9226b701070a4bf2c38c89e5a3f0d64de8debda981d1db98583009122a", size = 19482, upload_time = "2023-02-24T06:46:36.009Z" },
+    { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
 ]
 
 [[package]]

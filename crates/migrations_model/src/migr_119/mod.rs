@@ -17,7 +17,7 @@ pub async fn run_migration<RT: Runtime>(tx: &mut Transaction<RT>) -> anyhow::Res
         .table_mapping()
         .iter()
         .filter_map(|(_, namespace, _, table_name)| {
-            if table_name == &*CRON_JOBS_TABLE {
+            if table_name == &CRON_JOBS_TABLE {
                 Some(namespace)
             } else {
                 None

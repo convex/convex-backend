@@ -1,8 +1,8 @@
 ## About
 
 npm-packages contains the cli, demos, tutorials, tests, scripts and more. We use
-Rush for package management, so don't run `npm install` in these directories.
-See the main convex/README.md file for details.
+pnpm workspaces for package management, so don't run `npm install` in these
+directories. See the main convex/README.md file for details.
 
 ## Adding a new convex package
 
@@ -14,8 +14,8 @@ quickstart:
 3. Update `"name"` in your new `package.json` file to match your subdirectory
    name
 4. Add your new package to
-   [rush](https://github.com/get-convex/convex/blob/main/npm-packages/rush.json#L296)
-5. Run `just rush update` to install dependencies
+   [pnpm-workspace.yaml](https://github.com/convex/convex/blob/main/npm-packages/pnpm-workspace.yaml)
+5. Run `just update-js` to install dependencies
 
 ## Running a convex package
 

@@ -115,7 +115,7 @@ Severity levels:
 
 Use the logs tool with status "failure" to see individual error messages and stack traces.
 
-Only available for cloud deployments with user-level authentication.
+Only available for Convex cloud deployments when logged in as a user.
 `.trim();
 
 export const InsightsTool: ConvexTool<typeof inputSchema, typeof outputSchema> =
@@ -159,7 +159,7 @@ export const InsightsTool: ConvexTool<typeof inputSchema, typeof outputSchema> =
           exitCode: 1,
           errorType: "fatal",
           printedMessage:
-            "Insights require user-level authentication. Deploy keys and project keys cannot access team usage data.",
+            "Insights require to be logged in as a user. Deploy keys and project keys cannot access team usage data.",
         });
       }
 

@@ -3,21 +3,14 @@ import { useContext, useState } from "react";
 import { FileMetadata } from "system-udfs/convex/_system/frontend/fileStorageV2";
 import { Button } from "@ui/Button";
 import { Tooltip } from "@ui/Tooltip";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { PermissionsContext } from "@common/lib/deploymentContext";
 import { useNents } from "@common/lib/useNents";
 import { DeleteFileModal } from "./DeleteFileModal";
 import { PreviewImage } from "./PreviewImage";
 
 export function FileActions({ file }: { file: FileMetadata }) {
-  const { useCurrentDeployment, useHasProjectAdminPermissions } = useContext(
-    DeploymentInfoContext,
-  );
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const canDeleteFiles =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canDeleteFiles = useIsOperationAllowed("WriteData");
   const { selectedNent } = useNents();
   const isInUnmountedComponent = !!(
     selectedNent && selectedNent.state !== "active"
@@ -55,7 +48,7 @@ export function FileActions({ file }: { file: FileMetadata }) {
           isInUnmountedComponent
             ? "Cannot delete files in an unmounted component."
             : !canDeleteFiles &&
-              "You do not have permission to delete files in production."
+              "You do not have permission to delete files in this deployment."
         }
         onClick={() => setShowDeleteModal(true)}
         icon={<TrashIcon />}

@@ -1,4 +1,5 @@
 use json_trait::JsonForm as _;
+use packed_value::StringBuffer;
 use serde::{
     Deserialize,
     Serialize,
@@ -12,10 +13,9 @@ use super::schema_state::{
 use crate::schemas::DatabaseSchema;
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SchemaMetadata {
     pub state: SchemaState,
-    pub raw_schema: String,
+    pub raw_schema: StringBuffer,
 }
 
 impl SchemaMetadata {
@@ -25,14 +25,17 @@ impl SchemaMetadata {
 
     pub fn new(state: SchemaState, schema: DatabaseSchema) -> anyhow::Result<Self> {
         let raw_schema = schema.json_serialize()?;
-        Ok(Self { state, raw_schema })
+        Ok(Self {
+            state,
+            raw_schema: StringBuffer::new(raw_schema),
+        })
     }
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct SerializedSchemaMetadata {
     state: SerializedSchemaState,
-    schema: String,
+    schema: StringBuffer,
 }
 
 impl TryFrom<SchemaMetadata> for SerializedSchemaMetadata {

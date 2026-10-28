@@ -21,6 +21,12 @@ export function validatorToType(
     return "number";
   } else if (validator.type === "bigint") {
     return "bigint";
+  } else if (validator.type === "commitTs") {
+    // Match `Infer<v.commitTs()>`: the field holds a bigint once committed,
+    // but writes go through `db.vars.commitTs` (a `CommitTsPlaceholder`) and
+    // same-mutation read-backs yield the placeholder. The inline import keeps
+    // this valid in every generated file regardless of its header imports.
+    return 'bigint | import("convex/values").CommitTsPlaceholder';
   } else if (validator.type === "boolean") {
     return "boolean";
   } else if (validator.type === "string") {

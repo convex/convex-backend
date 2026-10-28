@@ -10,16 +10,17 @@ const meta = {
     onChange: fn(),
     regions: [
       {
-        displayName: "Europe (Ireland)",
-        name: "aws-eu-west-1",
-        available: true,
-      },
-      {
         displayName: "US East (N. Virginia)",
         name: "aws-us-east-1",
         available: true,
       },
+      {
+        displayName: "Europe (Ireland)",
+        name: "aws-eu-west-1",
+        available: true,
+      },
     ],
+    expectedRegionCount: 2,
     teamSlug: "example-team",
   },
   decorators: [
@@ -47,14 +48,14 @@ export const EuropeNotAvailable: Story = {
   args: {
     regions: [
       {
-        displayName: "Europe (Ireland)",
-        name: "aws-eu-west-1",
-        available: false,
-      },
-      {
         displayName: "US East (N. Virginia)",
         name: "aws-us-east-1",
         available: true,
+      },
+      {
+        displayName: "Europe (Ireland)",
+        name: "aws-eu-west-1",
+        available: false,
       },
     ],
   },
@@ -71,16 +72,44 @@ export const NonAdminEuropeNotAvailable: Story = {
     disabledDueToPermissions: true,
     regions: [
       {
+        displayName: "US East (N. Virginia)",
+        name: "aws-us-east-1",
+        available: true,
+      },
+      {
         displayName: "Europe (Ireland)",
         name: "aws-eu-west-1",
         available: false,
       },
+    ],
+  },
+};
+
+export const AllRegions: Story = {
+  args: {
+    regions: [
       {
         displayName: "US East (N. Virginia)",
         name: "aws-us-east-1",
         available: true,
       },
+      {
+        displayName: "Europe (Ireland)",
+        name: "aws-eu-west-1",
+        available: true,
+      },
+      {
+        displayName: "Canada (Central)",
+        name: "aws-ca-central-1",
+        available: true,
+      },
+      {
+        displayName: "Asia Pacific (Sydney)",
+        name: "aws-ap-southeast-2",
+        available: true,
+      },
     ],
+    expectedRegionCount: 4,
   },
 };
 

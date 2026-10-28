@@ -255,11 +255,14 @@ class Event {
   get timeStamp() {
     return this[_attributes].timeStamp;
   }
-
-  get [Symbol.toStringTag]() {
-    return "Event";
-  }
 }
+
+Object.defineProperty(Event.prototype, Symbol.toStringTag, {
+  value: "Event",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 const eventTargetData = Symbol();
 
@@ -701,7 +704,7 @@ function invokeEventListeners(tuple, eventImpl) {
   innerInvokeEventListeners(eventImpl, getListeners(tuple.item));
 }
 
-class EventTarget {
+export class EventTarget {
   constructor() {
     this[eventTargetData] = getDefaultTargetData();
   }
@@ -857,17 +860,23 @@ class EventTarget {
   getParent(_event) {
     return null;
   }
-
-  get [Symbol.toStringTag]() {
-    return "EventTarget";
-  }
 }
 
-class Window extends EventTarget {
-  get [Symbol.toStringTag]() {
-    return "Window";
-  }
-}
+Object.defineProperty(EventTarget.prototype, Symbol.toStringTag, {
+  value: "EventTarget",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
+
+class Window extends EventTarget {}
+
+Object.defineProperty(Window.prototype, Symbol.toStringTag, {
+  value: "Window",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 export function setupEvent(global) {
   setEventTargetData(global);

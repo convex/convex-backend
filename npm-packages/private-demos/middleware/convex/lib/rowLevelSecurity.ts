@@ -221,9 +221,9 @@ class WrapQuery<T extends GenericTableInfo> implements Query<T> {
   }
 }
 
-class WrapQueryInitializer<T extends GenericTableInfo>
-  implements QueryInitializer<T>
-{
+class WrapQueryInitializer<
+  T extends GenericTableInfo,
+> implements QueryInitializer<T> {
   q: QueryInitializer<T>;
   p: AuthPredicate<T>;
   constructor(q: QueryInitializer<T>, p: AuthPredicate<T>) {
@@ -290,9 +290,10 @@ class WrapQueryInitializer<T extends GenericTableInfo>
   }
 }
 
-class WrapReader<Ctx, DataModel extends GenericDataModel>
-  implements Omit<GenericDatabaseReader<DataModel>, "system">
-{
+class WrapReader<Ctx, DataModel extends GenericDataModel> implements Omit<
+  GenericDatabaseReader<DataModel>,
+  "system"
+> {
   ctx: Ctx;
   db: GenericDatabaseReader<DataModel>;
   rules: Rules<Ctx, DataModel>;
@@ -318,6 +319,7 @@ class WrapReader<Ctx, DataModel extends GenericDataModel>
   }
 
   async get<TableName extends string>(id: GenericId<TableName>): Promise<any> {
+    // eslint-disable-next-line @convex-dev/explicit-table-ids -- old internal demo project
     const doc = await this.db.get(id);
     if (doc) {
       const tableName = this._tableName(id);
@@ -357,13 +359,16 @@ class WrapReader<Ctx, DataModel extends GenericDataModel>
   }
 }
 
-class WrapWriter<Ctx, DataModel extends GenericDataModel>
-  implements Omit<GenericDatabaseWriter<DataModel>, "system">
-{
+class WrapWriter<Ctx, DataModel extends GenericDataModel> implements Omit<
+  GenericDatabaseWriter<DataModel>,
+  "system"
+> {
   ctx: Ctx;
   db: GenericDatabaseWriter<DataModel>;
   reader: Omit<GenericDatabaseReader<DataModel>, "system">;
   rules: Rules<Ctx, DataModel>;
+  // Plain values with no access-control surface; pass them through.
+  vars: GenericDatabaseWriter<DataModel>["vars"];
 
   async modifyPredicate<T extends GenericTableInfo>(
     tableName: string,
@@ -384,6 +389,7 @@ class WrapWriter<Ctx, DataModel extends GenericDataModel>
     this.db = db;
     this.reader = new WrapReader(ctx, db, rules);
     this.rules = rules;
+    this.vars = db.vars;
   }
   async insert<TableName extends string>(
     table: TableName,
@@ -419,6 +425,7 @@ class WrapWriter<Ctx, DataModel extends GenericDataModel>
     value: Partial<any>,
   ): Promise<void> {
     await this.checkAuth(id);
+    // eslint-disable-next-line @convex-dev/explicit-table-ids -- old internal demo project
     return await this.db.patch(id, value);
   }
   async replace<TableName extends string>(
@@ -426,10 +433,12 @@ class WrapWriter<Ctx, DataModel extends GenericDataModel>
     value: any,
   ): Promise<void> {
     await this.checkAuth(id);
+    // eslint-disable-next-line @convex-dev/explicit-table-ids -- old internal demo project
     return await this.db.replace(id, value);
   }
   async delete(id: GenericId<string>): Promise<void> {
     await this.checkAuth(id);
+    // eslint-disable-next-line @convex-dev/explicit-table-ids -- old internal demo project
     return await this.db.delete(id);
   }
   get<TableName extends string>(id: GenericId<TableName>): Promise<any> {

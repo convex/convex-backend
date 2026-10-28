@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
 import { fn } from "storybook/test";
 import { SpendingLimitsForm } from "./SpendingLimits";
+import { Sheet } from "@ui/Sheet";
 
 const currentSpending = {
   totalCents: 0,
@@ -14,7 +15,13 @@ const meta = {
     onCancel: fn(),
     currentSpending,
   },
-  parameters: { a11y: { test: "todo" } },
+  decorators: [
+    (Story) => (
+      <Sheet>
+        <Story />
+      </Sheet>
+    ),
+  ],
 } satisfies Meta<typeof SpendingLimitsForm>;
 
 export default meta;

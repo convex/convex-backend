@@ -1,0 +1,24 @@
+@import "tailwindcss";
+@config "../../tailwind.config.cjs";
+
+:root {
+  color: rgb(17 24 39);
+  background-color: rgb(249 250 251);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: rgb(229 231 235);
+    background-color: rgb(3 7 18);
+  }
+}
+
+html,
+body {
+  color: inherit;
+  background-color: inherit;
+}
+
+.using-mouse * {
+  outline: none !important;
+}

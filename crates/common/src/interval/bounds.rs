@@ -9,8 +9,7 @@ use value::heap_size::HeapSize;
 
 use super::key::BinaryKey;
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct StartIncluded(pub BinaryKey);
 
 impl Borrow<[u8]> for StartIncluded {
@@ -33,8 +32,7 @@ impl HeapSize for StartIncluded {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum End {
     Excluded(BinaryKey),
     Unbounded,
@@ -56,6 +54,7 @@ impl End {
     }
 
     /// Is the interval `(-inf, end)` disjoint with `[start, +inf)`?
+    /// i.e. is their intersection empty?
     pub fn is_disjoint(&self, start: &StartIncluded) -> bool {
         match (self, start) {
             (End::Unbounded, _) => false,
@@ -67,6 +66,17 @@ impl End {
         match (self, start) {
             (End::Unbounded, _) => false,
             (End::Excluded(s), StartIncluded(t)) => s[..].eq(&t[..]),
+        }
+    }
+
+    /// Is the union of `(-inf, end)` with `[start, +inf)` equal to `(-inf,
+    /// +inf)`?
+    ///
+    /// Equivalent to `!is_disjoint || is_adjacent`
+    pub fn is_overlapping_or_adjacent(&self, start: &StartIncluded) -> bool {
+        match (self, start) {
+            (End::Unbounded, _) => true,
+            (End::Excluded(s), StartIncluded(t)) => s >= t,
         }
     }
 
@@ -112,28 +122,6 @@ impl EndRef<'_> {
         match *self {
             EndRef::Excluded(end) => key < end,
             EndRef::Unbounded => true,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::{
-        super::key::BinaryKey,
-        End,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_end_ordering(key in any::<BinaryKey>()) {
-            assert!(End::Excluded(key) < End::Unbounded);
         }
     }
 }

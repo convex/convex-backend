@@ -21,7 +21,7 @@ export function NoScheduledJobs() {
 export function NoScheduledJobsForFunction() {
   const currentOpenFunction = useCurrentOpenFunction();
   return (
-    <div className="flex h-full w-full items-center justify-center text-content-secondary">
+    <div className="flex size-full items-center justify-center text-content-secondary">
       <span>
         There are no scheduled jobs for{" "}
         <code className="font-semibold">

@@ -1,0 +1,250 @@
+---
+title: "Teams"
+slug: "teams"
+sidebar_position: 0
+description:
+  "Manage team settings, members, billing, and access control in Convex"
+---
+
+In Convex, your projects are organized by team. Teams are used to share access
+to your projects with other people. To switch between teams or create a new
+team, click your team's name at the top of the Convex dashboard. Inside a
+project, the same menu is behind your team's icon, to the left of the project
+name.
+
+<Screenshot story="docs/pages/Projects#Team Switcher" alt="Team switcher" />
+
+The menu lists every team you belong to, and typing filters it. Pressing `/` or
+`⌘K` (`Ctrl+K` on Windows and Linux) anywhere in the dashboard opens the command
+palette, which has the same **Switch Team** menu alongside search across your
+projects and deployments.
+
+You may change the name of a team or invite new members to a team by clicking on
+the "Team Settings" button located on the top of the project list page.
+
+## General
+
+The [general page](https://dashboard.convex.dev/team/settings) allows changing
+the team name, slug, and the [default region](/production/regions.mdx) for new
+deployments. Each setting can be edited and saved independently.
+
+This page also displays your team ID, which is used to identify your team when
+working with the [Convex Platform APIs](/platform-apis/overview.mdx).
+
+You may also delete the team from this page. You can only delete a team after
+deleting all of it's projects, and removing all other team members from your
+team. Deleting your team will automatically cancel your Convex subscription.
+
+<Screenshot story="docs/pages/TeamSettings" alt="General team settings page" />
+
+## Team Members
+
+Use the
+[members settings page](https://dashboard.convex.dev/team/settings/members) to
+invite or remove members from your team.
+
+<Screenshot story="docs/pages/TeamMembers" alt="Team members page" />
+
+### Roles and permissions
+
+Convex has two levels of control for managing access to your team, projects, and
+deployments. Team-level roles control what a user can do within the team, while
+project-level permissions control what a user can do within a specific project.
+
+#### Team roles
+
+Your team members can have one of the following roles:
+
+- Admin
+- Developer
+
+The creator of the team is automatically assigned the Admin role. When inviting
+new team members, you may select a role for them. You may also change the role
+of a team member at any time.
+
+Developers can:
+
+- Create new projects and deployments. When a new project is created, the
+  creator of the project is automatically granted the
+  [Project Admin](#project-admins) role for that project.
+- View existing projects, and create development and preview deployments for
+  these projects. Developers may read data from production deployments, but
+  cannot write to them.
+- View the team's usage and billing status (such as previous and upcoming
+  invoices)
+
+Admins can do everything developers can, as well as:
+
+- Invite new team members
+- Remove members from the team
+- Change the role of other team members
+- Manage the team's Convex subscription and billing details.
+- Change the team name, slug, and default region
+- Team Admins are also implicitly granted project admin access to all projects
+  within the team. See [Project Admins](#project-admins) for more information.
+
+#### Project Admins
+
+In addition to team roles, you may also grant admin access to individual
+projects by granting team members the "Project Admin" role.
+
+If you are a Project Admin for a given project, you may:
+
+- Update the project name and slug
+- Update the project's default environment variables
+- Delete the project
+- Write to production deployments
+
+You may assign and remove the Project Admin role for multiple projects at the
+same time on the member settings page. To assign or remove the Project Admin
+role for multiple members at the same time, visit the
+[Project Settings](/dashboard/projects.mdx#project-settings) page instead.
+
+#### Custom Roles
+
+On Convex Business, you can define
+[custom roles](/team-management/custom-roles.mdx) with fine-grained permissions
+that go beyond the built-in Admin and Developer roles. A team member is assigned
+either a built-in role or one or more custom roles. Project Admin access is
+independent and applies on top of either choice.
+
+For the full action list and which built-in roles cover which actions, see
+[Role Actions](/team-management/role-actions.mdx).
+
+## Billing
+
+Use the [billing page](https://dashboard.convex.dev/team/settings/billing) to
+upgrade your Convex subscription to a higher tier, or manage your existing
+subscription.
+
+On paid plans, you can also update your billing contact details, payment method,
+and view your invoices.
+
+[Learn more about Convex pricing](https://www.convex.dev/pricing).
+
+<Screenshot story="docs/pages/TeamBilling" alt="Team billing page" />
+
+### Spending limits
+
+When you have an active Convex subscription, you can set the spending limits for
+your team on the
+[billing page](https://dashboard.convex.dev/team/settings/billing):
+
+- The **warning threshold** is only a soft limit: if it is exceeded, the team
+  will be notified by email, but no other action will be taken.
+- The **disable threshold** is a hard limit: if it is exceeded, all projects in
+  the team will be disabled. This will cause errors to be thrown when attempting
+  to run functions in your projects. You can re-enable projects by increasing or
+  removing the limit.
+
+Spending limits only apply to the resources used by your team's projects beyond
+the amounts included in your plan. The seat fees (the amount paid for each
+developer in your team) are not counted towards the limits. For instance, if you
+send the spending limit to $0/month, you will be billed for the seat fees only
+and the projects will be disabled if you exceed the built-in resources included
+in your plan.
+
+<Screenshot
+  story="docs/components/SpendingLimitsSection"
+  alt="The team billing page with some spending limits set."
+/>
+
+## Usage
+
+On the [usage page](https://dashboard.convex.dev/team/settings/usage) you can
+see all the resources consumed by your team, and how you're tracking against
+your plan's limits.
+
+[Learn more about Convex pricing](https://www.convex.dev/pricing).
+
+<Screenshot story="docs/pages/TeamUsage" alt="Team usage page" />
+
+All metrics are available in daily breakdowns:
+
+<Screenshot
+  story="docs/components/UsageByProjectChart"
+  alt="Team usage page graphs"
+/>
+
+## Referrals
+
+Use the [referrals page](https://dashboard.convex.dev/team/settings/referrals)
+to refer friends to Convex and earn free resources. For each team you refer (up
+to 5), both your team and the referred team receive additional resources on top
+of the [free plan limits](https://www.convex.dev/pricing).
+
+Referral benefits only apply while your team is on the free, though your
+referral link keeps working for the friends you refer. Share the referral link
+found on this page to get started, and you'll also see who referred you and
+which teams you've referred.
+
+## Team Authentication
+
+<Admonition type="info">
+
+Single Sign-On and Directory Sync are only available on Convex Business and
+Enterprise.
+
+</Admonition>
+
+The
+[team authentication page](https://dashboard.convex.dev/team/settings/team-authentication)
+is where you verify the email domains your team owns and connect your
+organization's identity provider:
+
+- **[Single Sign-On (SSO)](/team-management/sso.mdx)** lets team members
+  authenticate through your identity provider.
+- **[Directory Sync (SCIM)](/team-management/directory-sync.mdx)** provisions
+  members and their roles from your identity provider's user directory.
+
+<Screenshot
+  story="docs/pages/TeamAuthentication"
+  alt="Team authentication page"
+/>
+
+## Audit Log
+
+<Admonition type="info">
+
+The Audit Log is only available on Convex Professional, Business, and Enterprise
+plans.
+
+</Admonition>
+
+The [audit log page](https://dashboard.convex.dev/team/settings/audit-log) shows
+all the actions taken by members within the team. This includes creating and
+managing projects and deployments, inviting and removing team members, and more.
+If your team has [Single Sign-On](/team-management/sso.mdx#sign-in-audit-logs)
+enabled, the audit log also includes SSO sign-ins to the dashboard and CLI.
+
+<Screenshot story="docs/pages/TeamAuditLog" alt="Team audit log page" />
+
+You may also view a history of deployment-related events on the
+[deployment history page](/dashboard/deployments/history.mdx).
+
+## Access Tokens
+
+Use the
+[access tokens page](https://dashboard.convex.dev/team/settings/access-tokens)
+to create team access tokens for the
+[Convex Platform APIs](/platform-apis/overview.mdx).
+
+A team access token can only perform actions you have access to on the team. If
+you have [custom roles](/team-management/custom-roles.mdx), the token can only
+perform the actions allowed by your roles. You can only see and manage the
+tokens you have created yourself.
+
+## Applications
+
+The [applications page](https://dashboard.convex.dev/team/settings/applications)
+has two tabs:
+
+- **Authorized Applications** lists the third-party applications you have
+  authorized, via OAuth, to access this team on your behalf. You can revoke an
+  application's access here at any time. Like team access tokens, an authorized
+  application can only perform actions you have access to on the team, and you
+  can only see the applications you authorized yourself.
+- **Your OAuth Applications** lets you create and manage OAuth applications so
+  that other Convex users can authorize your product to manage their teams or
+  projects. See [OAuth Applications](/platform-apis/oauth-applications) for
+  details.

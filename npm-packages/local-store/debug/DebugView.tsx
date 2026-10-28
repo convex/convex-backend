@@ -3,7 +3,6 @@ import { IndexRangeBounds, PaginatorSubscriptionId } from "../shared/types";
 // import { SyncQueryManager } from "../local-store/syncQueryManager";
 import { useMutation } from "convex/react";
 import { LocalDbReaderImpl } from "../browser/localDbReader";
-// import { SchemaView } from "./SchemaView";
 import { PageTimeline } from "./PageTimeline";
 import { TableViewer } from "./TableView";
 import { anyApi } from "convex/server";
@@ -35,26 +34,10 @@ function renderBounds(bounds: IndexRangeBounds) {
   );
 }
 
-type DebugTab =
-  | "schema"
-  | "tables"
-  | "documents"
-  | "mutations"
-  | "queries"
-  | "indexeddb";
+type DebugTab = "tables" | "documents" | "mutations" | "queries" | "indexeddb";
 
 function TabContent({ tab }: { tab: DebugTab }) {
   const _syncQueryManager: LocalStoreClient = (globalThis as any).localDb;
-
-  if (tab === "schema") {
-    return (
-      <div className="overflow-auto max-h-[600px]">
-        {/* <SchemaView
-          schemaString={(syncQueryManager.syncSchema as any).export()}
-        /> */}
-      </div>
-    );
-  }
 
   if (tab === "tables") {
     return (
@@ -366,7 +349,7 @@ function IndexRangeView({
 }
 
 export function DebugView({ onClose }: DebugViewProps) {
-  const [activeTab, setActiveTab] = useState<DebugTab>("schema");
+  const [activeTab, setActiveTab] = useState<DebugTab>("tables");
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
       if (e.target === e.currentTarget) {
@@ -411,7 +394,6 @@ export function DebugView({ onClose }: DebugViewProps) {
         <div className="border-b border-gray-200 mb-6">
           <nav className="-mb-px flex space-x-8">
             {[
-              { id: "schema", label: "Sync Schema" },
               { id: "tables", label: "Table Viewer" },
               { id: "documents", label: "Documents" },
               { id: "mutations", label: "Mutations" },

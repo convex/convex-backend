@@ -7,7 +7,6 @@ use std::{
 use common::{
     components::ResolvedComponentFunctionPath,
     types::UdfType,
-    version::Version,
 };
 use deno_core::v8;
 use errors::ErrorMetadata;
@@ -24,6 +23,7 @@ use metrics::{
     log_gauge_with_labels,
     register_convex_counter,
     register_convex_gauge,
+    register_convex_gauge_evictable,
     register_convex_histogram,
     CancelableTimer,
     IntoLabel,
@@ -33,35 +33,17 @@ use metrics::{
     Timer,
     STATUS_LABEL,
 };
-use prometheus::{
-    VMHistogram,
-    VMHistogramVec,
-};
-use udf::{
-    ActionOutcome,
-    FunctionOutcome,
-    HttpActionOutcome,
-    UdfOutcome,
+use prometheus::VMHistogram;
+
+use crate::{
+    client::NO_AVAILABLE_WORKERS,
+    module_map::ModulesRegistered,
+    IsolateHeapStats,
 };
 
-use crate::IsolateHeapStats;
-
-register_convex_histogram!(
-    UDF_EXECUTE_SECONDS,
-    "Duration of an UDF execution",
-    &["udf_type", "npm_version", "status"]
-);
-pub fn execute_timer(udf_type: &UdfType, npm_version: &Option<Version>) -> StatusTimer {
-    let mut t = StatusTimer::new(&UDF_EXECUTE_SECONDS);
-    t.add_label(udf_type.metric_label());
-    t.add_label(match npm_version {
-        Some(v) => StaticMetricLabel::new("npm_version", v.to_string()),
-        None => StaticMetricLabel::new("npm_version", "none"),
-    });
-    t
-}
-
-register_convex_gauge!(
+// `client_id` is unbounded and a client that disconnects stops updating this
+// gauge, leaving a stale frozen value, so evict label sets that go idle.
+register_convex_gauge_evictable!(
     ISOLATE_POOL_RUNNING_COUNT_INFO,
     "How many isolate workers are currently running work",
     &["pool_name", "client_id"]
@@ -90,49 +72,68 @@ pub fn log_pool_max(name: &'static str, count: usize) {
     );
 }
 
-register_convex_gauge!(
-    ISOLATE_POOL_ALLOCATED_COUNT_INFO,
-    "How many isolate workers have been allocated",
-    &["pool_name"]
-);
-pub fn log_pool_allocated_count(name: &'static str, count: usize) {
-    log_gauge_with_labels(
-        &ISOLATE_POOL_ALLOCATED_COUNT_INFO,
-        count as f64,
-        vec![StaticMetricLabel::new("pool_name", name)],
-    );
-}
-
-pub fn is_developer_ok(outcome: &FunctionOutcome) -> bool {
-    match &outcome {
-        FunctionOutcome::Query(UdfOutcome { result, .. }) => result.is_ok(),
-        FunctionOutcome::Mutation(UdfOutcome { result, .. }) => result.is_ok(),
-        FunctionOutcome::Action(ActionOutcome { result, .. }) => result.is_ok(),
-        FunctionOutcome::HttpAction(HttpActionOutcome { result, .. }) => match result {
-            // The developer might hit errors after beginning to stream the response that wouldn't
-            // be captured here
-            udf::HttpActionResult::Streamed => true,
-            udf::HttpActionResult::Error(_) => false,
-        },
-    }
-}
-
-pub fn finish_execute_timer(timer: StatusTimer, outcome: &FunctionOutcome) {
-    if is_developer_ok(outcome) {
-        timer.finish();
-    } else {
-        timer.finish_developer_error();
-    }
-}
-
 register_convex_counter!(UDF_EXECUTE_FULL_TOTAL, "UDF execution queue full count");
+
+register_convex_counter!(
+    UDF_REJECTED_BEFORE_EXECUTION_TOTAL,
+    "UDF execution attempts rejected before execution",
+    &["reason"]
+);
+
+#[derive(Clone, Copy, Debug, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum RejectedBeforeExecutionReason {
+    ExpiredInQueue,
+    PerClientWorkerOverloaded,
+    WorkerPoolOverloaded,
+    IsolateNotClean,
+    InitialPermitTimeout,
+    ExecuteQueueFull,
+}
+
+impl RejectedBeforeExecutionReason {
+    fn error_metadata(self) -> ErrorMetadata {
+        match self {
+            Self::ExpiredInQueue => ErrorMetadata::rejected_before_execution(
+                "ExpiredInQueue",
+                "Too many concurrent requests in a short period of time. Spread your requests out \
+                 over time or throttle them to avoid errors.",
+            ),
+            Self::PerClientWorkerOverloaded | Self::WorkerPoolOverloaded => {
+                ErrorMetadata::rejected_before_execution("WorkerOverloaded", NO_AVAILABLE_WORKERS)
+            },
+            Self::IsolateNotClean => ErrorMetadata::rejected_before_execution(
+                "IsolateNotClean",
+                "Couldn't start running this function",
+            ),
+            Self::InitialPermitTimeout => ErrorMetadata::rejected_before_execution(
+                "InitialPermitTimeoutError",
+                "Timed out waiting for capacity to run this function",
+            ),
+            Self::ExecuteQueueFull => ErrorMetadata::rejected_before_execution(
+                "ExecuteFullError",
+                "Too many concurrent requests in a short period of time. Spread your requests out \
+                 over time or throttle them to avoid errors.",
+            ),
+        }
+    }
+}
+
+pub(crate) fn rejected_before_execution_error(
+    reason: RejectedBeforeExecutionReason,
+) -> ErrorMetadata {
+    let label: &'static str = reason.into();
+    log_counter_with_labels(
+        &UDF_REJECTED_BEFORE_EXECUTION_TOTAL,
+        1,
+        vec![StaticMetricLabel::new("reason", label)],
+    );
+    reason.error_metadata()
+}
+
 pub fn execute_full_error() -> ErrorMetadata {
     log_counter(&UDF_EXECUTE_FULL_TOTAL, 1);
-    ErrorMetadata::overloaded(
-        "ExecuteFullError",
-        "Too many concurrent requests in a short period of time. Spread out your requests out \
-         over time or throttle them to avoid errors.",
-    )
+    rejected_before_execution_error(RejectedBeforeExecutionReason::ExecuteQueueFull)
 }
 
 register_convex_histogram!(
@@ -199,6 +200,43 @@ pub fn eval_user_module_timer(udf_type: UdfType, is_dynamic: bool) -> StatusTime
     t.add_label(udf_type.metric_label());
     t.add_label(StaticMetricLabel::new("is_dynamic", is_dynamic.as_label()));
     t
+}
+
+register_convex_histogram!(
+    UDF_ISOLATE_MODULES_REGISTERED_TOTAL,
+    "Number of modules registered while loading user modules for a request",
+    &["udf_type", "is_dynamic"],
+);
+register_convex_histogram!(
+    UDF_ISOLATE_MODULES_REGISTERED_SOURCE_BYTES,
+    "Source bytes of the modules registered while loading user modules for a request",
+    &["udf_type", "is_dynamic"],
+);
+/// Counts only the modules this request had to register: a context reused from
+/// the context cache already has its import closure in the `ModuleMap` and
+/// registers nothing.
+pub fn log_modules_registered(
+    udf_type: UdfType,
+    is_dynamic: bool,
+    ModulesRegistered {
+        module_count,
+        source_size,
+    }: ModulesRegistered,
+) {
+    let labels = vec![
+        udf_type.metric_label(),
+        StaticMetricLabel::new("is_dynamic", is_dynamic.as_label()),
+    ];
+    log_distribution_with_labels(
+        &UDF_ISOLATE_MODULES_REGISTERED_TOTAL,
+        module_count as f64,
+        labels.clone(),
+    );
+    log_distribution_with_labels(
+        &UDF_ISOLATE_MODULES_REGISTERED_SOURCE_BYTES,
+        source_size as f64,
+        labels,
+    );
 }
 
 register_convex_histogram!(
@@ -533,6 +571,11 @@ pub fn create_isolate_timer() -> Timer<prometheus::VMHistogram> {
     Timer::new(&CREATE_ISOLATE_SECONDS)
 }
 
+register_convex_histogram!(DESTROY_ISOLATE_SECONDS, "Time to destroy an isolate");
+pub fn destroy_isolate_timer() -> Timer<prometheus::VMHistogram> {
+    Timer::new(&DESTROY_ISOLATE_SECONDS)
+}
+
 register_convex_histogram!(CREATE_CONTEXT_SECONDS, "Time to create a new V8 context");
 pub fn create_context_timer() -> Timer<prometheus::VMHistogram> {
     Timer::new(&CREATE_CONTEXT_SECONDS)
@@ -617,13 +660,6 @@ pub fn log_source_map_origin_in_separate_module() {
     log_counter(&SOURCE_MAP_ORIGIN_IN_SEPARATE_MODULE_TOTAL, 1);
 }
 
-register_convex_histogram!(MODULE_LOAD_SECONDS, "Time to load modules", &["source"]);
-pub fn module_load_timer(source: &'static str) -> Timer<VMHistogramVec> {
-    let mut timer = Timer::new_with_labels(&MODULE_LOAD_SECONDS);
-    timer.add_label(MetricLabel::new_const("source", source));
-    timer
-}
-
 register_convex_counter!(
     ISOLATE_OUT_OF_MEMORY_TOTAL,
     "Number of times isolate ran out of memory during function execution"
@@ -632,16 +668,24 @@ pub fn log_isolate_out_of_memory() {
     log_counter(&ISOLATE_OUT_OF_MEMORY_TOTAL, 1);
 }
 
+register_convex_counter!(
+    ISOLATE_HEAP_LIMIT_CALLBACK_REPEATED_TOTAL,
+    "Number of near-heap-limit callbacks for an isolate that was already terminated"
+);
+pub fn log_isolate_heap_limit_callback_repeated(count: u64) {
+    log_counter(&ISOLATE_HEAP_LIMIT_CALLBACK_REPEATED_TOTAL, count);
+}
+
 pub fn record_component_function_path(component_function_path: &ResolvedComponentFunctionPath) {
     LocalSpan::add_event(Event::new("component_function_path").with_properties(|| {
         let mut labels = vec![(
             Cow::Borrowed("udf_path"),
             Cow::Owned(component_function_path.udf_path.to_string()),
         )];
-        if let Some(component_path) = &component_function_path.component_path {
+        if !component_function_path.component_path.is_root() {
             labels.push((
                 Cow::Borrowed("component"),
-                Cow::Owned(component_path.to_string()),
+                Cow::Owned(component_function_path.component_path.to_string()),
             ));
         }
         labels
@@ -709,15 +753,6 @@ pub fn log_component_get_user_identity(has_user_identity: bool) {
     );
 }
 
-register_convex_counter!(
-    LEGACY_POSITIONAL_ARGS_TOTAL,
-    "Number of times that legacy positional arguments are used",
-);
-
-pub fn log_legacy_positional_args() {
-    log_counter(&LEGACY_POSITIONAL_ARGS_TOTAL, 1);
-}
-
 register_convex_histogram!(
     USER_FUNCTION_EXECUTION_SECONDS,
     "Time running user code for a function in the isolate",
@@ -726,10 +761,41 @@ register_convex_histogram!(
 pub fn log_user_function_execution_time(udf_type: UdfType, execution_time: Duration) {
     log_distribution_with_labels(
         &USER_FUNCTION_EXECUTION_SECONDS,
-        execution_time.as_millis() as f64,
+        execution_time.as_secs_f64(),
         vec![StaticMetricLabel::new(
             "udf_type",
             udf_type.to_lowercase_string(),
         )],
+    );
+}
+
+register_convex_counter!(
+    REUSABLE_CONTEXT_INIT_TOTAL,
+    "Number of times we initialized a reusable context",
+    &["udf_type", "reused"],
+);
+
+pub fn log_reusable_context_init(udf_type: UdfType, reused: bool) {
+    log_counter_with_labels(
+        &REUSABLE_CONTEXT_INIT_TOTAL,
+        1,
+        vec![
+            StaticMetricLabel::new("udf_type", udf_type.to_lowercase_string()),
+            StaticMetricLabel::new("reused", reused.as_label()),
+        ],
+    );
+}
+
+register_convex_counter!(
+    NORMALIZE_ID_OLD_FORMAT_TOTAL,
+    "Number of successful calls to normalizeId with old ID formats",
+    &["format"],
+);
+
+pub fn log_normalize_id_old_format(format: &'static str) {
+    log_counter_with_labels(
+        &NORMALIZE_ID_OLD_FORMAT_TOTAL,
+        1,
+        vec![StaticMetricLabel::new("format", format)],
     );
 }

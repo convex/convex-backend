@@ -33,7 +33,6 @@ const meta = {
       <EnvironmentVariables {...args} />
     </Sheet>
   ),
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof EnvironmentVariables<BaseEnvironmentVariable>>;
 
 export default meta;
@@ -60,6 +59,7 @@ export const WithWhitespaceValues: Story = {
   args: {
     environmentVariables: [],
     initialFormValues: [
+      { name: "EMPTY_STRING", value: "" },
       { name: "LEADING_SPACE", value: "  value" },
       { name: "TRAILING_SPACE", value: "value  " },
       { name: "BOTH_SPACES", value: "  value  " },

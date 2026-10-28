@@ -25,7 +25,6 @@ use value::codegen_convex_serialization;
 ///    time.
 /// 2. At most one schema can be in the `Active` state at a time.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum SchemaState {
     Pending,
     Validated,
@@ -90,31 +89,3 @@ impl TryFrom<SerializedSchemaState> for SchemaState {
 }
 
 codegen_convex_serialization!(SchemaState, SerializedSchemaState);
-
-#[cfg(test)]
-mod tests {
-    use value::{
-        obj,
-        ConvexValue,
-    };
-
-    use crate::bootstrap_model::schema::SchemaState;
-
-    #[test]
-    fn test_backwards_compatibility() -> anyhow::Result<()> {
-        let serialized = obj!(
-            "state" => "failed",
-            "error" => "dis failed",
-            "table_name" => ConvexValue::Null,
-        )?;
-        let deserialized: SchemaState = serialized.try_into().unwrap();
-        assert_eq!(
-            deserialized,
-            SchemaState::Failed {
-                error: "dis failed".to_string(),
-                table_name: None
-            }
-        );
-        Ok(())
-    }
-}

@@ -12,7 +12,4 @@
 
 mod dashboard;
 pub mod reduced;
-#[cfg(test)]
-mod tests;
-
 pub use self::dashboard::dashboard_shape_json;

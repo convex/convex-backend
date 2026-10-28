@@ -4,7 +4,7 @@
  * This module contains:
  * 1. {@link ConvexReactClient}, a client for using Convex in React.
  * 2. {@link ConvexProvider}, a component that stores this client in React context.
- * 3. {@link Authenticated}, {@link Unauthenticated} and {@link AuthLoading} helper auth components.
+ * 3. {@link Authenticated}, {@link Unauthenticated}, {@link AuthLoading} and {@link AuthRefreshing} helper auth components.
  * 4. Hooks {@link useQuery}, {@link useMutation}, {@link useAction} and more for accessing this
  *    client from your React components.
  *
@@ -33,7 +33,7 @@
  * ### Using the auth helpers
  *
  * ```typescript
- * import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
+ * import { Authenticated, Unauthenticated, AuthLoading, AuthRefreshing } from "convex/react";
  *
  * <Authenticated>
  *   Logged in
@@ -44,6 +44,9 @@
  * <AuthLoading>
  *   Still loading
  * </AuthLoading>
+ * <AuthRefreshing>
+ *   Refreshing token...
+ * </AuthRefreshing>
  * ```
  *
  * ### Using React hooks
@@ -61,7 +64,11 @@
  * @module
  */
 export * from "./use_paginated_query.js";
-export { usePaginatedQuery_experimental } from "./use_paginated_query2.js";
+export {
+  usePaginatedQuery_experimental,
+  type UsePaginatedQueryOptions,
+  type UsePaginatedQueryObjectReturnType,
+} from "./use_paginated_query2.js";
 export { usePaginatedQuery } from "./use_paginated_query.js";
 export { useQueries, type RequestForQueries } from "./use_queries.js";
 export type { AuthTokenFetcher } from "../browser/sync/client.js";
@@ -78,11 +85,16 @@ export {
   type MutationOptions,
   type ConvexReactClientOptions,
   type OptionalRestArgsOrSkip,
+  type UseQueryResult,
   ConvexReactClient,
   useConvex,
   ConvexProvider,
   useQuery,
+  useQuery_experimental,
   useMutation,
   useAction,
   useConvexConnectionState,
 } from "./client.js";
+/** @internal */
+export { convexQueryOptions } from "../browser/query_options.js";
+export type { QueryOptions } from "../browser/query_options.js";

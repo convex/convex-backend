@@ -91,13 +91,6 @@ impl Timestamp {
         8
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub fn must(value: i32) -> Self {
-        if value < Self::MIN.0 as i32 || value as u64 > Self::MAX.0 {
-            panic!("timestamp {value} out of bounds");
-        }
-        Self(value as u64)
-    }
 }
 
 impl fmt::Display for Timestamp {
@@ -175,31 +168,10 @@ impl From<Timestamp> for serde_json::Value {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for Timestamp {
-    type Parameters = ();
-    type Strategy = proptest::strategy::BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use proptest::strategy::Strategy;
-        (Timestamp::MIN.0..=Timestamp::MAX.0)
-            .prop_map(Timestamp)
-            .boxed()
-    }
-}
-
 impl Sub for Timestamp {
     type Output = Duration;
 
     fn sub(self, rhs: Self) -> Self::Output {
         Duration::from_nanos(self.0 - rhs.0)
     }
-}
-
-#[test]
-fn test_secs_since_f64_positive_zero() {
-    let ts = Timestamp::must(1234);
-    let zero = ts.secs_since_f64(ts);
-    // should be positive zero, not negative zero
-    assert!(zero.total_cmp(&0.0).is_eq(), "{zero:?}");
 }

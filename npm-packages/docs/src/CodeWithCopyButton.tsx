@@ -5,9 +5,9 @@ export function CodeWithCopyButton({ text }: { text: string }) {
   return (
     <code className="convex-inline-code-with-copy-button">
       {text}
-      <div className="convex-inline-code-copy-button">
+      <span className="convex-inline-code-copy-button">
         <CopyButton code={text} />
-      </div>
+      </span>
     </code>
   );
 }

@@ -31,17 +31,15 @@
               "requestId",
               "executionId",
               "usageStats",
+              "willRetry",
               "executionTimestamp",
               "identityType",
               "environment",
               "kind"
             ],
             "properties": {
-              "cachedResult": {
-                "type": "boolean"
-              },
-              "caller": {
-                "type": "string"
+              "udfType": {
+                "$ref": "#/components/schemas/UdfTypeJson"
               },
               "componentPath": {
                 "type": [
@@ -49,37 +47,8 @@
                   "null"
                 ]
               },
-              "environment": {
-                "type": "string"
-              },
-              "error": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "executionId": {
-                "type": "string"
-              },
-              "executionTime": {
-                "type": "number",
-                "format": "double"
-              },
-              "executionTimestamp": {
-                "type": "number",
-                "format": "double"
-              },
               "identifier": {
                 "type": "string"
-              },
-              "identityType": {
-                "type": "string"
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "Completion"
-                ]
               },
               "logLines": {
                 "type": "array",
@@ -87,15 +56,15 @@
                   "$ref": "#/components/schemas/Value"
                 }
               },
-              "occInfo": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/OccInfoJson"
-                  }
-                ]
+              "timestamp": {
+                "type": "number",
+                "format": "double"
+              },
+              "cachedResult": {
+                "type": "boolean"
+              },
+              "caller": {
+                "type": "string"
               },
               "parentExecutionId": {
                 "type": [
@@ -103,10 +72,11 @@
                   "null"
                 ]
               },
-              "requestId": {
-                "type": "string"
+              "executionTime": {
+                "type": "number",
+                "format": "double"
               },
-              "returnBytes": {
+              "userExecutionTime": {
                 "type": [
                   "number",
                   "null"
@@ -123,15 +93,56 @@
                   }
                 ]
               },
-              "timestamp": {
-                "type": "number",
-                "format": "double"
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
-              "udfType": {
-                "$ref": "#/components/schemas/UdfTypeJson"
+              "requestId": {
+                "type": "string"
+              },
+              "executionId": {
+                "type": "string"
               },
               "usageStats": {
                 "$ref": "#/components/schemas/UsageStatsJson"
+              },
+              "returnBytes": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "occInfo": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OccInfoJson"
+                  }
+                ]
+              },
+              "willRetry": {
+                "type": "boolean"
+              },
+              "executionTimestamp": {
+                "type": "number",
+                "format": "double"
+              },
+              "identityType": {
+                "type": "string"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Completion"
+                ]
               }
             }
           },
@@ -147,23 +158,21 @@
               "kind"
             ],
             "properties": {
+              "udfType": {
+                "$ref": "#/components/schemas/UdfTypeJson"
+              },
               "componentPath": {
                 "type": [
                   "string",
                   "null"
                 ]
               },
-              "executionId": {
-                "type": "string"
-              },
               "identifier": {
                 "type": "string"
               },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "Progress"
-                ]
+              "timestamp": {
+                "type": "number",
+                "format": "double"
               },
               "logLines": {
                 "type": "array",
@@ -174,12 +183,14 @@
               "requestId": {
                 "type": "string"
               },
-              "timestamp": {
-                "type": "number",
-                "format": "double"
+              "executionId": {
+                "type": "string"
               },
-              "udfType": {
-                "$ref": "#/components/schemas/UdfTypeJson"
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Progress"
+                ]
               }
             }
           }
@@ -204,23 +215,22 @@
           "level"
         ],
         "properties": {
-          "componentPath": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "isTruncated": {
-            "type": "boolean"
-          },
-          "level": {
-            "$ref": "#/components/schemas/LogLevelJson"
-          },
           "messages": {
             "type": "array",
             "items": {
               "type": "string"
             }
+          },
+          "isTruncated": {
+            "type": "boolean"
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevelJson"
           },
           "systemMetadata": {
             "oneOf": [
@@ -232,10 +242,11 @@
               }
             ]
           },
-          "timestamp": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
+          "componentPath": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "udfPath": {
             "type": [
@@ -247,22 +258,14 @@
       },
       "OccInfoJson": {
         "type": "object",
-        "required": [
-          "retryCount"
-        ],
         "properties": {
-          "documentId": {
+          "tableName": {
             "type": [
               "string",
               "null"
             ]
           },
-          "retryCount": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "tableName": {
+          "documentId": {
             "type": [
               "string",
               "null"
@@ -273,6 +276,20 @@
               "string",
               "null"
             ]
+          },
+          "componentPath": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retryCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -282,14 +299,6 @@
           "cursor"
         ],
         "properties": {
-          "clientRequestCounter": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32",
-            "minimum": 0
-          },
           "cursor": {
             "type": "number",
             "format": "double"
@@ -299,6 +308,14 @@
               "string",
               "null"
             ]
+          },
+          "clientRequestCounter": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -358,20 +375,24 @@
         "required": [
           "databaseReadBytes",
           "databaseWriteBytes",
+          "databaseIoReadBytes",
+          "databaseIoWriteBytes",
           "databaseReadDocuments",
+          "databaseWriteDocuments",
+          "databaseWriteIndexRows",
           "storageReadBytes",
           "storageWriteBytes",
           "vectorIndexReadBytes",
           "vectorIndexWriteBytes",
+          "textIndexQueryBytes",
+          "textIndexWriteQueryBytes",
+          "vectorIndexReadQueryBytes",
+          "vectorIndexWriteQueryBytes",
+          "networkEgressBytes",
           "memoryUsedMb"
         ],
         "properties": {
           "databaseReadBytes": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "databaseReadDocuments": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -381,7 +402,27 @@
             "format": "int64",
             "minimum": 0
           },
-          "memoryUsedMb": {
+          "databaseIoReadBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "databaseIoWriteBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "databaseReadDocuments": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "databaseWriteDocuments": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "databaseWriteIndexRows": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -402,6 +443,36 @@
             "minimum": 0
           },
           "vectorIndexWriteBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "textIndexQueryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "textIndexWriteQueryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "vectorIndexReadQueryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "vectorIndexWriteQueryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "networkEgressBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "memoryUsedMb": {
             "type": "integer",
             "format": "int64",
             "minimum": 0

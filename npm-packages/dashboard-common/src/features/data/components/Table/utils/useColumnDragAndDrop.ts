@@ -8,7 +8,7 @@ import {
   DragStartEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { HeaderGroup } from "react-table";
+import { HeaderGroup } from "@tanstack/react-table";
 import { GenericDocument } from "convex/server";
 
 export function useColumnDragAndDrop({
@@ -98,12 +98,7 @@ export function useColumnDragAndDrop({
     // Calculate the left position by summing up widths of previous columns
     let left = 0;
     for (let i = 0; i < columnIndex; i++) {
-      const colWidth = headerGroups[0].headers[i].getHeaderProps().style?.width;
-      if (typeof colWidth === "string") {
-        left += parseFloat(colWidth);
-      } else if (typeof colWidth === "number") {
-        left += colWidth;
-      }
+      left += headerGroups[0].headers[i].getSize();
     }
 
     return left;

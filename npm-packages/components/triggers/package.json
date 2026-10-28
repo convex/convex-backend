@@ -8,7 +8,7 @@
     "build:cjs": "tsc --project ./commonjs.json && echo '{\\n  \"type\": \"commonjs\"\\n}' > dist/commonjs/package.json",
     "typecheck": "tsc --noEmit",
     "dev": "convex dev",
-    "prepare": "npm run build"
+    "prepublishOnly": "npm run build"
   },
   "files": [
     "dist",
@@ -35,13 +35,20 @@
         "types": "./dist/commonjs/triggers/convex.config.d.ts",
         "default": "./dist/commonjs/triggers/convex.config.js"
       }
+    },
+    "./_generated/component.js": {
+      "import": {
+        "types": "./dist/esm/triggers/_generated/component.d.ts"
+      },
+      "require": {
+        "types": "./dist/commonjs/triggers/_generated/component.d.ts"
+      }
     }
   },
   "dependencies": {
     "convex": "workspace:*"
   },
   "devDependencies": {
-    "prettier": "^3.8.0",
     "@types/node": "^18.17.0",
     "typescript": "~5.0.3"
   },

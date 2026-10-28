@@ -15,11 +15,13 @@ use axum::{
 };
 use common::{
     components::ComponentId,
+    execution_context::RequestMetadata,
     http::{
         extract::{
             Json,
             MtState,
         },
+        ExtractRequestMetadata,
         HttpResponseError,
     },
     version::Version,
@@ -37,8 +39,12 @@ use model::{
         },
         ConfigModel,
     },
-    source_packages::SourcePackageModel,
+    source_packages::{
+        types::NodeVersion,
+        SourcePackageModel,
+    },
 };
+use roles::RequireDeploymentOp;
 use runtime::prod::ProdRuntime;
 use serde::{
     Deserialize,
@@ -51,10 +57,7 @@ use value::{
 };
 
 use crate::{
-    admin::{
-        must_be_admin_from_key,
-        must_be_admin_with_write_access,
-    },
+    admin::must_be_admin_from_key,
     EmptyResponse,
     LocalAppState,
 };
@@ -195,11 +198,12 @@ pub async fn get_config(
         req.admin_key,
     )
     .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
 
     let mut tx = st.application.begin(identity).await?;
     let component = ComponentId::Root; // This endpoint is only used pre-components.
     let (config, modules, udf_config) = ConfigModel::new(&mut tx, component)
-        .get_with_module_source(st.application.modules_cache())
+        .get_with_module_source(st.application.modules_storage())
         .await?;
     let config = ConvexObject::try_from(config)?.to_internal_json();
 
@@ -224,6 +228,7 @@ pub async fn get_config_hashes(
         req.admin_key,
     )
     .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
 
     let mut tx = st.application.begin(identity).await?;
     let component = ComponentId::Root; // This endpoint is not used in components push.
@@ -258,9 +263,10 @@ pub async fn get_config_hashes(
 #[debug_handler]
 pub async fn push_config(
     State(st): State<LocalAppState>,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(req): Json<ConfigJson>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    push_config_handler(&st.application, req)
+    push_config_handler(&st.application, request_metadata, req)
         .await
         .map_err(|e| e.wrap_error_message(|msg| format!("Hit an error while pushing:\n{msg}")))?;
 
@@ -270,15 +276,16 @@ pub async fn push_config(
 #[fastrace::trace]
 pub async fn push_config_handler(
     application: &Application<ProdRuntime>,
+    request_metadata: RequestMetadata,
     config: ConfigJson,
 ) -> anyhow::Result<(Identity, PushAnalytics, PushMetrics)> {
     let identity = application
         .app_auth()
-        .check_key(config.admin_key, application.instance_name())
+        .check_key(config.admin_key)
         .await
         .context("bad admin key error")?;
 
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
 
     let modules: Vec<ModuleConfig> = config
         .modules
@@ -289,7 +296,7 @@ pub async fn push_config_handler(
     let udf_server_version = Version::parse(&config.udf_server_version).context(
         ErrorMetadata::bad_request("InvalidVersion", "The function version is invalid"),
     )?;
-    let node_version = config
+    let node_version: Option<NodeVersion> = config
         .node_version
         .clone()
         .map(|v| v.parse())
@@ -301,10 +308,14 @@ pub async fn push_config_handler(
                 config.node_version.unwrap_or_default()
             ),
         ))?;
+    if let Some(node_version) = node_version {
+        node_version.check_supported_for_push()?;
+    }
 
     let (analytics, metrics) = application
         .push_config_no_components(
             identity.clone(),
+            request_metadata,
             config.config,
             modules,
             udf_server_version,

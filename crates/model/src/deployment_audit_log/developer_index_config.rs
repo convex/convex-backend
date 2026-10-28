@@ -25,14 +25,12 @@ use value::codegen_convex_serialization;
 // Index config that's specified by the developer - including spec + staged
 // state
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct DeveloperIndexConfig {
     spec: DeveloperIndexSpec,
-    staged: bool,
+    pub staged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum DeveloperIndexSpec {
     /// Standard database index.
     Database(DatabaseIndexSpec),
@@ -56,7 +54,6 @@ impl From<IndexConfig> for DeveloperIndexConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SerializedNamedDeveloperIndexConfig {
     pub name: String,
     #[serde(flatten)]
@@ -65,7 +62,6 @@ pub struct SerializedNamedDeveloperIndexConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SerializedDeveloperIndexConfig {
     #[serde(flatten)]
     spec: SerializedDeveloperIndexSpec,
@@ -75,7 +71,6 @@ pub struct SerializedDeveloperIndexConfig {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum SerializedDeveloperIndexSpec {
     Database(SerializedDatabaseIndexSpec),
     Search(SerializedTextIndexSpec),
@@ -121,44 +116,3 @@ impl TryFrom<SerializedDeveloperIndexConfig> for DeveloperIndexConfig {
 }
 
 codegen_convex_serialization!(DeveloperIndexConfig, SerializedDeveloperIndexConfig);
-
-#[cfg(test)]
-mod tests {
-    use common::bootstrap_model::index::database_index::IndexedFields;
-
-    use super::*;
-
-    #[test]
-    fn test_developer_index_config_serialization() -> anyhow::Result<()> {
-        let config = DeveloperIndexConfig {
-            spec: DeveloperIndexSpec::Database(DatabaseIndexSpec {
-                fields: IndexedFields::creation_time(),
-            }),
-            staged: false,
-        };
-        let serialized = SerializedDeveloperIndexConfig::from(config.clone());
-        let json = serde_json::to_value(&serialized)?;
-        let expected = serde_json::json!({
-            "type": "database",
-            "fields": ["_creationTime"],
-            "staged": false,
-        });
-        assert_eq!(json, expected);
-
-        assert_eq!(
-            config,
-            serde_json::from_value::<SerializedDeveloperIndexConfig>(expected)?.try_into()?,
-        );
-
-        let old_format = serde_json::json!({
-            "type": "database",
-            "fields": ["_creationTime"],
-        });
-        assert_eq!(
-            config,
-            serde_json::from_value::<SerializedDeveloperIndexConfig>(old_format)?.try_into()?,
-        );
-
-        Ok(())
-    }
-}

@@ -5,7 +5,7 @@ export function Spinner({ className }: { className?: string }) {
     <svg
       role="status"
       className={cn(
-        "ml-auto h-4 w-4 animate-rotate text-content-primary/70",
+        "ml-auto size-4 animate-rotate text-content-primary/70",
         className,
       )}
       style={{ animationDuration: "0.8s, 1.5s" }}
@@ -19,6 +19,7 @@ export function Spinner({ className }: { className?: string }) {
         stroke="currentColor"
         strokeWidth="18"
         fill="none"
+        strokeDasharray="35 65"
         className="animate-dashLength"
       />
     </svg>

@@ -1,11 +1,11 @@
 import { GenericDocument } from "convex/server";
-import { mutationGeneric } from "../server";
+import { mutationGeneric, writeAuditLog } from "../server";
 
 import { ConvexError, v } from "convex/values";
 
 const MAX_IMPORT_COUNT = 4096; // TRANSACTION_MAX_NUM_USER_WRITES / 2
 
-export default mutationGeneric({
+export default mutationGeneric("WriteData")({
   args: {
     componentId: v.optional(v.union(v.string(), v.null())),
     table: v.string(),
@@ -41,6 +41,10 @@ export default mutationGeneric({
       // Rewrapping this error because it could be a schema validation error.
       throw new ConvexError(e.message);
     }
+    await writeAuditLog("add_documents", {
+      table,
+      document_ids: insertedIds,
+    });
     return { success: true };
   },
 });

@@ -30,8 +30,7 @@ interface CursorPaginationControlsProps {
   pageSizeOptions?: readonly Option<number>[];
 }
 
-interface CursorPaginationControlsPropsWithDiscriminator
-  extends CursorPaginationControlsProps {
+interface CursorPaginationControlsPropsWithDiscriminator extends CursorPaginationControlsProps {
   isCursorBasedPagination: true;
 }
 
@@ -182,9 +181,9 @@ function CursorPaginationControls({
     <div className={cn("flex items-center justify-center gap-2", className)}>
       {/* Page size selector - only show if showPageSize is true */}
       {showPageSize && (
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           <span className="text-sm text-content-secondary tabular-nums">
-            Showing{" "}
+            Page size:
           </span>
           <Combobox
             label="Page size"
@@ -200,9 +199,6 @@ function CursorPaginationControls({
             buttonClasses="w-fit"
             optionsWidth="fit"
           />
-          <span className="text-sm text-content-secondary tabular-nums">
-            projects per page
-          </span>
         </div>
       )}
 
@@ -218,7 +214,7 @@ function CursorPaginationControls({
       />
 
       {/* Page indicator */}
-      <span className="text-sm text-content-secondary tabular-nums">
+      <span className="min-w-fit text-sm text-content-secondary tabular-nums">
         Page {currentPage.toLocaleString()}
       </span>
 

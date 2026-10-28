@@ -1,6 +1,6 @@
-import { throwNotImplementedMethodError } from "./helpers.js";
-import { Blob, isSupportedBlobPart } from "./09_file.js";
-import { parseFormData, FormData, formDataToBlob } from "./21_formdata.js";
+import { Blob } from "./09_file.js";
+import { parseFormData, FormData } from "./21_formdata.js";
+import { BodyInit, convertBodyInit, extractBody } from "./22_body.js";
 import inspect from "object-inspect";
 import {
   constructStreamId,
@@ -11,12 +11,13 @@ import {
 const _contentLength = Symbol("[[contentLength]]");
 export const _redirected = Symbol("[[redirected]]");
 const _responseType = Symbol("[[responseType]]");
+const NULL_BODY_STATUSES = [204, 205, 304];
 
 export class Response {
   private _status: number;
   private _statusText: string;
   private _headers: Headers;
-  private _bodyStream: ReadableStream | null;
+  private _bodyStream: ReadableStream | null = null;
   private _bodyUsed = false;
   private _url: string;
   [_contentLength]: number | null;
@@ -64,15 +65,7 @@ export class Response {
   }
 
   constructor(
-    body?:
-      | string
-      | ArrayBuffer
-      | null
-      | Blob
-      | ArrayBufferView
-      | URLSearchParams
-      | ReadableStream
-      | FormData,
+    body?: BodyInit | null,
     options?: {
       status?: number;
       statusText?: string;
@@ -80,6 +73,10 @@ export class Response {
       url?: string;
     },
   ) {
+    // WebIDL converts `body` before `init` or any constructor steps.
+    const convertedBody =
+      body === undefined || body === null ? null : convertBodyInit(body);
+
     let status = options?.status === undefined ? 200 : options.status;
     if (typeof status === "string") {
       // This coerces the string to a number (and is different from `parseInt` which allows trailing characters after a valid number)
@@ -108,38 +105,18 @@ export class Response {
       this[_contentLength] = Number(this._headers.get("content-length"));
     }
 
-    // Fill in a content type if none was provided and the body is a string
-    if (this._headers.get("content-type") === null) {
-      if (typeof body === "string") {
-        this._headers.set("content-type", "text/plain;charset=UTF-8");
-      } else if (body instanceof Blob && body.type !== "") {
-        this._headers.set("content-type", body.type);
+    if (convertedBody !== null) {
+      if (NULL_BODY_STATUSES.includes(this._status)) {
+        throw new TypeError("Response with null body status cannot have body");
       }
-    }
-
-    if (body !== null && body !== undefined) {
-      if (body instanceof URLSearchParams) {
-        body = body.toString();
+      const { stream, contentType, contentLength } = extractBody(convertedBody);
+      if (this._headers.get("content-type") === null && contentType !== null) {
+        this._headers.set("content-type", contentType);
       }
-      if (body instanceof FormData) {
-        const bodyBlob = formDataToBlob(body);
-        this._headers.set("content-type", bodyBlob.type);
-        this[_contentLength] = bodyBlob.size;
-        this._bodyStream = bodyBlob.stream();
-      } else if (body instanceof ReadableStream) {
-        this._bodyStream = body;
-      } else if (isSupportedBlobPart(body)) {
-        const bodyBlob = new Blob([body], {
-          type: this._headers.get("content-type") ?? undefined,
-        });
-        this[_contentLength] = bodyBlob.size;
-        this._bodyStream = bodyBlob.stream();
-      } else {
-        return throwNotImplementedMethodError(
-          "constructor with body type other than string | ArrayBuffer | Blob | ReadableStream | null",
-          "Response",
-        );
+      if (contentLength !== null) {
+        this[_contentLength] = contentLength;
       }
+      this._bodyStream = stream;
     } else {
       this._bodyStream = null;
     }
@@ -262,10 +239,6 @@ export class Response {
     return this[_responseType];
   }
 
-  get [Symbol.toStringTag]() {
-    return "Response";
-  }
-
   inspect() {
     const properties = {
       bodyUsed: this._bodyUsed,
@@ -291,6 +264,13 @@ export class Response {
   }
 }
 
+Object.defineProperty(Response.prototype, Symbol.toStringTag, {
+  value: "Response",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
+
 export const convexJsonFromResponse = ({ response }: { response: any }) => {
   if (!(response instanceof Response)) {
     throw new Error("HTTP actions must return a Response");
@@ -311,12 +291,20 @@ export const convexJsonFromResponse = ({ response }: { response: any }) => {
   };
 };
 
-export const responseFromConvexObject = (convexObject: Record<string, any>) => {
-  const body = convexObject.streamId
-    ? extractStream(convexObject.streamId)
-    : null;
+export const responseFromConvexObject = (
+  convexObject: Record<string, any>,
+  mapBodyError?: (e: unknown) => unknown,
+  requestMethod?: string,
+) => {
+  const status = Number(convexObject.status);
+  const body =
+    requestMethod !== "HEAD" &&
+    !NULL_BODY_STATUSES.includes(status) &&
+    convexObject.streamId
+      ? extractStream(convexObject.streamId, mapBodyError)
+      : null;
   const response = new Response(body, {
-    status: Number(convexObject.status),
+    status,
     statusText: convexObject.statusText,
     headers: convexObject.headerPairs,
     url: convexObject.url,

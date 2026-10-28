@@ -15,10 +15,10 @@ use std::{
 
 use anyhow::Context as _;
 use common::runtime::Runtime;
+use futures::FutureExt as _;
 
 use crate::async_lru::{
     AsyncLru,
-    SingleValueGenerator,
     SizedValue,
 };
 
@@ -51,19 +51,19 @@ impl<T: LruKey> BaseLruKey for T {
 
 type GenericKey = Box<dyn BaseLruKey>;
 
-impl Hash for GenericKey {
+impl Hash for dyn BaseLruKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.key_hash().hash(state)
     }
 }
 
-impl PartialEq for GenericKey {
+impl PartialEq for dyn BaseLruKey {
     fn eq(&self, other: &Self) -> bool {
-        BaseLruKey::eq(&**self, &**other)
+        BaseLruKey::eq(self, other)
     }
 }
 
-impl Eq for GenericKey {}
+impl Eq for dyn BaseLruKey {}
 
 impl Clone for GenericKey {
     fn clone(&self) -> Self {
@@ -80,9 +80,15 @@ pub struct MultiTypeAsyncLru<RT: Runtime> {
 }
 
 impl<RT: Runtime> MultiTypeAsyncLru<RT> {
-    pub fn new(rt: RT, max_size: u64, concurrency: usize, label: &'static str) -> Self {
+    pub fn new(
+        rt: RT,
+        max_size: u64,
+        concurrency: usize,
+        queue_size: usize,
+        label: &'static str,
+    ) -> Self {
         Self {
-            inner: AsyncLru::new(rt, max_size, concurrency, label),
+            inner: AsyncLru::new(rt, max_size, concurrency, queue_size, label),
         }
     }
 
@@ -90,108 +96,35 @@ impl<RT: Runtime> MultiTypeAsyncLru<RT> {
         self.inner.size()
     }
 
-    pub async fn get<Key: LruKey + Clone, V: 'static>(
+    pub async fn get<Key: LruKey + Clone, V: 'static, F>(
         &self,
-        key: Key,
-        value_generator: SingleValueGenerator<V>,
+        key: &Key,
+        value_generator: impl FnOnce() -> F,
     ) -> anyhow::Result<Arc<Key::Value>>
     where
         Arc<Key::Value>: From<V>,
+        F: Future<Output = anyhow::Result<V>> + Send + 'static,
     {
-        let key_ = key.clone();
         let result = self
             .inner
-            .get_and_prepopulate(
-                Box::new(key_),
-                Box::pin(async move {
-                    let mut hashmap = HashMap::new();
-                    hashmap.insert(
-                        Box::new(key) as GenericKey,
-                        value_generator
-                            .await
-                            .map(|v| <Arc<Key::Value>>::from(v) as Arc<dyn BaseLruValue>),
-                    );
-                    hashmap
-                }),
-            )
+            .get_and_prepopulate(key as &dyn BaseLruKey, || {
+                let key = key.clone();
+                (
+                    Box::new(key.clone()),
+                    value_generator().map(|value| {
+                        let mut hashmap = HashMap::new();
+                        hashmap.insert(
+                            Box::new(key) as GenericKey,
+                            <Arc<Key::Value>>::from(value?) as Arc<dyn BaseLruValue>,
+                        );
+                        Ok(hashmap)
+                    }),
+                )
+            })
             .await?;
         (result as Arc<dyn Any + Send + Sync>)
             .downcast()
             .ok()
             .context("MultiTypeAsyncLru error: cached value was wrong type")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use futures::FutureExt;
-    use runtime::testing::TestRuntime;
-
-    use super::{
-        LruKey,
-        MultiTypeAsyncLru,
-    };
-    use crate::async_lru::SizedValue;
-
-    #[derive(Hash, PartialEq, Eq, Clone, Debug)]
-    struct Key1(u32);
-    #[derive(Hash, PartialEq, Eq, Clone, Debug)]
-    struct Key2(u32);
-    #[derive(PartialEq, Debug)]
-    struct Value1(String);
-    #[derive(PartialEq, Debug)]
-    struct Value2(String);
-    impl SizedValue for Value1 {
-        fn size(&self) -> u64 {
-            0
-        }
-    }
-    impl SizedValue for Value2 {
-        fn size(&self) -> u64 {
-            0
-        }
-    }
-    impl LruKey for Key1 {
-        type Value = Value1;
-    }
-    impl LruKey for Key2 {
-        type Value = Value2;
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_multi_type_lru(rt: TestRuntime) -> anyhow::Result<()> {
-        let lru = MultiTypeAsyncLru::new(rt, 100, 1, "lru");
-        let v = lru
-            .get(Key1(123), async move { Ok(Value1("foo".into())) }.boxed())
-            .await?;
-        assert_eq!(*v, Value1("foo".into()));
-        // Fetching the same key again should return the same value (and not run the
-        // computation)
-        let v2 = lru
-            .get::<Key1, Value1>(Key1(123), async move { panic!() }.boxed())
-            .await?;
-        assert!(Arc::ptr_eq(&v, &v2));
-
-        // A different key with the same type should recompute
-        let v = lru
-            .get(Key1(456), async move { Ok(Value1("bar".into())) }.boxed())
-            .await?;
-        assert_eq!(*v, Value1("bar".into()));
-
-        // Different key types never overlap
-        let v = lru
-            .get(
-                Key2(123),
-                async move { Ok(Value2("foofoo".into())) }.boxed(),
-            )
-            .await?;
-        assert_eq!(*v, Value2("foofoo".into()));
-        let v2 = lru
-            .get::<Key2, Value2>(Key2(123), async move { panic!() }.boxed())
-            .await?;
-        assert!(Arc::ptr_eq(&v, &v2));
-        Ok(())
     }
 }

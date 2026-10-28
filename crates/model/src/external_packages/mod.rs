@@ -1,27 +1,16 @@
 use std::{
     collections::BTreeMap,
-    sync::LazyLock,
+    sync::Arc,
 };
 
 use anyhow::Context;
 use common::{
-    document::{
-        ParseDocument,
-        ParsedDocument,
-    },
-    query::{
-        IndexRange,
-        Order,
-        Query,
-    },
+    document::ParsedDocument,
+    query::Order,
     runtime::Runtime,
-    types::{
-        IndexName,
-        NodeDependency,
-    },
+    types::NodeDependency,
 };
 use database::{
-    ResolvedQuery,
     SystemMetadataModel,
     Transaction,
 };
@@ -44,19 +33,13 @@ pub mod types;
 
 const NUM_EXTERNAL_DEPS_CACHE_ENTRIES: usize = 10;
 
-pub static EXTERNAL_PACKAGES_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_external_deps_packages"
-        .parse()
-        .expect("invalid built-in _external_packages table")
-});
+pub const EXTERNAL_PACKAGES_TABLE: TableName = TableName::const_new("_external_deps_packages");
 
 pub struct ExternalPackagesTable;
 impl SystemTable for ExternalPackagesTable {
     type Metadata = ExternalDepsPackage;
 
-    fn table_name() -> &'static TableName {
-        &EXTERNAL_PACKAGES_TABLE
-    }
+    const TABLE_NAME: TableName = EXTERNAL_PACKAGES_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -78,12 +61,12 @@ impl<'a, RT: Runtime> ExternalPackagesModel<'a, RT> {
         external_deps_package_id: ExternalDepsPackageId,
     ) -> anyhow::Result<ParsedDocument<ExternalDepsPackage>> {
         let id: DeveloperDocumentId = external_deps_package_id.into();
-        let document_id = self.tx.resolve_developer_id(&id, TableNamespace::Global)?;
-        self.tx
-            .get(document_id)
-            .await?
-            .context("Couldn't find external package")?
-            .parse()
+        Ok(Arc::unwrap_or_clone(
+            self.tx
+                .get_system::<ExternalPackagesTable>(TableNamespace::Global, id)
+                .await?
+                .context("Couldn't find external package")?,
+        ))
     }
 
     pub async fn put(
@@ -102,12 +85,6 @@ impl<'a, RT: Runtime> ExternalPackagesModel<'a, RT> {
         &mut self,
         deps: Vec<NodeDependency>,
     ) -> anyhow::Result<Option<(ExternalDepsPackageId, ExternalDepsPackage)>> {
-        let index_query = Query::index_range(IndexRange {
-            index_name: IndexName::by_creation_time(EXTERNAL_PACKAGES_TABLE.clone()),
-            range: vec![],
-            order: Order::Desc,
-        });
-        let mut query_stream = ResolvedQuery::new(self.tx, TableNamespace::Global, index_query)?;
         let deps_map: BTreeMap<String, String> = deps
             .into_iter()
             .map(|dep| (dep.package, dep.version))
@@ -115,11 +92,16 @@ impl<'a, RT: Runtime> ExternalPackagesModel<'a, RT> {
 
         // Check at most NUM_EXTERNAL_DEPS_CACHE_ENTRIES entries for a match
         let mut cache_entries_checked = 0;
-        while let Some(doc) = query_stream.next(self.tx, None).await?
+        let index = SystemIndex::<ExternalPackagesTable>::by_creation_time();
+        let mut query = self
+            .tx
+            .query_system(TableNamespace::Global, &index)?
+            .order(Order::Desc)
+            .build();
+        while let Some(pkg) = query.next().await?
             && cache_entries_checked < NUM_EXTERNAL_DEPS_CACHE_ENTRIES
         {
-            let row: ParsedDocument<ExternalDepsPackage> = doc.parse()?;
-            let (id, pkg) = row.into_id_and_value();
+            let id = pkg.id();
 
             let pkg_deps_map: BTreeMap<String, String> = pkg
                 .deps
@@ -128,7 +110,10 @@ impl<'a, RT: Runtime> ExternalPackagesModel<'a, RT> {
                 .map(|dep| (dep.package, dep.version))
                 .collect();
             if pkg_deps_map.eq(&deps_map) {
-                return Ok(Some((DeveloperDocumentId::from(id).into(), pkg)));
+                return Ok(Some((
+                    DeveloperDocumentId::from(id).into(),
+                    (**pkg).clone(),
+                )));
             }
 
             cache_entries_checked += 1;

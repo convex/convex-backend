@@ -1,0 +1,33 @@
+---
+title: "Models"
+sidebar_label: "Models"
+sidebar_position: 2
+description: "Which models the AI Gateway serves and how to name them"
+---
+
+import ModelsList from "./_models-list.mdx";
+
+Model names use the `provider/model` form. Pass the string as `model` to the
+OpenAI SDK or `convexGateway`, for example `openai/gpt-4o-mini` or
+`anthropic/claude-sonnet-4.5`.
+
+The list below comes from [`GET /v1/models`](/ai-gateway/api.mdx#get-v1models)
+and updates automatically. For examples by kind of model, see
+[Embeddings](/ai-gateway/setup.mdx#embeddings),
+[Images and videos](/ai-gateway/images-and-videos.mdx),
+[Voice](/ai-gateway/voice.mdx#models), and
+[Decisions](/ai-gateway/setup.mdx#decisions-with-jev).
+
+## Zero-data-retention routing
+
+**ZDR** marks models with an endpoint in the zero-data-retention catalog at the
+last update. Unmarked models have no catalog match. Availability can change.
+
+Enable [ZDR routing](/ai-gateway/api.mdx#provider-preferences) on each request
+that requires it. The marker alone does not enable it or guarantee that an
+endpoint supports your request. If no eligible endpoint is available, the
+request fails. Image, video, and audio routes do not accept this option.
+
+<ModelsList />
+
+See [Getting started](/ai-gateway/setup) to send a request.

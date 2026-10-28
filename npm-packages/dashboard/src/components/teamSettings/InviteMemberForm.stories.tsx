@@ -1,6 +1,6 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 
-import { TeamMember } from "generatedApi";
+import { TeamMember } from "@convex-dev/platform/managementApi";
 import { InviteMemberForm } from "./InviteMemberForm";
 
 const meta = { component: InviteMemberForm } satisfies Meta<
@@ -16,11 +16,13 @@ const members: TeamMember[] = [
     email: "user1@example.org",
     name: "User 1",
     role: "admin",
+    customRoles: [],
   },
   {
     id: 2,
     email: "user2@example.org",
     role: "developer",
+    customRoles: [],
   },
 ];
 export const Primary: Story = {
@@ -36,6 +38,6 @@ export const Primary: Story = {
       referredBy: null,
     },
     members,
-    hasAdminPermissions: true,
+    canInvite: true,
   },
 };

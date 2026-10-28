@@ -3,7 +3,9 @@ title: "Local Deployments for Development"
 slug: "local-deployments"
 sidebar_position: 10
 sidebar_label: "Local Deployments"
-description: "Develop with Convex using deployments running locally on your machine"
+sidebar_class_name: "convex-sidebar-beta-badge"
+description:
+  "Develop with Convex using deployments running locally on your machine"
 ---
 
 Instead of syncing code to a Convex dev deployment hosted in the cloud, you can
@@ -15,12 +17,16 @@ Convex dashboard with local deployments!
 Each Convex deployment contains its own data, functions, scheduled functions,
 etc. A project has one production deployment, up to one cloud deployment for
 development per team member, and potentially many transient
-[preview deployments](/production/hosting/preview-deployments.mdx).
+[preview deployments](/production/multiple-deployments.mdx#preview).
 
 You can also develop with Convex using a deployment running on your own machine.
 Since the deployment is running locally, code sync is faster and means resources
 like functions calls and database bandwidth don't count against
 [the quotas for your Convex plan](https://www.convex.dev/pricing).
+
+[AI Gateway](/ai-gateway/setup.mdx#local-development) requests still use the
+cloud gateway and are charged to the linked project's team, even when your
+functions run locally.
 
 You can use local deployments with an existing Convex project, and view your
 deployment in the Convex dashboard under your project. You can also use local
@@ -51,13 +57,17 @@ local deployments with your account.
 To use a local deployment for an existing project, run:
 
 ```sh
-npx convex dev --local --once
+npx convex deployment select local
 ```
 
-You'll also always be given the option for a local deployment if you run
-`npx convex dev --configure`. Other flows may assume you want a cloud deployment
-in some situations, for example when connecting to a project for which you
-already have a cloud development deployment.
+The CLI commands you run next (for instance `npx convex dev`) will target your
+local deployment.
+
+If you want to go back to your personal cloud dev deployment, run:
+
+```sh
+npx convex deployment select dev
+```
 
 ## Local deployments vs. production
 
@@ -67,23 +77,10 @@ responses are sent to connected clients.
 
 For running a production application, you can use a production deployment hosted
 on the Convex cloud. Learn more about deploying to production
-[here](/production.mdx).
+[here](/production/overview.mdx).
 
 Alternatively, you can self-host a production deployment using the
-[open source convex-backend repo](https://github.com/get-convex/convex-backend).
-
-### Disabling
-
-To stop using local developments for a project, run the following:
-
-```sh
-npx convex disable-local-deployments
-```
-
-Remember your cloud dev deployment and each local dev deployment are completely
-separate, so contain different data. When switching between deployments you may
-wish to [export and re-import](/database/import-export/import-export.mdx) the
-data to keep using it.
+[open source convex-backend repo](https://github.com/convex/convex-backend).
 
 ## Limitations
 
@@ -94,14 +91,14 @@ data to keep using it.
   computer. Set up a proxy like ngrok or use a cloud deployment for these uses
   cases.
 
-- **Node actions require specific Node.js versions** - Running Node.js actions
-  (actions defined in files with `"use node;"`) requires having the same version
-  of Node.js as your project is
-  [configured for](/production/project-configuration#configuring-the-nodejs-version).
-  By default this is Node.js 20 today, though this may change in the future. To
-  resolve this you can install and set up [nvm](https://github.com/nvm-sh/nvm)
-  and then install the required Node.js version. You don't need to use this
-  version for the rest of your project.
+- **Node actions use your installed Node.js version** - Local deployments run
+  Node.js actions (actions defined in files with `"use node;"`) with the `node`
+  on your `PATH` instead of the version your project is
+  [configured for](/config/convex.json#configuring-the-nodejs-version), so they
+  may behave differently than in a cloud deployment. This must be one of the
+  [supported Node.js versions](/config/convex.json#configuring-the-nodejs-version).
+  If your default Node.js version isn't supported, you can install and set up
+  [nvm](https://github.com/nvm-sh/nvm) to switch to a supported version.
 
 - **Node.js actions run directly on your computer** - Like a normal Node.js
   server, code running in Node.js actions has unrestricted filesystem access.
@@ -123,7 +120,12 @@ data to keep using it.
   - Go to `brave://flags/`
   - Enable the `#brave-localhost-access-permission` flag
   - Go back to the Convex dashboard
-  - Click on **View Site Information**
-    (<img src="/screenshots/brave-site-information.png" alt="View Site Information icon" width={24} style={{ verticalAlign: "middle" }} />)
-    in the URL bar, then on **Site settings**
+  - Click on **View Site Information** (
+    <img
+      src="/screenshots/brave-site-information.png"
+      alt="View Site Information icon"
+      width={24}
+      style={{ verticalAlign: "middle" }}
+    />
+    ) in the URL bar, then on **Site settings**
   - Change the setting for **Localhost access** to **Allow**

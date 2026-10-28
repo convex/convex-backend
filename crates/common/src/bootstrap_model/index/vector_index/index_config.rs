@@ -12,7 +12,6 @@ use value::{
 use super::VectorDimensions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct VectorIndexSpec {
     // Dimensions of the vectors
     pub dimensions: VectorDimensions,
@@ -26,7 +25,6 @@ pub struct VectorIndexSpec {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SerializedVectorIndexSpec {
     // Support legacy alpha users with the old dimension field.
     #[serde(alias = "dimension")]

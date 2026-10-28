@@ -27,7 +27,7 @@ use value::sha256::{
     Sha256Digest,
 };
 
-pub const HTTP_ACTION_BODY_LIMIT: usize = 20 << 20;
+pub const HTTP_ACTION_RESPONSE_BODY_LIMIT: usize = 100 << 20;
 
 pub struct HttpActionRequest {
     pub head: HttpActionRequestHead,
@@ -94,89 +94,21 @@ impl TryFrom<pb::common::HttpActionRequestHead> for HttpActionRequestHead {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for HttpActionRequest {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = HttpActionRequest>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use futures::{
-            stream,
-            StreamExt,
-        };
-        use proptest::prelude::*;
-        use proptest_http::{
-            ArbitraryHeaderMap,
-            ArbitraryUri,
-        };
-        prop_compose! {
-            fn inner()(
-                ArbitraryHeaderMap(headers) in any::<ArbitraryHeaderMap>(),
-                method in any::<RoutableMethod>(),
-                ArbitraryUri(uri) in any::<ArbitraryUri>(),
-                body in any::<Option<Vec<u8>>>()) -> anyhow::Result<HttpActionRequest> {
-                    let origin: String = "http://example-deployment.convex.site/".to_string();
-                    let path_and_query: String =  uri.path_and_query().ok_or_else(|| anyhow::anyhow!("No path and query"))?.to_string();
-                    let url: Url = Url::parse(&(origin + &path_and_query))?;
-                Ok(HttpActionRequest {
-                    head: HttpActionRequestHead {
-                        headers,
-                        method: method.to_string().parse()?,
-                        url,
-                    },
-                    body: body.map(|body| stream::once(async move { Ok(body.into())}).boxed())
-
-                })
-            }
-        };
-        inner().prop_filter_map("Invalid HttpActionRequest", |r| r.ok())
-    }
-}
-
-/// HTTP Action responses are usually streamed via HttpActionResponsePart, so
-/// this struct is only used in tests for convenience
-#[cfg(any(test, feature = "testing"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HttpActionResponse {
-    pub body: Option<Vec<u8>>,
-    pub status: StatusCode,
-    pub headers: HeaderMap,
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl HttpActionResponse {
-    pub fn body(&self) -> &Option<Vec<u8>> {
-        &self.body
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for HttpActionResponse {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = HttpActionResponse>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        use proptest_http::{
-            ArbitraryHeaderMap,
-            ArbitraryStatusCode,
-        };
-        prop_compose! {
-            fn inner()(
-                ArbitraryHeaderMap(headers) in any::<ArbitraryHeaderMap>(),
-                ArbitraryStatusCode(status) in any::<ArbitraryStatusCode>(),
-                body in any::<Option<Vec<u8>>>()) -> anyhow::Result<HttpActionResponse> {
-                Ok(HttpActionResponse {
-                    status,
-                    headers,
-                    body
-
-                })
-            }
-        };
-        inner().prop_filter_map("Invalid HttpActionRequest", |r| r.ok())
+impl From<HttpActionRequestHead> for pb::common::HttpActionRequestHead {
+    fn from(
+        HttpActionRequestHead {
+            headers,
+            url,
+            method,
+        }: HttpActionRequestHead,
+    ) -> Self {
+        Self {
+            http_headers: normalize_header_map(headers)
+                .map(HttpHeader::from)
+                .collect(),
+            url: url.to_string(),
+            method: method.to_string(),
+        }
     }
 }
 

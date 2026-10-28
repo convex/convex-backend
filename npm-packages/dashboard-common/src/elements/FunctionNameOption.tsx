@@ -1,7 +1,4 @@
 import { ROUTABLE_HTTP_METHODS } from "convex/server";
-import { useHoverDirty } from "react-use";
-import { useRef } from "react";
-import { cn } from "@ui/cn";
 import {
   displayName,
   functionIdentifierFromValue,
@@ -51,68 +48,56 @@ export function FunctionNameOption({
     displayName(functionIdentifier.identifier),
   );
 
-  const hoverPrimary = primary;
-  const hoverSecondary = secondary;
+  const fullName = secondary + primary;
 
   // Leave some room for the component icon if there is a component path.
   const maxCharsShown = componentPath ? maxChars - 2 : maxChars;
 
+  const isTruncated =
+    !disableTruncation &&
+    (primary.length > maxCharsShown ||
+      secondary.length + primary.length > maxCharsShown);
+
   if (primary.length > maxCharsShown) {
-    primary = `...${primary.slice(primary.length - maxCharsShown + 3)}`;
+    primary = `…${primary.slice(primary.length - maxCharsShown + 1)}`;
 
     secondary = "";
   } else if (secondary.length + primary.length > maxCharsShown) {
-    secondary = `...${secondary.slice(
-      secondary.length - (maxCharsShown - primary.length) + 3,
+    secondary = `…${secondary.slice(
+      secondary.length - (maxCharsShown - primary.length) + 1,
     )}`;
   }
-
-  const ref = useRef<HTMLDivElement>(null);
-  const isHovering = useHoverDirty(ref);
 
   if (primary === "_other" && secondary === "") {
     return <span className="w-full">Other functions</span>;
   }
 
-  const showHover =
-    !disableTruncation &&
-    isHovering &&
-    (primary !== hoverPrimary || secondary !== hoverSecondary);
-  return (
-    <div className="flex w-full items-center space-x-1" ref={ref}>
+  const content = (
+    <div className="flex w-full items-center space-x-1">
       {componentPath && (
-        <Tooltip tip={componentPath}>
+        <Tooltip tip={componentPath} className="shrink-0">
           <PuzzlePieceIcon />
         </Tooltip>
       )}
-      <div className="group/overlay relative" role="tooltip">
+      <span
+        aria-label={fullName}
+        className={oneLine ? "min-w-0 truncate" : undefined}
+      >
         <span
-          className={cn(
-            "absolute top-[-3px] z-10 hidden rounded-sm border bg-background-secondary p-0.5",
-            oneLine
-              ? "right-[-3px]"
-              : "max-w-full break-words whitespace-normal",
-            showHover && "block",
-            !disableTruncation &&
-              "group-focus/overlay:block group-focus/overlay:ring-3",
-          )}
+          className={error ? "text-content-error" : "text-content-secondary"}
         >
-          <span className="text-content-secondary">{hoverSecondary}</span>
-          <span className="text-content-primary">{hoverPrimary}</span>
+          {secondary}
         </span>
-        <span aria-label={hoverSecondary + hoverPrimary}>
-          <span
-            className={error ? "text-content-error" : "text-content-secondary"}
-          >
-            {disableTruncation ? hoverSecondary : secondary}
-          </span>
-          <span
-            className={error ? "text-content-error" : "text-content-primary"}
-          >
-            {disableTruncation ? hoverPrimary : primary}
-          </span>
+        <span className={error ? "text-content-error" : "text-content-primary"}>
+          {primary}
         </span>
-      </div>
+      </span>
     </div>
   );
+
+  if (isTruncated) {
+    return <Tooltip tip={fullName}>{content}</Tooltip>;
+  }
+
+  return content;
 }

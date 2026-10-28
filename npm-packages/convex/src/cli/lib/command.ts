@@ -8,6 +8,7 @@ import {
   parseInteger,
   parsePositiveInteger,
 } from "./utils/utils.js";
+import { INLINE_QUERY_DESCRIPTION } from "./runTestFunction.js";
 
 declare module "@commander-js/extra-typings" {
   interface Command<Args extends any[] = [], Opts extends OptionValues = {}> {
@@ -83,11 +84,12 @@ declare module "@commander-js/extra-typings" {
      * Adds options and arguments for the `run` command.
      */
     addRunOptions(): Command<
-      [...Args, string, string | undefined],
+      [...Args, string | undefined, string | undefined],
       Opts & {
         watch?: boolean;
         push?: boolean;
         identity?: string;
+        inlineQuery?: string;
         typecheck: "enable" | "try" | "disable";
         typecheckComponents: boolean;
         codegen: "enable" | "disable";
@@ -145,6 +147,7 @@ declare module "@commander-js/extra-typings" {
         history: number;
         success: boolean;
         jsonl: boolean;
+        tail?: number | boolean;
       }
     >;
 
@@ -213,10 +216,14 @@ Command.prototype.addDeploymentSelectionOptions = function (
       new Option(
         "--deployment <deployment>",
         action +
-          " the specified deployment. Accepts a deployment name (e.g. joyful-capybara-123), ref (e.g. dev/james), 'dev' (for your personal dev deployment), 'prod' (for your project’s default production deployment). You can also select deployments in other projects with 'project-slug:ref' or 'team-slug:project-slug:ref'.",
-      )
-        .conflicts(["--prod", "--preview-name", "--deployment-name", "--url"])
-        .hideHelp(), // TODO(nicolas) Make this public
+          " a specific deployment. Accepts:\n" +
+          "• a deployment name (e.g. joyful-capybara-123)\n" +
+          "• a deployment reference (e.g. dev/james, staging)\n" +
+          "• `dev` (for your personal dev deployment)\n" +
+          "• `prod` (for your project’s default production deployment)\n" +
+          "• `local` (for your local dev deployment)." +
+          "\nYou can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.",
+      ).conflicts(["--prod", "--preview-name", "--deployment-name", "--url"]),
     )
     .addOption(
       new Option(
@@ -243,16 +250,17 @@ export async function normalizeDevOptions(
     codegen: "enable" | "disable";
     once?: boolean;
     untilSuccess: boolean;
-    run?: string | undefined;
+    start?: string;
     runSh?: string;
+    run?: string | undefined;
     runComponent?: string;
     tailLogs?: string | true;
-    logJsonl?: boolean;
     traceEvents: boolean;
     debugBundlePath?: string | undefined;
     debugNodeApis?: boolean;
     liveComponentSources?: boolean;
     pushAllModules?: boolean;
+    allowUnstagingSchema?: boolean;
     while?: string;
   },
 ): Promise<{
@@ -267,12 +275,12 @@ export async function normalizeDevOptions(
     | { kind: "shell"; command: string }
     | undefined;
   tailLogs: LogMode;
-  logJsonl: boolean;
   traceEvents: boolean;
   debugBundlePath?: string | undefined;
   debugNodeApis: boolean;
   liveComponentSources: boolean;
   pushAllModules: boolean;
+  allowUnstagingSchema: boolean;
 }> {
   if (cmdOptions.runComponent && !cmdOptions.run) {
     return await ctx.crash({
@@ -311,22 +319,22 @@ export async function normalizeDevOptions(
             name: cmdOptions.run,
             component: cmdOptions.runComponent,
           }
-        : cmdOptions.runSh !== undefined
+        : (cmdOptions.start ?? cmdOptions.runSh) !== undefined
           ? {
               kind: "shell",
-              command: cmdOptions.runSh,
+              command: (cmdOptions.start ?? cmdOptions.runSh)!,
             }
           : undefined,
     tailLogs:
       typeof cmdOptions.tailLogs === "string"
         ? (cmdOptions.tailLogs as LogMode)
         : "pause-on-deploy",
-    logJsonl: !!cmdOptions.logJsonl,
     traceEvents: cmdOptions.traceEvents,
     debugBundlePath: cmdOptions.debugBundlePath,
     debugNodeApis: !!cmdOptions.debugNodeApis,
     liveComponentSources: !!cmdOptions.liveComponentSources,
     pushAllModules: !!cmdOptions.pushAllModules,
+    allowUnstagingSchema: !!cmdOptions.allowUnstagingSchema,
   };
 }
 
@@ -336,7 +344,12 @@ Command.prototype.addDeployOptions = function () {
       "--dry-run",
       "Print out the generated configuration without deploying to your Convex deployment",
     )
-    .option("-y, --yes", "Skip confirmation prompt when running locally")
+    .addOption(
+      new Option(
+        "-y, --yes",
+        "Skip confirmation prompt when running interactively. Warning: this deploys to PRODUCTION. To deploy to your current dev environment, run npx convex dev --once",
+      ).hideHelp(),
+    )
     .addOption(
       new Option(
         "--typecheck <mode>",
@@ -402,7 +415,7 @@ Command.prototype.addSelfHostOptions = function () {
 Command.prototype.addRunOptions = function () {
   return (
     this.argument(
-      "functionName",
+      "[functionName]",
       "identifier of the function to run, like `listMessages` or `dir/file:myFunction`",
     )
       .argument(
@@ -412,6 +425,12 @@ Command.prototype.addRunOptions = function () {
       .option(
         "-w, --watch",
         "Watch a query, printing its result if the underlying data changes. Given function must be a query.",
+      )
+      .addOption(
+        new Option(
+          "--inline-query <query>",
+          INLINE_QUERY_DESCRIPTION,
+        ).conflicts("--watch"),
       )
       .option("--push", "Push code to deployment before running the function.")
       .addOption(
@@ -447,7 +466,7 @@ Command.prototype.addRunOptions = function () {
       .addOption(
         new Option(
           "--component <path>",
-          "Path to the component in the component tree defined in convex.config.ts.",
+          'Path to the component (e.g. "workflow" or "workflow/workpool")',
         ),
       )
       .addOption(new Option("--live-component-sources").hideHelp())
@@ -479,8 +498,8 @@ Command.prototype.addImportOptions = function () {
       new Option(
         "--replace-all",
         "Replace all existing data in the deployment with the imported tables,\n" +
-          "  deleting tables that don't appear in the import file or the schema,\n" +
-          "  and clearing tables that appear in the schema but not in the import file",
+          "deleting tables that don't appear in the import file or the schema,\n" +
+          "and clearing tables that appear in the schema but not in the import file",
       )
         .conflicts("--append")
         .conflicts("--replace"),
@@ -502,7 +521,7 @@ Command.prototype.addImportOptions = function () {
     .addOption(
       new Option(
         "--component <path>",
-        "Path to the component in the component tree defined in convex.config.ts.",
+        'Path to the component (e.g. "workflow" or "workflow/workpool")',
       ),
     );
 };
@@ -539,7 +558,7 @@ Command.prototype.addDataOptions = function () {
     .addOption(
       new Option(
         "--component <path>",
-        "Path to the component in the component tree defined in convex.config.ts.",
+        'Path to the component (e.g. "workflow" or "workflow/workpool")',
       ),
     )
     .addOption(
@@ -565,7 +584,15 @@ Command.prototype.addLogsOptions = function () {
       "Print a log line for every successful function execution",
       false,
     )
-    .option("--jsonl", "Output raw log events as JSONL", false);
+    .option("--jsonl", "Output raw log events as JSONL", false)
+    .addOption(
+      new Option(
+        "--tail [n]",
+        "Deprecated/unnecessary: `convex logs` already tails by default. Accepted as an alias for --history for compatibility with agents that pass it.",
+      )
+        .argParser(parseInteger)
+        .hideHelp(),
+    );
 };
 
 Command.prototype.addNetworkTestOptions = function () {

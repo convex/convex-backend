@@ -32,6 +32,7 @@ use database::{
     SchemaDiff,
     SchemaModel,
     SchemaValidationProgressTable,
+    SchemaValidationTable,
     SchemasTable,
     SerializedSchemaDiff,
     SystemMetadataModel,
@@ -149,7 +150,7 @@ impl<'a, RT: Runtime> ComponentDefinitionConfigModel<'a, RT> {
             for (module_path, module) in downloaded_source_package {
                 // NB: The source package here may contain more modules (e.g. `_deps/*`) that
                 // aren't in `new_definition.functions`.
-                if !functions.contains_key(module_path) {
+                if !module_path.is_deps() && !functions.contains_key(module_path) {
                     // TODO: It's a bit kludgy that we're filling in a default value here rather
                     // than earlier in the push pipeline.
                     tracing::warn!("Module not in functions: {:?}", module_path);
@@ -266,6 +267,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
         &mut self,
         app: &CheckedComponent,
         new_definitions: &BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
+        skip_index_diff: bool,
     ) -> anyhow::Result<SchemaChange> {
         let existing_components_by_parent = BootstrapComponentsModel::new(self.tx)
             .load_all_components()
@@ -309,9 +311,12 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                     .get(&new_node.definition_path)
                     .context("Missing definition for component")?;
                 let schema_id = if let Some(ref schema) = definition.schema {
-                    let index_diff = IndexModel::new(self.tx)
-                        .prepare_new_and_mutated_indexes(namespace, schema)
-                        .await?;
+                    if !skip_index_diff {
+                        let index_diff = IndexModel::new(self.tx)
+                            .prepare_new_and_mutated_indexes(namespace, schema)
+                            .await?;
+                        index_diffs.insert(path.clone(), index_diff.into());
+                    }
 
                     let (schema_id, schema_state) = SchemaModel::new(self.tx, namespace)
                         .submit_pending(schema.clone())
@@ -324,9 +329,16 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                             );
                         },
                     };
-                    index_diffs.insert(path.clone(), index_diff.into());
                     Some(schema_id.into())
                 } else {
+                    // Properly populate the index diff when there is no schema in the new push. We
+                    // treat this as no indexes being defined
+                    if !skip_index_diff {
+                        let index_diff = IndexModel::new(self.tx)
+                            .get_index_diff(namespace, &BTreeMap::new())
+                            .await?;
+                        index_diffs.insert(path.clone(), index_diff.into());
+                    }
                     None
                 };
                 schema_ids.insert(path.clone(), schema_id);
@@ -379,6 +391,13 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
         initialize_application_system_table(
             self.tx,
             &SchemaValidationProgressTable,
+            component_id.into(),
+            &DEFAULT_TABLE_NUMBERS,
+        )
+        .await?;
+        initialize_application_system_table(
+            self.tx,
+            &SchemaValidationTable,
             component_id.into(),
             &DEFAULT_TABLE_NUMBERS,
         )
@@ -448,18 +467,21 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                     let component_type = match parent_and_name {
                         None => {
                             anyhow::ensure!(new_node.args.is_empty());
+                            anyhow::ensure!(new_node.env.is_empty());
                             ComponentType::App
                         },
                         Some((parent, name)) => ComponentType::ChildComponent {
                             parent,
                             name,
                             args: new_node.args.clone(),
+                            env: new_node.env.clone(),
                         },
                     };
                     Ok(ComponentMetadata {
                         definition_id,
                         component_type,
                         state: ComponentState::Active,
+                        http_prefix: new_node.http_prefix.clone(),
                     })
                 })
                 .transpose()?;
@@ -484,6 +506,16 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                 },
                 // Update a node.
                 (Some(existing_node), Some(new_metadata)) => {
+                    // A concurrent push created this component with a different namespace
+                    // than our `start_push` allocated.
+                    if let Some(allocated_id) = schema_change.allocated_component_ids.get(&path)
+                        && *allocated_id != existing_node.developer_id()
+                    {
+                        anyhow::bail!(ErrorMetadata::conflict(
+                            "RaceDetected",
+                            format!("Component {path} was created by a concurrent push"),
+                        ));
+                    }
                     let schema_id = self.schema_id_from_schema_change(schema_change, &path)?;
                     self.modify_component(
                         existing_node,
@@ -780,7 +812,9 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                             definition_type: ComponentDefinitionType::App,
                             child_components: Vec::new(),
                             http_mounts: BTreeMap::new(),
+                            http_prefix: None,
                             exports: BTreeMap::new(),
+                            env_vars: BTreeMap::new(),
                         },
                     )
                     .await?;
@@ -849,10 +883,6 @@ struct TreeDiffChild<'a> {
 }
 
 #[derive(Debug, Clone, AsRefStr)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub enum ComponentDiffType {
     Create,
     Modify,
@@ -861,10 +891,6 @@ pub enum ComponentDiffType {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct ComponentDiff {
     pub diff_type: ComponentDiffType,
     pub module_diff: ModuleDiff,

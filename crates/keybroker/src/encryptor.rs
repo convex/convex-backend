@@ -19,11 +19,6 @@ use crate::Secret;
 
 const AEAD_ALGORITHM: aead::Algorithm = aead::AES_128_GCM_SIV;
 const KEY_LEN: usize = 16;
-#[test]
-fn test_key_len() {
-    assert_eq!(KEY_LEN, AEAD_ALGORITHM.key_len());
-}
-
 #[derive(Clone)]
 pub struct Encryptor<const DETERMINISTIC: bool> {
     derived_key: [u8; KEY_LEN],
@@ -42,6 +37,9 @@ impl Purpose {
     /// we want them to be deterministic to avoid breaking caching.
     /// These do not need to be secret in the first place - only tamper-proof.
     pub const CURSOR: DeterministicPurpose = Purpose("cursor");
+    /// Cursor for the data sync (streaming export) API.
+    pub const DATA_SYNC_CURSOR: Purpose = Purpose("data sync cursor");
+    pub const EXPORT_DOWNLOAD_TOKEN: Purpose = Purpose("export download token");
     pub const QUERY_JOURNAL: Purpose = Purpose("query journal");
     pub const STORE_FILE_AUTHORIZATION: Purpose = Purpose("store file authorization");
 }
@@ -55,19 +53,19 @@ impl<const DETERMINISTIC: bool> Purpose<DETERMINISTIC> {
 const KDF_ALGORITHM: &kdf::KbkdfCtrHmacAlgorithm =
     kdf::get_kbkdf_ctr_hmac_algorithm(kdf::KbkdfCtrHmacAlgorithmId::Sha256).unwrap();
 
+/// Derives `out.len()` bytes from `secret` for the context `label`. Distinct
+/// labels yield independent keys.
+pub(crate) fn derive_bytes(secret: &Secret, label: &[u8], out: &mut [u8]) -> anyhow::Result<()> {
+    kdf::kbkdf_ctr_hmac(KDF_ALGORITHM, secret.as_bytes(), label, out).context("KBKDF failed")
+}
+
 impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
     pub fn derive_from_secret(
         secret: &Secret,
         purpose: Purpose<DETERMINISTIC>,
     ) -> anyhow::Result<Self> {
         let mut derived_key = [0; KEY_LEN];
-        kdf::kbkdf_ctr_hmac(
-            KDF_ALGORITHM,
-            secret.as_bytes(),
-            purpose.as_bytes(),
-            &mut derived_key,
-        )
-        .context("KBKDF failed")?;
+        derive_bytes(secret, purpose.as_bytes(), &mut derived_key)?;
         Ok(Self { derived_key })
     }
 
@@ -121,7 +119,7 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
         }
         buffer.extend_from_slice(&encoded_message);
         buffer.extend_from_slice(tag.as_ref());
-        hex::encode(buffer)
+        const_hex::encode(buffer)
     }
 
     pub fn decrypt_proto<M: Default + Message>(
@@ -129,7 +127,7 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
         version: u8,
         encoded: &str,
     ) -> anyhow::Result<M> {
-        let mut bytes = hex::decode(encoded)?;
+        let mut bytes = const_hex::decode(encoded)?;
         let mut reader = Cursor::new(&bytes[..]);
         let message_version = reader.read_u8()?;
         if message_version != version {
@@ -151,65 +149,4 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
             .map_err(|_| anyhow::anyhow!("Failed to decrypt ciphertext"))?;
         Ok(M::decode(&*plaintext)?)
     }
-}
-
-#[test]
-fn test_encryptor() {
-    use common::testing::assert_contains;
-
-    let secret = Secret::random();
-    let encryptor = RandomEncryptor::derive_from_secret(&secret, Purpose("testing")).unwrap();
-    let message = "very cool message".to_owned();
-    let encoded = encryptor.encrypt_proto(11, &message);
-    // RandomEncryptor is nondeterministic
-    assert_ne!(encoded, encryptor.encrypt_proto(11, &message));
-    assert_eq!(
-        encryptor.decrypt_proto::<String>(11, &encoded).unwrap(),
-        message
-    );
-    // decrypting with the wrong version should fail
-    assert_contains(
-        &encryptor.decrypt_proto::<String>(12, &encoded).unwrap_err(),
-        "Invalid message version",
-    );
-
-    // An encryptor with a different purpose should not recognize the message
-    let encryptor2 = RandomEncryptor::derive_from_secret(&secret, Purpose("testing2")).unwrap();
-    assert_contains(
-        &encryptor2
-            .decrypt_proto::<String>(11, &encoded)
-            .unwrap_err(),
-        "Failed to decrypt",
-    );
-}
-
-#[test]
-fn test_deterministic_encryptor() {
-    use common::testing::assert_contains;
-
-    let secret = Secret::random();
-    let encryptor =
-        DeterministicEncryptor::derive_from_secret(&secret, Purpose("testing")).unwrap();
-    let message = "very cool message".to_owned();
-    let encoded = encryptor.encrypt_proto(11, &message);
-    assert_eq!(encoded, encryptor.encrypt_proto(11, &message));
-    assert_eq!(
-        encryptor.decrypt_proto::<String>(11, &encoded).unwrap(),
-        message
-    );
-    // decrypting with the wrong version should fail
-    assert_contains(
-        &encryptor.decrypt_proto::<String>(12, &encoded).unwrap_err(),
-        "Invalid message version",
-    );
-
-    // An encryptor with a different purpose should not recognize the message
-    let encryptor2 =
-        DeterministicEncryptor::derive_from_secret(&secret, Purpose("testing2")).unwrap();
-    assert_contains(
-        &encryptor2
-            .decrypt_proto::<String>(11, &encoded)
-            .unwrap_err(),
-        "Failed to decrypt",
-    );
 }

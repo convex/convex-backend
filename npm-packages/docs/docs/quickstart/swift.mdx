@@ -6,7 +6,7 @@ hide_table_of_contents: true
 sidebar_position: 600
 ---
 
-Learn how to query data from Convex in an application targeting iOS and MacOS
+Learn how to query data from Convex in an application targeting iOS and macOS
 devices built with Swift and SwiftUI.
 
 This quickstart assumes that you have a Mac with Xcode, node and npm installed.
@@ -19,10 +19,11 @@ If you don’t have those tools, take time to install them first.
     3. Name your project something like “ConvexQuickstart”
     4. Ensure Language is set to Swift and User Interface is SwiftUI
     5. Click *Next*
-    
+
     <p style={{textAlign: 'center'}}>
       <img src="/screenshots/swift_qs_step_1.png" alt="Create new iOS project" width={600} />
     </p>
+
   </Step>
 
   <Step title="Configure dependencies">
@@ -33,11 +34,11 @@ If you don’t have those tools, take time to install them first.
     4.  Click the + button (See Screenshot)
     5.  Paste
         ```
-        https://github.com/get-convex/convex-swift
+        https://github.com/convex/convex-swift
         ```
         into the search box and press enter
     6.  When the `convex-swift` package loads, click the *Add Package* button
-    7.  In the *Package Products* dialog, select ConvexQuickstart in the 
+    7.  In the *Package Products* dialog, select ConvexQuickstart in the
         *Add to Target* dropdown
     8.  Click the Add Package button
 
@@ -52,7 +53,7 @@ If you don’t have those tools, take time to install them first.
     created. Run the following commands to install the Convex client and
     server library.
 
-    ```bash
+    ```sh
     npm init -y
     npm install convex
     ```
@@ -63,7 +64,7 @@ If you don’t have those tools, take time to install them first.
     Start a Convex dev deployment. Follow the command line instructions to
     create a new project.
 
-    ```bash
+    ```sh
     npx convex dev
     ```
 
@@ -85,7 +86,7 @@ If you don’t have those tools, take time to install them first.
     Open another terminal tab by pressing ⌘+T which should open in your Swift
     project directory and run
 
-    ```bash
+    ```sh
     npx convex import --table tasks sampleData.jsonl
     ```
 
@@ -184,4 +185,4 @@ If you don’t have those tools, take time to install them first.
 
 </StepByStep>
 
-See the complete [iOS Swift documentation](/client/swift.md).
+See the complete [iOS Swift documentation](/client/swift/overview.mdx).

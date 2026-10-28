@@ -11,8 +11,8 @@
   "dependencies": {
     "bootstrap": "^5.0.2",
     "convex": "workspace:*",
-    "convex-ents": "^0.16.0",
-    "convex-helpers": "^0.1.105",
+    "convex-ents": "^0.20.0",
+    "convex-helpers": "^0.1.129",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
     "@popperjs/core": "~2.11.6"
@@ -27,7 +27,7 @@
     "eslint": "^9.37.0",
     "shx": "~0.4.0",
     "typescript": "~5.0.3",
-    "typescript-eslint": "~8.38.0",
-    "vite": "^6.4.1"
+    "typescript-eslint": "~8.57.0",
+    "vite": "^6.4.4"
   }
 }

@@ -12,7 +12,9 @@ export default function Index() {
         alignItems: "center",
       }}
     >
-      {tasks?.map(({ _id, text }) => <Text key={_id}>{text}</Text>)}
+      {tasks?.map(({ _id, text }) => (
+        <Text key={_id}>{text}</Text>
+      ))}
     </View>
   );
 }

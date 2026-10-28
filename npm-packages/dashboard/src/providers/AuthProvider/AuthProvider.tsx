@@ -19,6 +19,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [error, setError] = useState<Error | null>(null);
 
   const fetchSession = useCallback(async () => {
+    let redirecting = false;
     try {
       setError(null);
       const response = await fetch("/api/auth/session");
@@ -28,6 +29,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setSession(sessionData);
       } else if (response.status === 401) {
         setSession(null);
+      } else if (
+        response.status === 503 &&
+        window.location.pathname !== "/login-error"
+      ) {
+        redirecting = true;
+        window.location.assign(
+          `/login-error?returnTo=${encodeURIComponent(
+            window.location.pathname + window.location.search,
+          )}`,
+        );
+        return;
       } else {
         throw new Error("Failed to fetch session");
       }
@@ -35,7 +47,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setError(err as Error);
       setSession(null);
     } finally {
-      setIsLoading(false);
+      if (!redirecting) {
+        setIsLoading(false);
+      }
     }
   }, []);
 

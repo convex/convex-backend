@@ -1,4 +1,5 @@
 #![feature(coroutines)]
+#![feature(str_as_str)]
 #![feature(iter_from_coroutine)]
 #![feature(iterator_try_collect)]
 #![feature(impl_trait_in_assoc_type)]
@@ -21,14 +22,8 @@ mod json;
 mod overlaps;
 mod subtype;
 mod supertype;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
-
 pub mod export_context;
 pub mod pretty;
-#[cfg(test)]
-mod tests;
-
 use std::{
     collections::BTreeMap,
     sync::Arc,

@@ -8,10 +8,17 @@ import {
   CrossCircledIcon,
   ExclamationTriangleIcon,
 } from "@radix-ui/react-icons";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
 import { InsightsSummary } from "./InsightsSummary";
 import { severityForInsightKind } from "./InsightsSummaryListItem";
 
-export function SmallInsightsSummary({ onViewAll }: { onViewAll: () => void }) {
+export function SmallInsightsSummary({
+  onViewAll,
+  canViewInsights,
+}: {
+  onViewAll: () => void;
+  canViewInsights?: boolean;
+}) {
   const deployment = useCurrentDeployment();
   const insights = useInsights();
   const { from } = useInsightsPeriod();
@@ -35,13 +42,13 @@ export function SmallInsightsSummary({ onViewAll }: { onViewAll: () => void }) {
     <span className="flex animate-fadeInFromLoading items-center gap-3 text-xs text-content-secondary">
       {criticalCount > 0 && (
         <span className="flex items-center gap-1 text-content-error">
-          <CrossCircledIcon className="h-3 w-3 min-w-3" />
+          <CrossCircledIcon className="size-3 min-w-3" />
           {criticalCount} critical
         </span>
       )}
       {warningCount > 0 && (
         <span className="flex items-center gap-1 text-content-warning">
-          <ExclamationTriangleIcon className="h-3 w-3 min-w-3" />
+          <ExclamationTriangleIcon className="size-3 min-w-3" />
           {warningCount} warning{warningCount !== 1 ? "s" : ""}
         </span>
       )}
@@ -54,41 +61,52 @@ export function SmallInsightsSummary({ onViewAll }: { onViewAll: () => void }) {
       id="insights"
       title="Insights"
       defaultOpen
-      closedDescription={closedDescription}
+      closedDescription={canViewInsights === false ? null : closedDescription}
     >
-      <Sheet
-        padding={false}
-        className="flex w-full animate-fadeInFromLoading flex-col"
-      >
-        <div className="flex items-center justify-between p-2">
-          <span className="text-xs text-content-secondary">
-            {new Date(from).toLocaleString([], {
-              year: "numeric",
-              month: "numeric",
-              day: "numeric",
-              hour: "numeric",
-              minute: undefined,
-            })}{" "}
-            – Now
-          </span>
-        </div>
-        <InsightsSummary insights={insights?.slice(0, 5)} />
-      </Sheet>
-      <div className="flex">
-        {insights && insights.length > 0 && (
-          <Button
-            variant="neutral"
-            className="m-auto mt-2 w-fit gap-1 hover:bg-background-tertiary"
-            onClick={onViewAll}
+      {canViewInsights === false ? (
+        <Sheet className="flex w-full max-w-3xl animate-fadeInFromLoading flex-col py-12">
+          <NoPermissionMessage
+            message="You do not have permission to view insights."
+            missingPermission="deployment:insights:view"
+          />
+        </Sheet>
+      ) : (
+        <>
+          <Sheet
+            padding={false}
+            className="flex w-full animate-fadeInFromLoading flex-col"
           >
-            View{" "}
-            {insights.length > 6
-              ? `${insights.length - 5} more insights`
-              : "all Insights"}{" "}
-            <ChevronRightIcon />
-          </Button>
-        )}
-      </div>
+            <div className="flex items-center justify-between p-2">
+              <span className="text-xs text-content-secondary">
+                {new Date(from).toLocaleString([], {
+                  year: "numeric",
+                  month: "numeric",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: undefined,
+                })}{" "}
+                – Now
+              </span>
+            </div>
+            <InsightsSummary insights={insights?.slice(0, 5)} />
+          </Sheet>
+          <div className="flex">
+            {insights && insights.length > 0 && (
+              <Button
+                variant="neutral"
+                className="m-auto mt-2 w-fit gap-1 hover:bg-background-tertiary"
+                onClick={onViewAll}
+              >
+                View{" "}
+                {insights.length > 6
+                  ? `${insights.length - 5} more insights`
+                  : "all Insights"}{" "}
+                <ChevronRightIcon />
+              </Button>
+            )}
+          </div>
+        </>
+      )}
     </DisclosureSection>
   );
 }

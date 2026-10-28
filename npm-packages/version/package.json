@@ -4,8 +4,6 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "convex dev",
-    "predev": "convex dev --until-success && convex dashboard",
-    "logs": "convex logs",
     "test": "vitest run --typecheck",
     "dev:test": "vitest --typecheck",
     "build": "convex typecheck 2>&1"
@@ -14,14 +12,15 @@
     "arktype": "^2.1.20",
     "chalk": "5",
     "convex": "workspace:*",
-    "semver": "^7.6.0"
+    "semver": "^7.6.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^18.17.0",
     "@types/semver": "^7.3.13",
     "convex-test": "^0.0.41",
     "typescript": "^5.9.2",
-    "vite": "^6.4.1",
-    "vitest": "^3.2.4"
+    "vite": "^6.4.4",
+    "vitest": "^4.1.0"
   }
 }

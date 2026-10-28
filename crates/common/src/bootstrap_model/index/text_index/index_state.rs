@@ -18,7 +18,6 @@ use crate::bootstrap_model::index::text_index::backfill_state::SerializedTextInd
 /// is committed by the user, they advance to the `SnapshottedAt` state and can
 /// be used in queries.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum TextIndexState {
     Backfilling(TextIndexBackfillState),
     Backfilled {

@@ -6,13 +6,17 @@ export const listNumbers = query({
     count: v.number(),
   },
   handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) {
+      throw new Error("Not authenticated");
+    }
     const numbers = await ctx.db
       .query("numbers")
       // Ordered by _creationTime, return most recent
       .order("desc")
       .take(args.count);
     return {
-      viewer: (await ctx.auth.getUserIdentity())?.name ?? null,
+      viewer: identity.name,
       numbers: numbers.reverse().map((number) => number.value),
     };
   },

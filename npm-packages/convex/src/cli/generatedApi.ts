@@ -301,22 +301,22 @@ export interface components {
             usedEmails: string[];
         };
         CheckProjectEnvironmentHealthRequest: {
-            /** @description WorkOS client ID */
-            clientId: string;
             /**
              * Format: int64
              * @description Project ID
              */
             projectId: number;
+            /** @description WorkOS client ID */
+            clientId: string;
         };
         DeleteProjectEnvironmentRequest: {
-            /** @description WorkOS client ID of the environment to delete */
-            clientId: string;
             /**
              * Format: int64
              * @description Project ID for the environment to delete
              */
             projectId: number;
+            /** @description WorkOS client ID of the environment to delete */
+            clientId: string;
         };
         /** @description Response for deleting a project environment - matches
          *     DeleteWorkOSEnvironmentResponse */
@@ -350,13 +350,13 @@ export interface components {
         /** @description Response for getting a project WorkOS environment with credentials - matches
          *     ProvisionProjectEnvironmentResponse pattern with workos_ prefix */
         GetProjectEnvironmentResponse: {
-            isProduction: boolean;
-            /** @description The user-provided environment name (e.g., "staging", "development") */
-            userEnvironmentName: string;
-            workosApiKey: string;
-            workosClientId: string;
             workosEnvironmentId: string;
             workosEnvironmentName: string;
+            workosClientId: string;
+            workosApiKey: string;
+            /** @description The user-provided environment name (e.g., "staging", "development") */
+            userEnvironmentName: string;
+            isProduction: boolean;
         };
         GetProjectEnvironmentsResponse: {
             environments: components["schemas"]["ProjectEnvironmentSummary"][];
@@ -365,31 +365,31 @@ export interface components {
             deploymentName: string;
         };
         HasAssociatedWorkOSTeamResponse: {
-            /** @description Email of Convex team member who created the WorkOS account.
-             *     This field should always be present when has_associated_workos_team is
-             *     true. */
-            adminConvexEmail?: string | null;
+            hasAssociatedWorkosTeam: boolean;
+            teamId: components["schemas"]["TeamId"];
             /** @description Email address used to provision the WorkOS account. This field should
              *     always be present if has_associated_workos_team is true. */
             adminEmail?: string | null;
             /** @description Name of Convex team member who created the WorkOS account.
              *     This field is optional even when has_associated_workos_team is true. */
             adminName?: string | null;
-            hasAssociatedWorkosTeam: boolean;
-            teamId: components["schemas"]["TeamId"];
+            /** @description Email of Convex team member who created the WorkOS account.
+             *     This field should always be present when has_associated_workos_team is
+             *     true. */
+            adminConvexEmail?: string | null;
         };
         InvitationEligibleEmailsResponse: {
+            eligibleEmails: string[];
             /** @description The admin email used to create this team's WorkOS account (always
              *     eligible for re-invitation) */
             adminEmail?: string | null;
-            eligibleEmails: string[];
         };
         InviteWorkOSTeamMemberRequest: {
+            /** @description Convex team ID that has an associated WorkOS team */
+            teamId: components["schemas"]["TeamId"];
             /** @description Email address to invite to the WorkOS team,
              *     must be a verified email address associated with the user's account */
             email: string;
-            /** @description Convex team ID that has an associated WorkOS team */
-            teamId: components["schemas"]["TeamId"];
         };
         InviteWorkOSTeamMemberResponse: {
             email: string;
@@ -401,36 +401,35 @@ export interface components {
         /** Format: int64 */
         MemberId: number;
         ProjectDetails: {
-            /** Format: int64 */
-            createTime: number;
-            devDeploymentName?: string | null;
             id: components["schemas"]["ProjectId"];
-            isDemo: boolean;
             name: components["schemas"]["ProjectName"];
-            prodDeploymentName?: string | null;
             slug: components["schemas"]["ProjectSlug"];
             teamId: components["schemas"]["TeamId"];
+            /** Format: int64 */
+            createTime: number;
+            prodDeploymentName?: string | null;
+            devDeploymentName?: string | null;
         };
         /** @description Summary of a project WorkOS environment for list responses - slimmer than
          *     full environment details, uses workos_ prefix for consistency with
          *     deployment */
         ProjectEnvironmentSummary: {
-            isProduction: boolean;
-            /** @description The user-provided environment name (e.g., "staging", "development") */
-            userEnvironmentName: string;
-            workosClientId: string;
             workosEnvironmentId: string;
             workosEnvironmentName: string;
+            workosClientId: string;
+            /** @description The user-provided environment name (e.g., "staging", "development") */
+            userEnvironmentName: string;
+            isProduction: boolean;
         };
         /** Format: int64 */
         ProjectId: number;
         ProjectName: string;
         ProjectSlug: string;
         ProvisionEnvironmentResponse: {
-            apiKey: string;
-            clientId: string;
             environmentId: string;
             environmentName: string;
+            clientId: string;
+            apiKey: string;
             newlyProvisioned: boolean;
         };
         ProvisionProjectEnvironmentRequest: {
@@ -440,57 +439,57 @@ export interface components {
         /** @description Response for provisioning a project WorkOS environment - matches
          *     ProvisionEnvironmentResponse pattern with workos_ prefix for consistency */
         ProvisionProjectEnvironmentResponse: {
+            workosEnvironmentId: string;
+            workosEnvironmentName: string;
+            workosClientId: string;
+            workosApiKey: string;
             newlyProvisioned: boolean;
             /** @description The user-provided environment name (e.g., "staging", "development") */
             userEnvironmentName: string;
-            workosApiKey: string;
-            workosClientId: string;
-            workosEnvironmentId: string;
-            workosEnvironmentName: string;
         };
         ProvisionWorkOSTeamRequest: {
+            /** @description Convex team ID, no WorkOS team exists at this point */
+            teamId: components["schemas"]["TeamId"];
             /** @description Email address to use for the WorkOS team admin,
              *     must be a verified email address associated with the user's account */
             email: string;
-            /** @description Convex team ID, no WorkOS team exists at this point */
-            teamId: components["schemas"]["TeamId"];
         };
         ProvisionWorkOSTeamResponse: {
-            adminEmail: string;
             workosTeamId: string;
             workosTeamName: string;
+            adminEmail: string;
         };
         ReferralCode: string;
         /** @enum {string} */
-        RegionName: "aws-us-east-1" | "aws-eu-west-1";
+        RegionName: "aws-us-east-1" | "aws-eu-west-1" | "aws-ca-central-1" | "aws-ap-southeast-2";
         /** Format: int64 */
         TeamId: number;
         TeamName: string;
         TeamResponse: {
-            creator?: null | components["schemas"]["MemberId"];
-            defaultRegion?: null | components["schemas"]["RegionName"];
             id: components["schemas"]["TeamId"];
-            managedBy?: null | components["schemas"]["ManagedBy"];
-            managedByUrl?: string | null;
             name: components["schemas"]["TeamName"];
+            slug: components["schemas"]["TeamSlug"];
+            creator?: null | components["schemas"]["MemberId"];
+            suspended: boolean;
             referralCode: components["schemas"]["ReferralCode"];
             referredBy?: null | components["schemas"]["TeamId"];
-            slug: components["schemas"]["TeamSlug"];
+            managedBy?: null | components["schemas"]["ManagedBy"];
+            defaultRegion?: null | components["schemas"]["RegionName"];
             ssoLoginId?: string | null;
-            suspended: boolean;
+            managedByUrl?: string | null;
         };
         TeamSlug: string;
         WorkOSEnvironmentHealthResponse: {
-            clientId: string;
             id: string;
             name: string;
+            clientId: string;
         };
         /** @enum {string} */
-        WorkOSProductionState: "active" | "inactive";
+        WorkOSProductionState: "active" | "inactive" | "suspended" | "deleting";
         WorkOSTeamHealthResponse: {
-            teamInfo?: null | components["schemas"]["WorkOSTeamInfo"];
             /** @description Whether a WorkOS team has been provisioned for this Convex team */
             teamProvisioned: boolean;
+            teamInfo?: null | components["schemas"]["WorkOSTeamInfo"];
         };
         WorkOSTeamInfo: {
             id: string;

@@ -1,27 +1,38 @@
 use std::{
-    borrow::Cow,
+    borrow::Borrow,
+    cmp::{
+        Ordering,
+        Reverse,
+    },
     collections::{
+        btree_map::Entry,
         BTreeMap,
-        BTreeSet,
+        BinaryHeap,
         VecDeque,
+    },
+    iter,
+    mem,
+    ops::{
+        Bound,
+        Deref,
     },
     sync::Arc,
 };
 
 use common::{
-    bootstrap_model::tables::TableMetadata,
+    components::CanonicalizedComponentFunctionPath,
     document::{
-        DocumentUpdate,
-        DocumentUpdateRef,
+        DocumentUpdateWithPrevTs,
         PackedDocument,
-        ParseDocument,
-        ParsedDocument,
     },
     document_index_keys::{
-        DocumentIndexKeyValue,
-        DocumentIndexKeys,
+        DatabaseIndexWrite,
+        IndexKeyUpdate,
+        TextIndexWrite,
+        Update,
     },
-    index::IndexKeyBytes,
+    erased_slot::ErasedSlot,
+    interval::IntervalSet,
     knobs::{
         WRITE_LOG_MAX_RETENTION_SECS,
         WRITE_LOG_MIN_RETENTION_SECS,
@@ -29,23 +40,23 @@ use common::{
     },
     runtime::block_in_place,
     types::{
-        IndexId,
         RepeatableTimestamp,
+        SubscriberId,
+        TabletIndexName,
         Timestamp,
+        UdfIdentifier,
     },
     value::ResolvedDocumentId,
 };
-use errors::{
-    ErrorMetadata,
-    ErrorMetadataAnyhowExt,
-};
+use errors::ErrorMetadata;
 use futures::Future;
-use imbl::Vector;
+use imbl::{
+    OrdMap,
+    OrdSet,
+};
 use indexing::{
-    backend_in_memory_indexes::{
-        DatabaseIndexSnapshotCache,
-        TimestampedIndexCache,
-    },
+    database_index_snapshot::TimestampedIndexCache,
+    index_cache::WriteLogIndexReader,
     index_registry::IndexRegistry,
 };
 use parking_lot::Mutex;
@@ -53,204 +64,252 @@ use search::query::tokenize;
 use tokio::sync::oneshot;
 use value::{
     heap_size::{
+        ElementsHeapSize,
         HeapSize,
-        WithHeapSize,
     },
-    TableName,
     TabletId,
 };
 
 use crate::{
-    database::ConflictingReadWithWriteSource,
+    database::{
+        ConflictingRead,
+        ConflictingReadWithWriteSource,
+    },
     metrics,
     reads::ReadSet,
     Snapshot,
     Token,
 };
 
+/// The packed writes of a single commit, in `table_dependency_sort_key` order.
+/// Shared because both `PendingWrites` and the off-thread persistence write
+/// need them, and neither mutates them.
+pub type OrderedDocumentWrites = Arc<[PackedDocumentUpdate]>;
+
 #[derive(Clone)]
 pub struct PackedDocumentUpdate {
     pub id: ResolvedDocumentId,
-    pub old_document: Option<PackedDocument>,
+    /// The old document with the timestamp of its revision.
+    pub old_document: Option<(PackedDocument, Timestamp)>,
     pub new_document: Option<PackedDocument>,
 }
 
 impl HeapSize for PackedDocumentUpdate {
     fn heap_size(&self) -> usize {
-        self.old_document.heap_size() + self.new_document.heap_size()
+        self.old_document
+            .as_ref()
+            .map_or(0, |(document, _)| document.heap_size())
+            + self.new_document.heap_size()
     }
 }
 
-type OrderedDocumentWrites = WithHeapSize<Vec<(ResolvedDocumentId, PackedDocumentUpdate)>>;
-
 impl PackedDocumentUpdate {
-    pub fn pack(update: &impl DocumentUpdateRef) -> Self {
+    pub fn pack(update: &DocumentUpdateWithPrevTs) -> Self {
         Self {
-            id: update.id(),
-            old_document: update.old_document().map(PackedDocument::pack),
-            new_document: update.new_document().map(PackedDocument::pack),
+            id: update.id,
+            old_document: update
+                .old_document
+                .as_ref()
+                .map(|(document, ts)| (PackedDocument::pack(document), *ts)),
+            new_document: update.new_document.as_ref().map(PackedDocument::pack),
         }
     }
 
-    pub fn unpack(&self) -> DocumentUpdate {
-        DocumentUpdate {
+    pub fn unpack(&self) -> DocumentUpdateWithPrevTs {
+        DocumentUpdateWithPrevTs {
             id: self.id,
-            old_document: self.old_document.as_ref().map(|doc| doc.unpack()),
+            old_document: self
+                .old_document
+                .as_ref()
+                .map(|(document, ts)| (document.unpack(), *ts)),
             new_document: self.new_document.as_ref().map(|doc| doc.unpack()),
         }
     }
 }
-
-pub type IterWrites<'a> = std::slice::Iter<
-    'a,
-    (
-        ResolvedDocumentId,
-        DocumentIndexKeysUpdate,
-        Option<RefreshableTabletUpdate>,
-    ),
->;
-
-#[derive(Clone)]
-pub struct DocumentIndexKeysUpdate {
-    pub id: ResolvedDocumentId,
-    pub old_document_keys: Option<DocumentIndexKeys>,
-    pub new_document_keys: Option<DocumentIndexKeys>,
+/// Indicates whether an index entry in the write log belongs to the
+/// `by_database_index` or `by_text_index` map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum IndexKind {
+    Database,
+    Text,
 }
 
-impl DocumentIndexKeysUpdate {
-    pub fn from_document_update(
-        full: &PackedDocumentUpdate,
-        index_registry: &IndexRegistry,
-    ) -> Self {
-        Self {
-            id: full.id,
-            old_document_keys: full
-                .old_document
-                .as_ref()
-                .map(|old_doc| index_registry.document_index_keys(old_doc, tokenize)),
-            new_document_keys: full
-                .new_document
-                .as_ref()
-                .map(|new_doc| index_registry.document_index_keys(new_doc, tokenize)),
-        }
+/// The per-commit index-key writes, split by index kind so each Vec holds a
+/// homogeneous update type.
+#[derive(Default)]
+pub struct IndexKeyWrites {
+    pub database: Vec<(TabletIndexName, Arc<WriteInIndex<DatabaseIndexWrite>>)>,
+    pub text: Vec<(TabletIndexName, Arc<WriteInIndex<TextIndexWrite>>)>,
+}
+
+impl IndexKeyWrites {
+    pub fn empty() -> Self {
+        Self::default()
     }
 }
 
-impl HeapSize for DocumentIndexKeysUpdate {
-    fn heap_size(&self) -> usize {
-        self.old_document_keys.heap_size() + self.new_document_keys.heap_size()
-    }
-}
-
-/// Optionally contains [`RefreshableTabletUpdate`] if the document is in system
-/// table whose query caches should be refreshable.
-type OrderedIndexKeyWrites = WithHeapSize<
-    Vec<(
-        ResolvedDocumentId,
-        DocumentIndexKeysUpdate,
-        Option<RefreshableTabletUpdate>,
-    )>,
->;
-
-/// None if the update was a delete.
-pub struct RefreshableTabletUpdate(Option<PackedDocument>);
-
-impl RefreshableTabletUpdate {
-    pub fn document(&self) -> Option<&PackedDocument> {
-        self.0.as_ref()
-    }
-}
-
-impl HeapSize for RefreshableTabletUpdate {
-    fn heap_size(&self) -> usize {
-        self.0.heap_size()
-    }
-}
-
-/// Converts [OrderedDocumentWrites] (the log used in `PendingWrites` that
-/// contains full documents) to [OrderedIndexKeyWrites] (the log used
-/// in `WriteLog` that contains only index keys).
-///
-/// Also updates `refreshable_tablets` if we see changes to table documents that
-/// match `refreshable_tables`.
+/// Converts [PackedDocumentUpdate]s (the log used in `PendingWrites` that
+/// contains full documents) to [IndexKeyWrites] (the log used in `WriteLog`
+/// that contains index keys too).
 pub fn index_keys_from_full_documents(
-    ordered_writes: OrderedDocumentWrites,
+    ts: Timestamp,
+    ordered_writes: &[PackedDocumentUpdate],
+    write_source: &WriteSource,
     index_registry: &IndexRegistry,
-    tables_tablet_id: TabletId,
-    refreshable_tables: &BTreeSet<TableName>,
-    refreshable_tablets: &mut BTreeSet<TabletId>,
-) -> OrderedIndexKeyWrites {
-    let mut writes = vec![];
-    for (id, update) in ordered_writes {
-        if id.tablet_id == tables_tablet_id
-            && let Some(new_doc) = update.new_document.as_ref()
+) -> IndexKeyWrites {
+    let _timer = metrics::pending_writes_to_write_log_timer();
+    let mut database: BTreeMap<TabletIndexName, Vec<DatabaseIndexWrite>> = BTreeMap::new();
+    let mut text: BTreeMap<TabletIndexName, Vec<TextIndexWrite>> = BTreeMap::new();
+    for update in ordered_writes {
+        for (index_name, index_update) in index_registry
+            .document_index_keys(
+                update.id,
+                update.old_document.as_ref().map(|(document, _)| document),
+                update.new_document.as_ref(),
+                tokenize,
+            )
+            .0
+            .into_iter()
         {
-            let maybe_table_metadata: anyhow::Result<ParsedDocument<TableMetadata>> =
-                new_doc.parse();
-            if let Ok(table_doc) = maybe_table_metadata {
-                if refreshable_tables.contains(&table_doc.name) {
-                    refreshable_tablets.insert(TabletId(id.internal_id()));
-                }
-            } else {
-                tracing::error!(
-                    "Failed to parse table metadata from doc {id} with tables_tablet \
-                     {tables_tablet_id}, may not be able to refresh system table index caches"
-                );
+            match index_update.update {
+                IndexKeyUpdate::Database(u) => {
+                    database
+                        .entry(index_name)
+                        .or_default()
+                        .push(DatabaseIndexWrite {
+                            document_id: index_update.document_id,
+                            update: u,
+                            new_document: index_update.new_document,
+                        });
+                },
+                IndexKeyUpdate::Text(u) => {
+                    text.entry(index_name).or_default().push(TextIndexWrite {
+                        document_id: index_update.document_id,
+                        update: u,
+                    });
+                },
             }
         }
-        writes.push((
-            id,
-            DocumentIndexKeysUpdate::from_document_update(&update, index_registry),
-            refreshable_tablets
-                .contains(&id.tablet_id)
-                .then_some(RefreshableTabletUpdate(update.new_document)),
-        ));
     }
-    WithHeapSize::from(writes)
+
+    IndexKeyWrites {
+        database: make_writes(ts, write_source, database),
+        text: make_writes(ts, write_source, text),
+    }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WriteSource(pub(crate) Option<Cow<'static, str>>);
+fn make_writes<K, T>(
+    ts: Timestamp,
+    write_source: &WriteSource,
+    writes: BTreeMap<K, Vec<T>>,
+) -> Vec<(K, Arc<WriteInIndex<T>>)> {
+    writes
+        .into_iter()
+        .map(|(index, index_updates)| {
+            (
+                index,
+                Arc::new(WriteInIndex {
+                    ts,
+                    index_updates,
+                    write_source: write_source.clone(),
+                }),
+            )
+        })
+        .collect()
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum WriteSource {
+    /// A user-defined function (mutation) that performed the write.
+    Udf(Arc<UdfIdentifier>),
+    /// A system UDF (e.g. _system/ mutations) that performed the write.
+    /// Separated from `Udf` so callers can choose whether to expose it.
+    SystemUdf(Arc<UdfIdentifier>),
+    /// An internal system operation (e.g. "system_table_cleanup").
+    System(&'static str),
+}
+
+impl std::fmt::Debug for WriteSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Udf(id) => write!(f, "Udf({id})"),
+            Self::SystemUdf(id) => write!(f, "SystemUdf({id})"),
+            Self::System(s) => write!(f, "System({s:?})"),
+        }
+    }
+}
+
 impl WriteSource {
-    pub fn unknown() -> Self {
-        Self(None)
+    /// Create a system write source from a static label.
+    pub fn system(label: &'static str) -> Self {
+        Self::System(label)
     }
 
-    pub fn new(source: impl Into<Cow<'static, str>>) -> Self {
-        Self(Some(source.into()))
+    /// Create the write source for a mutation on `path`. `_system/` functions
+    /// get `SystemUdf` so that consumers filtering on `is_udf` don't surface
+    /// them as developer functions.
+    pub fn mutation(path: CanonicalizedComponentFunctionPath) -> Self {
+        let is_system = path.is_system();
+        let identifier = Arc::new(UdfIdentifier::Function(path));
+        if is_system {
+            Self::SystemUdf(identifier)
+        } else {
+            Self::Udf(identifier)
+        }
     }
-}
 
-impl From<Option<String>> for WriteSource {
-    fn from(value: Option<String>) -> Self {
-        Self(value.map(|value| value.into()))
+    /// Returns a display string for this write source, including the
+    /// component path for UDF sources.
+    pub fn display_name(&self) -> Option<String> {
+        match self {
+            Self::Udf(identifier) | Self::SystemUdf(identifier) => {
+                let (component, id) = (**identifier).clone().into_component_and_udf_path();
+                Some(match component {
+                    Some(component) => format!("{component}/{id}"),
+                    None => id,
+                })
+            },
+            Self::System(s) => Some(s.to_string()),
+        }
     }
-}
 
-impl From<String> for WriteSource {
-    fn from(value: String) -> Self {
-        Self(Some(value.into()))
+    /// Returns true if this is a user UDF write source.
+    pub fn is_udf(&self) -> bool {
+        matches!(self, Self::Udf(_))
+    }
+
+    /// Returns the UDF identifier if this is a user function write source.
+    pub fn udf_identifier(&self) -> Option<&UdfIdentifier> {
+        match self {
+            Self::Udf(id) => Some(id),
+            Self::SystemUdf(_) => None,
+            Self::System(_) => None,
+        }
     }
 }
 
 impl From<&'static str> for WriteSource {
     fn from(value: &'static str) -> Self {
-        Self(Some(value.into()))
+        Self::System(value)
     }
 }
 
 impl HeapSize for WriteSource {
     fn heap_size(&self) -> usize {
-        self.0
-            .as_ref()
-            .filter(|value| Cow::is_owned(value))
-            .map(|value| value.len())
-            .unwrap_or_default()
+        match self {
+            Self::Udf(_) | Self::SystemUdf(_) => std::mem::size_of::<Arc<UdfIdentifier>>(),
+            Self::System(_) => 0,
+        }
     }
 }
 
 struct WriteLogManager {
     log: WriteLog,
+    size: usize,
+    /// Keeps track of the minimum timestamps in each index's log, used for fast
+    /// purging. Each entry records which map (`IndexKind`) the index belongs to
+    /// so we can remove from the right map.
+    min_ts_to_index: BinaryHeap<Reverse<(Timestamp, TabletIndexName, IndexKind)>>,
     waiters: VecDeque<(Timestamp, oneshot::Sender<()>)>,
 }
 
@@ -258,7 +317,12 @@ impl WriteLogManager {
     fn new(initial_timestamp: Timestamp) -> Self {
         let log = WriteLog::new(initial_timestamp);
         let waiters = VecDeque::new();
-        Self { log, waiters }
+        Self {
+            log,
+            size: 0,
+            min_ts_to_index: BinaryHeap::new(),
+            waiters,
+        }
     }
 
     fn notify_waiters(&mut self) {
@@ -279,12 +343,30 @@ impl WriteLogManager {
         }
     }
 
-    fn append(&mut self, ts: Timestamp, writes: OrderedIndexKeyWrites, write_source: WriteSource) {
+    fn append(&mut self, ts: Timestamp, writes: IndexKeyWrites) {
         assert!(self.log.max_ts() < ts, "{:?} >= {}", self.log.max_ts(), ts);
 
-        self.log
-            .by_ts
-            .push_back(Arc::new((ts, writes, write_source)));
+        for (index, updates) in writes.database {
+            assert_eq!(updates.ts, ts);
+            self.log.by_database_index.append(
+                index,
+                ArcWriteInIndex(updates),
+                IndexKind::Database,
+                &mut self.size,
+                &mut self.min_ts_to_index,
+            );
+        }
+        for (index, updates) in writes.text {
+            assert_eq!(updates.ts, ts);
+            self.log.by_text_index.append(
+                index,
+                ArcWriteInIndex(updates),
+                IndexKind::Text,
+                &mut self.size,
+                &mut self.min_ts_to_index,
+            );
+        }
+        self.log.max_ts = ts;
 
         self.notify_waiters();
     }
@@ -311,29 +393,164 @@ impl WriteLogManager {
     }
 
     fn enforce_retention_policy(&mut self, current_ts: Timestamp) {
-        let max_ts = current_ts
+        let hard_limit_ts = current_ts
             .sub(*WRITE_LOG_MIN_RETENTION_SECS)
             .unwrap_or(Timestamp::MIN);
-        let target_ts = current_ts
+        let soft_limit_ts = current_ts
             .sub(*WRITE_LOG_MAX_RETENTION_SECS)
             .unwrap_or(Timestamp::MIN);
-        while let Some((ts, ..)) = self.log.by_ts.front().map(|entry| &**entry) {
-            let ts = *ts;
-
-            // We never trim past max_ts, even if the size of the write log
-            // is larger.
-            if ts >= max_ts {
+        loop {
+            let limit_ts = if self.size >= *WRITE_LOG_SOFT_MAX_SIZE_BYTES {
+                hard_limit_ts
+            } else {
+                soft_limit_ts
+            };
+            let Some(Reverse((ts, index, kind))) = self
+                .min_ts_to_index
+                .pop_if(|&Reverse((ts, ..))| ts == self.log.purged_ts || ts < limit_ts)
+            else {
                 break;
-            }
-
-            // Trim the log based on both target_ts and size.
-            if ts >= target_ts && self.log.by_ts.heap_size() < *WRITE_LOG_SOFT_MAX_SIZE_BYTES {
-                break;
-            }
+            };
 
             self.log.purged_ts = ts;
-            self.log.by_ts.pop_front();
+
+            match kind {
+                IndexKind::Database => {
+                    self.log.by_database_index.remove_at_ts(
+                        index,
+                        ts,
+                        IndexKind::Database,
+                        &mut self.size,
+                        &mut self.min_ts_to_index,
+                    );
+                },
+                IndexKind::Text => {
+                    self.log.by_text_index.remove_at_ts(
+                        index,
+                        ts,
+                        IndexKind::Text,
+                        &mut self.size,
+                        &mut self.min_ts_to_index,
+                    );
+                },
+            }
         }
+    }
+}
+
+/// All of the updates at `ts` within a single index.
+pub struct WriteInIndex<T> {
+    pub ts: Timestamp,
+    pub index_updates: Vec<T>,
+    pub write_source: WriteSource,
+}
+/// A `WriteInIndex` that can be stored in an OrdSet.
+/// Note that Eq/Ord compare timestamp only.
+pub(crate) struct ArcWriteInIndex<T>(Arc<WriteInIndex<T>>);
+
+impl<T> Clone for ArcWriteInIndex<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> Deref for ArcWriteInIndex<T> {
+    type Target = WriteInIndex<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<T: HeapSize> ArcWriteInIndex<T> {
+    fn heap_size(&self) -> usize {
+        mem::size_of_val(&*self.0)
+            + self.0.index_updates.capacity() * mem::size_of::<T>()
+            + self.0.index_updates.elements_heap_size()
+            + self.0.write_source.heap_size()
+    }
+}
+
+impl<T> PartialEq for ArcWriteInIndex<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ts == other.0.ts
+    }
+}
+impl<T> Eq for ArcWriteInIndex<T> {}
+impl<T> PartialOrd for ArcWriteInIndex<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl<T> Ord for ArcWriteInIndex<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.ts.cmp(&other.0.ts)
+    }
+}
+impl<T> Borrow<Timestamp> for ArcWriteInIndex<T> {
+    fn borrow(&self) -> &Timestamp {
+        &self.0.ts
+    }
+}
+
+/// A typed map from index name to timestamped update vectors.
+/// Shared structure for both database and search index maps in the write log.
+struct WritesByIndex<T>(OrdMap<TabletIndexName, OrdSet<ArcWriteInIndex<T>>>);
+
+impl<T> Clone for WritesByIndex<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T: HeapSize> WritesByIndex<T> {
+    fn new() -> Self {
+        Self(OrdMap::new())
+    }
+
+    fn append(
+        &mut self,
+        index: TabletIndexName,
+        update: ArcWriteInIndex<T>,
+        kind: IndexKind,
+        by_index_size: &mut usize,
+        min_ts_to_index: &mut BinaryHeap<Reverse<(Timestamp, TabletIndexName, IndexKind)>>,
+    ) {
+        *by_index_size += update.heap_size();
+        if let Some(e) = self.0.get_mut(&index) {
+            e.insert(update);
+        } else {
+            let ts = update.ts;
+            self.0.insert(index.clone(), OrdSet::unit(update));
+            min_ts_to_index.push(Reverse((ts, index, kind)));
+        }
+    }
+
+    /// Remove the entry at `ts` for `index`. If the index has remaining
+    /// entries, re-register its new minimum timestamp.
+    fn remove_at_ts(
+        &mut self,
+        index: TabletIndexName,
+        ts: Timestamp,
+        kind: IndexKind,
+        by_index_size: &mut usize,
+        min_ts_to_index: &mut BinaryHeap<Reverse<(Timestamp, TabletIndexName, IndexKind)>>,
+    ) {
+        let Some(inner) = self.0.get_mut(&index) else {
+            return;
+        };
+        if let Some(update) = inner.remove(&ts) {
+            *by_index_size = by_index_size.saturating_sub(update.heap_size());
+        }
+        if let Some(update) = inner.get_min() {
+            let new_min_ts = update.0.ts;
+            min_ts_to_index.push(Reverse((new_min_ts, index, kind)));
+        } else {
+            self.0.remove(&index);
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&TabletIndexName, &OrdSet<ArcWriteInIndex<T>>)> {
+        self.0.iter()
     }
 }
 
@@ -342,87 +559,82 @@ impl WriteLogManager {
 /// they may trigger subscriptions.
 #[derive(Clone)]
 struct WriteLog {
-    by_ts: WithHeapSize<Vector<Arc<(Timestamp, OrderedIndexKeyWrites, WriteSource)>>>,
+    by_database_index: WritesByIndex<DatabaseIndexWrite>,
+    by_text_index: WritesByIndex<TextIndexWrite>,
+    max_ts: Timestamp,
     purged_ts: Timestamp,
+}
+
+pub struct OutOfRetentionError {
+    reads_ts: Timestamp,
+    purged_ts: Timestamp,
+}
+
+impl From<OutOfRetentionError> for anyhow::Error {
+    #[track_caller]
+    fn from(e: OutOfRetentionError) -> Self {
+        anyhow::anyhow!(
+            "Timestamp {reads_ts} is outside of write log retention window (minimum timestamp \
+             {purged_ts})",
+            reads_ts = e.reads_ts,
+            purged_ts = e.purged_ts
+        )
+        .context(ErrorMetadata::out_of_retention())
+    }
 }
 
 impl WriteLog {
     fn new(initial_timestamp: Timestamp) -> Self {
         Self {
-            by_ts: WithHeapSize::default(),
+            by_database_index: WritesByIndex::new(),
+            by_text_index: WritesByIndex::new(),
+            max_ts: initial_timestamp,
             purged_ts: initial_timestamp,
         }
     }
 
     fn max_ts(&self) -> Timestamp {
-        match self.by_ts.back() {
-            Some(entry) => entry.0,
-            None => self.purged_ts,
-        }
+        self.max_ts
     }
 
-    // Runtime: O((log n) + k) where n is total length of the write log and k is
-    // the number of elements in the returned iterator.
-    fn iter(
-        &self,
-        from: Timestamp,
-        to: Timestamp,
-    ) -> anyhow::Result<impl Iterator<Item = (&Timestamp, IterWrites<'_>, &WriteSource)> + '_> {
-        anyhow::ensure!(
-            from > self.purged_ts,
-            anyhow::anyhow!(
-                "Timestamp {from} is outside of write log retention window (minimum timestamp {})",
-                self.purged_ts
-            )
-            .context(ErrorMetadata::out_of_retention())
-        );
-        let start = match self.by_ts.binary_search_by_key(&from, |entry| entry.0) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
-        let iter = self.by_ts.focus().narrow(start..).into_iter();
-        Ok(iter
-            .map(|entry| &**entry)
-            .take_while(move |(t, ..)| *t <= to)
-            .map(|(ts, writes, write_source)| (ts, writes.iter(), write_source)))
-    }
-
-    #[fastrace::trace]
     fn is_stale(
         &self,
         reads: &ReadSet,
         reads_ts: Timestamp,
         ts: Timestamp,
-    ) -> anyhow::Result<Option<ConflictingReadWithWriteSource>> {
-        block_in_place(|| {
-            let log_range = self.iter(reads_ts.succ()?, ts)?;
-            Ok(reads.writes_overlap_index_keys(log_range))
-        })
+    ) -> Result<Option<ConflictingReadWithWriteSource>, OutOfRetentionError> {
+        if reads_ts < self.purged_ts {
+            Err(OutOfRetentionError {
+                reads_ts,
+                purged_ts: self.purged_ts,
+            })
+        } else {
+            Ok(reads.writes_overlap_by_index(
+                &self.by_database_index.0,
+                &self.by_text_index.0,
+                reads_ts,
+                ts,
+            ))
+        }
     }
 
     /// Returns Err(write_ts) if the token could not be refreshed, where
     /// write_ts is the timestamp of a conflicting write (if known)
-    fn refresh_token(
-        &self,
-        mut token: Token,
-        ts: Timestamp,
-    ) -> anyhow::Result<Result<Token, Option<Timestamp>>> {
+    fn refresh_token(&self, mut token: Token, ts: Timestamp) -> Result<Token, Option<Timestamp>> {
         metrics::log_read_set_age(ts.secs_since_f64(token.ts()).max(0.0));
-        let result = match self.is_stale(token.reads(), token.ts(), ts) {
+        match self.is_stale(token.reads(), token.ts(), ts) {
             Ok(Some(conflict)) => Err(Some(conflict.write_ts)),
-            Err(e) if e.is_out_of_retention() => {
+            Err(OutOfRetentionError { .. }) => {
                 metrics::log_reads_refresh_miss();
                 Err(None)
             },
-            Err(e) => return Err(e),
             Ok(None) => {
                 if token.ts() < ts {
                     token.advance_ts(ts);
                 }
                 Ok(token)
             },
-        };
-        Ok(result)
+        }
     }
 }
 
@@ -474,20 +686,15 @@ impl LogReader {
             return Ok(Ok(token));
         }
         let snapshot = { self.inner.lock().log.clone() };
-        block_in_place(|| {
-            let max_ts = snapshot.max_ts();
-            anyhow::ensure!(
-                ts <= max_ts,
-                "Can't refresh token to newer timestamp {ts} than max ts {max_ts}"
-            );
-            snapshot.refresh_token(token, ts)
-        })
+        let max_ts = snapshot.max_ts();
+        anyhow::ensure!(
+            ts <= max_ts,
+            "Can't refresh token to newer timestamp {ts} than max ts {max_ts}"
+        );
+        Ok(snapshot.refresh_token(token, ts))
     }
 
-    pub fn refresh_reads_until_max_ts(
-        &self,
-        token: Token,
-    ) -> anyhow::Result<Result<Token, Option<Timestamp>>> {
+    pub fn refresh_reads_until_max_ts(&self, token: Token) -> Result<Token, Option<Timestamp>> {
         let snapshot = { self.inner.lock().log.clone() };
         block_in_place(|| {
             let max_ts = snapshot.max_ts();
@@ -496,8 +703,7 @@ impl LogReader {
     }
 
     pub fn max_ts(&self) -> Timestamp {
-        let snapshot = { self.inner.lock().log.clone() };
-        snapshot.max_ts()
+        self.inner.lock().log.max_ts()
     }
 
     /// Blocks until the log has advanced past the given timestamp.
@@ -509,14 +715,61 @@ impl LogReader {
         result
     }
 
-    pub fn for_each<F>(&self, from: Timestamp, to: Timestamp, mut f: F) -> anyhow::Result<()>
+    /// Iterates over all index write log entries in the range [from, to]
+    /// (inclusive), calling `f` for each database (index_name, updates) pair
+    /// and `g` for each text index (index_name, updates) pair.
+    ///
+    /// Entries are yielded per-index (not per-document or per-commit). The same
+    /// commit may produce entries across multiple index vectors.
+    pub fn for_each_index<F, G>(
+        &self,
+        from: Timestamp,
+        to: Timestamp,
+        to_notify: &mut BTreeMap<SubscriberId, (Timestamp, Option<WriteSource>, TabletId)>,
+        num_index_updates: &mut usize,
+        mut f: F,
+        mut g: G,
+    ) -> anyhow::Result<()>
     where
-        for<'a> F: FnMut(Timestamp, IterWrites<'a>),
+        F: for<'a> FnMut(
+            &'a TabletIndexName,
+            Box<dyn Iterator<Item = &'a WriteInIndex<DatabaseIndexWrite>> + 'a>,
+            &'a mut BTreeMap<SubscriberId, (Timestamp, Option<WriteSource>, TabletId)>,
+            &'a mut usize,
+        ),
+        G: for<'a> FnMut(
+            &'a TabletIndexName,
+            Box<dyn Iterator<Item = &'a WriteInIndex<TextIndexWrite>> + 'a>,
+            &'a mut BTreeMap<SubscriberId, (Timestamp, Option<WriteSource>, TabletId)>,
+            &'a mut usize,
+        ),
     {
         let snapshot = { self.inner.lock().log.clone() };
         block_in_place(|| {
-            for (ts, writes, _) in snapshot.iter(from, to)? {
-                f(*ts, writes);
+            anyhow::ensure!(
+                from > snapshot.purged_ts,
+                anyhow::anyhow!(
+                    "Timestamp {from} is outside of write log retention window (minimum timestamp \
+                     {})",
+                    snapshot.purged_ts
+                )
+                .context(ErrorMetadata::out_of_retention())
+            );
+            for (index_name, updates) in snapshot.by_database_index.iter() {
+                f(
+                    index_name,
+                    Box::new(updates.range(from..=to).map(|u| &*u.0)),
+                    to_notify,
+                    num_index_updates,
+                );
+            }
+            for (index_name, updates) in snapshot.by_text_index.iter() {
+                g(
+                    index_name,
+                    Box::new(updates.range(from..=to).map(|u| &*u.0)),
+                    to_notify,
+                    num_index_updates,
+                );
             }
             Ok(())
         })
@@ -548,96 +801,59 @@ impl LogReader {
         }
         if *begin_ts != *end_ts {
             let from = (*begin_ts).succ()?;
-            let result = self.for_each(from, *end_ts, |ts, writes| {
-                for (_doc_id, index_keys_update, refreshable_update) in writes {
-                    if let Some(refreshable_update) = refreshable_update {
-                        let old_keys = resolve_db_index_keys(
-                            index_registry,
-                            index_keys_update.old_document_keys.as_ref(),
-                            &cache,
-                        );
-                        let new_keys = resolve_db_index_keys(
-                            index_registry,
-                            index_keys_update.new_document_keys.as_ref(),
-                            &cache,
-                        );
-                        if !cache.apply_write(
-                            ts,
-                            old_keys.unwrap_or_default(),
-                            new_keys.unwrap_or_default(),
-                            refreshable_update.document().cloned(),
-                        ) {
-                            return;
+            let snapshot = { self.inner.lock().log.clone() };
+
+            if from <= snapshot.purged_ts {
+                return Ok(None);
+            }
+
+            block_in_place(|| {
+                'outer: for (index_name, writes) in snapshot.by_database_index.iter() {
+                    let Some(index) = index_registry.get_enabled(index_name) else {
+                        continue;
+                    };
+                    if !cache.is_index_tracked(&index.id()) {
+                        continue;
+                    }
+                    let is_by_id = index.metadata.name.is_by_id();
+                    let index_id = index.id();
+
+                    for update in writes.range(from..=*end_ts) {
+                        let ts = update.0.ts;
+                        for write in &update.0.index_updates {
+                            if !cache.apply_write(ts, index_id, is_by_id, write) {
+                                break 'outer;
+                            }
                         }
-                    } else {
-                        remove_non_refreshable_indexes(
-                            index_keys_update,
-                            index_registry,
-                            &mut cache,
-                        );
                     }
                 }
             });
-            match result {
-                Ok(()) => {},
-                Err(e) if e.is_out_of_retention() => return Ok(None),
-                Err(e) => return Err(e),
-            }
         }
 
         Ok(Some(TimestampedIndexCache { cache, ts: end_ts }))
     }
 }
 
-fn remove_non_refreshable_indexes(
-    index_keys_update: &DocumentIndexKeysUpdate,
-    index_registry: &IndexRegistry,
-    index_cache: &mut DatabaseIndexSnapshotCache,
-) {
-    for doc_keys in [
-        &index_keys_update.old_document_keys,
-        &index_keys_update.new_document_keys,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        for (index_name, key_value) in doc_keys.iter() {
-            if matches!(key_value, DocumentIndexKeyValue::Standard(_))
-                && let Some(index) = index_registry.get_enabled(index_name)
-            {
-                index_cache.remove_index(index.id());
-            }
+impl WriteLogIndexReader for LogReader {
+    fn iter_writes_after<'a>(
+        &self,
+        index_name: &TabletIndexName,
+        ts: Timestamp,
+        storage: &'a mut ErasedSlot,
+    ) -> anyhow::Result<Box<dyn Iterator<Item = &'a DatabaseIndexWrite> + 'a>> {
+        let snapshot = self.inner.lock().log.clone();
+        if ts < snapshot.purged_ts {
+            anyhow::bail!("Timestamp is out of retention window");
         }
+        let Some(index) = storage.insert(snapshot.by_database_index.0).get(index_name) else {
+            return Ok(Box::new(iter::empty()));
+        };
+        Ok(Box::new(
+            index
+                .range((Bound::Excluded(ts), Bound::Unbounded))
+                .flat_map(|write| write.index_updates.iter()),
+        ))
     }
-}
-
-/// Only resolve keys for db indexes already tracked in the cache and in enabled
-/// indexes
-fn resolve_db_index_keys(
-    index_registry: &IndexRegistry,
-    doc_keys: Option<&DocumentIndexKeys>,
-    index_cache: &DatabaseIndexSnapshotCache,
-) -> Option<Vec<(IndexId, bool, IndexKeyBytes)>> {
-    doc_keys.map(|keys| {
-        keys.iter()
-            .filter_map(|(index_name, key_value)| {
-                if let DocumentIndexKeyValue::Standard(index_key) = key_value {
-                    index_registry
-                        .get_enabled(index_name)
-                        .filter(|index| index_cache.is_index_tracked(&index.id()))
-                        .map(|index| {
-                            (
-                                index.id(),
-                                index.metadata.name.is_by_id(),
-                                index_key.clone(),
-                            )
-                        })
-                } else {
-                    None
-                }
-            })
-            .collect()
-    })
 }
 
 /// LogWriter can append to the log.
@@ -648,13 +864,19 @@ pub struct LogWriter {
 impl LogWriter {
     // N.B.: `writes` is `OrderedWrites` because that's what the committer
     // already has, but the write log doesn't actually care about the ordering.
+    //
+    // N.B. log.append must be called before apply_writes to prevent a cache
+    // interval from getting populated and checking the write log does not have any
+    // overlapping writes in `IndexCache::populate` before the write is appended,
+    // thereby missing a write.
     pub fn append(
         &mut self,
         ts: Timestamp,
-        writes: OrderedIndexKeyWrites,
-        write_source: WriteSource,
+        writes: IndexKeyWrites,
+        apply_writes_callback: impl FnOnce(),
     ) {
-        block_in_place(|| self.inner.lock().append(ts, writes, write_source));
+        block_in_place(|| self.inner.lock().append(ts, writes));
+        apply_writes_callback();
     }
 
     pub fn is_stale(
@@ -664,8 +886,99 @@ impl LogWriter {
         ts: Timestamp,
     ) -> anyhow::Result<Option<ConflictingReadWithWriteSource>> {
         let snapshot = { self.inner.lock().log.clone() };
-        block_in_place(|| snapshot.is_stale(reads, reads_ts, ts))
+        Ok(block_in_place(|| snapshot.is_stale(reads, reads_ts, ts))?)
     }
+
+    pub fn snapshot(&self) -> WriteLogSnapshot {
+        WriteLogSnapshot(self.inner.lock().log.clone())
+    }
+}
+
+/// A point-in-time view of the write log that can be moved to another thread.
+pub struct WriteLogSnapshot(WriteLog);
+
+impl WriteLogSnapshot {
+    pub fn max_ts(&self) -> Timestamp {
+        self.0.max_ts()
+    }
+
+    pub fn is_stale(
+        &self,
+        reads: &ReadSet,
+        reads_ts: Timestamp,
+        ts: Timestamp,
+    ) -> anyhow::Result<Option<ConflictingReadWithWriteSource>> {
+        Ok(self.0.is_stale(reads, reads_ts, ts)?)
+    }
+}
+
+/// The commit that wrote a database index key, and the document it wrote.
+struct PendingKeyWriter {
+    ts: Timestamp,
+    document_id: ResolvedDocumentId,
+}
+
+/// The database index keys written by all pending commits for a single index,
+/// sorted by key. Index keys end with the document id, and a document written
+/// by one pending commit can't be written by another. The later commit read
+/// the document at a timestamp before every pending commit, so it conflicts
+/// with the earlier write. Each key therefore has exactly one pending writer.
+#[derive(Default)]
+struct PendingKeysInIndex(BTreeMap<Arc<[u8]>, PendingKeyWriter>);
+
+impl PendingKeysInIndex {
+    fn insert(&mut self, key: Arc<[u8]>, writer: PendingKeyWriter) {
+        let ts = writer.ts;
+        if let Some(existing) = self.0.insert(key, writer) {
+            panic!(
+                "index key written by pending commits at {} and {ts}",
+                existing.ts
+            );
+        }
+    }
+
+    /// Removes the entry for `key`, which must have been written by the commit
+    /// at `ts`.
+    fn remove(&mut self, key: &[u8], ts: Timestamp) {
+        let writer = self
+            .0
+            .remove(key)
+            .unwrap_or_else(|| panic!("index key of pending write at {ts} is missing"));
+        assert_eq!(
+            writer.ts, ts,
+            "index key of pending write at {ts} was written at {}",
+            writer.ts
+        );
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns an index key contained in `intervals` that has a pending write,
+    /// along with the commit that wrote it.
+    fn overlaps(&self, intervals: &IntervalSet) -> Option<(&[u8], &PendingKeyWriter)> {
+        // Both sides are sorted by key, so probe whichever is smaller against
+        // the other rather than scanning both.
+        let (key, writer) = if self.0.len() <= intervals.len() {
+            self.0.iter().find(|(key, _)| intervals.contains(key))?
+        } else {
+            intervals
+                .iter_ref()
+                .find_map(|interval| self.0.range::<[u8], _>(interval).next())?
+        };
+        Some((key, writer))
+    }
+}
+
+struct PendingWrite {
+    ts: Timestamp,
+    writes: OrderedDocumentWrites,
+    write_source: WriteSource,
+    snapshot: Snapshot,
+    /// The keys this commit added to [`PendingWrites::by_database_index`],
+    /// retained so they can be removed once it is published.
+    index_keys: BTreeMap<TabletIndexName, Vec<Arc<[u8]>>>,
 }
 
 /// Pending writes are used by the committer to detect conflicts between a new
@@ -674,13 +987,22 @@ impl LogWriter {
 /// These pending writes do not conflict with each other so any subset of them
 /// may be written to persistence, in any order.
 pub struct PendingWrites {
-    by_ts: BTreeMap<Timestamp, (OrderedDocumentWrites, WriteSource, Snapshot)>,
+    /// Pending commits in commit order, oldest first.
+    by_ts: VecDeque<PendingWrite>,
+    /// The database index keys of every pending commit, so that `is_stale` can
+    /// intersect a read set with the pending writes by index and key instead of
+    /// walking every pending document.
+    ///
+    /// Keying by name rather than index id relies on every pending key under
+    /// one name having been computed with the same index definition.
+    by_database_index: BTreeMap<TabletIndexName, PendingKeysInIndex>,
 }
 
 impl PendingWrites {
     pub fn new() -> Self {
         Self {
-            by_ts: BTreeMap::new(),
+            by_ts: VecDeque::new(),
+            by_database_index: BTreeMap::new(),
         }
     }
 
@@ -691,723 +1013,180 @@ impl PendingWrites {
         write_source: WriteSource,
         snapshot: Snapshot,
     ) -> PendingWriteHandle {
-        if let Some((last_ts, _)) = self.by_ts.iter().next_back() {
-            assert!(*last_ts < ts, "{:?} >= {}", *last_ts, ts);
+        if let Some(last) = self.by_ts.back() {
+            assert!(last.ts < ts, "{:?} >= {}", last.ts, ts);
         }
 
-        self.by_ts.insert(ts, (writes, write_source, snapshot));
-        PendingWriteHandle(Some(ts))
+        let index_keys = self.index_by_key(ts, &writes, &snapshot.index_registry);
+        self.by_ts.push_back(PendingWrite {
+            ts,
+            writes,
+            write_source,
+            snapshot,
+            index_keys,
+        });
+        PendingWriteHandle(ts)
+    }
+
+    /// Adds the database index keys the commit at `ts` writes to
+    /// `by_database_index`, returning them so `pop_first` can take them out
+    /// again.
+    fn index_by_key(
+        &mut self,
+        ts: Timestamp,
+        writes: &OrderedDocumentWrites,
+        index_registry: &IndexRegistry,
+    ) -> BTreeMap<TabletIndexName, Vec<Arc<[u8]>>> {
+        let mut index_keys: BTreeMap<TabletIndexName, Vec<Arc<[u8]>>> = BTreeMap::new();
+        for update in writes.iter() {
+            let update_keys = index_registry.database_index_keys(
+                update.id,
+                update.old_document.as_ref().map(|(document, _)| document),
+                update.new_document.as_ref(),
+            );
+            for (index_name, Update { old, new }) in update_keys {
+                // An update that leaves the indexed fields alone writes the
+                // same key twice.
+                let new = new.filter(|new| old.as_ref() != Some(new));
+                let index = self
+                    .by_database_index
+                    .entry(index_name.clone())
+                    .or_default();
+                let keys = index_keys.entry(index_name).or_default();
+                for key in old.into_iter().chain(new) {
+                    let key: Arc<[u8]> = Arc::from(key.0);
+                    index.insert(
+                        key.clone(),
+                        PendingKeyWriter {
+                            ts,
+                            document_id: update.id,
+                        },
+                    );
+                    keys.push(key);
+                }
+            }
+        }
+        index_keys
     }
 
     pub fn latest_snapshot(&self) -> Option<Snapshot> {
         self.by_ts
-            .iter()
-            .next_back()
-            .map(|(_, (_, _, snapshot))| snapshot.clone())
+            .back()
+            .map(|pending_write| pending_write.snapshot.clone())
     }
 
     /// Recomputes the snapshot associated with each pending write, rebasing the
     /// pending writes on the new base snapshot provided.
     pub fn recompute_pending_snapshots(&mut self, mut base_snapshot: Snapshot) {
-        for (ts, (ordered_writes, _, snapshot)) in self.by_ts.iter_mut() {
-            for (_id, document_update) in ordered_writes.iter() {
+        for pending_write in self.by_ts.iter_mut() {
+            let ts = pending_write.ts;
+            for document_update in pending_write.writes.iter() {
                 base_snapshot
-                    .update(&document_update.unpack(), *ts)
+                    .update(&document_update.unpack(), ts)
                     .expect("Failed to update snapshot");
             }
-            *snapshot = base_snapshot.clone();
+            pending_write.snapshot = base_snapshot.clone();
         }
     }
 
-    pub fn iter(
-        &self,
-        from: Timestamp,
-        to: Timestamp,
-    ) -> impl Iterator<
-        Item = (
-            &Timestamp,
-            impl Iterator<Item = &(ResolvedDocumentId, PackedDocumentUpdate)>,
-            &WriteSource,
-        ),
-    > {
-        self.by_ts
-            .range(from..=to)
-            .map(|(ts, (w, source, _snapshot))| (ts, w.iter(), source))
+    /// Returns a pending write that conflicts with `reads`, if there is one.
+    #[fastrace::trace]
+    pub fn is_stale(&self, reads: &ReadSet) -> Option<ConflictingReadWithWriteSource> {
+        self.database_index_conflict(reads)
+            .or_else(|| self.text_index_conflict(reads))
     }
 
-    pub fn is_stale(
-        &self,
-        reads: &ReadSet,
-        reads_ts: Timestamp,
-        ts: Timestamp,
-    ) -> anyhow::Result<Option<ConflictingReadWithWriteSource>> {
-        Ok(reads.writes_overlap_docs(self.iter(reads_ts.succ()?, ts)))
+    /// Intersects the read set's index intervals with the pending index keys,
+    /// touching only the indexes that were read.
+    fn database_index_conflict(&self, reads: &ReadSet) -> Option<ConflictingReadWithWriteSource> {
+        reads.iter_indexed().find_map(|(index, index_reads)| {
+            let pending = self.by_database_index.get(index)?;
+            let (index_key, writer) = pending.overlaps(&index_reads.intervals)?;
+            Some(ConflictingReadWithWriteSource {
+                read: ConflictingRead {
+                    index: index.clone(),
+                    id: writer.document_id,
+                    stack_traces: index_reads.stack_traces_covering(index_key),
+                },
+                write_source: self.write_source(writer.ts).clone(),
+                write_ts: writer.ts,
+            })
+        })
     }
 
-    pub fn pop_first(
-        &mut self,
-        mut handle: PendingWriteHandle,
-    ) -> Option<(Timestamp, OrderedDocumentWrites, WriteSource, Snapshot)> {
-        let first = self.by_ts.pop_first();
-        if let Some((ts, (writes, write_source, snapshot))) = first {
-            if let Some(expected_ts) = handle.0
-                && ts == expected_ts
-            {
-                handle.0.take();
+    /// Checks the read set against every pending document.
+    ///
+    /// Text index keys aren't indexed like database index keys are: tokenizing
+    /// a document is too expensive to do on the committer thread, so it is
+    /// deferred until the commit is written to persistence. Text index reads
+    /// are rare enough that the linear scan is worth avoiding that cost.
+    fn text_index_conflict(&self, reads: &ReadSet) -> Option<ConflictingReadWithWriteSource> {
+        if !reads.has_search_reads() {
+            return None;
+        }
+        self.by_ts.iter().find_map(|pending_write| {
+            let read = pending_write
+                .writes
+                .iter()
+                .flat_map(|update| {
+                    [
+                        update.old_document.as_ref().map(|(document, _)| document),
+                        update.new_document.as_ref(),
+                    ]
+                })
+                .flatten()
+                .find_map(|document| reads.search_overlaps_document(document))?;
+            Some(ConflictingReadWithWriteSource {
+                read,
+                write_source: pending_write.write_source.clone(),
+                write_ts: pending_write.ts,
+            })
+        })
+    }
+
+    fn write_source(&self, ts: Timestamp) -> &WriteSource {
+        let position = self
+            .by_ts
+            .binary_search_by(|pending_write| pending_write.ts.cmp(&ts))
+            .expect("pending index key without a pending write");
+        &self.by_ts[position].write_source
+    }
+
+    pub fn pop_first(&mut self, handle: PendingWriteHandle) -> (OrderedDocumentWrites, Snapshot) {
+        let pending_write = self
+            .by_ts
+            .pop_front()
+            .unwrap_or_else(|| panic!("commit at {} not pending", handle.0));
+        let ts = pending_write.ts;
+        assert_eq!(
+            ts, handle.0,
+            "pending write handle ts {} does not match first pending write {ts}",
+            handle.0,
+        );
+        for (index_name, keys) in pending_write.index_keys {
+            let Entry::Occupied(mut entry) = self.by_database_index.entry(index_name) else {
+                panic!("index of pending write is missing");
+            };
+            let index = entry.get_mut();
+            for key in keys {
+                index.remove(&key, ts);
             }
-            Some((ts, writes, write_source, snapshot))
-        } else {
-            None
+            if index.is_empty() {
+                entry.remove();
+            }
         }
+        (pending_write.writes, pending_write.snapshot)
     }
 
     pub fn min_ts(&self) -> Option<Timestamp> {
-        self.by_ts.first_key_value().map(|(ts, _)| *ts)
+        self.by_ts.front().map(|pending_write| pending_write.ts)
     }
 }
 
-pub struct PendingWriteHandle(Option<Timestamp>);
+pub struct PendingWriteHandle(Timestamp);
 
 impl PendingWriteHandle {
     pub fn must_commit_ts(&self) -> Timestamp {
-        self.0.expect("pending write already committed")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use common::{
-        self,
-        bootstrap_model::index::{
-            database_index::IndexedFields,
-            IndexMetadata,
-            INDEX_TABLE,
-        },
-        document::{
-            CreationTime,
-            PackedDocument,
-            ResolvedDocument,
-        },
-        document_index_keys::DocumentIndexKeys,
-        index::IndexKey,
-        interval::{
-            BinaryKey,
-            End,
-            Interval,
-            StartIncluded,
-        },
-        knobs::WRITE_LOG_MAX_RETENTION_SECS,
-        testing::TestIdGenerator,
-        types::{
-            unchecked_repeatable_ts,
-            GenericIndexName,
-            IndexDescriptor,
-            IndexId,
-            PersistenceVersion,
-            TabletIndexName,
-            Timestamp,
-        },
-        value::{
-            FieldPath,
-            ResolvedDocumentId,
-        },
-    };
-    use convex_macro::test_runtime;
-    use indexing::{
-        backend_in_memory_indexes::{
-            DatabaseIndexSnapshotCache,
-            TimestampedIndexCache,
-        },
-        index_registry::IndexRegistry,
-    };
-    use runtime::testing::TestRuntime;
-    use value::{
-        assert_obj,
-        val,
-    };
-
-    use crate::{
-        reads::{
-            ReadSet,
-            TransactionReadSet,
-        },
-        write_log::{
-            new_write_log,
-            remove_non_refreshable_indexes,
-            resolve_db_index_keys,
-            DocumentIndexKeysUpdate,
-            RefreshableTabletUpdate,
-            WriteLogManager,
-            WriteSource,
-        },
-    };
-
-    #[test]
-    fn test_write_log() -> anyhow::Result<()> {
-        let mut log_manager = WriteLogManager::new(Timestamp::must(1000));
-        assert_eq!(log_manager.log.purged_ts, Timestamp::must(1000));
-        assert_eq!(log_manager.log.max_ts(), Timestamp::must(1000));
-
-        for ts in (1002..=1010).step_by(2) {
-            log_manager.append(Timestamp::must(ts), vec![].into(), WriteSource::unknown());
-            assert_eq!(log_manager.log.purged_ts, Timestamp::must(1000));
-            assert_eq!(log_manager.log.max_ts(), Timestamp::must(ts));
-        }
-
-        assert!(log_manager
-            .log
-            .iter(Timestamp::must(1000), Timestamp::must(1010))
-            .is_err());
-        assert_eq!(
-            log_manager
-                .log
-                .iter(Timestamp::must(1001), Timestamp::must(1010))?
-                .map(|(ts, ..)| *ts)
-                .collect::<Vec<_>>(),
-            (1002..=1010)
-                .step_by(2)
-                .map(Timestamp::must)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            log_manager
-                .log
-                .iter(Timestamp::must(1004), Timestamp::must(1008))?
-                .map(|(ts, ..)| *ts)
-                .collect::<Vec<_>>(),
-            (1004..=1008)
-                .step_by(2)
-                .map(Timestamp::must)
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(
-            log_manager
-                .log
-                .iter(Timestamp::must(1004), Timestamp::must(1020))?
-                .map(|(ts, ..)| *ts)
-                .collect::<Vec<_>>(),
-            (1004..=1010)
-                .step_by(2)
-                .map(Timestamp::must)
-                .collect::<Vec<_>>()
-        );
-
-        log_manager.enforce_retention_policy(
-            Timestamp::must(1005)
-                .add(*WRITE_LOG_MAX_RETENTION_SECS)
-                .unwrap(),
-        );
-        assert_eq!(log_manager.log.purged_ts, Timestamp::must(1004));
-        assert_eq!(log_manager.log.max_ts(), Timestamp::must(1010));
-
-        assert!(log_manager
-            .log
-            .iter(Timestamp::must(1004), Timestamp::must(1010))
-            .is_err());
-        assert_eq!(
-            log_manager
-                .log
-                .iter(Timestamp::must(1005), Timestamp::must(1010))?
-                .map(|(ts, ..)| *ts)
-                .collect::<Vec<_>>(),
-            (1006..=1010)
-                .step_by(2)
-                .map(Timestamp::must)
-                .collect::<Vec<_>>()
-        );
-
-        Ok(())
-    }
-
-    #[test_runtime]
-    async fn test_is_stale(_rt: TestRuntime) -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-        let mut log_manager = WriteLogManager::new(Timestamp::must(1000));
-        let table_id = id_generator.user_table_id(&"t".parse()?).tablet_id;
-        let id = id_generator.user_generate(&"t".parse()?);
-        let index_key = IndexKey::new(vec![val!(5)], id.into());
-        let index_key_binary: BinaryKey = index_key.to_bytes().into();
-        let index_name =
-            TabletIndexName::new(table_id, IndexDescriptor::new("by_k").unwrap()).unwrap();
-        log_manager.append(
-            Timestamp::must(1003),
-            vec![(
-                id,
-                DocumentIndexKeysUpdate {
-                    id,
-                    old_document_keys: None,
-                    new_document_keys: Some(DocumentIndexKeys::with_standard_index_for_test(
-                        index_name.clone(),
-                        index_key.clone(),
-                    )),
-                },
-                None,
-            )]
-            .into(),
-            WriteSource::unknown(),
-        );
-        let read_set = |interval: Interval| -> ReadSet {
-            let field_path: FieldPath = "k".parse().unwrap();
-            let mut reads = TransactionReadSet::new();
-            reads
-                .record_indexed_directly(
-                    index_name.clone(),
-                    vec![field_path].try_into().unwrap(),
-                    interval,
-                )
-                .unwrap();
-            reads.into_read_set()
-        };
-        // Write conflicts with read.
-        let read_set_conflict = read_set(Interval::all());
-        assert_eq!(
-            log_manager
-                .log
-                .is_stale(
-                    &read_set_conflict,
-                    Timestamp::must(1001),
-                    Timestamp::must(1004)
-                )?
-                .unwrap()
-                .read
-                .index,
-            index_name.clone()
-        );
-        // Write happened after read finished.
-        assert_eq!(
-            log_manager.log.is_stale(
-                &read_set_conflict,
-                Timestamp::must(1001),
-                Timestamp::must(1002)
-            )?,
-            None
-        );
-        // Write happened before read started.
-        assert_eq!(
-            log_manager.log.is_stale(
-                &read_set_conflict,
-                Timestamp::must(1003),
-                Timestamp::must(1004)
-            )?,
-            None
-        );
-        // Different intervals, some of which intersect the write.
-        let empty_read_set = read_set(Interval::empty());
-        assert_eq!(
-            log_manager.log.is_stale(
-                &empty_read_set,
-                Timestamp::must(1001),
-                Timestamp::must(1004)
-            )?,
-            None
-        );
-        let prefix_read_set = read_set(Interval::prefix(index_key_binary.clone()));
-        assert_eq!(
-            log_manager
-                .log
-                .is_stale(
-                    &prefix_read_set,
-                    Timestamp::must(1001),
-                    Timestamp::must(1004)
-                )?
-                .unwrap()
-                .read
-                .index,
-            index_name.clone()
-        );
-        let end_excluded_read_set = read_set(Interval {
-            start: StartIncluded(BinaryKey::min()),
-            end: End::Excluded(index_key_binary.clone()),
-        });
-        assert_eq!(
-            log_manager.log.is_stale(
-                &end_excluded_read_set,
-                Timestamp::must(1001),
-                Timestamp::must(1004)
-            )?,
-            None
-        );
-        let start_included_read_set = read_set(Interval {
-            start: StartIncluded(index_key_binary),
-            end: End::Unbounded,
-        });
-        assert_eq!(
-            log_manager
-                .log
-                .is_stale(
-                    &start_included_read_set,
-                    Timestamp::must(1001),
-                    Timestamp::must(1004)
-                )?
-                .unwrap()
-                .read
-                .index,
-            index_name.clone()
-        );
-
-        let mut delete_log_manager = WriteLogManager::new(Timestamp::must(1000));
-        delete_log_manager.append(
-            Timestamp::must(1003),
-            vec![(
-                id,
-                DocumentIndexKeysUpdate {
-                    id,
-                    old_document_keys: Some(DocumentIndexKeys::with_standard_index_for_test(
-                        index_name.clone(),
-                        index_key,
-                    )),
-                    new_document_keys: None,
-                },
-                None,
-            )]
-            .into(),
-            WriteSource::unknown(),
-        );
-        assert_eq!(
-            delete_log_manager
-                .log
-                .is_stale(
-                    &read_set_conflict,
-                    Timestamp::must(1001),
-                    Timestamp::must(1004)
-                )?
-                .unwrap()
-                .read
-                .index,
-            index_name
-        );
-        assert_eq!(
-            delete_log_manager.log.is_stale(
-                &empty_read_set,
-                Timestamp::must(1001),
-                Timestamp::must(1004)
-            )?,
-            None
-        );
-        Ok(())
-    }
-
-    struct FastForwardIndexCacheFixture {
-        id_generator: TestIdGenerator,
-        index_registry: IndexRegistry,
-        table_index_name: TabletIndexName,
-        index_id: IndexId,
-    }
-
-    impl FastForwardIndexCacheFixture {
-        fn new() -> anyhow::Result<Self> {
-            let mut id_generator = TestIdGenerator::new();
-            let table_name = "users".parse()?;
-            let table_id = id_generator.user_table_id(&table_name);
-
-            let by_id = GenericIndexName::by_id(table_id.tablet_id);
-            let by_name =
-                GenericIndexName::new(table_id.tablet_id, IndexDescriptor::new("by_name")?)?;
-
-            let indexes = vec![
-                IndexMetadata::new_enabled(by_id, IndexedFields::by_id()),
-                IndexMetadata::new_enabled(by_name.clone(), vec!["name".parse()?].try_into()?),
-            ];
-
-            let index_documents = gen_index_documents(&mut id_generator, indexes)?;
-            let index_registry = IndexRegistry::bootstrap(
-                &id_generator,
-                index_documents.values(),
-                PersistenceVersion::default(),
-            )?;
-
-            let index_id = index_registry.get_enabled(&by_name).unwrap().id();
-
-            Ok(Self {
-                id_generator,
-                index_registry,
-                table_index_name: by_name,
-                index_id,
-            })
-        }
-
-        fn cache_tracking_index(&self) -> DatabaseIndexSnapshotCache {
-            let mut cache = DatabaseIndexSnapshotCache::new();
-            cache.track_index_for_testing(self.index_id);
-            cache
-        }
-
-        fn make_doc(
-            &mut self,
-            obj: common::value::ConvexObject,
-        ) -> anyhow::Result<(ResolvedDocumentId, IndexKey, PackedDocument)> {
-            let id = self.id_generator.user_generate(&"users".parse()?);
-            let doc = ResolvedDocument::new(id, CreationTime::ONE, obj)?;
-            let fields: Vec<FieldPath> = vec!["name".parse()?];
-            let key = doc.index_key(&fields);
-            let packed = PackedDocument::pack(&doc);
-            Ok((id, key, packed))
-        }
-    }
-
-    fn gen_index_documents(
-        id_generator: &mut TestIdGenerator,
-        mut indexes: Vec<common::bootstrap_model::index::TabletIndexMetadata>,
-    ) -> anyhow::Result<BTreeMap<ResolvedDocumentId, ResolvedDocument>> {
-        let mut index_documents = BTreeMap::new();
-        let index_table = id_generator.system_table_id(&INDEX_TABLE);
-        indexes.push(IndexMetadata::new_enabled(
-            GenericIndexName::by_id(index_table.tablet_id),
-            IndexedFields::by_id(),
-        ));
-        for metadata in indexes {
-            let id = id_generator.system_generate(&INDEX_TABLE);
-            let doc = ResolvedDocument::new(id, CreationTime::ONE, metadata.try_into()?)?;
-            index_documents.insert(doc.id(), doc);
-        }
-        Ok(index_documents)
-    }
-
-    #[test]
-    fn resolve_db_index_keys_insert() -> anyhow::Result<()> {
-        let mut f = FastForwardIndexCacheFixture::new()?;
-        let (_id, key, _doc) = f.make_doc(assert_obj!("name" => "alice"))?;
-
-        let doc_keys = DocumentIndexKeys::with_standard_index_for_test(
-            f.table_index_name.clone(),
-            key.clone(),
-        );
-
-        let cache = f.cache_tracking_index();
-        let old_keys = resolve_db_index_keys(&f.index_registry, None, &cache);
-        let new_keys = resolve_db_index_keys(&f.index_registry, Some(&doc_keys), &cache);
-        assert!(old_keys.is_none());
-        assert_eq!(new_keys.unwrap(), vec![(f.index_id, false, key.to_bytes())]);
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_db_index_keys_update() -> anyhow::Result<()> {
-        let mut f = FastForwardIndexCacheFixture::new()?;
-        let (_id, old_key, _old_doc) = f.make_doc(assert_obj!("name" => "alice"))?;
-        let (_id2, new_key, _new_doc) = f.make_doc(assert_obj!("name" => "bob"))?;
-
-        let old_doc_keys = DocumentIndexKeys::with_standard_index_for_test(
-            f.table_index_name.clone(),
-            old_key.clone(),
-        );
-        let new_doc_keys = DocumentIndexKeys::with_standard_index_for_test(
-            f.table_index_name.clone(),
-            new_key.clone(),
-        );
-
-        let cache = f.cache_tracking_index();
-        let old_keys = resolve_db_index_keys(&f.index_registry, Some(&old_doc_keys), &cache);
-        let new_keys = resolve_db_index_keys(&f.index_registry, Some(&new_doc_keys), &cache);
-        assert_eq!(
-            old_keys.unwrap(),
-            vec![(f.index_id, false, old_key.to_bytes())]
-        );
-        assert_eq!(
-            new_keys.unwrap(),
-            vec![(f.index_id, false, new_key.to_bytes())]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_db_index_keys_delete() -> anyhow::Result<()> {
-        let mut f = FastForwardIndexCacheFixture::new()?;
-        let (_id, key, _doc) = f.make_doc(assert_obj!("name" => "alice"))?;
-
-        let doc_keys = DocumentIndexKeys::with_standard_index_for_test(
-            f.table_index_name.clone(),
-            key.clone(),
-        );
-
-        let cache = f.cache_tracking_index();
-        let old_keys = resolve_db_index_keys(&f.index_registry, Some(&doc_keys), &cache);
-        let new_keys = resolve_db_index_keys(&f.index_registry, None, &cache);
-        assert_eq!(old_keys.unwrap(), vec![(f.index_id, false, key.to_bytes())]);
-        assert!(new_keys.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn resolve_db_index_keys_skips_untracked_indexes() -> anyhow::Result<()> {
-        let mut f = FastForwardIndexCacheFixture::new()?;
-        let (_id, key, _doc) = f.make_doc(assert_obj!("name" => "alice"))?;
-
-        let doc_keys = DocumentIndexKeys::with_standard_index_for_test(
-            f.table_index_name.clone(),
-            key.clone(),
-        );
-
-        // Use an empty cache — no indexes are tracked.
-        let empty_cache = DatabaseIndexSnapshotCache::new();
-        let keys = resolve_db_index_keys(&f.index_registry, Some(&doc_keys), &empty_cache);
-        assert_eq!(keys.unwrap(), vec![]);
-        Ok(())
-    }
-
-    #[test]
-    fn non_refreshable_insert() -> anyhow::Result<()> {
-        let mut f = FastForwardIndexCacheFixture::new()?;
-        let (_id, key, _doc) = f.make_doc(assert_obj!("name" => "alice"))?;
-
-        let update = DocumentIndexKeysUpdate {
-            id: _id,
-            old_document_keys: None,
-            new_document_keys: Some(DocumentIndexKeys::with_standard_index_for_test(
-                f.table_index_name.clone(),
-                key,
-            )),
-        };
-
-        let mut cache = f.cache_tracking_index();
-        assert!(cache.is_index_tracked(&f.index_id));
-        remove_non_refreshable_indexes(&update, &f.index_registry, &mut cache);
-        assert!(!cache.is_index_tracked(&f.index_id));
-        Ok(())
-    }
-
-    #[test]
-    fn non_refreshable_delete() -> anyhow::Result<()> {
-        let mut f = FastForwardIndexCacheFixture::new()?;
-        let (id, key, _doc) = f.make_doc(assert_obj!("name" => "alice"))?;
-
-        let update = DocumentIndexKeysUpdate {
-            id,
-            old_document_keys: Some(DocumentIndexKeys::with_standard_index_for_test(
-                f.table_index_name.clone(),
-                key,
-            )),
-            new_document_keys: None,
-        };
-
-        let mut cache = f.cache_tracking_index();
-        assert!(cache.is_index_tracked(&f.index_id));
-        remove_non_refreshable_indexes(&update, &f.index_registry, &mut cache);
-        assert!(!cache.is_index_tracked(&f.index_id));
-        Ok(())
-    }
-
-    #[test]
-    fn non_refreshable_search_index_filtered() -> anyhow::Result<()> {
-        let mut f = FastForwardIndexCacheFixture::new()?;
-
-        // Use a search index key value (not Standard) — should be filtered out.
-        let search_keys = DocumentIndexKeys::with_search_index_for_test(
-            f.table_index_name.clone(),
-            "name".parse()?,
-            common::document_index_keys::SearchValueTokens::from_iter_for_test(vec![
-                "hello".to_string()
-            ]),
-        );
-
-        let update = DocumentIndexKeysUpdate {
-            id: f.id_generator.user_generate(&"users".parse()?),
-            old_document_keys: None,
-            new_document_keys: Some(search_keys),
-        };
-
-        let mut cache = f.cache_tracking_index();
-        remove_non_refreshable_indexes(&update, &f.index_registry, &mut cache);
-        // Index should still be tracked since search indexes are filtered out.
-        assert!(cache.is_index_tracked(&f.index_id));
-        Ok(())
-    }
-
-    #[test_runtime]
-    async fn test_fast_forward_index_cache_same_ts(_rt: TestRuntime) -> anyhow::Result<()> {
-        let f = FastForwardIndexCacheFixture::new()?;
-        let (_owner, reader, _writer) = new_write_log(Timestamp::must(1000));
-
-        let ts = unchecked_repeatable_ts(Timestamp::must(1000));
-        let cache = TimestampedIndexCache {
-            cache: f.cache_tracking_index(),
-            ts,
-        };
-        let result = reader
-            .fast_forward_index_cache(cache, &f.index_registry, ts)
-            .await?;
-        assert!(result.is_some());
-        assert_eq!(*result.unwrap().ts, *ts);
-        Ok(())
-    }
-
-    #[test_runtime]
-    async fn test_fast_forward_index_cache_with_writes(_rt: TestRuntime) -> anyhow::Result<()> {
-        let mut f = FastForwardIndexCacheFixture::new()?;
-        let (_owner, reader, mut writer) = new_write_log(Timestamp::must(1000));
-
-        let (id, key, doc) = f.make_doc(assert_obj!("name" => "alice"))?;
-        let expected_key_bytes = key.to_bytes();
-        writer.append(
-            Timestamp::must(1002),
-            vec![(
-                id,
-                DocumentIndexKeysUpdate {
-                    id,
-                    old_document_keys: None,
-                    new_document_keys: Some(DocumentIndexKeys::with_standard_index_for_test(
-                        f.table_index_name.clone(),
-                        key,
-                    )),
-                },
-                Some(RefreshableTabletUpdate(Some(doc))),
-            )]
-            .into(),
-            WriteSource::unknown(),
-        );
-
-        let index_cache = f.cache_tracking_index();
-        assert!(index_cache.documents_for_index(&f.index_id).is_empty());
-
-        let begin_ts = unchecked_repeatable_ts(Timestamp::must(1000));
-        let end_ts = unchecked_repeatable_ts(Timestamp::must(1002));
-        let cache = TimestampedIndexCache {
-            cache: index_cache,
-            ts: begin_ts,
-        };
-        let result = reader
-            .fast_forward_index_cache(cache, &f.index_registry, end_ts)
-            .await?;
-        let ff_cache = result.unwrap();
-        assert_eq!(*ff_cache.ts, *end_ts);
-        let cached_docs = ff_cache.cache.documents_for_index(&f.index_id);
-        assert_eq!(cached_docs.len(), 1);
-        let (cached_key, cached_ts, cached_doc) = &cached_docs[0];
-        assert_eq!(*cached_key, expected_key_bytes);
-        assert_eq!(*cached_ts, Timestamp::must(1002));
-        assert_eq!(cached_doc.id(), id);
-        Ok(())
-    }
-
-    #[test_runtime]
-    async fn test_fast_forward_index_cache_out_of_retention(
-        _rt: TestRuntime,
-    ) -> anyhow::Result<()> {
-        let f = FastForwardIndexCacheFixture::new()?;
-        let (mut owner, reader, mut writer) = new_write_log(Timestamp::must(1000));
-
-        writer.append(Timestamp::must(1001), vec![].into(), WriteSource::unknown());
-
-        // Enforce retention far in the future so ts=1001 gets purged.
-        owner.enforce_retention_policy(
-            Timestamp::must(1001)
-                .add(*WRITE_LOG_MAX_RETENTION_SECS)
-                .unwrap()
-                .succ()?,
-        );
-
-        let begin_ts = unchecked_repeatable_ts(Timestamp::must(1000));
-        let end_ts = unchecked_repeatable_ts(Timestamp::must(1001));
-        let cache = TimestampedIndexCache {
-            cache: f.cache_tracking_index(),
-            ts: begin_ts,
-        };
-        let result = reader
-            .fast_forward_index_cache(cache, &f.index_registry, end_ts)
-            .await?;
-        assert!(result.is_none());
-        Ok(())
+        self.0
     }
 }

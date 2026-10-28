@@ -1,11 +1,9 @@
-use std::{
-    collections::BTreeMap,
-    sync::LazyLock,
-};
+use std::collections::BTreeMap;
 
 use common::bootstrap_model::index::database_index::IndexedFields;
+use const_format::formatcp;
 use errors::ErrorMetadata;
-use fivetran_destination::constants::{
+use model::fivetran_import::constants::{
     METADATA_CONVEX_FIELD_NAME,
     SOFT_DELETE_CONVEX_FIELD_NAME,
 };
@@ -30,14 +28,11 @@ pub const DUPLICATE_FIELD_LIMIT: usize = 3;
 
 /// Field name for CDC deletes. See Airbyte docs: https://docs.airbyte.com/understanding-airbyte/cdc#syncing
 /// When this field is present, it represents a deleted record.
-static CDC_DELETED_FIELD: LazyLock<FieldName> = LazyLock::new(|| {
-    format!("{IDENTIFIER_PREFIX}ab_cdc_deleted_at")
-        .parse()
-        .unwrap()
-});
+const CDC_DELETED_FIELD: FieldName =
+    FieldName::const_new(formatcp!("{IDENTIFIER_PREFIX}ab_cdc_deleted_at"));
 
 /// Airbyte fields that are related to CDC are prefixed with `_ab_cdc`
-static CDC_PREFIX: LazyLock<String> = LazyLock::new(|| format!("{IDENTIFIER_PREFIX}ab_cdc"));
+static CDC_PREFIX: &str = formatcp!("{IDENTIFIER_PREFIX}ab_cdc");
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AirbyteRecord {
@@ -47,15 +42,6 @@ pub struct AirbyteRecord {
 }
 
 impl AirbyteRecord {
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new(table_name: TableName, deleted: bool, record: ConvexObject) -> Self {
-        Self {
-            table_name,
-            deleted,
-            record,
-        }
-    }
-
     pub fn table_name(&self) -> &TableName {
         &self.table_name
     }
@@ -119,7 +105,7 @@ impl TryFrom<AirbyteRecordMessage> for AirbyteRecord {
     fn try_from(msg: AirbyteRecordMessage) -> anyhow::Result<AirbyteRecord> {
         let table_name = msg.table_name.parse::<ValidIdentifier<TableName>>()?.0;
         let object: ConvexObject = valid_json(msg.data)?.try_into()?;
-        let deleted = match object.get(&*CDC_DELETED_FIELD) {
+        let deleted = match object.get(&CDC_DELETED_FIELD) {
             Some(ts) => ts != &ConvexValue::Null,
             None => false,
         };
@@ -128,7 +114,7 @@ impl TryFrom<AirbyteRecordMessage> for AirbyteRecord {
         // underscore are system fields in Convex).
         let fields_and_values: BTreeMap<FieldName, ConvexValue> = object
             .into_iter()
-            .filter(|(field_name, _value)| !field_name.starts_with(&CDC_PREFIX.clone()))
+            .filter(|(field_name, _value)| !field_name.starts_with(CDC_PREFIX))
             .collect();
         let record: ConvexObject = fields_and_values.try_into()?;
         Ok(Self {
@@ -215,126 +201,9 @@ pub fn mark_as_soft_deleted(object: ConvexObject) -> anyhow::Result<ConvexObject
 
     new_value.insert(
         metadata_key,
-        ConvexValue::Object(metadata_object.shallow_merge(ConvexObject::for_value(
-            FieldName::from(SOFT_DELETE_CONVEX_FIELD_NAME.clone()),
-            ConvexValue::Boolean(true),
-        )?)?),
+        ConvexValue::Object(
+            metadata_object.insert(SOFT_DELETE_CONVEX_FIELD_NAME.into(), true.into())?,
+        ),
     );
     new_value.try_into()
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-    use value::{
-        assert_obj,
-        FieldName,
-        TableName,
-    };
-
-    use super::{
-        valid_json,
-        AirbyteRecord,
-        AirbyteRecordMessage,
-    };
-    use crate::{
-        airbyte_import::CDC_DELETED_FIELD,
-        valid_identifier::ValidIdentifier,
-    };
-
-    #[test]
-    fn test_valid_identifier() -> anyhow::Result<()> {
-        let bad_identifier = "_id";
-        let valid_identifier = bad_identifier.parse::<ValidIdentifier<FieldName>>()?;
-        let expected_identifier: FieldName = "source_id".parse()?;
-        assert_eq!(expected_identifier, valid_identifier.0);
-
-        let bad_identifier = "*name!of.table";
-        let valid_identifier = bad_identifier.parse::<ValidIdentifier<TableName>>()?;
-        let expected_identifier: TableName = "source_name_of_table".parse()?;
-        assert_eq!(expected_identifier, valid_identifier.0);
-
-        let good_identifier = "ok_table";
-        let valid_identifier = good_identifier.parse::<ValidIdentifier<TableName>>()?;
-        let expected_identifier: TableName = "ok_table".parse()?;
-        assert_eq!(expected_identifier, valid_identifier.0);
-
-        let bad_identifier = "_system_table";
-        let valid_identifier = bad_identifier.parse::<ValidIdentifier<TableName>>()?;
-        let expected_identifier: TableName = "source_system_table".parse()?;
-        assert_eq!(expected_identifier, valid_identifier.0);
-        Ok(())
-    }
-
-    #[test]
-    fn test_valid_object() -> anyhow::Result<()> {
-        let data = json!({"_bad_field_name": "hello", "good_field_name": "goodbye"});
-        let valid_data = valid_json(data)?;
-        assert_eq!(
-            json!({"source_bad_field_name": "hello", "good_field_name": "goodbye"}),
-            valid_data
-        );
-
-        // Nested object case
-        let data = json!({"good_field_name": {"_bad_field_name": "hello"}});
-        let valid_data = valid_json(data)?;
-        assert_eq!(
-            json!({"good_field_name": {"source_bad_field_name": "hello"}}),
-            valid_data
-        );
-
-        // Nested array case
-        let data = json!({"good_field_name": [{"_bad_field_name": "hello"}]});
-        let valid_data = valid_json(data)?;
-        assert_eq!(
-            json!({"good_field_name": [{"source_bad_field_name": "hello"}]}),
-            valid_data
-        );
-
-        // Edge case: prefixed field collides with existing field
-        let data = json!({"source_id": 1, "_id": 2});
-        let valid_data = valid_json(data)?;
-        assert_eq!(json!({"source_id": 1, "source_source_id": 2}), valid_data);
-
-        // Duplicate limit reached
-        let data =
-            json!({"_id": 0, "source_id": 1, "source_source_id": 2, "source_source_source_id": 3 });
-        assert!(valid_json(data).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_validation() -> anyhow::Result<()> {
-        let table_name = "stream_table".to_string();
-        let airbyte_record_message = AirbyteRecordMessage {
-            table_name: table_name.clone(),
-            data: json!({"field": "value"}),
-        };
-        let expected_record = AirbyteRecord {
-            table_name: table_name.parse()?,
-            deleted: false,
-            record: assert_obj!("field" => "value"),
-        };
-        assert_eq!(
-            AirbyteRecord::try_from(airbyte_record_message)?,
-            expected_record
-        );
-
-        // CDC fields
-        let table_name = "stream_table".to_string();
-        let airbyte_record_message = AirbyteRecordMessage {
-            table_name: table_name.clone(),
-            data: json!({"field": "value", "_ab_cdc_lsn": "lsn", CDC_DELETED_FIELD.clone(): "timestamp"}),
-        };
-        let expected_record = AirbyteRecord {
-            table_name: table_name.parse()?,
-            deleted: true,
-            record: assert_obj!("field" => "value"),
-        };
-        assert_eq!(
-            AirbyteRecord::try_from(airbyte_record_message)?,
-            expected_record
-        );
-        Ok(())
-    }
 }

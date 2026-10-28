@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
     // Client code used in thread #2
     let mut client_ = client.clone();
 
-    println!("{}", format!("Hi! What's your name?").red().bold());
+    println!("{}", "Hi! What's your name?".to_string().red().bold());
     let mut sender = readline()?;
     if sender.is_empty() {
         sender = String::from("Anonymous Person");
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
                     let new_val = new_val.expect("Client dropped prematurely");
                     println!(
                         "{}",
-                        format!("---------------- Message History ----------------").yellow()
+                        "---------------- Message History ----------------".to_string().yellow()
                     );
                     if let FunctionResult::Value(Value::Array(array)) = new_val {
                         for item in array {
@@ -99,9 +99,9 @@ async fn main() -> anyhow::Result<()> {
                                         _ => "Anonymous Author",
                                     };
                                     let author_string = if author == &sender_clone {
-                                        format!("{author}").yellow().bold()
+                                        author.to_string().yellow().bold()
                                     } else {
-                                        format!("{author}").red().bold()
+                                        author.to_string().red().bold()
                                     };
                                     println!("{author_string}: {str:?}");
                                 }
@@ -110,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     println!(
                         "{}",
-                        format!("-------------- End Message History --------------").yellow()
+                        "-------------- End Message History --------------".to_string().yellow()
                     );
                 },
                 _ = cancel_fut => {
@@ -132,12 +132,14 @@ async fn main() -> anyhow::Result<()> {
         if line == "quit" || line == "exit" {
             println!(
                 "{}",
-                format!("------------- Exiting Convex Demo -------------").blue()
+                "------------- Exiting Convex Demo -------------"
+                    .to_string()
+                    .blue()
             );
             break;
         }
 
-        println!("{}", format!("Sending a message").yellow().bold());
+        println!("{}", "Sending a message".to_string().yellow().bold());
         let result = client_
             .mutation(
                 "messages:send",
@@ -149,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
             .await?;
         match result {
             FunctionResult::Value(Value::Null) => {
-                println!("{}.", format!("Message sent").green().bold());
+                println!("{}.", "Message sent".to_string().green().bold());
             },
             FunctionResult::Value(v) => {
                 println!(

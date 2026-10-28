@@ -30,11 +30,9 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let ts = Timestamp::must(1);
 
     let mut index = MemoryVectorIndex::new(WriteTimestamp::Committed(ts));
-    let mut next_id = 1u128;
 
-    for _ in 0..n {
-        let id = InternalId(next_id.to_le_bytes());
-        next_id += 1;
+    for id in 1u128..=n {
+        let id = InternalId(id.to_le_bytes());
         let document = QdrantDocument {
             internal_id: id,
             vector: (0..d)

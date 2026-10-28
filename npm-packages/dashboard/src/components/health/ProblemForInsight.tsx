@@ -5,7 +5,7 @@ import {
 import { Insight } from "api/insights";
 import { Button } from "@ui/Button";
 import { formatNumberCompact } from "@common/lib/format";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 
 export function ProblemForInsight({
   insight,
@@ -78,11 +78,7 @@ function OCCProblem({
             href="https://docs.convex.dev/error#1"
             tip={
               <>
-                <Link
-                  href="https://docs.convex.dev/error#1"
-                  target="_blank"
-                  className="underline"
-                >
+                <Link href="https://docs.convex.dev/error#1" target="_blank">
                   Learn more
                 </Link>{" "}
                 about write conflicts.
@@ -125,11 +121,7 @@ function OCCProblem({
               will eventually fail permanently if the conflicts persist.
             </p>
             <p>
-              <Link
-                href="https://docs.convex.dev/error#1"
-                className="text-content-link hover:underline"
-                target="_blank"
-              >
+              <Link href="https://docs.convex.dev/error#1" target="_blank">
                 Learn how to debug this Insight.
               </Link>
             </p>
@@ -202,7 +194,6 @@ function ReadLimitProblem({
               <Link
                 href="https://docs.convex.dev/production/state/limits#transactions"
                 target="_blank"
-                className="text-content-link hover:underline"
               >
                 limit of{" "}
                 {kind === "bytes" ? bytesLimitString : documentsLimitString}
@@ -213,7 +204,6 @@ function ReadLimitProblem({
               To limit the amount of data read by a function, consider{" "}
               <Link
                 href="https://docs.convex.dev/database/indexes/indexes-and-query-perf"
-                className="text-content-link hover:underline"
                 target="_blank"
               >
                 adding an index
@@ -221,7 +211,6 @@ function ReadLimitProblem({
               or{" "}
               <Link
                 href="https://docs.convex.dev/database/pagination"
-                className="text-content-link hover:underline"
                 target="_blank"
               >
                 implementing pagination

@@ -6,10 +6,8 @@ description: "Integrate Clerk authentication with Convex"
 ---
 
 import UnderTheHood from "@site/docs/auth/_under_the_hood.mdx";
-import ConfigTS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/_mainClerk.tsx";
-import ConfigJS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite/src/_mainClerk.jsx";
-import ConfigEnvTS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/_mainClerkEnv.tsx";
-import ConfigEnvJS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite/src/_mainClerkEnv.jsx";
+import Config from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/_mainClerk.tsx";
+import ConfigEnv from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/_mainClerkEnv.tsx";
 import App from "!!raw-loader!@site/../private-demos/snippets/src/clerkApp.tsx";
 import Messages from "!!raw-loader!@site/../private-demos/snippets/convex/clerkMessages.ts";
 
@@ -32,7 +30,7 @@ See the following sections for the Clerk SDK that you're using:
 ### React
 
 **Example:**
-[React with Convex and Clerk](https://github.com/get-convex/template-react-vite-clerk)
+[React with Convex and Clerk](https://github.com/convex/template-react-vite-clerk)
 
 This guide assumes you already have a working React app with Convex. If not
 follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
@@ -65,7 +63,7 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
 
   </Step>
   <Step title="Configure Convex with the Clerk issuer domain">
-    In your app's `convex` folder, create a new file <JSDialectFileName name="auth.config.ts" /> with the following code. This is the server-side configuration for validating access tokens.
+    In your app's `convex` folder, create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
 
     ```ts title="convex/auth.config.ts"
     import { AuthConfig } from "convex/server";
@@ -97,7 +95,7 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
     In a new terminal window, install the Clerk React SDK:
 
     ```sh
-    npm install @clerk/clerk-react
+    npm install @clerk/react
     ```
 
   </Step>
@@ -116,10 +114,9 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
 
     Then, wrap it with `<ClerkProvider>`. `<ClerkProvider>` requires a `publishableKey` prop, which you can set to the `VITE_CLERK_PUBLISHABLE_KEY` environment variable.
 
-    <TSAndJSSnippet
+    <Snippet
       title="src/main.tsx"
-      sourceTS={ConfigTS}
-      sourceJS={ConfigJS}
+      source={Config}
       highlightPatterns={["ClerkProvider", "ConvexProviderWithClerk"]}
     />
 
@@ -127,11 +124,11 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
 
   <Step title="Show UI based on authentication state">
     You can control which UI is shown when the user is signed in or signed out using
-    Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+    Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
     In the following example, the `<Content />` component is a child of `<Authenticated>`,
     so its content and any of its child components are guaranteed to have an authenticated
-    user, and Convex queries can require authentication.
+    user, and Convex queries can require authentication. `<AuthRefreshing>` renders when queries and mutations are pending and the socket is paused for token refresh (a generally rare case).
 
     <Admonition type="tip">
     If you choose to build your own auth-integrated components without using the helpers,
@@ -143,8 +140,14 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
     </Admonition>
 
     ```tsx title="src/App.tsx"
-    import { SignInButton, UserButton } from "@clerk/clerk-react";
-    import { Authenticated, Unauthenticated, AuthLoading, useQuery } from "convex/react";
+    import { SignInButton, UserButton } from "@clerk/react";
+    import {
+      Authenticated,
+      Unauthenticated,
+      AuthLoading,
+      AuthRefreshing,
+      useQuery,
+    } from "convex/react";
     import { api } from "../convex/_generated/api";
 
     function App() {
@@ -160,6 +163,9 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
           <AuthLoading>
             <p>Still loading</p>
           </AuthLoading>
+          <AuthRefreshing>
+            <p>Refreshing token...</p>
+          </AuthRefreshing>
         </main>
       );
     }
@@ -183,10 +189,9 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
     **Make sure that the component calling this query is a child of `<Authenticated>` from
     `convex/react`**. Otherwise, it will throw on page load.
 
-    <TSAndJSSnippet
+    <Snippet
       title="convex/messages.ts"
-      sourceTS={Messages}
-      sourceJS={Messages}
+      source={Messages}
     />
 
   </Step>
@@ -195,7 +200,7 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
 ### Next.js
 
 **Example:**
-[Next.js with Convex and Clerk](https://github.com/get-convex/template-nextjs-clerk)
+[Next.js with Convex and Clerk](https://github.com/convex/template-nextjs-clerk)
 
 This guide assumes you already have a working Next.js app with Convex. If not
 follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
@@ -228,7 +233,7 @@ follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
 
   </Step>
   <Step title="Configure Convex with the Clerk issuer domain">
-    In your app's `convex` folder, create a new file <JSDialectFileName name="auth.config.ts" /> with the following code. This is the server-side configuration for validating access tokens.
+    In your app's `convex` folder, create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
 
     ```ts title="convex/auth.config.ts"
     import { AuthConfig } from "convex/server";
@@ -374,11 +379,11 @@ follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
   </Step>
   <Step title="Show UI based on authentication state">
     You can control which UI is shown when the user is signed in or signed out using
-    Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+    Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
     In the following example, the `<Content />` component is a child of `<Authenticated>`,
     so its content and any of its child components are guaranteed to have an authenticated
-    user, and Convex queries can require authentication.
+    user, and Convex queries can require authentication. `<AuthRefreshing>` renders when queries and mutations are pending and the socket is paused for token refresh (a generally rare case).
 
     <Admonition type="tip">
     If you choose to build your own auth-integrated components without using the helpers,
@@ -428,10 +433,9 @@ follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
     **Make sure that the component calling this query is a child of `<Authenticated>` from
     `convex/react`**. Otherwise, it will throw on page load.
 
-    <TSAndJSSnippet
+    <Snippet
       title="convex/messages.ts"
-      sourceTS={Messages}
-      sourceJS={Messages}
+      source={Messages}
     />
 
   </Step>
@@ -440,7 +444,7 @@ follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
 ### TanStack Start
 
 **Example:**
-[TanStack Start with Convex and Clerk](https://github.com/get-convex/templates/tree/main/template-tanstack-start)
+[TanStack Start with Convex and Clerk](https://github.com/convex/templates/tree/main/template-tanstack-start)
 
 See the
 [TanStack Start with Clerk guide](/client/tanstack/tanstack-start/clerk.mdx) for
@@ -472,6 +476,17 @@ export default function Badge() {
 }
 ```
 
+### Factor verification age
+
+Clerk's `fva` (factor verification age) claim updates every minute until it hits
+99, so it's
+[excluded from the Convex identity](/auth/functions-auth.mdx#clerk-claims-configuration)
+to avoid rerunning authenticated queries on every token refresh.
+
+If you need step-up auth for sensitive actions, use Clerk's
+[reverification](https://clerk.com/docs/guides/secure/reverification) rather
+than reading `fva` directly.
+
 ## Configuring dev and prod instances
 
 To configure a different Clerk instance between your Convex development and
@@ -494,8 +509,7 @@ Paste your Clerk Frontend API URL into your `.env` file, set it as the
 CLERK_JWT_ISSUER_DOMAIN=https://verb-noun-00.clerk.accounts.dev
 ```
 
-Then, update your <JSDialectFileName name="auth.config.ts" /> file to use the
-environment variable.
+Then, update your `auth.config.ts` file to use the environment variable.
 
 ```ts title="convex/auth.config.ts"
 import { AuthConfig } from "convex/server";
@@ -518,13 +532,10 @@ Clerk instance.
 
 {/* TODO: Update screenshot to use `CLERK_FRONTEND_API_URL`. It should be in the format `https://verb-noun-00.clerk.accounts.dev` */}
 
-<p style={{ textAlign: "center" }}>
-  <img
-    src="/screenshots/clerk-convex-dashboard.png"
-    alt="Convex dashboard dev deployment settings"
-    width={600}
-  />
-</p>
+<Screenshot
+  story="docs/pages/project/deployment/settings/EnvironmentVariables#Clerk"
+  alt="Convex dashboard dev deployment settings"
+/>
 
 Then, to switch your deployment to the new configuration, run `npx convex dev`.
 
@@ -568,10 +579,9 @@ redirected back to your page, `useConvexAuth()` returns
 `isAuthenticated: false`, it's possible that your backend isn't correctly
 configured.
 
-The <JSDialectFileName name="auth.config.ts" /> file contains a list of
-configured authentication providers. You must run `npx convex dev` or
-`npx convex deploy` after adding a new provider to sync the configuration to
-your backend.
+The `auth.config.ts` file contains a list of configured authentication
+providers. You must run `npx convex dev` or `npx convex deploy` after adding a
+new provider to sync the configuration to your backend.
 
 For more thorough debugging steps, see
 [Debugging Authentication](/auth/debug.mdx).
@@ -584,14 +594,13 @@ For more thorough debugging steps, see
   providerProvider={<code>ClerkProvider</code>}
   configProp={
     <>
-      the{" "}
+      Clerk's{" "}
       <a
-        href="https://clerk.com/docs/authentication/sign-in#override-ur-ls"
+        href="https://clerk.com/docs/guides/development/customize-redirect-urls"
         target="_blank"
       >
-        <code>afterSignIn</code>
-      </a>{" "}
-      prop
+        redirect URL props or environment variables
+      </a>
     </>
   }
 />

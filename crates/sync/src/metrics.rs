@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use metrics::{
     log_counter_with_labels,
+    log_distribution,
     log_distribution_with_labels,
     register_convex_counter,
     register_convex_histogram,
@@ -22,24 +23,19 @@ use sync_types::{
 register_convex_histogram!(
     SYNC_CONNECT_SECONDS,
     "Time between SyncWorker creation and receiving Connect message",
-    &[STATUS_LABEL[0], "partition_id"]
+    &STATUS_LABEL
 );
 /// Measuring time between SyncWorker creation and receiving Connect message.
-pub fn connect_timer(partition_id: u64) -> StatusTimer {
-    let mut timer = StatusTimer::new(&SYNC_CONNECT_SECONDS);
-    timer.add_label(StaticMetricLabel::new(
-        "partition_id",
-        partition_id.to_string(),
-    ));
-    timer
+pub fn connect_timer() -> StatusTimer {
+    StatusTimer::new(&SYNC_CONNECT_SECONDS)
 }
 
 register_convex_histogram!(
     SYNC_HANDLE_MESSAGE_SECONDS,
     "Time to handle a websocket message",
-    &[STATUS_LABEL[0], "partition_id", "endpoint"]
+    &[STATUS_LABEL[0], "endpoint"]
 );
-pub fn handle_message_timer(partition_id: u64, message: &ClientMessage) -> StatusTimer {
+pub fn handle_message_timer(message: &ClientMessage) -> StatusTimer {
     let mut timer = StatusTimer::new(&SYNC_HANDLE_MESSAGE_SECONDS);
     let request_name = match message {
         ClientMessage::Authenticate { .. } => "Authenticate",
@@ -50,101 +46,58 @@ pub fn handle_message_timer(partition_id: u64, message: &ClientMessage) -> Statu
         ClientMessage::Event { .. } => "Event",
     };
     timer.add_label(StaticMetricLabel::new("endpoint", request_name.to_owned()));
-    timer.add_label(StaticMetricLabel::new(
-        "partition_id",
-        partition_id.to_string(),
-    ));
     timer
 }
 
 register_convex_histogram!(
     SYNC_UPDATE_QUERIES_SECONDS,
     "Time to update queries",
-    &[STATUS_LABEL[0], "partition_id"]
+    &STATUS_LABEL
 );
-pub fn update_queries_timer(partition_id: u64) -> StatusTimer {
-    let mut timer = StatusTimer::new(&SYNC_UPDATE_QUERIES_SECONDS);
-    timer.add_label(StaticMetricLabel::new(
-        "partition_id",
-        partition_id.to_string(),
-    ));
-    timer
+pub fn update_queries_timer() -> StatusTimer {
+    StatusTimer::new(&SYNC_UPDATE_QUERIES_SECONDS)
 }
 
 register_convex_histogram!(
     MODIFY_QUERY_TO_TRANSITION_SECONDS,
     "Time between getting a ModifyQuerySet message and sending the Transition",
-    &[STATUS_LABEL[0], "partition_id"]
+    &STATUS_LABEL
 );
-pub fn modify_query_to_transition_timer(partition_id: u64) -> StatusTimer {
-    let mut timer = StatusTimer::new(&MODIFY_QUERY_TO_TRANSITION_SECONDS);
-    timer.add_label(StaticMetricLabel::new(
-        "partition_id",
-        partition_id.to_string(),
-    ));
-    timer
+pub fn modify_query_to_transition_timer() -> StatusTimer {
+    StatusTimer::new(&MODIFY_QUERY_TO_TRANSITION_SECONDS)
 }
 
 register_convex_histogram!(
     SYNC_MUTATION_QUEUE_SECONDS,
     "Time between a mutation entering and exiting the single threaded sync worker queue",
-    &[STATUS_LABEL[0], "partition_id"]
+    &STATUS_LABEL
 );
-pub fn mutation_queue_timer(partition_id: u64) -> StatusTimer {
-    let mut timer = StatusTimer::new(&SYNC_MUTATION_QUEUE_SECONDS);
-    timer.add_label(StaticMetricLabel::new(
-        "partition_id",
-        partition_id.to_string(),
-    ));
-    timer
+pub fn mutation_queue_timer() -> StatusTimer {
+    StatusTimer::new(&SYNC_MUTATION_QUEUE_SECONDS)
 }
 
 register_convex_histogram!(
     SYNC_QUERY_MODIFICATION_ARGS_BYTES,
     "Size of query modification args in ClientMessages",
-    &["partition_id"]
 );
-pub fn log_query_modification_args_size(partition_id: u64, size: usize) {
-    log_distribution_with_labels(
-        &SYNC_QUERY_MODIFICATION_ARGS_BYTES,
-        size as f64,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
-    );
+pub fn log_query_modification_args_size(size: usize) {
+    log_distribution(&SYNC_QUERY_MODIFICATION_ARGS_BYTES, size as f64);
 }
 
 register_convex_histogram!(
     SYNC_MUTATION_ARGS_BYTES,
     "Size of mutation args in ClientMessages",
-    &["partition_id"]
 );
-pub fn log_mutation_args_size(partition_id: u64, size: usize) {
-    log_distribution_with_labels(
-        &SYNC_MUTATION_ARGS_BYTES,
-        size as f64,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
-    );
+pub fn log_mutation_args_size(size: usize) {
+    log_distribution(&SYNC_MUTATION_ARGS_BYTES, size as f64);
 }
 
 register_convex_histogram!(
     SYNC_ACTION_ARGS_BYTES,
     "Size of action args in ClientMessages",
-    &["partition_id"]
 );
-pub fn log_action_args_size(partition_id: u64, size: usize) {
-    log_distribution_with_labels(
-        &SYNC_ACTION_ARGS_BYTES,
-        size as f64,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
-    );
+pub fn log_action_args_size(size: usize) {
+    log_distribution(&SYNC_ACTION_ARGS_BYTES, size as f64);
 }
 
 register_convex_counter!(
@@ -172,6 +125,41 @@ pub fn log_query_set_size(partition_id: u64, num_queries: usize) {
             "partition_id",
             partition_id.to_string(),
         )],
+    );
+}
+
+register_convex_histogram!(
+    SYNC_SUBSCRIPTION_RECONNECT_AFFECTED_QUERY_SET_TOTAL,
+    "Size of query sets affected by recoverable subscription stream failures",
+);
+pub fn log_subscription_reconnect_affected_query_set_size(query_count: usize) {
+    log_distribution(
+        &SYNC_SUBSCRIPTION_RECONNECT_AFFECTED_QUERY_SET_TOTAL,
+        query_count as f64,
+    );
+}
+
+register_convex_histogram!(
+    SYNC_SUBSCRIPTION_RECONNECT_WAIT_SECONDS,
+    "Time a browser connection remains open before reconnecting after a subscription failure",
+);
+pub fn log_subscription_reconnect_wait(wait: Duration) {
+    log_distribution(
+        &SYNC_SUBSCRIPTION_RECONNECT_WAIT_SECONDS,
+        wait.as_secs_f64(),
+    );
+}
+
+register_convex_counter!(
+    SYNC_SUBSCRIPTION_RECONNECT_DELAY_TOTAL,
+    "Delayed subscription reconnect outcomes",
+    &["outcome"],
+);
+pub fn log_subscription_reconnect_delay(outcome: &'static str) {
+    log_counter_with_labels(
+        &SYNC_SUBSCRIPTION_RECONNECT_DELAY_TOTAL,
+        1,
+        vec![StaticMetricLabel::new("outcome", outcome)],
     );
 }
 
@@ -216,7 +204,6 @@ register_convex_counter!(
 register_convex_histogram!(
     SYNC_RECONNECT_PREV_CONNECTIONS,
     "How many previous connections happened on a given reconnect",
-    &["partition_id"]
 );
 pub fn log_connect(partition_id: u64, last_close_reason: String, connection_count: u32) {
     log_counter_with_labels(
@@ -227,93 +214,52 @@ pub fn log_connect(partition_id: u64, last_close_reason: String, connection_coun
             StaticMetricLabel::new("partition_id", partition_id.to_string()),
         ],
     );
-    log_distribution_with_labels(
-        &SYNC_RECONNECT_PREV_CONNECTIONS,
-        connection_count.into(),
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
-    );
+    log_distribution(&SYNC_RECONNECT_PREV_CONNECTIONS, connection_count.into());
 }
 
 register_convex_histogram!(
     SYNC_TRANSITION_MESSAGE_SIZE_BYTES,
     "Heap size of Transition messages sent to clients",
-    &["partition_id"]
 );
-pub fn log_transition_size(partition_id: u64, transition_heap_size: usize) {
-    log_distribution_with_labels(
+pub fn log_transition_size(transition_heap_size: usize) {
+    log_distribution(
         &SYNC_TRANSITION_MESSAGE_SIZE_BYTES,
         transition_heap_size as f64,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
     );
 }
 
 register_convex_histogram!(
     SYNC_LINEARIZABILITY_DELAY_SECONDS,
     "How far behind the current backend is behind what the client has observed",
-    &["partition_id"]
 );
-pub fn log_linearizability_violation(partition_id: u64, delay_secs: f64) {
-    log_distribution_with_labels(
-        &SYNC_LINEARIZABILITY_DELAY_SECONDS,
-        delay_secs,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
-    );
+pub fn log_linearizability_violation(delay_secs: f64) {
+    log_distribution(&SYNC_LINEARIZABILITY_DELAY_SECONDS, delay_secs);
 }
 
 register_convex_histogram!(
     SYNC_PROCESS_CLIENT_MESSAGE_SECONDS,
     "Delay between receiving a client message over the web socket and processing it",
-    &["partition_id"],
 );
-pub fn log_process_client_message_delay(partition_id: u64, delay: Duration) {
-    log_distribution_with_labels(
-        &SYNC_PROCESS_CLIENT_MESSAGE_SECONDS,
-        delay.as_secs_f64(),
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
-    );
+pub fn log_process_client_message_delay(delay: Duration) {
+    log_distribution(&SYNC_PROCESS_CLIENT_MESSAGE_SECONDS, delay.as_secs_f64());
 }
 
 register_convex_histogram!(
     SYNC_CLIENT_CONSTRUCT_TO_FIRST_MESSAGE_SECONDS,
     "Time from client construction to first message",
-    &["partition_id"],
 );
-pub fn log_client_construct_to_first_message_millis(partition_id: u64, ms: f64) {
-    log_distribution_with_labels(
-        &SYNC_CLIENT_CONSTRUCT_TO_FIRST_MESSAGE_SECONDS,
-        ms / 1000.0,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
-    );
+pub fn log_client_construct_to_first_message_millis(ms: f64) {
+    log_distribution(&SYNC_CLIENT_CONSTRUCT_TO_FIRST_MESSAGE_SECONDS, ms / 1000.0);
 }
 
 register_convex_histogram!(
     SYNC_CLIENT_CONSTRUCT_TO_WEBSOCKET_OPENED_SECONDS,
     "Time from client construction to websocket open",
-    &["partition_id"]
 );
-pub fn log_client_construct_to_websocket_opened_millis(partition_id: u64, ms: f64) {
-    log_distribution_with_labels(
+pub fn log_client_construct_to_websocket_opened_millis(ms: f64) {
+    log_distribution(
         &SYNC_CLIENT_CONSTRUCT_TO_WEBSOCKET_OPENED_SECONDS,
         ms / 1000.0,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
     );
 }
 
@@ -346,8 +292,8 @@ pub fn log_client_connect_timings(partition_id: u64, marks: Vec<ClientMark>) {
     }
     match (client_constructed, websocket_opened, first_message_received) {
         (Some(construct), Some(opened), Some(first)) => {
-            log_client_construct_to_first_message_millis(partition_id, first - construct);
-            log_client_construct_to_websocket_opened_millis(partition_id, opened - construct);
+            log_client_construct_to_first_message_millis(first - construct);
+            log_client_construct_to_websocket_opened_millis(opened - construct);
         },
         _ => {
             log_client_metrics_incomplete(partition_id);
@@ -356,7 +302,6 @@ pub fn log_client_connect_timings(partition_id: u64, marks: Vec<ClientMark>) {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub enum ClientMarkName {
     /// When a client is constructed (the browser client, not the React client)
     ClientConstructed,
@@ -367,7 +312,6 @@ pub enum ClientMarkName {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(test, derive(proptest_derive::Arbitrary))]
 pub struct ClientMark {
     pub name: ClientMarkName,
     pub start_time: f64,
@@ -396,33 +340,18 @@ impl TryFrom<JsonValue> for ClientMark {
     }
 }
 
-pub fn log_client_transition(partition_id: u64, transition_transit_time: f64, message_length: f64) {
-    log_distribution_with_labels(
+pub fn log_client_transition(transition_transit_time: f64, message_length: f64) {
+    log_distribution(
         &SYNC_TRANSITION_TRANSIT_TIME_SECONDS,
         transition_transit_time / 1000.0,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
     );
-    log_distribution_with_labels(
-        &SYNC_TRANSITION_MESSAGE_LENGTH_BYTES,
-        message_length,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
-    );
+    log_distribution(&SYNC_TRANSITION_MESSAGE_LENGTH_BYTES, message_length);
     // Only log this for messages 100KB or larger so the portion due to clock skew
     // is smaller.
     if message_length >= 100_000.0 {
-        log_distribution_with_labels(
+        log_distribution(
             &SYNC_TRANSITION_BYTES_PER_SECOND,
             message_length / (transition_transit_time / 1000.0),
-            vec![StaticMetricLabel::new(
-                "partition_id",
-                partition_id.to_string(),
-            )],
         );
     }
 }
@@ -517,22 +446,50 @@ struct NetworkRecoveryReconnectEvent {
 register_convex_histogram!(
     SYNC_TRANSITION_TRANSIT_TIME_SECONDS,
     "Time for transition to transit from client (corrected by an estimated clock skew)",
-    &["partition_id"]
 );
 register_convex_histogram!(
     SYNC_TRANSITION_MESSAGE_LENGTH_BYTES,
     "Length of transition message from client",
-    &["partition_id"]
 );
 register_convex_histogram!(
     SYNC_TRANSITION_BYTES_PER_SECOND,
     "Length of transition message over server-to-client transit time, from client",
-    &["partition_id"]
 );
+register_convex_counter!(
+    SYNC_WORKER_QUERY_RETRY_TOTAL,
+    "Number of times the sync worker retried a query execution",
+    &["partition_id"],
+);
+pub fn log_sync_worker_query_retry(partition_id: u64) {
+    log_counter_with_labels(
+        &SYNC_WORKER_QUERY_RETRY_TOTAL,
+        1,
+        vec![StaticMetricLabel::new(
+            "partition_id",
+            partition_id.to_string(),
+        )],
+    );
+}
+
+register_convex_counter!(
+    SYNC_WORKER_UPDATE_QUERIES_RETRY_TOTAL,
+    "Number of times the sync worker picked a new timestamp and re-ran all queries",
+    &["partition_id"],
+);
+pub fn log_sync_worker_update_queries_retry(partition_id: u64) {
+    log_counter_with_labels(
+        &SYNC_WORKER_UPDATE_QUERIES_RETRY_TOTAL,
+        1,
+        vec![StaticMetricLabel::new(
+            "partition_id",
+            partition_id.to_string(),
+        )],
+    );
+}
+
 register_convex_histogram!(
     SYNC_QUERY_INVALIDATION_LAG_SECONDS,
     "Time between an invalidating write and a query being rerun",
-    &["partition_id"]
 );
 register_convex_counter!(
     SYNC_QUERY_INVALIDATION_LAG_UNKNOWN_TOTAL,
@@ -546,13 +503,9 @@ pub fn log_query_invalidated(
     current_ts: Timestamp,
 ) {
     if let Some(invalid_ts) = invalid_ts {
-        log_distribution_with_labels(
+        log_distribution(
             &SYNC_QUERY_INVALIDATION_LAG_SECONDS,
             current_ts.secs_since_f64(invalid_ts),
-            vec![StaticMetricLabel::new(
-                "partition_id",
-                partition_id.to_string(),
-            )],
         );
     } else {
         log_counter_with_labels(
@@ -590,7 +543,6 @@ register_convex_counter!(
 register_convex_histogram!(
     SYNC_NETWORK_RECOVERY_TIME_SAVED_SECONDS,
     "Time saved by reconnecting immediately on network recovery instead of waiting for backoff",
-    &["partition_id"]
 );
 pub fn log_network_recovery_reconnect(partition_id: u64, time_saved_ms: f64) {
     log_counter_with_labels(
@@ -601,12 +553,8 @@ pub fn log_network_recovery_reconnect(partition_id: u64, time_saved_ms: f64) {
             partition_id.to_string(),
         )],
     );
-    log_distribution_with_labels(
+    log_distribution(
         &SYNC_NETWORK_RECOVERY_TIME_SAVED_SECONDS,
         time_saved_ms / 1000.0,
-        vec![StaticMetricLabel::new(
-            "partition_id",
-            partition_id.to_string(),
-        )],
     );
 }

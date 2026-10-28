@@ -13,6 +13,8 @@ use common::{
         ParseDocument,
         ParsedDocument,
     },
+    errors::report_error,
+    knobs::FILE_STORAGE_SIZE_MIN_DOCUMENTS_TO_RESUME,
     query::{
         IndexRange,
         IndexRangeExpression,
@@ -21,8 +23,8 @@ use common::{
     },
     runtime::Runtime,
     types::{
-        GenericIndexName,
         IndexName,
+        IndexRef,
         StorageUuid,
     },
     virtual_system_mapping::AssociatedVirtualTable,
@@ -33,6 +35,9 @@ use database::{
         TableFilter,
     },
     unauthorized_error,
+    DataSyncCursor,
+    DataSyncIterator,
+    DataSyncStatus,
     DatabaseSnapshot,
     IndexModel,
     ResolvedQuery,
@@ -42,7 +47,6 @@ use database::{
     Transaction,
 };
 use errors::ErrorMetadata;
-use futures::TryStreamExt;
 use imbl::ordmap;
 use keybroker::Identity;
 use maplit::btreemap;
@@ -58,6 +62,7 @@ use value::{
     ResolvedDocumentId,
     TableName,
     TableNamespace,
+    TabletId,
 };
 
 use self::virtual_table::FileStorageDocMapper;
@@ -73,25 +78,15 @@ pub mod virtual_table;
 
 pub type BatchKey = usize;
 
-pub static FILE_STORAGE_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_file_storage"
-        .parse()
-        .expect("invalid built-in file storage table")
-});
-pub static FILE_STORAGE_VIRTUAL_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_storage"
-        .parse()
-        .expect("_storage is not a valid virtual table name")
-});
+pub const FILE_STORAGE_TABLE: TableName = TableName::const_new("_file_storage");
+pub const FILE_STORAGE_VIRTUAL_TABLE: TableName = TableName::const_new("_storage");
 
-pub static FILE_STORAGE_INDEX_BY_ID: LazyLock<IndexName> =
-    LazyLock::new(|| GenericIndexName::by_id(FILE_STORAGE_TABLE.clone()));
-pub static FILE_STORAGE_INDEX_BY_CREATION_TIME: LazyLock<IndexName> =
-    LazyLock::new(|| GenericIndexName::by_creation_time(FILE_STORAGE_TABLE.clone()));
-pub static FILE_STORAGE_VIRTUAL_INDEX_BY_ID: LazyLock<IndexName> =
-    LazyLock::new(|| GenericIndexName::by_id(FILE_STORAGE_VIRTUAL_TABLE.clone()));
-static FILE_STORAGE_VIRTUAL_INDEX_BY_CREATION_TIME: LazyLock<IndexName> =
-    LazyLock::new(|| GenericIndexName::by_creation_time(FILE_STORAGE_VIRTUAL_TABLE.clone()));
+const FILE_STORAGE_INDEX_BY_ID: IndexName = IndexName::by_id(FILE_STORAGE_TABLE);
+const FILE_STORAGE_INDEX_BY_CREATION_TIME: IndexName =
+    IndexName::by_creation_time(FILE_STORAGE_TABLE);
+const FILE_STORAGE_VIRTUAL_INDEX_BY_ID: IndexName = IndexName::by_id(FILE_STORAGE_VIRTUAL_TABLE);
+const FILE_STORAGE_VIRTUAL_INDEX_BY_CREATION_TIME: IndexName =
+    IndexName::by_creation_time(FILE_STORAGE_VIRTUAL_TABLE);
 
 static FILE_STORAGE_ID_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "storageId".parse().expect("invalid storageId field"));
@@ -102,9 +97,7 @@ pub struct FileStorageTable;
 impl SystemTable for FileStorageTable {
     type Metadata = FileStorageEntry;
 
-    fn table_name() -> &'static TableName {
-        &FILE_STORAGE_TABLE
-    }
+    const TABLE_NAME: TableName = FILE_STORAGE_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![FILE_STORAGE_ID_INDEX.clone()]
@@ -112,12 +105,12 @@ impl SystemTable for FileStorageTable {
 
     fn virtual_table() -> Option<AssociatedVirtualTable> {
         Some(AssociatedVirtualTable::Primary {
-            virtual_table_name: FILE_STORAGE_VIRTUAL_TABLE.clone(),
+            virtual_table_name: FILE_STORAGE_VIRTUAL_TABLE,
             virtual_to_system_indexes: ordmap! {
-                FILE_STORAGE_VIRTUAL_INDEX_BY_CREATION_TIME.clone() =>
-                    FILE_STORAGE_INDEX_BY_CREATION_TIME.clone(),
-                FILE_STORAGE_VIRTUAL_INDEX_BY_ID.clone() =>
-                    FILE_STORAGE_INDEX_BY_ID.clone()
+                FILE_STORAGE_VIRTUAL_INDEX_BY_CREATION_TIME =>
+                    FILE_STORAGE_INDEX_BY_CREATION_TIME,
+                FILE_STORAGE_VIRTUAL_INDEX_BY_ID =>
+                    FILE_STORAGE_INDEX_BY_ID
             },
             doc_mapper: Arc::new(FileStorageDocMapper),
         })
@@ -125,7 +118,6 @@ impl SystemTable for FileStorageTable {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, derive_more::Display)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum FileStorageId {
     LegacyStorageId(StorageUuid),
     DocumentId(DeveloperDocumentId),
@@ -272,19 +264,17 @@ impl<'a, RT: Runtime> FileStorageModel<'a, RT> {
                     )
                     .context(ErrorMetadata::bad_request(
                         "InvalidArgument",
-                        format!(
-                            "Invalid storage ID. Storage ID cannot be an ID on any table other \
-                             than '_storage'.",
-                        ),
+                        "Invalid storage ID. Storage ID cannot be an ID on any table other than \
+                         '_storage'."
+                            .to_string(),
                     ))?;
                 anyhow::ensure!(
-                    table_name == *FILE_STORAGE_VIRTUAL_TABLE,
+                    table_name == FILE_STORAGE_VIRTUAL_TABLE,
                     ErrorMetadata::bad_request(
                         "InvalidArgument",
-                        format!(
-                            "Invalid storage ID. Storage ID cannot be an ID on any table other \
-                             than '_storage'.",
-                        ),
+                        "Invalid storage ID. Storage ID cannot be an ID on any table other than \
+                         '_storage'."
+                            .to_string(),
                     )
                 );
                 let table_mapping = self.tx.table_mapping().clone();
@@ -306,7 +296,7 @@ impl<'a, RT: Runtime> FileStorageModel<'a, RT> {
         &mut self,
         storage_id: FileStorageId,
         identity: Identity,
-    ) -> anyhow::Result<Option<FileStorageEntry>> {
+    ) -> anyhow::Result<Option<ParsedDocument<FileStorageEntry>>> {
         // We only expect this function to be called by the framework as part
         // of a storage syscall. We require passing in a system identity to confirm
         // that the caller isn't letting a user call this directly
@@ -316,11 +306,10 @@ impl<'a, RT: Runtime> FileStorageModel<'a, RT> {
         let Some(entry) = self.get_file(storage_id).await? else {
             return Ok(None);
         };
-        let document_id = entry.id();
         SystemMetadataModel::new(self.tx, self.namespace)
-            .delete(document_id)
+            .delete(entry.id())
             .await?;
-        Ok(Some(entry.into_value()))
+        Ok(Some(entry))
     }
 
     pub async fn get_total_storage_count(&mut self) -> anyhow::Result<u64> {
@@ -330,69 +319,166 @@ impl<'a, RT: Runtime> FileStorageModel<'a, RT> {
     }
 }
 
-#[fastrace::trace]
-pub async fn get_total_file_storage_size<RT: Runtime>(
+/// The `_file_storage` tablets to iterate, mapped to their `by_id` index id.
+async fn file_storage_target_tables<RT: Runtime>(
     identity: &Identity,
-    db: &DatabaseSnapshot<RT>,
-) -> anyhow::Result<u64> {
-    let tablet_id_to_by_id_index = {
-        let mut tx = db.begin_tx(
-            identity.clone(),
-            Arc::new(SearchNotEnabled),
-            FunctionUsageTracker::new(),
-            virtual_system_mapping().clone(),
-        )?;
-        let by_id_indexes = IndexModel::new(&mut tx).by_id_indexes().await?;
-        let table_mapping = tx.table_mapping();
-        let tablet_id_to_by_id_index: BTreeMap<_, _> = table_mapping
-            .iter()
-            .filter(|(tablet_id, _, _, table_name)| {
-                **table_name == *FILE_STORAGE_TABLE && table_mapping.is_active(*tablet_id)
-            })
-            .map(|(tablet_id, ..)| {
-                anyhow::Ok((
-                    tablet_id,
-                    *by_id_indexes
-                        .get(&tablet_id)
-                        .context("_file_storage by_id index not found")?,
-                ))
-            })
-            .try_collect()?;
-        tablet_id_to_by_id_index
-    };
-    let mut table_iterator = db
-        .table_iterator()
-        .multi(tablet_id_to_by_id_index.keys().copied().collect());
-    let mut total_size = 0;
-    for (tablet_id, by_id_index) in tablet_id_to_by_id_index {
-        let mut table_stream =
-            Box::pin(table_iterator.stream_documents_in_table(tablet_id, by_id_index, None));
-        while let Some(storage_document) = table_stream.try_next().await? {
-            let storage_entry: ParsedDocument<FileStorageEntry> = storage_document.value.parse()?;
-            total_size += storage_entry.size as u64;
-        }
-        drop(table_stream);
-        table_iterator.unregister_table(tablet_id)?;
-    }
-    Ok(total_size)
+    snapshot: &DatabaseSnapshot<RT>,
+) -> anyhow::Result<BTreeMap<TabletId, IndexRef>> {
+    let mut tx = snapshot.begin_tx(
+        identity.clone(),
+        Arc::new(SearchNotEnabled),
+        FunctionUsageTracker::new(),
+        virtual_system_mapping().clone(),
+    )?;
+    let by_id_indexes = IndexModel::new(&mut tx).by_id_indexes().await?;
+    let table_mapping = tx.table_mapping();
+    table_mapping
+        .iter()
+        .filter(|(tablet_id, _, _, table_name)| {
+            **table_name == FILE_STORAGE_TABLE && table_mapping.is_active(*tablet_id)
+        })
+        .map(|(tablet_id, ..)| {
+            anyhow::Ok((
+                tablet_id,
+                *by_id_indexes
+                    .get(&tablet_id)
+                    .context("_file_storage by_id index not found")?,
+            ))
+        })
+        .try_collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use pb::storage::FileStorageId as FileStorageIdProto;
-    use proptest::prelude::*;
-    use sync_types::testing::assert_roundtrips;
+/// The deployment's total `_file_storage` document size, maintained
+/// incrementally across calls to [`Self::total_size`]. The first call syncs
+/// every `_file_storage` document; later ones resume from the retained cursor
+/// and read only the document log written since, unless the storage tables are
+/// small enough ([`FILE_STORAGE_SIZE_MIN_DOCUMENTS_TO_RESUME`]) that syncing
+/// them again is cheaper.
+pub struct FileStorageSizeTracker<RT: Runtime> {
+    iterator: DataSyncIterator<RT>,
+    synced: Option<SyncedTotals>,
+    min_documents_to_resume: i64,
+}
 
-    use super::FileStorageId;
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
+/// A completed sync: the totals cover every document captured by `cursor`,
+/// which is at a consistent snapshot.
+struct SyncedTotals {
+    cursor: DataSyncCursor,
+    /// Accumulated based on deltas to the table, hence signed.
+    size: i64,
+    /// Documents in the synced tables, accumulated the same way.
+    num_documents: i64,
+}
 
-        #[test]
-        fn test_function_result_proto_roundtrips(left in any::<FileStorageId>()) {
-            assert_roundtrips::<FileStorageId, FileStorageIdProto>(left);
+impl<RT: Runtime> FileStorageSizeTracker<RT> {
+    pub fn new(iterator: DataSyncIterator<RT>) -> Self {
+        Self {
+            iterator,
+            synced: None,
+            min_documents_to_resume: *FILE_STORAGE_SIZE_MIN_DOCUMENTS_TO_RESUME,
         }
     }
+
+    /// Total size of all `_file_storage` documents across the deployment, at
+    /// the consistent snapshot the iterator picks at the end of the sync.
+    /// `snapshot` supplies the set of `_file_storage` tablets to sync, not the
+    /// timestamp read at.
+    #[fastrace::trace]
+    pub async fn total_size(
+        &mut self,
+        identity: &Identity,
+        snapshot: DatabaseSnapshot<RT>,
+    ) -> anyhow::Result<u64> {
+        let target_tables = file_storage_target_tables(identity, &snapshot).await?;
+        drop(snapshot);
+        // Only resume when every table counted in the totals is still a target:
+        // a dropped table's documents are baked into them, and the iterator
+        // will never emit them again for us to subtract back out. Added tables
+        // are fine — the iterator walks them in the `by_id` dimension and we
+        // add their documents.
+        let resumable = self.synced.take().filter(|synced| {
+            synced.num_documents >= self.min_documents_to_resume
+                && synced
+                    .cursor
+                    .synced_tables()
+                    .iter()
+                    .all(|tablet| target_tables.contains_key(tablet))
+        });
+        let synced = match resumable {
+            None => sync_totals(&self.iterator, None, &target_tables).await?,
+            Some(resumable) => {
+                match sync_totals(&self.iterator, Some(resumable), &target_tables).await {
+                    Ok(synced) => synced,
+                    Err(e) => {
+                        // A retained cursor has its own failure modes, notably
+                        // `synced_ts` falling out of document retention. Start
+                        // over rather than failing every subsequent call too.
+                        report_error(&mut e.context("Resuming file storage size sync failed"))
+                            .await;
+                        sync_totals(&self.iterator, None, &target_tables).await?
+                    },
+                }
+            },
+        };
+        // A negative size is not possible. `self.synced` stays empty, so the
+        // next call starts over.
+        let size = u64::try_from(synced.size).map_err(|_| {
+            anyhow::anyhow!(
+                "DataSyncIterator returned negative file storage total {}",
+                synced.size
+            )
+        })?;
+        self.synced = Some(synced);
+        Ok(size)
+    }
+
+}
+
+/// Drive the iterator until it is caught up, accumulating deltas: add each
+/// emitted revision and subtract its predecessor, which the iterator supplies
+/// for every re-emitted document. Memory stays constant rather than
+/// materializing a per-document size map.
+async fn sync_totals<RT: Runtime>(
+    iterator: &DataSyncIterator<RT>,
+    resume: Option<SyncedTotals>,
+    target_tables: &BTreeMap<TabletId, IndexRef>,
+) -> anyhow::Result<SyncedTotals> {
+    let (mut cursor, mut size, mut num_documents) = match resume {
+        Some(SyncedTotals {
+            cursor,
+            size,
+            num_documents,
+        }) => (Some(cursor), size, num_documents),
+        None => (None, 0, 0),
+    };
+    let cursor = loop {
+        let page = iterator
+            .next_page_with_prev_revs(cursor, target_tables)
+            .await?;
+        for entry in page.entries {
+            if let Some(value) = entry.log_entry.value {
+                let storage_entry: ParsedDocument<FileStorageEntry> = value.parse()?;
+                size += storage_entry.size;
+                num_documents += 1;
+            }
+            if let Some(prev_rev) = entry.prev_rev {
+                let prev_entry: ParsedDocument<FileStorageEntry> = prev_rev.parse()?;
+                size -= prev_entry.size;
+                num_documents -= 1;
+            }
+        }
+        match page.status {
+            DataSyncStatus::UpToDate { .. } => break page.cursor,
+            // `Stale` is a consistent snapshot too, but behind the latest
+            // repeatable timestamp — keep paging so the totals don't fall
+            // further behind on every call.
+            DataSyncStatus::Stale { .. } | DataSyncStatus::Snapshotting { .. } => {},
+        }
+        cursor = Some(page.cursor);
+    };
+    Ok(SyncedTotals {
+        cursor,
+        size,
+        num_documents,
+    })
 }

@@ -1,18 +1,10 @@
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-mod index_diff_tests;
-#[cfg(test)]
-mod index_limits_tests;
-#[cfg(test)]
-pub mod index_test_utils;
-#[cfg(test)]
-mod index_tests;
 pub mod module_loader;
 pub mod types;
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+};
 
 use common::{
     components::ComponentId,
@@ -26,10 +18,10 @@ use database::{
     SchemaModel,
     Transaction,
 };
+use storage::Storage;
 use sync_types::CanonicalizedModulePath;
 use value::ResolvedDocumentId;
 
-use self::module_loader::ModuleLoader;
 use crate::{
     auth::AuthInfoModel,
     config::types::{
@@ -130,7 +122,7 @@ impl<'a, RT: Runtime> ConfigModel<'a, RT> {
     /// out of the metadata tables to avoid keeping too many sources of truth.
     pub async fn get_with_module_source(
         &mut self,
-        module_loader: &dyn ModuleLoader<RT>,
+        modules_storage: &Arc<dyn Storage>,
     ) -> anyhow::Result<(ConfigMetadata, Vec<ModuleConfig>, Option<UdfConfig>)> {
         // TODO: Move to `application/`.
         if !(self.tx.identity().is_admin() || self.tx.identity().is_system()) {
@@ -138,7 +130,7 @@ impl<'a, RT: Runtime> ConfigModel<'a, RT> {
         }
         let mut config = ConfigMetadata::new();
         let modules: Vec<_> = ModuleModel::new(self.tx)
-            .get_application_modules(self.component, module_loader)
+            .get_application_modules(self.component, modules_storage)
             .await?
             .into_values()
             .collect();
@@ -167,7 +159,7 @@ impl<'a, RT: Runtime> ConfigModel<'a, RT> {
         &mut self,
     ) -> anyhow::Result<(
         ConfigMetadata,
-        Vec<ParsedDocument<ModuleMetadata>>,
+        Vec<Arc<ParsedDocument<ModuleMetadata>>>,
         Option<UdfConfig>,
     )> {
         // TODO: Move to `application/`.

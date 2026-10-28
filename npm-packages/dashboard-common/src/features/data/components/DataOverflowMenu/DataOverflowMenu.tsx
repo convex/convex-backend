@@ -1,4 +1,4 @@
-import { BackspaceIcon, FingerPrintIcon } from "@heroicons/react/24/outline";
+import { BackspaceIcon } from "@heroicons/react/24/outline";
 import {
   BarChartIcon,
   TrashIcon,
@@ -7,10 +7,12 @@ import {
   CubeIcon,
 } from "@radix-ui/react-icons";
 import { useContext } from "react";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { PermissionsContext } from "@common/lib/deploymentContext";
 import { useNents } from "@common/lib/useNents";
 import { Menu, MenuItem } from "@ui/Menu";
 import { TableSchemaStatus } from "@common/features/data/components/TableSchema";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
+import { IndexIcon } from "@common/elements/icons";
 
 export function DataOverflowMenu({
   tableSchemaStatus,
@@ -44,16 +46,9 @@ export function DataOverflowMenu({
     tableSchemaStatus?.isValidationRunning &&
     tableSchemaStatus?.isDefinedInInProgressSchema;
 
-  const { useCurrentDeployment, useHasProjectAdminPermissions } = useContext(
-    DeploymentInfoContext,
-  );
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
 
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const canManageTable =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
+  const canManageTable = useIsOperationAllowed("WriteData");
   return (
     <Menu
       placement="bottom-start"
@@ -73,7 +68,7 @@ export function DataOverflowMenu({
         Schema
       </MenuItem>
       <MenuItem action={onClickIndexes}>
-        <FingerPrintIcon className="size-4" />
+        <IndexIcon kind="database" />
         Indexes
       </MenuItem>
       <MenuItem action={onClickMetrics}>
@@ -82,20 +77,23 @@ export function DataOverflowMenu({
       </MenuItem>
       <MenuItem
         tip={
-          isInUnmountedComponent
-            ? "Cannot clear tables in an unmounted component."
-            : numRows === 0
-              ? "There are no documents to delete."
-              : !canManageTable
-                ? "You do not have permission to clear tables in production."
-                : undefined
+          isInUnmountedComponent ? (
+            "Cannot clear tables in an unmounted component."
+          ) : numRows === 0 ? (
+            "There are no documents to delete."
+          ) : !canManageTable ? (
+            <PermissionDeniedTip
+              message="You do not have permission to clear tables in this deployment."
+              action="deployment:data:write"
+            />
+          ) : undefined
         }
         tipSide="left"
         variant="danger"
         action={onClickClearTable}
         disabled={numRows === 0 || !canManageTable || isInUnmountedComponent}
       >
-        <BackspaceIcon className="h-4 w-4" />
+        <BackspaceIcon className="size-4" />
         Clear Table
       </MenuItem>
       <MenuItem
@@ -107,7 +105,10 @@ export function DataOverflowMenu({
           ) : isInInProgressSchema ? (
             "Cannot delete table while schema validation is in progress."
           ) : !canManageTable ? (
-            "You do not have permission to delete tables in production."
+            <PermissionDeniedTip
+              message="You do not have permission to delete tables in this deployment."
+              action="deployment:data:write"
+            />
           ) : undefined
         }
         tipSide="left"

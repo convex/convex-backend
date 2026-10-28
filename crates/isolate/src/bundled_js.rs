@@ -27,8 +27,3 @@ pub fn node_executor_file(path: &str) -> Option<BundledJsFile> {
 pub fn node_executor_files_sha256() -> Sha256Digest {
     node_executor_js_data::FILES_SHA256.into()
 }
-
-#[cfg(any(test, feature = "testing"))]
-pub const OUT_DIR: &str = env!("OUT_DIR");
-#[cfg(any(test, feature = "testing"))]
-pub const UDF_TEST_BUNDLE_PATH: &str = concat!(env!("OUT_DIR"), "/udf_test_bundle/fullConfig.json");

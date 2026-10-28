@@ -86,7 +86,7 @@ export function LogListItem({
     >
       <Wrapper setShownLog={setShownLog} logKey={logKey} ref={wrapperRef}>
         <div className={classNames("flex gap-4 items-center", "p-0.5 ml-2")}>
-          <div className="min-w-[9.25rem] text-left whitespace-nowrap">
+          <div className="min-w-37 text-left whitespace-nowrap">
             {log.localizedTimestamp}
             <span
               className={classNames(
@@ -99,7 +99,7 @@ export function LogListItem({
           </div>
           <div
             className={cn(
-              "-ml-0.5 min-w-8 overflow-hidden rounded-sm border px-0.5 py-[1px] text-[10px] group-hover:border-border-selected",
+              "-ml-0.5 min-w-8 overflow-hidden rounded-sm border px-0.5 py-px text-[10px] group-hover:border-border-selected",
               isFailure && "border-background-errorSecondary",
             )}
           >
@@ -107,9 +107,9 @@ export function LogListItem({
           </div>
 
           {log.kind === "outcome" ? (
-            <div className="flex min-w-[7rem] items-center gap-2">
+            <div className="flex min-w-28 items-center gap-2">
               <LogStatusLine outcome={log.outcome} />{" "}
-              <div className="w-8 min-w-[2rem] text-right whitespace-nowrap">
+              <div className="w-8 min-w-8 text-right whitespace-nowrap">
                 {log.cachedResult ? (
                   <span className="text-xs font-medium text-content-success">
                     (cached)

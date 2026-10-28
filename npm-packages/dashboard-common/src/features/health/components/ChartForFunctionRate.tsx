@@ -20,8 +20,38 @@ import { ChartData } from "@common/lib/charts/types";
 import { DeploymentTimes } from "@common/features/health/components/DeploymentTimes";
 import { Button } from "@ui/Button";
 import { FunctionNameOption } from "@common/elements/FunctionNameOption";
+import { functionIdentifierValue } from "@common/lib/functions/generateFileTree";
 import { LoadingTransition } from "@ui/Loading";
 import { Spinner } from "@ui/Spinner";
+
+function SubscriptionInvalidationLabel({
+  dataKey,
+  maxChars = 24,
+}: {
+  dataKey: string;
+  maxChars?: number;
+}) {
+  // Keys are either "mutation:table" (health page) or just "table" (function page).
+  const lastColon = dataKey.lastIndexOf(":");
+  if (lastColon === -1) {
+    // Just a table name
+    return <span>{dataKey}</span>;
+  }
+  const mutation = dataKey.substring(0, lastColon);
+  const table = dataKey.substring(lastColon + 1);
+  return (
+    <span className="flex items-center gap-1">
+      <span className="truncate">
+        <FunctionNameOption
+          maxChars={maxChars}
+          label={functionIdentifierValue(mutation)}
+        />
+      </span>
+      <span className="shrink-0 text-content-secondary">→</span>
+      <span className="shrink-0">{table}</span>
+    </span>
+  );
+}
 
 function PortalTooltip({
   active,
@@ -108,7 +138,8 @@ export function ChartForFunctionRate({
     | "failureRate"
     | "schedulerStatus"
     | "functionConcurrency"
-    | "functionCalls";
+    | "functionCalls"
+    | "subscriptionInvalidations";
 }) {
   const [shown, setShown] = useState<string | null>(null);
   const [startDate] = useState(new Date(Date.now() - 3600 * 1000));
@@ -128,7 +159,7 @@ export function ChartForFunctionRate({
     {} as Record<string, { hour: string; timestamp: number }[]>,
   );
   return (
-    <div className="h-full min-h-52 w-full [&_*]:!outline-none">
+    <div className="size-full min-h-52 **:outline-none!">
       <LoadingTransition
         loadingProps={{
           fullHeight: false,
@@ -136,13 +167,13 @@ export function ChartForFunctionRate({
           shimmer: false,
         }}
         loadingState={
-          <div className="flex h-full w-full items-center justify-center">
+          <div className="flex size-full items-center justify-center">
             <Spinner className="m-auto size-12" />
           </div>
         }
       >
         {chartData === null ? (
-          <div className="flex h-[11.25rem] w-full items-center justify-center px-12 text-center text-sm text-content-secondary">
+          <div className="flex h-45 w-full items-center justify-center px-12 text-center text-sm text-content-secondary">
             {`Data will appear here as your ${kind === "cacheHitRate" ? "queries" : "functions"} are called.`}
           </div>
         ) : chartData === undefined ? null : (
@@ -177,7 +208,8 @@ export function ChartForFunctionRate({
                   tickLine={false}
                   width="auto"
                   tickFormatter={(value) =>
-                    kind === "functionCalls"
+                    kind === "functionCalls" ||
+                    kind === "subscriptionInvalidations"
                       ? formatNumberCompact(value as number)
                       : kind === "schedulerStatus" ||
                           kind === "functionConcurrency"
@@ -187,18 +219,23 @@ export function ChartForFunctionRate({
                   domain={
                     kind !== "schedulerStatus" &&
                     kind !== "functionConcurrency" &&
-                    kind !== "functionCalls"
+                    kind !== "functionCalls" &&
+                    kind !== "subscriptionInvalidations"
                       ? [0, 100]
                       : undefined
                   }
                   interval={
                     kind === "schedulerStatus" ||
                     kind === "functionConcurrency" ||
-                    kind === "functionCalls"
+                    kind === "functionCalls" ||
+                    kind === "subscriptionInvalidations"
                       ? 0
                       : undefined
                   }
-                  allowDecimals={kind !== "functionCalls"}
+                  allowDecimals={
+                    kind !== "functionCalls" &&
+                    kind !== "subscriptionInvalidations"
+                  }
                   tick={{ fontSize: 11, fill: "currentColor" }}
                 />
                 <Legend
@@ -207,44 +244,59 @@ export function ChartForFunctionRate({
                   iconType="plainline"
                   iconSize={12}
                   layout="horizontal"
-                  formatter={(_value, entry, idx) => {
-                    const { dataKey } = entry;
-                    return (
-                      <Button
-                        variant="unstyled"
-                        key={idx}
-                        className={classNames(
-                          "span items-center gap-1 transition-opacity text-content-primary",
-                          shown === dataKey || shown === null
-                            ? "opacity-100"
-                            : "opacity-50",
-                        )}
-                        onClick={() =>
-                          shown === dataKey
-                            ? setShown(null)
-                            : setShown(dataKey as string)
-                        }
-                      >
-                        {dataKey === "_rest" ? (
-                          `All${[].length > 1 ? " other" : ""} ${kind === "cacheHitRate" ? "queries" : "functions"}`
-                        ) : kind === "schedulerStatus" ? (
-                          "Lag Time (minutes)"
-                        ) : kind === "functionConcurrency" ? (
-                          (dataKey as string)
-                        ) : kind === "functionCalls" ? (
-                          <FunctionNameOption
-                            maxChars={24}
-                            label={dataKey as string}
-                          />
-                        ) : (
-                          <FunctionNameOption
-                            maxChars={24}
-                            label={dataKey as string}
-                          />
-                        )}
-                      </Button>
-                    );
-                  }}
+                  content={() => (
+                    <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1">
+                      {chartData.lineKeys.map((line) => (
+                        <Button
+                          variant="unstyled"
+                          key={line.key}
+                          className={classNames(
+                            "flex items-center gap-1 transition-opacity text-content-primary",
+                            shown === line.key || shown === null
+                              ? "opacity-100"
+                              : "opacity-50",
+                          )}
+                          onClick={() =>
+                            shown === line.key
+                              ? setShown(null)
+                              : setShown(line.key)
+                          }
+                        >
+                          <svg className="w-3" viewBox="0 0 12 12" aria-hidden>
+                            <line
+                              x1="0"
+                              y1="6"
+                              x2="12"
+                              y2="6"
+                              stroke={line.color}
+                              strokeWidth="2"
+                            />
+                          </svg>
+                          {line.key === "_rest" ? (
+                            kind === "subscriptionInvalidations" ? (
+                              "Other"
+                            ) : (
+                              `All${[].length > 1 ? " other" : ""} ${kind === "cacheHitRate" ? "queries" : "functions"}`
+                            )
+                          ) : kind === "schedulerStatus" ? (
+                            "Lag Time (minutes)"
+                          ) : kind === "functionConcurrency" ? (
+                            line.key
+                          ) : kind === "subscriptionInvalidations" ? (
+                            <SubscriptionInvalidationLabel
+                              dataKey={line.key}
+                              maxChars={24}
+                            />
+                          ) : (
+                            <FunctionNameOption
+                              maxChars={24}
+                              label={line.key}
+                            />
+                          )}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
                 />
 
                 <Tooltip
@@ -267,21 +319,33 @@ export function ChartForFunctionRate({
                                 ({ dataKey }: any) =>
                                   shown === dataKey || shown === null,
                               )
+                              .sort((a: any, b: any) =>
+                                a.dataKey === "_rest"
+                                  ? 1
+                                  : b.dataKey === "_rest"
+                                    ? -1
+                                    : 0,
+                              )
                               .map((dataPoint: any) => ({
                                 ...dataPoint,
                                 formattedValue: (
-                                  <span className="flex min-w-48 items-center justify-between">
-                                    <div>
+                                  <span className="flex flex-1 items-center justify-between gap-2">
+                                    <div className="flex-1 truncate">
                                       {dataPoint.dataKey === "_rest" ? (
-                                        `All${payload.length > 1 ? " other" : ""} ${kind === "cacheHitRate" ? "queries" : "functions"}`
+                                        kind === "subscriptionInvalidations" ? (
+                                          "Other"
+                                        ) : (
+                                          `All${payload.length > 1 ? " other" : ""} ${kind === "cacheHitRate" ? "queries" : "functions"}`
+                                        )
                                       ) : kind === "schedulerStatus" ? (
                                         "Lag Time"
                                       ) : kind === "functionConcurrency" ? (
                                         (dataPoint.dataKey as string)
-                                      ) : kind === "functionCalls" ? (
-                                        <FunctionNameOption
+                                      ) : kind ===
+                                        "subscriptionInvalidations" ? (
+                                        <SubscriptionInvalidationLabel
+                                          dataKey={dataPoint.dataKey as string}
                                           maxChars={24}
-                                          label={dataPoint.dataKey as string}
                                         />
                                       ) : (
                                         <FunctionNameOption
@@ -290,21 +354,23 @@ export function ChartForFunctionRate({
                                         />
                                       )}
                                     </div>
-                                    <div>
+                                    <div className="shrink-0 text-right">
                                       {kind === "schedulerStatus"
                                         ? `${(dataPoint.value as number).toLocaleString()} minutes`
                                         : kind === "functionConcurrency" ||
                                             kind === "functionCalls"
                                           ? `${formatNumberCompact(dataPoint.value as number)} ${(dataPoint.value as number) === 1 ? "call" : "calls"}`
-                                          : `${(
-                                              dataPoint.value as number
-                                            ).toFixed(
-                                              (dataPoint.value as number) %
-                                                1 ===
-                                                0
-                                                ? 0
-                                                : 2,
-                                            )}%`}
+                                          : kind === "subscriptionInvalidations"
+                                            ? `${formatNumberCompact(dataPoint.value as number)} ${(dataPoint.value as number) === 1 ? "invalidation" : "invalidations"}`
+                                            : `${(
+                                                dataPoint.value as number
+                                              ).toFixed(
+                                                (dataPoint.value as number) %
+                                                  1 ===
+                                                  0
+                                                  ? 0
+                                                  : 2,
+                                              )}%`}
                                     </div>
                                   </span>
                                 ),

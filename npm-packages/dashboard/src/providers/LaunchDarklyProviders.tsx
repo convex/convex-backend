@@ -93,7 +93,6 @@ export function MaybeLaunchDarklyProvider({
   return accessToken ? (
     <LaunchDarklyProvider>{children}</LaunchDarklyProvider>
   ) : (
-    // eslint-disable-next-line react/jsx-no-useless-fragment
     <>{children}</>
   );
 }

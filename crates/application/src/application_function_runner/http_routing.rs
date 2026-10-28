@@ -8,7 +8,10 @@ use common::{
         Reference,
     },
     errors::JsError,
-    execution_context::ExecutionContext,
+    execution_context::{
+        ExecutionContext,
+        RequestContext,
+    },
     http::RoutedHttpPath,
     log_lines::{
         run_function_and_collect_log_lines,
@@ -25,7 +28,6 @@ use common::{
         ModuleEnvironment,
         RoutableMethod,
     },
-    RequestId,
 };
 use database::{
     BootstrapComponentsModel,
@@ -68,7 +70,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     pub async fn run_http_action(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         http_request: HttpActionRequest,
         mut response_streamer: HttpActionResponseStreamer,
         identity: Identity,
@@ -109,7 +111,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             Err(e) => return Ok(udf::HttpActionResult::Error(e)),
         };
         let unix_timestamp = self.runtime.unix_timestamp();
-        let context = ExecutionContext::new(request_id, &caller);
+        let context = ExecutionContext::new(request_context, &caller);
 
         let request_head = http_request.head.clone();
         let route = http_request.head.route_for_failure();
@@ -340,14 +342,15 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             let (definition_id, current_id) =
                 model.must_component_path_to_ids(&current_component_path)?;
             let definition = model.load_definition_metadata(definition_id).await?;
-            let http_routes = ModuleModel::new(model.tx)
-                .get_http(current_id)
-                .await?
+            let module = ModuleModel::new(model.tx).get_http(current_id).await?;
+            let http_routes = module
+                .as_ref()
                 .map(|m| {
-                    m.into_value()
-                        .analyze_result
+                    m.analyze_result
+                        .as_ref()
                         .context("Missing analyze result for http module")?
                         .http_routes
+                        .as_ref()
                         .context("Missing http routes")
                 })
                 .transpose()?;
@@ -356,12 +359,26 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 return Ok(None);
             }
 
+            // Apps may define an http_prefix for their http.js routes. If a prefix
+            // was defined, we strip it off ahead of matching the routes against
+            // http.js (which themselves are defined without the prefix).
+            let http_js_routed_path = if definition.is_app()
+                && let Some(ref prefix) = definition.http_prefix
+            {
+                routed_path
+                    .strip_prefix(&prefix[..])
+                    .map(|suffix| RoutedHttpPath(format!("/{suffix}")))
+            } else {
+                Some(routed_path.clone())
+            };
+
             // First, try matching an exact path from `http.js`, which will always
             // be the most specific match.
-            if let Some(ref http_routes) = http_routes
-                && http_routes.route_exact(&routed_path[..], method)
+            if let Some(ref effective_path) = http_js_routed_path
+                && let Some(http_routes) = http_routes
+                && http_routes.route_exact(&effective_path[..], method)
             {
-                return Ok(Some((current_component_path, routed_path)));
+                return Ok(Some((current_component_path, effective_path.clone())));
             }
 
             // Next, try finding the most specific prefix match from both `http.js`
@@ -372,11 +389,14 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             }
             let mut longest_match = None;
 
-            if let Some(ref http_routes) = http_routes
-                && let Some(match_suffix) = http_routes.route_prefix(&routed_path, method)
+            if let Some(ref effective_path) = http_js_routed_path
+                && let Some(http_routes) = http_routes
+                && let Some(match_suffix) = http_routes.route_prefix(effective_path, method)
             {
                 longest_match = Some((match_suffix, CurrentMatch::CurrentHttpJs));
             }
+            // http_mounts are not nested under a (possible) App http_prefix - they always
+            // use the original routed_path (absolute paths from root)
             for (mount_path, reference) in &definition.http_mounts {
                 let Some(match_suffix) = routed_path.strip_prefix(&mount_path[..]) else {
                     continue;
@@ -396,11 +416,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     // If we couldn't match the route, forward the request to the current
                     // component's `http.js` if present. This lets the JS layer uniformly handle
                     // 404s when defined.
-                    if http_routes.is_some() {
-                        return Ok(Some((
-                            current_component_path,
-                            RoutedHttpPath(routed_path.to_string()),
-                        )));
+                    if let Some(effective_path) = http_js_routed_path
+                        && http_routes.is_some()
+                    {
+                        return Ok(Some((current_component_path, effective_path)));
                     } else {
                         return Ok(None);
                     }
@@ -408,7 +427,9 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 Some((_, CurrentMatch::CurrentHttpJs)) => {
                     return Ok(Some((
                         current_component_path,
-                        RoutedHttpPath(routed_path.to_string()),
+                        // Use the effective (prefix-stripped) path for http.js
+                        http_js_routed_path
+                            .expect("CurrentHttpJs match requires http_js_routed_path"),
                     )));
                 },
                 Some((match_suffix, CurrentMatch::MountedComponent(reference))) => {

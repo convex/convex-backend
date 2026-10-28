@@ -1,0 +1,14 @@
+{
+  "name": "component-tests",
+  "version": "0.0.0",
+  "dependencies": {
+    "convex": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "~5.0.3",
+    "@types/node": "^18.17.0"
+  },
+  "scripts": {
+    "build": ""
+  }
+}

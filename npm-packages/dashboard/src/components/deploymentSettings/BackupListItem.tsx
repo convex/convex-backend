@@ -21,8 +21,8 @@ import { Checkbox } from "@ui/Checkbox";
 import { Menu, MenuItem } from "@ui/Menu";
 import { useEffect, useId, useRef, useState } from "react";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import { DeploymentResponse, ProjectDetails, TeamResponse } from "generatedApi";
-import { useDeploymentById } from "api/deployments";
+import { ProjectDetails } from "generatedApi";
+import { useDeploymentByName } from "api/deployments";
 import { useTeamMembers } from "api/teams";
 import { useProjectById } from "api/projects";
 import { useProfile } from "api/profile";
@@ -32,41 +32,44 @@ import {
   SignalIcon,
 } from "@heroicons/react/24/outline";
 import {
-  useRequestCloudBackup,
   useRestoreFromCloudBackup,
   useDeleteCloudBackup,
   BackupResponse,
-  useListCloudBackups,
   useCancelCloudBackup,
 } from "api/backups";
 import { Doc, Id } from "system-udfs/convex/_generated/dataModel";
 import { BackupIdentifier } from "elements/BackupIdentifier";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { cn } from "@ui/cn";
 import { getDeploymentLabel } from "elements/DeploymentDisplay";
-import { usePostHog } from "hooks/usePostHog";
+import { BackupNowButton } from "./BackupNowButton";
 
 export function BackupListItem({
+  teamId,
   backup,
   restoring,
   someBackupInProgress,
   someRestoreInProgress,
   latestBackupInTargetDeployment,
   targetDeployment,
-  team,
-  canPerformActions,
-  getZipExportUrl,
+  canCreate,
+  canImport,
+  canDelete,
+  downloadZipExport,
   maxCloudBackups,
   progressMessage,
 }: {
+  teamId: number;
   backup: BackupResponse;
   restoring: boolean;
   someBackupInProgress: boolean;
   someRestoreInProgress: boolean;
   latestBackupInTargetDeployment: BackupResponse | null;
   targetDeployment: PlatformDeploymentResponse;
-  team: TeamResponse;
-  canPerformActions: boolean;
-  getZipExportUrl: (snapshotId: Id<"_exports">) => string;
+  canCreate: boolean;
+  canImport: boolean;
+  canDelete: boolean;
+  downloadZipExport: (snapshotId: Id<"_exports">) => Promise<void>;
   maxCloudBackups: number;
   progressMessage: string | null;
 }) {
@@ -76,6 +79,8 @@ export function BackupListItem({
 
   const targetDeploymentId =
     targetDeployment.kind === "cloud" ? targetDeployment.id : null;
+  const restoreBlockedByDedicated =
+    targetDeployment.kind === "cloud" && targetDeployment.class.startsWith("d");
 
   const previousState = useRef(backup.state);
   useEffect(() => {
@@ -114,10 +119,18 @@ export function BackupListItem({
         <div className="my-2 flex flex-wrap items-center gap-4">
           <div className="flex flex-1 flex-col items-start gap-1">
             <span className="min-w-fit text-sm font-medium">
-              Backup from {new Date(backup.requestedTime).toLocaleString()}{" "}
-              <span className="text-xs font-normal text-content-secondary">
-                (<TimestampDistance date={new Date(backup.requestedTime)} />)
-              </span>
+              Backup from {new Date(backup.requestedTime).toLocaleString()}
+              {backup.state === "complete" &&
+                typeof backup.completedTime === "number" && (
+                  <span className="text-xs font-normal text-content-secondary">
+                    {" "}
+                    (completed in{" "}
+                    {formatBackupDuration(
+                      backup.completedTime - backup.requestedTime,
+                    )}
+                    )
+                  </span>
+                )}
             </span>
             <BackupIdentifier backup={backup} />
             {(backup.state === "requested" ||
@@ -180,13 +193,16 @@ export function BackupListItem({
                   <MenuItem
                     variant="danger"
                     action={() => setModal("cancel")}
-                    disabled={backup.state !== "inProgress"}
+                    disabled={backup.state !== "inProgress" || !canDelete}
                     tipSide="left"
                     tip={
                       backup.state !== "inProgress"
                         ? "This backup hasn't started yet."
-                        : !canPerformActions
-                          ? "You do not have permission to cancel backups in production."
+                        : !canDelete
+                          ? permissionDeniedTip(
+                              "You do not have permission to cancel backups.",
+                              "deployment:backups:delete",
+                            )
                           : undefined
                     }
                   >
@@ -199,11 +215,10 @@ export function BackupListItem({
                     (targetDeployment.kind === "cloud" &&
                       backup.sourceDeploymentId !== targetDeployment.id)
                   }
-                  href={
-                    backup.state === "complete"
-                      ? getZipExportUrl(backup.snapshotId)
-                      : "" // only when disabled
-                  }
+                  action={() => {
+                    if (backup.state !== "complete") return; // only when disabled
+                    void downloadZipExport(backup.snapshotId);
+                  }}
                   tipSide="left"
                   tip={
                     backup.state !== "complete"
@@ -229,19 +244,25 @@ export function BackupListItem({
                     backup.state !== "complete" ||
                     someRestoreInProgress ||
                     someBackupInProgress ||
-                    !canPerformActions
+                    !canImport ||
+                    restoreBlockedByDedicated
                   }
                   tipSide="left"
                   tip={
-                    backup.state !== "complete"
-                      ? backupStateDescription
-                      : someRestoreInProgress
-                        ? "Another backup is being restored at the moment."
-                        : someBackupInProgress
-                          ? "Please wait for the ongoing backup to be completed before restoring from a backup."
-                          : !canPerformActions
-                            ? "You do not have permission to restore backups in production."
-                            : undefined
+                    restoreBlockedByDedicated
+                      ? `Restores into ${targetDeployment.kind === "cloud" ? targetDeployment.class.toUpperCase() : "dedicated"} deployments must use a physical backup. Contact the Convex team to restore from a physical backup.`
+                      : backup.state !== "complete"
+                        ? backupStateDescription
+                        : someRestoreInProgress
+                          ? "Another backup is being restored at the moment."
+                          : someBackupInProgress
+                            ? "Please wait for the ongoing backup to be completed before restoring from a backup."
+                            : !canImport
+                              ? permissionDeniedTip(
+                                  "You do not have permission to restore backups.",
+                                  "deployment:backups:import",
+                                )
+                              : undefined
                   }
                 >
                   Restore
@@ -252,15 +273,18 @@ export function BackupListItem({
                   disabled={
                     backup.state === "inProgress" ||
                     backup.state === "requested" ||
-                    !canPerformActions
+                    !canDelete
                   }
                   tipSide="left"
                   tip={
                     backup.state === "inProgress" ||
                     backup.state === "requested"
                       ? backupStateDescription
-                      : !canPerformActions
-                        ? "You do not have permission to delete backups in production."
+                      : !canDelete
+                        ? permissionDeniedTip(
+                            "You do not have permission to delete backups.",
+                            "deployment:backups:delete",
+                          )
                         : undefined
                   }
                 >
@@ -284,19 +308,18 @@ export function BackupListItem({
         >
           {modal === "suggestBackup" ? (
             <SuggestBackup
-              team={team}
+              teamId={teamId}
               targetDeployment={targetDeployment}
               onClose={() => setModal(null)}
               onContinue={() => setModal("restoreConfirmation")}
               latestBackupInTargetDeployment={latestBackupInTargetDeployment}
               maxCloudBackups={maxCloudBackups}
-              canPerformActions={canPerformActions}
+              canCreate={canCreate}
             />
           ) : (
             <RestoreConfirmation
               backup={backup}
               targetDeployment={targetDeployment}
-              team={team}
               latestBackupInTargetDeployment={latestBackupInTargetDeployment}
               onClose={() => setModal(null)}
             />
@@ -308,7 +331,6 @@ export function BackupListItem({
         <DeleteOrCancelBackupModal
           action={modal}
           backup={backup}
-          team={team}
           onClose={() => setModal(null)}
         />
       )}
@@ -317,21 +339,21 @@ export function BackupListItem({
 }
 
 function SuggestBackup({
-  team,
+  teamId,
   targetDeployment,
   onClose,
   onContinue,
   latestBackupInTargetDeployment,
   maxCloudBackups,
-  canPerformActions,
+  canCreate,
 }: {
-  team: TeamResponse;
+  teamId: number;
   targetDeployment: PlatformDeploymentResponse;
   onClose: () => void;
   onContinue: () => void;
   latestBackupInTargetDeployment: BackupResponse | null;
   maxCloudBackups: number;
-  canPerformActions: boolean;
+  canCreate: boolean;
 }) {
   return (
     <>
@@ -346,10 +368,10 @@ function SuggestBackup({
 
       <div className="flex justify-end gap-2">
         <BackupNowButton
+          teamId={teamId}
           deployment={targetDeployment}
-          team={team}
           maxCloudBackups={maxCloudBackups}
-          canPerformActions={canPerformActions}
+          canCreate={canCreate}
           onBackupRequested={onClose}
         />
         <Button variant="primary" onClick={onContinue}>
@@ -363,13 +385,11 @@ function SuggestBackup({
 function RestoreConfirmation({
   backup,
   targetDeployment,
-  team,
   latestBackupInTargetDeployment,
   onClose,
 }: {
   backup: BackupResponse;
   targetDeployment: PlatformDeploymentResponse;
-  team: TeamResponse;
   latestBackupInTargetDeployment: BackupResponse | null;
   onClose: () => void;
 }) {
@@ -389,7 +409,6 @@ function RestoreConfirmation({
         backup={backup}
         targetDeployment={targetDeployment}
         latestBackupInTargetDeployment={latestBackupInTargetDeployment}
-        team={team}
       />
 
       <p className="my-2 text-sm">
@@ -447,16 +466,14 @@ function RestoreConfirmation({
 function DeleteOrCancelBackupModal({
   action,
   backup,
-  team,
   onClose,
 }: {
   action: "delete" | "cancel";
   backup: BackupResponse;
-  team: TeamResponse;
   onClose: () => void;
 }) {
-  const doDelete = useDeleteCloudBackup(team.id, backup.id);
-  const doCancel = useCancelCloudBackup(team.id, backup.id);
+  const doDelete = useDeleteCloudBackup(backup.sourceDeploymentId, backup.id);
+  const doCancel = useCancelCloudBackup(backup.sourceDeploymentId, backup.id);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -467,11 +484,7 @@ function DeleteOrCancelBackupModal({
     >
       <p className="text-content-secondary">This action cannot be undone.</p>
 
-      <BackupSummary
-        backup={backup}
-        sourceDeploymentAppearance="inline"
-        team={team}
-      />
+      <BackupSummary backup={backup} sourceDeploymentAppearance="inline" />
 
       <div className="flex justify-end gap-2">
         <Button
@@ -504,18 +517,13 @@ function DeleteOrCancelBackupModal({
 export type BackupSummaryProps = {
   backup: BackupResponse | null;
   sourceDeploymentAppearance: null | "inline" | "differentDeploymentWarning";
-  team: TeamResponse;
 };
 
 function BackupSummary({
   backup,
   sourceDeploymentAppearance,
-  team,
 }: BackupSummaryProps) {
-  const backupDeployment = useDeploymentById(
-    team.id,
-    backup?.sourceDeploymentId,
-  );
+  const backupDeployment = useDeploymentByName(backup?.sourceDeploymentName);
   const sourceDeployment = backupDeployment ? (
     <Tooltip tip={<code>{backupDeployment.name}</code>}>
       <FullDeploymentName deployment={backupDeployment} />
@@ -598,15 +606,13 @@ export function TransferSummary({
   backup,
   targetDeployment,
   latestBackupInTargetDeployment,
-  team,
 }: {
   backup: BackupResponse | null;
   targetDeployment: PlatformDeploymentResponse;
   latestBackupInTargetDeployment: BackupResponse | null | undefined;
-  team: TeamResponse;
 }) {
   return (
-    <div className="mb-4 grid justify-center gap-2 rounded-lg border md:flex md:gap-5">
+    <div className="mb-4 grid justify-center gap-2 rounded-lg border p-4 md:flex md:gap-5">
       <BackupSummary
         backup={backup}
         sourceDeploymentAppearance={
@@ -616,7 +622,6 @@ export function TransferSummary({
             ? "differentDeploymentWarning"
             : null
         }
-        team={team}
       />
 
       <div className="flex w-full justify-center md:my-4 md:w-fit">
@@ -636,7 +641,7 @@ export function FullDeploymentName({
   deployment,
   showProjectName = true,
 }: {
-  deployment: PlatformDeploymentResponse | DeploymentResponse;
+  deployment: PlatformDeploymentResponse;
   showProjectName?: boolean;
 }) {
   const { project, isLoading } = useProjectById(deployment.projectId);
@@ -667,7 +672,7 @@ export function FullDeploymentName({
 
 function useMemberName(
   project: ProjectDetails | undefined,
-  deployment: PlatformDeploymentResponse | DeploymentResponse | undefined,
+  deployment: PlatformDeploymentResponse | undefined,
 ) {
   const teamMembers = useTeamMembers(project?.teamId);
   const whose = teamMembers?.find((tm) => tm.id === deployment?.creator);
@@ -700,111 +705,6 @@ function isInLastFiveMinutes(backup: BackupResponse): boolean {
   return backup.requestedTime >= Date.now() - fiveMinutes;
 }
 
-export function BackupNowButton({
-  deployment,
-  team,
-  maxCloudBackups,
-  canPerformActions,
-  onBackupRequested,
-}: {
-  deployment: PlatformDeploymentResponse;
-  team: TeamResponse;
-  maxCloudBackups: number;
-  canPerformActions: boolean;
-  onBackupRequested?: () => void;
-}) {
-  const backups = useListCloudBackups(team?.id);
-  const nonFailedBackupsForDeployment = backups?.filter(
-    (backup) =>
-      backup.sourceDeploymentName === deployment.name &&
-      (backup.state === "requested" ||
-        backup.state === "inProgress" ||
-        backup.state === "complete"),
-  );
-
-  const requestBackup = useRequestCloudBackup(
-    deployment.kind === "cloud" ? deployment.id : 0,
-    team.id,
-  );
-  const [isOngoing, setIsOngoing] = useState(false);
-  const [showModal, setShowModal] = useState(false);
-  const [includeStorage, setIncludeStorage] = useState(false);
-  const includeStorageCheckboxId = useId();
-  const { capture } = usePostHog();
-
-  const doBackup = async () => {
-    setIsOngoing(true);
-    try {
-      await requestBackup({ includeStorage });
-      capture("created_backup", { includedStorage: includeStorage });
-    } finally {
-      setIsOngoing(false);
-    }
-    setShowModal(false);
-    if (onBackupRequested) {
-      onBackupRequested();
-    }
-  };
-
-  return (
-    <>
-      <Button
-        variant="neutral"
-        className="w-fit"
-        loading={isOngoing}
-        icon={<ArchiveIcon />}
-        onClick={() => setShowModal(true)}
-        disabled={
-          nonFailedBackupsForDeployment === undefined ||
-          nonFailedBackupsForDeployment.length >= maxCloudBackups ||
-          !canPerformActions
-        }
-        tip={
-          isOngoing
-            ? "A backup is currently in progress."
-            : nonFailedBackupsForDeployment &&
-                nonFailedBackupsForDeployment.length >= maxCloudBackups
-              ? `You can only have up to ${maxCloudBackups} backups on your current plan. Delete some of your existing backups in this deployment to create a new one.`
-              : !canPerformActions
-                ? "You do not have permission to create backups in production."
-                : undefined
-        }
-      >
-        Backup Now
-      </Button>
-
-      {showModal && (
-        <Modal
-          onClose={() => setShowModal(false)}
-          title="Request an immediate backup"
-          size="sm"
-        >
-          <label
-            className="ml-px flex items-center gap-2 text-sm"
-            htmlFor={includeStorageCheckboxId}
-          >
-            <Checkbox
-              id={includeStorageCheckboxId}
-              checked={includeStorage}
-              onChange={() => setIncludeStorage(!includeStorage)}
-            />
-            Include file storage
-          </label>
-
-          <Button
-            className="mt-4 ml-auto flex gap-2"
-            variant="primary"
-            onClick={doBackup}
-            loading={isOngoing}
-          >
-            Create Backup
-          </Button>
-        </Modal>
-      )}
-    </>
-  );
-}
-
 export function progressMessageForBackup(
   // Backup response from big-brain
   backup: BackupResponse,
@@ -818,11 +718,26 @@ export function progressMessageForBackup(
     : null;
 }
 
+function formatBackupDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
 function DeploymentLabel({
   whoseName,
   deployment,
 }: {
-  deployment: PlatformDeploymentResponse | DeploymentResponse;
+  deployment: PlatformDeploymentResponse;
   whoseName: string | null;
 }) {
   return (

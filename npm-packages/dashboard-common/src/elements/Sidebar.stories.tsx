@@ -13,7 +13,7 @@ import { fn } from "storybook/test";
 const meta = {
   component: Sidebar,
   render: (args) => (
-    <div className="m-[-1rem] h-[100vh] w-[100vw] bg-background-primary">
+    <div className="-m-4 h-screen w-screen bg-background-primary">
       <Sidebar {...args} />
     </div>
   ),

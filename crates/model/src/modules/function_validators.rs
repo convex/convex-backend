@@ -8,8 +8,6 @@ use common::{
     virtual_system_mapping::VirtualSystemMapping,
 };
 use errors::ErrorMetadataAnyhowExt;
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use serde::{
     Deserialize,
     Serialize,
@@ -18,21 +16,16 @@ use value::{
     ConvexArray,
     ConvexValue,
     NamespacedTableMapping,
+    PendingValue,
+    MAX_COMMIT_TS,
 };
 
 /**
  * A validator for the arguments to a UDF.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ArgsValidator {
     Unvalidated,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::btree_set(any::<value::TableName>(), \
-                             1..8).prop_flat_map(any_with::<ObjectValidator>).\
-                             prop_map(ArgsValidator::Validated)")
-    )]
     Validated(ObjectValidator),
 }
 
@@ -57,19 +50,16 @@ impl ArgsValidator {
                         return Ok(Some(JsError::from_message(error_message)));
                     },
                 };
-                let object_arg = match single_arg {
-                    ConvexValue::Object(o) => o,
-                    _ => {
-                        let error_message = format!(
-                            "Expected to receive an object as the function's argument. Instead \
-                             received: {single_arg}"
-                        );
-                        return Ok(Some(JsError::from_message(error_message)));
-                    },
-                };
+                if !matches!(single_arg, ConvexValue::Object(_)) {
+                    let error_message = format!(
+                        "Expected to receive an object as the function's argument. Instead \
+                         received: {single_arg}"
+                    );
+                    return Ok(Some(JsError::from_message(error_message)));
+                }
 
                 let validation_error = Validator::Object(object_validator.clone()).check_value(
-                    &ConvexValue::Object(object_arg.clone()),
+                    single_arg,
                     table_mapping,
                     virtual_system_mapping,
                 );
@@ -81,6 +71,22 @@ impl ArgsValidator {
             },
         };
         Ok(result)
+    }
+
+    /// Validates pending args by resolving commit timestamps to
+    /// `MAX_COMMIT_TS`
+    pub fn check_pending_args(
+        &self,
+        args: Vec<PendingValue>,
+        table_mapping: &NamespacedTableMapping,
+        virtual_system_mapping: &VirtualSystemMapping,
+    ) -> anyhow::Result<Option<JsError>> {
+        let projected = args
+            .into_iter()
+            .map(|arg| arg.into_resolved(MAX_COMMIT_TS))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .and_then(ConvexArray::try_from)?;
+        self.check_args(&projected, table_mapping, virtual_system_mapping)
     }
 }
 
@@ -127,15 +133,8 @@ impl TryFrom<ArgsValidator> for ArgsValidatorJson {
  * A validator for the return value of a UDF.
  */
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ReturnsValidator {
     Unvalidated,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::btree_set(any::<value::TableName>(), \
-                             1..8).prop_flat_map(any_with::<Validator>).\
-                             prop_map(ReturnsValidator::Validated)")
-    )]
     Validated(Validator),
 }
 
@@ -166,6 +165,21 @@ impl ReturnsValidator {
                 }
             },
         }
+    }
+
+    /// Validates pending values by resolving commit timestamps to
+    /// `MAX_COMMIT_TS`
+    pub fn check_pending_output(
+        &self,
+        output: &PendingValue,
+        table_mapping: &NamespacedTableMapping,
+        virtual_system_mapping: &VirtualSystemMapping,
+    ) -> anyhow::Result<Option<JsError>> {
+        if !self.needs_validation() {
+            return Ok(None);
+        }
+        let projected = output.resolve(MAX_COMMIT_TS)?;
+        Ok(self.check_output(&projected, table_mapping, virtual_system_mapping))
     }
 }
 
@@ -200,35 +214,6 @@ impl TryFrom<ReturnsValidator> for ReturnsValidatorJson {
         match returns {
             ReturnsValidator::Unvalidated => Ok(Self(None)),
             ReturnsValidator::Validated(output_schema) => Ok(Self(Some(output_schema.try_into()?))),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use sync_types::testing::assert_roundtrips;
-
-    use crate::modules::function_validators::{
-        ArgsValidator,
-        ArgsValidatorJson,
-        ReturnsValidator,
-        ReturnsValidatorJson,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_args_roundtrips(v in any::<ArgsValidator>()) {
-            assert_roundtrips::<ArgsValidator, ArgsValidatorJson>(v);
-        }
-
-        #[test]
-        fn test_returns_roundtrips(v in any::<ReturnsValidator>()) {
-            assert_roundtrips::<ReturnsValidator, ReturnsValidatorJson>(v);
         }
     }
 }

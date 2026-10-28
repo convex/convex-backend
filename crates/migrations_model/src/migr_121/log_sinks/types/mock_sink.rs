@@ -4,7 +4,6 @@ use value::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct MockSinkConfig {}
 
 impl TryFrom<ConvexObject> for MockSinkConfig {

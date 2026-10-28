@@ -6,7 +6,7 @@ on:
       github_sha:
         description:
           "Rev to tag as latest. Pick from
-          https://github.com/get-convex/convex-backend/pkgs/container/convex-backend"
+          https://github.com/convex/convex-backend/pkgs/container/convex-backend"
         type: string
         required: true
 
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -23,20 +23,20 @@ jobs:
 
       - name: Modify convex-backend manifest with latest tag
         run: |
-          digests=$(docker manifest inspect ghcr.io/get-convex/convex-backend:${{ inputs.github_sha }} | jq -r '.manifests[].digest')
+          digests=$(docker manifest inspect ghcr.io/convex/convex-backend:${{ inputs.github_sha }} | jq -r '.manifests[].digest')
           args=()
           for digest in $digests; do
-            args+=(--amend "ghcr.io/get-convex/convex-backend@$digest")
+            args+=(--amend "ghcr.io/convex/convex-backend@$digest")
           done
-          docker manifest create ghcr.io/get-convex/convex-backend:latest "${args[@]}"
-          docker manifest push ghcr.io/get-convex/convex-backend:latest
+          docker manifest create ghcr.io/convex/convex-backend:latest "${args[@]}"
+          docker manifest push ghcr.io/convex/convex-backend:latest
 
       - name: Modify dashboard manifest with latest tag
         run: |
-          digests=$(docker manifest inspect ghcr.io/get-convex/convex-dashboard:${{ inputs.github_sha }} | jq -r '.manifests[].digest')
+          digests=$(docker manifest inspect ghcr.io/convex/convex-dashboard:${{ inputs.github_sha }} | jq -r '.manifests[].digest')
           args=()
           for digest in $digests; do
-            args+=(--amend "ghcr.io/get-convex/convex-dashboard@$digest")
+            args+=(--amend "ghcr.io/convex/convex-dashboard@$digest")
           done
-          docker manifest create ghcr.io/get-convex/convex-dashboard:latest "${args[@]}"
-          docker manifest push ghcr.io/get-convex/convex-dashboard:latest
+          docker manifest create ghcr.io/convex/convex-dashboard:latest "${args[@]}"
+          docker manifest push ghcr.io/convex/convex-dashboard:latest

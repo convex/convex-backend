@@ -27,6 +27,15 @@ Read on for some additional details about how the auto-configuration works and
 some things that you may need to configure manually based on your specific
 needs.
 
+<Admonition type="info">
+  Provisioning or disconnecting the underlying Convex-managed WorkOS team
+  requires **team admin**. Provisioning a per-deployment WorkOS environment uses
+  the deployment's own management permission — any team member can do this for
+  their dev or preview deployment, but production envs require team admin (or
+  project admin). Shared project-level WorkOS environments require team admin or
+  project admin.
+</Admonition>
+
 ## Production deployments
 
 In the Convex dashboard settings for your production deployment, create an

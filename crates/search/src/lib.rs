@@ -2,9 +2,7 @@
 #![feature(try_blocks)]
 #![feature(try_blocks_heterogeneous)]
 #![feature(ptr_metadata)]
-#![feature(iterator_try_collect)]
 #![feature(impl_trait_in_assoc_type)]
-#![feature(trait_alias)]
 
 mod aggregation;
 mod archive;
@@ -13,14 +11,10 @@ mod convex_query;
 pub mod disk_index;
 pub mod fragmented_segment;
 mod incremental_index;
-mod intersection;
-mod levenshtein_dfa;
 mod memory_index;
 pub mod metrics;
 pub mod query;
-pub mod scoring;
 pub mod searcher;
-mod tantivy_query;
 mod text_index_manager;
 
 use std::{
@@ -36,7 +30,10 @@ use aggregation::PostingListMatchAggregator;
 use anyhow::Context;
 use common::{
     bootstrap_model::index::{
-        text_index::TextIndexSpec,
+        text_index::{
+            FragmentedTextSegment,
+            TextIndexSpec,
+        },
         IndexConfig,
     },
     document::ResolvedDocument,
@@ -60,11 +57,9 @@ use common::{
 use constants::CONVEX_EN_TOKENIZER;
 pub use constants::{
     convex_en,
-    EXACT_SEARCH_MAX_WORD_LENGTH,
     MAX_CANDIDATE_REVISIONS,
     MAX_FILTER_CONDITIONS,
     MAX_QUERY_TERMS,
-    SINGLE_TYPO_SEARCH_MAX_WORD_LENGTH,
 };
 use convex_query::OrTerm;
 use errors::ErrorMetadata;
@@ -95,13 +90,9 @@ use tantivy::{
         TextOptions,
         FAST,
     },
-    tokenizer::{
-        TextAnalyzer,
-        Token,
-    },
+    tokenizer::TextAnalyzer,
     Term,
 };
-pub use tantivy_query::SearchQueryResult;
 use value::{
     values_to_bytes,
     ConvexValue,
@@ -123,10 +114,7 @@ pub use self::{
         TextSegmentPaths,
         UpdatableTextSegment,
     },
-    memory_index::{
-        build_term_weights,
-        MemoryTextIndex,
-    },
+    memory_index::MemoryTextIndex,
     searcher::{
         Searcher,
         SegmentTermMetadataFetcher,
@@ -142,7 +130,10 @@ pub use self::{
 use crate::{
     aggregation::TokenMatchAggregator,
     constants::MAX_UNIQUE_QUERY_TERMS,
-    metrics::log_num_segments_searched_total,
+    metrics::{
+        log_num_segments_searched_total,
+        log_text_search_bytes,
+    },
     searcher::{
         Bm25Stats,
         PostingListQuery,
@@ -164,23 +155,15 @@ pub const CREATION_TIME_FIELD_NAME: &str = "creation_time";
 
 #[derive(Debug, Clone)]
 pub enum DocumentTerm {
-    Search { term: Term, pos: FieldPosition },
+    Search { term: Term },
     Filter { term: Term },
 }
 
 impl DocumentTerm {
     pub fn term(&self) -> &Term {
         match self {
-            Self::Search { term, .. } => term,
+            Self::Search { term } => term,
             Self::Filter { term } => term,
-        }
-    }
-
-    pub fn position(&self) -> FieldPosition {
-        match self {
-            Self::Search { pos, .. } => *pos,
-            // Filter fields are given a dummy position of 0
-            Self::Filter { .. } => FieldPosition(0),
         }
     }
 
@@ -192,7 +175,7 @@ impl DocumentTerm {
 impl From<DocumentTerm> for Term {
     fn from(doc_term: DocumentTerm) -> Self {
         match doc_term {
-            DocumentTerm::Search { term, .. } => term,
+            DocumentTerm::Search { term } => term,
             DocumentTerm::Filter { term } => term,
         }
     }
@@ -200,34 +183,44 @@ impl From<DocumentTerm> for Term {
 
 pub type EditDistance = u8;
 
-/// Used to represent the position of a term within a document. For now, this
-/// position is wrt the document token stream so should only be used internally.
-#[derive(Debug, Clone, Copy, Default, PartialOrd, Ord, Eq, PartialEq)]
-pub struct FieldPosition(u32);
-
-impl FieldPosition {
-    #[cfg(test)]
-    pub fn new_for_test(pos: u32) -> Self {
-        Self(pos)
-    }
-}
-
-impl From<FieldPosition> for u32 {
-    fn from(value: FieldPosition) -> Self {
-        value.0
-    }
-}
-
-impl TryFrom<&Token> for FieldPosition {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &Token) -> Result<Self, Self::Error> {
-        Ok(Self(u32::try_from(value.position)?))
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextIndexWriteSize(pub u64);
+
+#[derive(Debug)]
+pub struct TextSearchResults {
+    pub revisions_with_keys: RevisionWithKeys,
+    /// Disk index bytes attributed to this query: each segment's size scaled
+    /// by the share of its live documents that match the query's filter
+    /// conditions. Documents in the memory index are excluded.
+    pub filtered_bytes_searched: u64,
+}
+
+/// The share of `segment_size_bytes` attributed to a query, given the segment's
+/// BM25 statistics for the query's terms. With several filter conditions the
+/// matching set is their intersection, whose size is unknown before the
+/// posting lists are read, so the smallest filter term's document frequency
+/// bounds it from above.
+fn filtered_segment_bytes(
+    segment_size_bytes: u64,
+    stats: &Bm25Stats,
+    filter_terms: &[Term],
+) -> u64 {
+    if filter_terms.is_empty() {
+        return segment_size_bytes;
+    }
+    if stats.num_documents == 0 {
+        return 0;
+    }
+    let min_doc_frequency = filter_terms
+        .iter()
+        .map(|term| stats.doc_frequencies.get(term).copied().unwrap_or(0))
+        .min()
+        .unwrap_or(0);
+    let matching_docs = cmp::min(min_doc_frequency, stats.num_documents);
+    let scaled = u128::from(segment_size_bytes) * u128::from(matching_docs)
+        / u128::from(stats.num_documents);
+    u64::try_from(scaled).expect("scaled size is at most segment_size_bytes")
+}
 
 #[derive(Clone)]
 pub struct TantivySearchIndexSchema {
@@ -317,13 +310,6 @@ impl TantivySearchIndexSchema {
         Ok(Self::new(spec))
     }
 
-    pub fn to_index_config(&self) -> TextIndexSpec {
-        TextIndexSpec {
-            search_field: self.search_field_path.clone(),
-            filter_fields: self.filter_fields.keys().cloned().collect(),
-        }
-    }
-
     fn filter_field_bytes(document: &ResolvedDocument, field_path: &FieldPath) -> Vec<u8> {
         let value = document.value().get_path(field_path);
         search_value_to_bytes(value)
@@ -364,7 +350,6 @@ impl TantivySearchIndexSchema {
 
                 doc_terms.push(DocumentTerm::Search {
                     term: Term::from_field_text(self.search_field, &token.text),
-                    pos: FieldPosition::try_from(token)?,
                 });
             }
         }
@@ -428,37 +413,56 @@ impl TantivySearchIndexSchema {
         compiled_query: CompiledQuery,
         memory_index: &MemoryTextIndex,
         search_storage: Arc<dyn Storage>,
-        segments: Vec<FragmentedTextStorageKeys>,
+        segments: Vec<FragmentedTextSegment>,
         disk_index_ts: Timestamp,
         searcher: Arc<dyn Searcher>,
         labels: SearchIndexMetricLabels<'_>,
-    ) -> anyhow::Result<RevisionWithKeys> {
+    ) -> anyhow::Result<TextSearchResults> {
         log_num_segments_searched_total(segments.len());
         let labels = labels.to_owned();
+        let total_size_bytes: u64 = segments.iter().map(|s| s.size_bytes_total).sum();
 
         // Step 1: Map the old `CompiledQuery` struct onto `TokenQuery`s.
         let mut token_queries = vec![];
         let num_text_query_terms = compiled_query.text_query.len() as u32;
         for query_term in compiled_query.text_query {
             let query = TokenQuery {
-                max_distance: query_term.max_distance(),
                 prefix: query_term.prefix(),
                 term: query_term.into_term(),
             };
             token_queries.push(query);
         }
-        let mut exist_filter_conditions = false;
-        let mut num_expected_filter_conditions = 0;
+        let mut filter_terms = vec![];
         for CompiledFilterCondition::Must(term) in compiled_query.filter_conditions {
-            exist_filter_conditions = true;
-            num_expected_filter_conditions += 1;
             let query = TokenQuery {
-                term,
-                max_distance: 0,
+                term: term.clone(),
                 prefix: false,
             };
             token_queries.push(query);
+            filter_terms.push(term);
         }
+        let exist_filter_conditions = !filter_terms.is_empty();
+        let num_expected_filter_conditions = filter_terms.len();
+        // Bytes charged when the query ends before per-segment statistics are
+        // available: a query without filters reads every document's posting
+        // lists, so it searches the whole index, and a filtered query whose
+        // filter terms match nowhere touches no documents.
+        let short_circuit_bytes_searched = if exist_filter_conditions {
+            0
+        } else {
+            total_size_bytes
+        };
+        let finish = |revisions_with_keys: RevisionWithKeys, filtered_bytes_searched: u64| {
+            log_text_search_bytes(
+                total_size_bytes,
+                filtered_bytes_searched,
+                exist_filter_conditions,
+            );
+            TextSearchResults {
+                revisions_with_keys,
+                filtered_bytes_searched,
+            }
+        };
 
         // Step 2: Execute the token queries across both the memory and disk indexes,
         // and merge the results to get the top terms. Note that we spawn the calls
@@ -468,7 +472,7 @@ impl TantivySearchIndexSchema {
         for segment in &segments {
             let searcher = searcher.clone();
             let search_storage = search_storage.clone();
-            let segment = segment.clone();
+            let segment = FragmentedTextStorageKeys::from(segment.clone());
             let token_queries = token_queries.clone();
             let labels = labels.clone();
             token_query_futures.spawn("query_tokens", async move {
@@ -498,21 +502,18 @@ impl TantivySearchIndexSchema {
             }
         }
 
-        // Deduplicate terms, using the best distance for each term.
+        // Deduplicate terms, preferring an exact match over a prefix match for each
+        // term.
         let mut results_by_term = BTreeMap::new();
         for token_match in match_aggregator.into_results() {
-            let sort_key = (
-                token_match.distance,
-                token_match.prefix,
-                token_match.token_ord,
-            );
+            let sort_key = (token_match.prefix, token_match.token_ord);
             let existing_key = results_by_term.entry(token_match.term).or_insert(sort_key);
 
             // NB: Since OR and AND queries are on different fields, we can assume their
             // terms are disjoint. Assert this condition here since we're deduplicating
             // terms and taking their minimum `token_ord`, which could potentially lose
             // intersection conditions otherwise.
-            let (_, _, existing_token_ord) = *existing_key;
+            let (_, existing_token_ord) = *existing_key;
             let existing_is_intersection = existing_token_ord >= num_text_query_terms;
             let is_intersection = token_match.token_ord >= num_text_query_terms;
             anyhow::ensure!(existing_is_intersection == is_intersection);
@@ -523,12 +524,12 @@ impl TantivySearchIndexSchema {
         // If there are no matches, short-circuit and return an empty result.
         let not_enough_and_tokens_present = results_by_term
             .iter()
-            .filter(|(_, (_, _, token_ord))| *token_ord >= num_text_query_terms)
+            .filter(|(_, (_, token_ord))| *token_ord >= num_text_query_terms)
             .count()
             < num_expected_filter_conditions;
         let no_filter_matches = exist_filter_conditions && not_enough_and_tokens_present;
         if terms.is_empty() || no_filter_matches {
-            return Ok(vec![]);
+            return Ok(finish(vec![], short_circuit_bytes_searched));
         }
 
         // Step 3: Given the terms we decided on, query BM25 statistics across all of
@@ -537,18 +538,23 @@ impl TantivySearchIndexSchema {
         for segment in &segments {
             let searcher = searcher.clone();
             let search_storage = search_storage.clone();
-            let segment = segment.clone();
+            let segment_size_bytes = segment.size_bytes_total;
+            let segment = FragmentedTextStorageKeys::from(segment.clone());
             let terms = terms.clone();
             let labels = labels.clone();
             bm25_futures.spawn("query_bm25_stats", async move {
-                searcher
+                let stats = searcher
                     .query_bm25_stats(search_storage, segment, terms, labels)
-                    .await
+                    .await?;
+                anyhow::Ok((segment_size_bytes, stats))
             });
         }
         let mut bm25_stats = Bm25Stats::empty();
+        let mut filtered_bytes_searched = 0u64;
         while let Some(result) = bm25_futures.join_next().await {
-            let segment_bm25_stats = result??;
+            let (segment_size_bytes, segment_bm25_stats) = result??;
+            filtered_bytes_searched +=
+                filtered_segment_bytes(segment_size_bytes, &segment_bm25_stats, &filter_terms);
             bm25_stats += segment_bm25_stats;
         }
         let bm25_stats =
@@ -557,28 +563,22 @@ impl TantivySearchIndexSchema {
         // Step 4: Decide on our posting list queries given the previous results.
         let mut or_terms = vec![];
         let mut and_terms = vec![];
-        for (term, (distance, prefix, token_ord)) in results_by_term {
+        for (term, (prefix, token_ord)) in results_by_term {
             if token_ord >= num_text_query_terms {
-                anyhow::ensure!(distance == 0 && !prefix);
+                anyhow::ensure!(!prefix);
                 and_terms.push(term);
             } else {
                 let doc_frequency = *bm25_stats
                     .doc_frequencies
                     .get(&term)
                     .context("Missing term frequency")?;
-                // TODO: Come up with a smarter way to boost scores based on edit distance.
-                // Eventually this will be in user space so developers can tweak
-                // it as they desire.
-                let mut boost = 1. / (1. + distance as f32);
-                if prefix {
-                    boost *= 0.5;
-                }
+                let boost = if prefix { 0.5 } else { 1. };
                 let or_term = OrTerm {
                     term,
                     doc_frequency,
                     bm25_boost: boost,
                 };
-                metrics::log_search_term_edit_distance(distance, prefix);
+                metrics::log_search_term_match(prefix);
                 or_terms.push(or_term);
             }
         }
@@ -587,7 +587,7 @@ impl TantivySearchIndexSchema {
         // filters these terms further. So if we have no or_terms, our result is
         // empty regardless of any matching and_terms.
         if or_terms.is_empty() {
-            return Ok(vec![]);
+            return Ok(finish(vec![], filtered_bytes_searched));
         }
 
         // Step 5: Execute the posting list query against the memory index's tombstones
@@ -618,7 +618,7 @@ impl TantivySearchIndexSchema {
         for segment in &segments {
             let searcher = searcher.clone();
             let search_storage = search_storage.clone();
-            let segment = segment.clone();
+            let segment = FragmentedTextStorageKeys::from(segment.clone());
             let query = query.clone();
             let labels = labels.clone();
             posting_list_futures.spawn("query_posting_lists", async move {
@@ -665,16 +665,16 @@ impl TantivySearchIndexSchema {
                             .expect("Could not convert internal ID to value"),
                     )),
                 ];
-                let bytes = values_to_bytes::<false>(&index_fields);
+                let bytes = values_to_bytes(&index_fields);
                 let index_key_bytes = IndexKeyBytes(bytes);
                 result.push((candidate, index_key_bytes));
             }
             result
         });
-        Ok(result)
+        Ok(finish(result, filtered_bytes_searched))
     }
 
-    fn compile_tokens_with_typo_tolerance(
+    fn compile_tokens_with_prefix_last_term(
         search_field: Field,
         tokens: &Vec<String>,
     ) -> anyhow::Result<Vec<QueryTerm>> {
@@ -780,9 +780,9 @@ impl TantivySearchIndexSchema {
                     Ok(QueryTerm::new(term, false))
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?,
-            // Only the V2 search codepath can generate QueryTerm::Fuzzy
+            // V2 matches the final query term as a prefix; V1 matches every term exactly.
             SearchVersion::V2 => {
-                Self::compile_tokens_with_typo_tolerance(self.search_field, &tokens)?
+                Self::compile_tokens_with_prefix_last_term(self.search_field, &tokens)?
             },
         };
 
@@ -835,32 +835,4 @@ pub enum SearchFileType {
     TextIdTracker,
     TextAliveBitset,
     TextDeletedTerms,
-}
-
-#[cfg(test)]
-mod test {
-    use std::collections::BTreeSet;
-
-    use common::bootstrap_model::index::text_index::TextIndexSpec;
-
-    use crate::{
-        TantivySearchIndexSchema,
-        SEARCH_FIELD_ID,
-    };
-
-    /// DO NOT CHANGE CONSTANTS!
-    /// This test ensures that we don't accidentally change our field IDs in
-    /// tantivy.
-    #[test]
-    fn test_field_ids_dont_change() -> anyhow::Result<()> {
-        let schema = TantivySearchIndexSchema::new(&TextIndexSpec {
-            search_field: "mySearchField".parse()?,
-            filter_fields: BTreeSet::new(),
-        });
-        assert_eq!(schema.internal_id_field.field_id(), 0);
-        assert_eq!(schema.ts_field.field_id(), 1);
-        assert_eq!(schema.creation_time_field.field_id(), 2);
-        assert_eq!(schema.search_field.field_id(), SEARCH_FIELD_ID);
-        Ok(())
-    }
 }

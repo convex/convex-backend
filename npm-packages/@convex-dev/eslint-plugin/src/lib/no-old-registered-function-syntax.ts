@@ -1,4 +1,4 @@
-import type { TSESTree } from "@typescript-eslint/utils";
+import type { TSESTree } from "@typescript-eslint/types";
 import { CONVEX_REGISTRARS, createRule, isEntryPoint } from "../util.js";
 
 /**
@@ -21,9 +21,7 @@ export const noOldRegisteredFunctionSyntax = createRule({
   },
   defaultOptions: [],
   create: (context) => {
-    // yes it's deprecated, but that's the version that exists
-    // in eslint 8
-    const filename = context.getFilename();
+    const { filename } = context;
     // Skip generated files
     const isGenerated = filename.includes("_generated");
     const entry = isEntryPoint(filename);
@@ -87,11 +85,9 @@ export const noOldRegisteredFunctionSyntax = createRule({
                 fixText += "  args: {},\n";
               }
 
-              // Preserve the original function as much as possible
-              const sourceCode = context.getSourceCode();
-
               // Get the original function text without the outer parentheses
-              const originalFunctionText = sourceCode.getText(functionArg);
+              const originalFunctionText =
+                context.sourceCode.getText(functionArg);
 
               // Add the handler property with the original function
               fixText += `  handler: ${originalFunctionText}`;

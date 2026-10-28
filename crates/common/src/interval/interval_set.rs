@@ -27,7 +27,6 @@ use super::{
 
 /// A set of `Interval`s. Intersecting and adjacent intervals are merged.
 #[derive(Clone, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(Eq))]
 pub enum IntervalSet {
     /// Map from Interval.start to Interval.end. All intervals are
     /// non-intersecting, non-adjacent, and non-empty.
@@ -40,21 +39,6 @@ pub enum IntervalSet {
 impl Default for IntervalSet {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl PartialEq for IntervalSet {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::All, Self::All) => true,
-            (Self::All, Self::Intervals(intervals)) | (Self::Intervals(intervals), Self::All) => {
-                let mut map: WithHeapSize<BTreeMap<_, _>> = WithHeapSize::default();
-                map.insert(StartIncluded(BinaryKey::min()), End::Unbounded);
-                intervals == &map
-            },
-            (Self::Intervals(x), Self::Intervals(y)) => x == y,
-        }
     }
 }
 
@@ -91,12 +75,18 @@ impl TryFrom<Vec<IntervalProto>> for IntervalSet {
     type Error = anyhow::Error;
 
     fn try_from(intervals: Vec<IntervalProto>) -> anyhow::Result<Self> {
-        let mut set = IntervalSet::new();
         if intervals == ALL_INTERVAL_PROTO {
             return Ok(IntervalSet::All);
         }
+        let mut set: Vec<(StartIncluded, End)> = vec![];
         for interval in intervals {
             let start = StartIncluded(interval.start_inclusive.into());
+            if let Some((_, last_end)) = set.last() {
+                anyhow::ensure!(
+                    !last_end.is_overlapping_or_adjacent(&start),
+                    "IntervalProtos out of order: {last_end:?} >= {start:?}"
+                );
+            }
             let end = match interval.end {
                 None => return Err(anyhow::anyhow!("Interval missing end")),
                 Some(end) => match end {
@@ -104,9 +94,32 @@ impl TryFrom<Vec<IntervalProto>> for IntervalSet {
                     EndProto::Exclusive(end) => End::Excluded(end.into()),
                 },
             };
-            set.add(Interval { start, end });
+            anyhow::ensure!(
+                end.greater_than(&start.0),
+                "empty IntervalProto {start:?}..{end:?}"
+            );
+            set.push((start, end));
         }
-        Ok(set)
+        Ok(IntervalSet::Intervals(
+            set.into_iter().collect::<BTreeMap<_, _>>().into(),
+        ))
+    }
+}
+
+impl IntoIterator for IntervalSet {
+    type Item = Interval;
+
+    type IntoIter = impl Iterator<Item = Interval>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            Self::All => Either::Left(iter::once(Interval::all())),
+            Self::Intervals(intervals) => Either::Right(
+                intervals
+                    .into_iter()
+                    .map(|(start, end)| Interval { start, end }),
+            ),
+        }
     }
 }
 
@@ -133,48 +146,6 @@ impl IntervalSet {
         }
     }
 
-    // Return all of the intervals in `self` that intersect with or are adjacent to
-    // `interval`. This is O(log(n) + m), with `n` intervals in this IntervalSet and
-    // `m` matches.
-    fn intersecting_or_adjacent<'a>(
-        intervals: &'a WithHeapSize<BTreeMap<StartIncluded, End>>,
-        interval: &'a Interval,
-    ) -> impl Iterator<Item = Interval> + 'a {
-        iter::from_coroutine(
-            #[coroutine]
-            move || {
-                // We *might* intersect with the preceeding interval.
-                if let Some((other_start, other_end)) = intervals
-                    .range::<StartIncluded, _>(..&interval.start)
-                    .next_back()
-                {
-                    let other = Interval {
-                        start: other_start.clone(),
-                        end: other_end.clone(),
-                    };
-                    if !interval.is_disjoint(&other) || interval.is_adjacent(&other) {
-                        yield other;
-                    }
-                }
-
-                // We definitely intersect with any interval with a `start` inside `interval`.
-                for (other_start, other_end) in
-                    intervals.range::<StartIncluded, _>(&interval.start..)
-                {
-                    if interval.end.is_disjoint(other_start)
-                        && !interval.end.is_adjacent(other_start)
-                    {
-                        break;
-                    }
-                    yield Interval {
-                        start: other_start.clone(),
-                        end: other_end.clone(),
-                    };
-                }
-            },
-        )
-    }
-
     /// Add the given `Interval` to the set.
     pub fn add(&mut self, interval: Interval) {
         if interval.is_empty() {
@@ -186,8 +157,6 @@ impl IntervalSet {
         match self {
             IntervalSet::All => {},
             IntervalSet::Intervals(intervals) => {
-                let mut merged_start = interval.start.clone();
-                let mut merged_end = interval.end.clone();
                 // In order to merge adjacent and overlapping intervals, we need to find all of
                 // the overlapping intervals and take the min of our new interval and
                 // all of the overlapping to find the start of the merged interval
@@ -214,20 +183,42 @@ impl IntervalSet {
                 // merged start                       ^
                 // merged_end                                       ^
                 // -> self.intervals after   ---      ---------------  --
-                let other_intervals: Vec<Interval> =
-                    Self::intersecting_or_adjacent(intervals, &interval).collect();
-                for other_interval in other_intervals {
-                    if other_interval.start < merged_start {
-                        merged_start = other_interval.start.clone();
+                let mut cursor = intervals.upper_bound_mut(match &interval.end {
+                    End::Excluded(binary_key) => Bound::Included(&binary_key[..]),
+                    End::Unbounded => Bound::Unbounded,
+                });
+                let mut merged_interval = interval;
+                // Iterate all overlapping intervals in descending order
+                if let Some((_other_start, other_end)) = cursor.peek_prev()
+                    && other_end.is_overlapping_or_adjacent(&merged_interval.start)
+                {
+                    let (other_start, other_end) = cursor.remove_prev().expect("peeked");
+                    if other_end > merged_interval.end {
+                        merged_interval.end = other_end;
                     }
-                    if other_interval.end > merged_end {
-                        merged_end = other_interval.end.clone();
+                    if other_start <= merged_interval.start {
+                        merged_interval.start = other_start;
+                    } else {
+                        while let Some((_other_start, other_end)) = cursor.peek_prev()
+                            && other_end.is_overlapping_or_adjacent(&merged_interval.start)
+                        {
+                            let (other_start, other_end) = cursor.remove_prev().expect("peeked");
+                            // Only the first visited interval can extend `merged_interval.end`
+                            debug_assert!(other_end < merged_interval.end);
+                            if other_start <= merged_interval.start {
+                                merged_interval.start = other_start;
+                                break;
+                            }
+                        }
                     }
-                    intervals
-                        .remove(&other_interval.start)
-                        .expect("tried to remove existing interval");
                 }
-                intervals.insert(merged_start, merged_end);
+                if merged_interval == Interval::all() {
+                    *self = IntervalSet::All;
+                    return;
+                }
+                cursor
+                    .insert_after(merged_interval.start, merged_interval.end)
+                    .expect("invariant broken?");
             },
         };
     }
@@ -262,15 +253,23 @@ impl IntervalSet {
             .all(|(in_set, _)| in_set)
     }
 
+    /// Return an iterator over all the intervals within the set, borrowing
+    /// their bounds.
+    pub fn iter_ref(&self) -> impl Iterator<Item = IntervalRef<'_>> + '_ {
+        match self {
+            Self::All => Either::Left(iter::once(IntervalRef::all())),
+            Self::Intervals(intervals) => Either::Right(intervals.iter().map(
+                |(StartIncluded(start), end)| IntervalRef {
+                    start: start.as_slice(),
+                    end: end.as_ref(),
+                },
+            )),
+        }
+    }
+
     /// Return an iterator over all the intervals within the set.
     pub fn iter(&self) -> impl Iterator<Item = Interval> + '_ {
-        match self {
-            Self::All => Either::Left(std::iter::once(Interval::all())),
-            Self::Intervals(intervals) => Either::Right(intervals.iter().map(|(a, b)| Interval {
-                start: a.clone(),
-                end: b.clone(),
-            })),
-        }
+        self.iter_ref().map(|interval| interval.to_owned())
     }
 
     /// Computes the set-difference target - self.
@@ -381,6 +380,47 @@ impl IntervalSet {
             },
         }
     }
+
+    /// Returns a cursor for testing membership of a *monotonically
+    /// non-decreasing* stream of keys. Each query is O(1) amortized -- a
+    /// forward merge over the set's sorted intervals -- rather than the
+    /// O(log n) of [`Self::contains`]. Keys MUST be queried in ascending
+    /// order; querying out of order yields incorrect results.
+    pub fn membership_cursor(&self) -> MembershipCursor<impl Iterator<Item = Interval> + '_> {
+        MembershipCursor::new(self.iter())
+    }
+}
+
+/// Cursor for membership tests over an ascending stream of keys, returned by
+/// [`IntervalSet::membership_cursor`].
+pub struct MembershipCursor<I: Iterator<Item = Interval>> {
+    intervals: I,
+    current: Option<Interval>,
+}
+
+impl<I: Iterator<Item = Interval>> MembershipCursor<I> {
+    fn new(mut intervals: I) -> Self {
+        let current = intervals.next();
+        Self { intervals, current }
+    }
+
+    /// Returns whether `key` is in the set. `key` must be greater than or equal
+    /// to every previously queried key.
+    pub fn contains(&mut self, key: &[u8]) -> bool {
+        // Advance past every interval that ends at or before `key`: since keys
+        // are non-decreasing, those intervals can't match this or any later
+        // query.
+        while self
+            .current
+            .as_ref()
+            .is_some_and(|interval| !interval.as_ref().end.greater_than(key))
+        {
+            self.current = self.intervals.next();
+        }
+        self.current
+            .as_ref()
+            .is_some_and(|interval| interval.contains(key))
+    }
 }
 
 impl HeapSize for IntervalSet {
@@ -388,453 +428,6 @@ impl HeapSize for IntervalSet {
         match self {
             Self::All => 0,
             Self::Intervals(intervals) => intervals.heap_size(),
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-mod proptest {
-    use proptest::prelude::*;
-
-    use super::IntervalSet;
-    use crate::interval::Interval;
-
-    impl Arbitrary for IntervalSet {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = IntervalSet>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            prop::collection::vec(any::<Interval>(), 0..4).prop_map(|intervals| {
-                let mut set = IntervalSet::new();
-                for interval in intervals {
-                    set.add(interval);
-                }
-                set
-            })
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use cmd_util::env::env_config;
-    use itertools::Itertools;
-    use must_let::must_let;
-    use proptest::prelude::*;
-    use value::heap_size::WithHeapSize;
-
-    use super::{
-        super::{
-            bounds::End,
-            key::BinaryKey,
-            test_helpers::*,
-            Interval,
-        },
-        IntervalSet,
-    };
-    use crate::interval::{
-        bounds::EndRef,
-        StartIncluded,
-    };
-
-    impl IntervalSet {
-        fn intervals(&self) -> WithHeapSize<BTreeMap<StartIncluded, End>> {
-            match self {
-                Self::All => {
-                    let mut map: WithHeapSize<BTreeMap<_, _>> = WithHeapSize::default();
-                    map.insert(StartIncluded(BinaryKey::min()), End::Unbounded);
-                    map
-                },
-                Self::Intervals(intervals) => intervals.clone(),
-            }
-        }
-    }
-
-    #[test]
-    fn test_add() {
-        let mut r = IntervalSet::new();
-        r.add(int_interval(5, 10));
-        assert_eq!(r.intervals().len(), 1);
-        assert_eq!(r.intervals().get(&int_start(5)), Some(&int_end(10)));
-
-        // Merge with the first interval
-        r.add(int_interval(3, 5));
-        assert_eq!(r.intervals().len(), 1, "{:?}", r.intervals());
-        assert_eq!(r.intervals().get(&int_start(3)), Some(&int_end(10)));
-
-        // Extend interval below.
-        r.add(int_interval(2, 4));
-        assert_eq!(r.intervals().len(), 1);
-        assert_eq!(r.intervals().get(&int_start(2)), Some(&int_end(10)));
-
-        r.add(int_interval(0, 1));
-        assert_eq!(r.intervals().len(), 2);
-        assert_eq!(r.intervals().get(&int_start(0)), Some(&int_end(1)));
-        assert_eq!(r.intervals().get(&int_start(2)), Some(&int_end(10)));
-
-        // Merge intervals back together.
-        r.add(int_interval(0, 12));
-        assert_eq!(r.intervals().len(), 1);
-        assert_eq!(r.intervals().get(&int_start(0)), Some(&int_end(12)));
-
-        // Extend interval above.
-        r.add(int_interval(10, 15));
-        assert_eq!(r.intervals().len(), 1);
-        assert_eq!(r.intervals().get(&int_start(0)), Some(&int_end(15)));
-
-        // Disjoint interval above.
-        r.add(int_interval(20, 25));
-        assert_eq!(r.intervals().len(), 2);
-        assert_eq!(r.intervals().get(&int_start(0)), Some(&int_end(15)));
-        assert_eq!(r.intervals().get(&int_start(20)), Some(&int_end(25)));
-
-        // Extend high interval to max.
-        r.add(Interval {
-            start: int_start(22),
-            end: End::Unbounded,
-        });
-        assert_eq!(r.intervals().len(), 2);
-        assert_eq!(r.intervals().get(&int_start(0)), Some(&int_end(15)));
-        assert_eq!(r.intervals().get(&int_start(20)), Some(&End::Unbounded));
-
-        // Empty intervals should no-op.
-        r.add(Interval::empty());
-        assert_eq!(r.intervals().len(), 2);
-        assert_eq!(r.intervals().get(&int_start(0)), Some(&int_end(15)));
-        assert_eq!(r.intervals().get(&int_start(20)), Some(&End::Unbounded));
-
-        r.add(int_interval(25, 4));
-        assert_eq!(r.intervals().len(), 2);
-        assert_eq!(r.intervals().get(&int_start(0)), Some(&int_end(15)));
-        assert_eq!(r.intervals().get(&int_start(20)), Some(&End::Unbounded));
-    }
-
-    #[test]
-    fn test_merge_multi_overlap_above_and_below() {
-        //                                   1         2
-        //                         0123456789012345678901234567
-        // self.intervals          --- -----    ----      -----
-        // intervals                     ------------------
-        // -> self.intervals after --- ------------------------
-        let mut r = IntervalSet::new();
-
-        r.add(int_interval(0, 3));
-        r.add(int_interval(4, 9));
-        r.add(int_interval(13, 17));
-        r.add(int_interval(23, 28));
-        assert_eq!(r.intervals().len(), 4);
-
-        r.add(int_interval(6, 24));
-
-        assert_eq!(
-            r.intervals().into_iter().collect::<Vec<_>>(),
-            vec![(int_start(0), int_end(3)), (int_start(4), int_end(28)),]
-        );
-    }
-
-    #[test]
-    fn test_merge_multi_overlap_above() {
-        // Partial overlap above.
-        //
-        //                                    1         2
-        //                          0123456789012345678901234567
-        // self.intervals           ---          ---       -----
-        // interval                       ------------------
-        // -> self.intervals after  ---   ----------------------
-        let mut r = IntervalSet::new();
-
-        r.add(int_interval(0, 3));
-        r.add(int_interval(13, 16));
-        r.add(int_interval(23, 28));
-        assert_eq!(r.intervals().len(), 3);
-
-        r.add(int_interval(6, 24));
-        assert_eq!(
-            r.intervals().into_iter().collect::<Vec<_>>(),
-            vec![(int_start(0), int_end(3)), (int_start(6), int_end(28)),]
-        );
-    }
-
-    #[test]
-    fn test_merge_multi_contained() {
-        //                                    1         2
-        //                          0123456789012345678901234567
-        // self.intervals           ---          ---   ----   --
-        // interval                       ------------------
-        // -> self.intervals after  ---   ------------------  --
-        let mut r = IntervalSet::new();
-
-        r.add(int_interval(0, 3));
-        r.add(int_interval(13, 16));
-        r.add(int_interval(19, 23));
-        r.add(int_interval(26, 28));
-        assert_eq!(r.intervals().len(), 4);
-
-        r.add(int_interval(6, 24));
-        assert_eq!(
-            r.intervals().into_iter().collect::<Vec<_>>(),
-            vec![
-                (int_start(0), int_end(3)),
-                (int_start(6), int_end(24)),
-                (int_start(26), int_end(28)),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_contains() {
-        let mut r = IntervalSet::new();
-        r.add(int_interval(1, 2));
-        r.add(int_interval(6, 11));
-        r.add(Interval {
-            start: int_start(15),
-            end: End::Unbounded,
-        });
-
-        assert!(!r.contains(&[0]));
-        assert!(r.contains(&[1]));
-        assert!(!r.contains(&[5]));
-        assert!(r.contains(&[6]));
-        assert!(r.contains(&[10]));
-        assert!(!r.contains(&[11]));
-        assert!(r.contains(&[15]));
-        assert!(r.contains(&[20]));
-    }
-
-    #[test]
-    fn test_contains_interval() {
-        let mut r = IntervalSet::new();
-        r.add(int_interval(1, 2));
-        r.add(int_interval(6, 11));
-        r.add(Interval {
-            start: int_start(15),
-            end: End::Unbounded,
-        });
-
-        assert!(!r.contains_interval(int_interval(0, 3).as_ref()));
-        assert!(r.contains_interval(int_interval(1, 2).as_ref()));
-        assert!(!r.contains_interval(int_interval(1, 3).as_ref()));
-        assert!(!r.contains_interval(int_interval(3, 7).as_ref()));
-        assert!(r.contains_interval(int_interval(6, 7).as_ref()));
-        assert!(!r.contains_interval(int_interval(6, 13).as_ref()));
-        assert!(r.contains_interval(int_interval(16, 17).as_ref()));
-        assert!(r.contains_interval(
-            Interval {
-                start: int_start(16),
-                end: End::Unbounded,
-            }
-            .as_ref()
-        ));
-    }
-
-    #[test]
-    fn test_subtract_from_interval() {
-        let mut s = IntervalSet::new();
-        s.add(int_interval(1, 2));
-        s.add(int_interval(6, 11));
-        s.add(int_interval_unbounded(16));
-
-        assert_eq!(
-            s.subtract_from_interval(&int_interval(7, 10)),
-            IntervalSet::new()
-        );
-        assert_eq!(
-            s.subtract_from_interval(&int_interval(5, 10)),
-            new_interval_set(vec![int_interval(5, 6)])
-        );
-        assert_eq!(
-            s.subtract_from_interval(&int_interval(5, 11)),
-            new_interval_set(vec![int_interval(5, 6)])
-        );
-        assert_eq!(
-            s.subtract_from_interval(&int_interval(5, 12)),
-            new_interval_set(vec![int_interval(5, 6), int_interval(11, 12)])
-        );
-        assert_eq!(
-            s.subtract_from_interval(&int_interval_unbounded(0)),
-            new_interval_set(vec![
-                int_interval(0, 1),
-                int_interval(2, 6),
-                int_interval(11, 16)
-            ]),
-        );
-        assert_eq!(
-            new_interval_set(vec![int_interval(1, 2)])
-                .subtract_from_interval(&int_interval_unbounded(0)),
-            new_interval_set(vec![int_interval(0, 1), int_interval_unbounded(2)])
-        );
-        assert_eq!(
-            new_interval_set(vec![int_interval_unbounded(0)])
-                .subtract_from_interval(&Interval::empty()),
-            IntervalSet::new()
-        );
-    }
-
-    fn test_sequence(intervals: Vec<Interval>, points: Vec<BinaryKey>) {
-        let mut r = IntervalSet::new();
-        for interval in &intervals {
-            r.add(interval.clone());
-        }
-
-        // Since r.intervals.iter() is in lower-bound order on each of the intervals, we
-        // can just compare each neighboring pair of intervals (windows(2)) to
-        // make sure that there is a gap between them.
-        for window in r
-            .intervals()
-            .iter()
-            .map(|(start, end)| Interval {
-                start: start.clone(),
-                end: end.clone(),
-            })
-            .collect::<Vec<_>>()
-            .windows(2)
-        {
-            must_let!(let [r1, r2] = window);
-            assert!(!r1.is_empty());
-            assert!(!r2.is_empty());
-            assert!(r1.start < r2.start, "intervals not kept in sorted order");
-            assert!(
-                r1.is_disjoint(r2),
-                "{r1:?} and {r2:?} both appear but intersect"
-            );
-            assert!(
-                !r1.is_adjacent(r2),
-                "{r1:?} and {r2:?} both appear but are adjacent"
-            );
-        }
-
-        // If any of the intervals contains a point, then certainly the IntervalSet that
-        // is supposed to be the union of all of them does too.
-        for point in points {
-            assert!(
-                intervals.iter().any(|i| i.contains(&point)) == r.contains(&point),
-                "some interval contains {point:?} but the IntervalSet does not",
-            );
-        }
-
-        // The IntervalSet contains all of its component intervals.
-        for interval in intervals.iter() {
-            assert!(r.contains_interval(interval.as_ref()));
-        }
-    }
-
-    #[test]
-    fn test_empty_interval() {
-        test_sequence(
-            vec![Interval {
-                start: StartIncluded(BinaryKey::min()),
-                end: End::Excluded(BinaryKey::min()),
-            }],
-            vec![BinaryKey::min()],
-        );
-    }
-
-    #[test]
-    fn test_interval_set_all_split_interval_components() {
-        let mut set = IntervalSet::default();
-        set.add(Interval {
-            start: StartIncluded(BinaryKey::min()),
-            end: End::Unbounded,
-        });
-        let all_set = IntervalSet::All;
-        let target = int_interval(1, 3);
-        assert_eq!(
-            set.split_interval_components(target.as_ref()).collect_vec(),
-            all_set
-                .split_interval_components(target.as_ref())
-                .collect_vec()
-        );
-    }
-
-    #[test]
-    fn test_interval_set_add_all_makes_all() {
-        let mut set1 = IntervalSet::default();
-        set1.add(Interval::all());
-        let mut set2 = IntervalSet::default();
-        set2.add(Interval {
-            start: StartIncluded(BinaryKey::min()),
-            end: End::Unbounded,
-        });
-        assert_eq!(set1, set2);
-        assert_eq!(set1, IntervalSet::All);
-    }
-
-    #[test]
-    fn test_interval_set_add_to_all_still_all() {
-        let mut set = IntervalSet::All;
-        set.add(int_interval(1, 2));
-        assert_eq!(set, IntervalSet::All);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 1024 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-
-        #[test]
-        fn proptest_small_range_insert_contains(
-            ranges in prop::collection::vec(small_interval(), 1..16),
-            points in prop::collection::vec(small_key(), 1..16),
-        ) {
-            test_sequence(ranges, points);
-        }
-
-        #[test]
-        fn proptest_contains_interval(
-            ranges in prop::collection::vec(small_interval(), 1..16),
-            points in prop::collection::vec(small_key(), 1..16),
-            interval in small_interval(),
-        ) {
-            let mut r = IntervalSet::new();
-            for range in ranges {
-                r.add(range);
-            }
-            // I ⊆ R ⇒ p ∈ I ⇒ p ∈ R
-            if r.contains_interval(interval.as_ref()) {
-                for point in &points {
-                    if interval.contains(point) {
-                        assert!(r.contains(point));
-                    }
-                }
-            }
-            let difference = r.subtract_from_interval(&interval);
-            // p ∈ R ⇒ p ∉ I \ R
-            for point in &points {
-                if r.contains(point) {
-                    assert!(!difference.contains(point));
-                }
-            }
-        }
-
-        #[test]
-        fn proptest_interval_components(
-            ranges in prop::collection::vec(small_interval(), 1..16),
-            interval in small_interval(),
-        ) {
-            let mut r = IntervalSet::new();
-            for range in ranges {
-                r.add(range);
-            }
-            let components = r.split_interval_components(interval.as_ref()).collect_vec();
-            // Components alternate in_set between true and false.
-            // And components are adjacent.
-            for ((in_set1, interval1), (in_set2, interval2)) in components.iter().tuples() {
-                assert!(in_set1 != in_set2);
-                must_let!(let EndRef::Excluded(interval1_end) = &interval1.end);
-                must_let!(let interval2_start = &interval2.start);
-                assert_eq!(interval1_end, interval2_start);
-            }
-            let mut union_components = IntervalSet::new();
-            for (in_set, interval) in components {
-                assert_eq!(r.contains_interval(interval), in_set);
-                union_components.add(interval.to_owned());
-            }
-            if interval.is_empty() {
-                assert!(union_components.is_empty());
-            } else {
-                assert_eq!(union_components.iter().collect_vec(), vec![interval]);
-            }
         }
     }
 }

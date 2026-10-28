@@ -4,6 +4,7 @@ import { withTmpDir, TempDir } from "../../bundler/fs.js";
 import { entryPoints } from "../../bundler/index.js";
 import { apiCodegen } from "../codegen_templates/api.js";
 import { apiCjsCodegen } from "../codegen_templates/api_cjs.js";
+import { compareModulePaths } from "../codegen_templates/common.js";
 import {
   dynamicDataModelDTS,
   dynamicDataModelTS,
@@ -13,7 +14,7 @@ import {
   staticDataModelTS,
 } from "../codegen_templates/dataModel.js";
 import { readmeCodegen } from "../codegen_templates/readme.js";
-import { serverCodegen } from "../codegen_templates/server.js";
+import { serverCodegen, EnvVarMeta } from "../codegen_templates/server.js";
 import { tsconfigCodegen } from "../codegen_templates/tsconfig.js";
 import { Context } from "../../bundler/context.js";
 import {
@@ -30,7 +31,10 @@ import {
 } from "./config.js";
 import { recursivelyDelete } from "./fsUtils.js";
 import { componentServerTS } from "../codegen_templates/component_server.js";
-import { ComponentDirectory } from "./components/definition/directoryStructure.js";
+import {
+  ComponentDirectory,
+  toComponentDefinitionPath,
+} from "./components/definition/directoryStructure.js";
 import { StartPushResponse } from "./deployApi/startPush.js";
 import {
   componentApiDTS,
@@ -42,7 +46,6 @@ import {
   rootComponentApiCJS,
 } from "../codegen_templates/component_api.js";
 import { functionsDir } from "./utils/utils.js";
-import { LargeIndexDeletionCheck } from "./indexes.js";
 
 const PRESERVED_GENERATED_ENTRIES = new Set(["ai"]);
 
@@ -77,7 +80,6 @@ export type CodegenOptions = {
   liveComponentSources: boolean;
   debugNodeApis: boolean;
   systemUdfs: boolean;
-  largeIndexDeletionCheck: LargeIndexDeletionCheck;
   codegenOnlyThisComponent?: string | undefined;
 };
 
@@ -97,9 +99,19 @@ export async function doInitConvexFolder(
     const { projectConfig, configPath } = await readProjectConfig(ctx);
     folder = functionsDir(configPath, projectConfig);
   }
-  await prepareForCodegen(ctx, folder, opts);
+  const { functionsDirExistedBeforeCodegen } = await prepareForCodegen(
+    ctx,
+    folder,
+    opts,
+  );
   await withTmpDir(async (tmpDir) => {
-    await doReadmeCodegen(ctx, tmpDir, folder, skipIfExists, opts);
+    await doReadmeCodegen(
+      ctx,
+      tmpDir,
+      folder,
+      skipIfExists && functionsDirExistedBeforeCodegen,
+      opts,
+    );
     await doTsconfigCodegen(ctx, tmpDir, folder, skipIfExists, opts);
   });
 }
@@ -109,6 +121,7 @@ async function prepareForCodegen(
   functionsDir: string,
   opts?: { dryRun?: boolean },
 ) {
+  const functionsDirExistedBeforeCodegen = ctx.fs.exists(functionsDir);
   // Delete the old _generated.ts because v0.1.2 used to put the react generated
   // code there
   const legacyCodegenPath = path.join(functionsDir, "_generated.ts");
@@ -126,7 +139,7 @@ async function prepareForCodegen(
   // Create the codegen dir if it doesn't already exist.
   const codegenDir = path.join(functionsDir, "_generated");
   ctx.fs.mkdir(codegenDir, { allowExisting: true, recursive: true });
-  return codegenDir;
+  return { codegenDir, functionsDirExistedBeforeCodegen };
 }
 
 /** Codegen only for an application (a root component) */
@@ -137,7 +150,7 @@ export async function doCodegen(
   opts?: { dryRun?: boolean; generateCommonJSApi?: boolean; debug?: boolean },
 ) {
   const { projectConfig } = await readProjectConfig(ctx);
-  const codegenDir = await prepareForCodegen(ctx, functionsDir, opts);
+  const { codegenDir } = await prepareForCodegen(ctx, functionsDir, opts);
 
   await withTmpDir(async (tmpDir) => {
     // Write files in dependency order so a watching dev server doesn't
@@ -167,6 +180,7 @@ export async function doCodegen(
       tmpDir,
       codegenDir,
       useTypeScript,
+      undefined,
       opts,
     );
     writtenFiles.push(...serverFiles);
@@ -218,7 +232,7 @@ export async function doInitialComponentCodegen(
     return;
   }
 
-  const codegenDir = await prepareForCodegen(
+  const { codegenDir } = await prepareForCodegen(
     ctx,
     componentDirectory.path,
     opts,
@@ -256,6 +270,7 @@ export async function doInitialComponentCodegen(
     tmpDir,
     codegenDir,
     useTypeScript,
+    undefined,
     opts,
   );
   writtenFiles.push(...serverFiles);
@@ -398,14 +413,23 @@ export async function doFinalComponentCodegen(
     );
   }
 
-  // server.ts - regenerate it in final codegen for consistency, even though
-  // the stub from initial codegen would be sufficient.
+  // server.ts - regenerate it in final codegen so we can emit typed env vars.
+  const definitionPath = toComponentDefinitionPath(
+    rootComponent,
+    componentDirectory,
+  );
+  const analysis = startPushResponse.analysis[definitionPath];
+  const envVars: EnvVarMeta[] =
+    analysis?.definition.envVars && analysis.definition.envVars.length > 0
+      ? analysis.definition.envVars
+      : [];
   await writeServerFilesForComponent(
     ctx,
     componentDirectory.isRoot,
     tmpDir,
     codegenDir,
     useTypeScript,
+    envVars,
     opts,
   );
 
@@ -471,11 +495,11 @@ async function doReadmeCodegen(
   ctx: Context,
   tmpDir: TempDir,
   functionsDir: string,
-  skipIfExists: boolean,
+  skip: boolean,
   opts?: { dryRun?: boolean; debug?: boolean },
 ) {
   const readmePath = path.join(functionsDir, "README.md");
-  if (skipIfExists && ctx.fs.exists(readmePath)) {
+  if (skip) {
     logVerbose(`Not overwriting README.md.`);
     return;
   }
@@ -559,10 +583,14 @@ async function writeServerFiles(
   tmpDir: TempDir,
   codegenDir: string,
   useTypeScript: boolean,
+  envVars: EnvVarMeta[] | undefined,
   opts?: { dryRun?: boolean; debug?: boolean },
 ): Promise<string[]> {
   if (!useTypeScript) {
-    const serverContent = serverCodegen({ useTypeScript: false });
+    const serverContent = serverCodegen({
+      useTypeScript: false,
+      envVars,
+    });
     await writeFormattedFile(
       ctx,
       tmpDir,
@@ -583,7 +611,10 @@ async function writeServerFiles(
 
     return ["server.js", "server.d.ts"];
   } else {
-    const serverContent = serverCodegen({ useTypeScript: true });
+    const serverContent = serverCodegen({
+      useTypeScript: true,
+      envVars,
+    });
     await writeFormattedFile(
       ctx,
       tmpDir,
@@ -605,10 +636,11 @@ async function writeComponentServerFile(
   ctx: Context,
   tmpDir: TempDir,
   codegenDir: string,
+  envVars: EnvVarMeta[] | undefined,
   opts?: { dryRun?: boolean; debug?: boolean },
 ): Promise<string[]> {
   const serverTSPath = path.join(codegenDir, "server.ts");
-  const serverTSContents = componentServerTS(false);
+  const serverTSContents = componentServerTS(false, envVars);
   await writeFormattedFile(
     ctx,
     tmpDir,
@@ -632,12 +664,26 @@ async function writeServerFilesForComponent(
   tmpDir: TempDir,
   codegenDir: string,
   useTypeScript: boolean,
+  envVars: EnvVarMeta[] | undefined,
   opts?: { dryRun?: boolean; debug?: boolean },
 ): Promise<string[]> {
   if (isRoot) {
-    return await writeServerFiles(ctx, tmpDir, codegenDir, useTypeScript, opts);
+    return await writeServerFiles(
+      ctx,
+      tmpDir,
+      codegenDir,
+      useTypeScript,
+      envVars,
+      opts,
+    );
   } else {
-    return await writeComponentServerFile(ctx, tmpDir, codegenDir, opts);
+    return await writeComponentServerFile(
+      ctx,
+      tmpDir,
+      codegenDir,
+      envVars,
+      opts,
+    );
   }
 }
 
@@ -647,14 +693,26 @@ async function doInitialComponentServerCodegen(
   tmpDir: TempDir,
   codegenDir: string,
   useTypeScript: boolean,
+  envVars: EnvVarMeta[] | undefined,
   opts?: { dryRun?: boolean; debug?: boolean },
 ) {
+  // Don't write our stub if the file already exists, since it may have
+  // better type information from `doFinalComponentCodegen` (e.g. env vars).
+  const serverFilename = useTypeScript ? "server.ts" : "server.js";
+  if (ctx.fs.exists(path.join(codegenDir, serverFilename))) {
+    const filenames = [serverFilename];
+    if (!useTypeScript) {
+      filenames.push("server.d.ts");
+    }
+    return filenames;
+  }
   return await writeServerFilesForComponent(
     ctx,
     isRoot,
     tmpDir,
     codegenDir,
     useTypeScript,
+    envVars,
     opts,
   );
 }
@@ -787,7 +845,7 @@ async function doApiCodegen(
   const absModulePaths = await entryPoints(ctx, functionsDir);
   const modulePaths = absModulePaths
     .map((p) => path.relative(functionsDir, p))
-    .sort();
+    .sort(compareModulePaths);
 
   const writtenFiles: string[] = [];
 

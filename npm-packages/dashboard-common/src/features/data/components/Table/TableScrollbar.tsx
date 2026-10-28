@@ -9,8 +9,8 @@ const MIN_SCROLLBAR_SIZE = 64;
 // https://www.thisdot.co/blog/creating-custom-scrollbars-with-react
 function useScrollbar(
   totalRowCount: number,
-  outerRef: RefObject<HTMLElement>,
-  listRef: RefObject<FixedSizeList>,
+  outerRef: RefObject<HTMLElement | null>,
+  listRef: RefObject<FixedSizeList | null>,
 ) {
   const { densityValues } = useTableDensity();
   // Recompute scrollbar size when window is resize by forcing a rerender.
@@ -188,8 +188,8 @@ export function TableScrollbar({
   listRef,
 }: {
   totalRowCount?: number;
-  outerRef: RefObject<HTMLElement>;
-  listRef: RefObject<FixedSizeList>;
+  outerRef: RefObject<HTMLElement | null>;
+  listRef: RefObject<FixedSizeList | null>;
 }) {
   const {
     scrollbarHeight,

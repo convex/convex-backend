@@ -1,6 +1,5 @@
 import { Button } from "@ui/Button";
 import { OrbSubscriptionResponse } from "generatedApi";
-import { useSupportFormOpen } from "elements/SupportWidget";
 import { PlanCard } from "./PlanCard";
 
 export function BusinessPlan({
@@ -11,7 +10,6 @@ export function BusinessPlan({
   isLoading?: boolean;
 }) {
   const isCurrentPlan = subscription?.plan.planType === "CONVEX_BUSINESS";
-  const [, setOpenState] = useSupportFormOpen();
 
   return (
     <PlanCard
@@ -27,22 +25,17 @@ export function BusinessPlan({
       saleHeader="$2,500 monthly minimum"
       action={
         isCurrentPlan ? (
-          <p className="flex h-[2.125rem] items-center px-2 font-semibold">
+          <p className="flex h-8.5 items-center px-2 font-semibold">
             Current Plan
           </p>
         ) : (
           <Button
             variant="neutral"
             disabled={isLoading}
-            onClick={() =>
-              setOpenState({
-                defaultSubject: "Business Plan Inquiry",
-                defaultMessage:
-                  "I'm interested in learning more about the Business plan.",
-              })
-            }
+            href="https://www.convex.dev/enterprise/pricing"
+            target="_blank"
           >
-            Contact Us
+            See Pricing
           </Button>
         )
       }

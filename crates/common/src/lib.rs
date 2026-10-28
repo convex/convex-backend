@@ -1,14 +1,7 @@
 //! Common code, types and libraries for interacting with the system.
-#![feature(binary_heap_drain_sorted)]
-#![feature(const_for)]
-#![feature(const_type_name)]
 #![feature(coroutines)]
-#![feature(iter_intersperse)]
-#![feature(nonzero_ops)]
-#![feature(try_blocks)]
+#![feature(exclusive_wrapper)]
 #![feature(try_blocks_heterogeneous)]
-#![feature(type_alias_impl_trait)]
-#![feature(bound_as_ref)]
 #![feature(iter_from_coroutine)]
 #![feature(iterator_try_collect)]
 #![feature(error_iter)]
@@ -19,6 +12,7 @@
 #![feature(duration_constructors)]
 
 pub mod async_compat;
+pub mod audit_log_lines;
 pub mod auth;
 pub mod backoff;
 pub mod bootstrap_model;
@@ -27,14 +21,17 @@ pub mod client_pool;
 pub mod codel_queue;
 pub mod comparators;
 pub mod components;
+pub mod coverage;
 pub mod deleted_bitset;
 pub mod document;
 pub mod document_index_keys;
+pub mod erased_slot;
 pub mod errors;
 pub mod execution_context;
 pub mod ext;
 pub mod fastrace_helpers;
 pub mod floating_point;
+pub mod fmt;
 pub mod grpc;
 pub mod heap_size;
 pub mod http;
@@ -59,7 +56,9 @@ pub mod pii;
 pub mod pool_stats;
 pub mod query;
 pub mod query_journal;
+pub mod read_write_balance;
 pub mod retriable_stream;
+pub mod retry;
 pub mod runtime;
 pub mod schemas;
 pub mod sentry;
@@ -67,8 +66,6 @@ pub mod sha256;
 pub mod shapes;
 pub mod shutdown;
 pub mod sync;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
 pub mod tracing;
 pub mod tracing_util;
 pub mod try_anyhow;
@@ -81,10 +78,12 @@ pub mod try_chunks;
 pub mod version;
 pub mod ws;
 
-pub use execution_context::RequestId;
+pub use execution_context::{
+    RequestContext,
+    RequestId,
+    RequestMetadata,
+};
 pub use tokio;
-#[cfg(any(test, feature = "testing"))]
-pub use value::assert_obj;
 pub use value::{
     obj,
     val,

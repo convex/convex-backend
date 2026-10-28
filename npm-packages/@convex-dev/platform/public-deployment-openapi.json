@@ -347,6 +347,9 @@
           "args"
         ],
         "properties": {
+          "path": {
+            "type": "string"
+          },
           "args": {
             "type": "object"
           },
@@ -355,9 +358,6 @@
               "string",
               "null"
             ]
-          },
-          "path": {
-            "type": "string"
           }
         }
       },
@@ -386,16 +386,7 @@
           "args"
         ],
         "properties": {
-          "args": {
-            "type": "object"
-          },
           "componentPath": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "format": {
             "type": [
               "string",
               "null"
@@ -403,6 +394,15 @@
           },
           "path": {
             "type": "string"
+          },
+          "args": {
+            "type": "object"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -414,20 +414,20 @@
           "ts"
         ],
         "properties": {
+          "path": {
+            "type": "string"
+          },
           "args": {
             "type": "object"
+          },
+          "ts": {
+            "$ref": "#/components/schemas/SerializedTs"
           },
           "format": {
             "type": [
               "string",
               "null"
             ]
-          },
-          "path": {
-            "type": "string"
-          },
-          "ts": {
-            "$ref": "#/components/schemas/SerializedTs"
           }
         }
       },
@@ -440,6 +440,9 @@
               "status"
             ],
             "properties": {
+              "value": {
+                "$ref": "#/components/schemas/Value"
+              },
               "logLines": {
                 "type": "array",
                 "items": {
@@ -451,9 +454,6 @@
                 "enum": [
                   "success"
                 ]
-              },
-              "value": {
-                "$ref": "#/components/schemas/Value"
               }
             }
           },
@@ -464,6 +464,9 @@
               "status"
             ],
             "properties": {
+              "errorMessage": {
+                "type": "string"
+              },
               "errorData": {
                 "oneOf": [
                   {
@@ -473,9 +476,6 @@
                     "$ref": "#/components/schemas/Value"
                   }
                 ]
-              },
-              "errorMessage": {
-                "type": "string"
               },
               "logLines": {
                 "type": "array",

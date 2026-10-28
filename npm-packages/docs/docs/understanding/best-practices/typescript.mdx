@@ -22,7 +22,7 @@ provide progressively better type support. For the best support you'll want to
 complete them all.
 
 **Example:**
-[TypeScript and Schema](https://github.com/get-convex/convex-demos/tree/main/typescript)
+[TypeScript and Schema](https://github.com/convex/convex-demos/tree/main/typescript)
 
 ## Writing Convex functions in TypeScript
 
@@ -73,8 +73,8 @@ references to documents can be described with parametrized
 ## Type annotating server-side helpers
 
 When you want to reuse logic across Convex functions you'll want to define
-helper TypeScript functions, and these might need some of the provided context,
-to access the database, authentication and any other Convex feature.
+helper functions, and these might need some of the provided context, to access
+the database, authentication and any other Convex feature.
 
 Convex generates types corresponding to documents and IDs in your database,
 `Doc` and `Id`, as well as `QueryCtx`, `MutationCtx` and `ActionCtx` types based
@@ -112,7 +112,7 @@ functions declarations. For React, install and configure TypeScript so you can
 write your React components in `.tsx` files instead of `.jsx` files.
 
 Follow our [React](/quickstart/react.mdx) or [Next.js](/quickstart/nextjs.mdx)
-quickstart to get started with Convex and TypeScript.
+quickstart to get started with Convex.
 
 ### Type annotating client-side code
 
@@ -145,5 +145,12 @@ See [Serializing IDs](/database/document-ids.mdx#serializing-ids).
 
 Convex requires TypeScript version
 [5.0.3](https://www.npmjs.com/package/typescript/v/5.0.3) or newer.
+
+Both TypeScript 6 and TypeScript 7 are supported, and Convex typechecks with the
+`tsc` binary installed in your project without any extra configuration.
+TypeScript 7.0 does not include a JavaScript API, so if other tools in your
+project need it, follow TypeScript's
+[side-by-side installation](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0)
+instructions. Convex picks up TypeScript 7 in that setup too.
 
 <StackPosts query="types" />

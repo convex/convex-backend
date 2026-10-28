@@ -286,9 +286,7 @@ export class LocalSyncState {
     return this.querySet.get(queryToken)?.journal;
   }
 
-  restart(
-    oldRemoteQueryResults: Set<QueryId>,
-  ): [QuerySetModification, (Authenticate | undefined)?] {
+  restart(): [QuerySetModification, (Authenticate | undefined)?] {
     // Restart works whether we are paused or unpaused.
     // The `this.pendingQuerySetModifications` is not used
     // when restarting as the AddQuery and RemoveQuery are computed
@@ -308,9 +306,10 @@ export class LocalSyncState {
       };
       modifications.push(add);
 
-      if (!oldRemoteQueryResults.has(localQuery.id)) {
-        this.outstandingQueriesOlderThanRestart.add(localQuery.id);
-      }
+      // Track all re-sent queries as outstanding so the backoff retry
+      // counter doesn't reset until the server has re-confirmed results
+      // for every active query.
+      this.outstandingQueriesOlderThanRestart.add(localQuery.id);
     }
     this.querySetVersion = 1;
     const querySet: QuerySetModification = {

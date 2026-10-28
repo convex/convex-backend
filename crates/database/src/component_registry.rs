@@ -148,18 +148,6 @@ impl ComponentRegistry {
             .with_context(|| format!("Component {component_id:?} not found"))
     }
 
-    pub fn component_path_from_document_id(
-        &self,
-        table_mapping: &TableMapping,
-        id: ResolvedDocumentId,
-        reads: &mut TransactionReadSet,
-    ) -> anyhow::Result<Option<ComponentPath>> {
-        let tablet_id = id.tablet_id;
-        let table_namespace = table_mapping.tablet_namespace(tablet_id)?;
-        let component_id = ComponentId::from(table_namespace);
-        Ok(self.get_component_path(component_id, reads))
-    }
-
     pub fn all_component_paths(
         &self,
         reads: &mut TransactionReadSet,
@@ -236,7 +224,7 @@ impl ComponentRegistry {
         reads: &mut TransactionReadSet,
     ) -> anyhow::Result<Vec<ParsedDocument<ComponentMetadata>>> {
         let interval =
-            Interval::prefix(values_to_bytes::<false>(&[Some(val!(parent_id.to_string()))]).into());
+            Interval::prefix(values_to_bytes(&[Some(val!(parent_id.to_string()))]).into());
         reads.record_indexed_derived(
             TabletIndexName::new(
                 self.components_tablet,
@@ -266,7 +254,7 @@ impl ComponentRegistry {
         reads: &mut TransactionReadSet,
     ) -> anyhow::Result<Option<ParsedDocument<ComponentMetadata>>> {
         let interval = Interval::prefix(
-            values_to_bytes::<false>(&match &parent_and_name {
+            values_to_bytes(&match &parent_and_name {
                 Some((parent, name)) => {
                     vec![Some(val!(parent.to_string())), Some(val!(name.to_string()))]
                 },

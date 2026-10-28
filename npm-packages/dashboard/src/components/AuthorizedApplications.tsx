@@ -22,10 +22,12 @@ export function AuthorizedApplications({
   accessTokens,
   explainer,
   onRevoke,
+  revokeDisabledReason,
 }: {
   accessTokens: AppAccessTokenResponse[] | undefined;
   explainer: React.ReactNode;
   onRevoke: (token: AppAccessTokenResponse) => Promise<void>;
+  revokeDisabledReason?: React.ReactNode;
 }) {
   return (
     <Sheet>
@@ -43,6 +45,7 @@ export function AuthorizedApplications({
                     key={token.name}
                     token={token}
                     onRevoke={onRevoke}
+                    revokeDisabledReason={revokeDisabledReason}
                   />
                 ))
             ) : (
@@ -60,9 +63,11 @@ export function AuthorizedApplications({
 function AuthorizedApplicationListItem({
   token,
   onRevoke,
+  revokeDisabledReason,
 }: {
   token: AppAccessTokenResponse;
   onRevoke: (token: AppAccessTokenResponse) => Promise<void>;
+  revokeDisabledReason?: React.ReactNode;
 }) {
   const team = useCurrentTeam();
   const [showConfirmation, setShowConfirmation] = useState(false);
@@ -104,7 +109,12 @@ function AuthorizedApplicationListItem({
               <ExclamationTriangleIcon />
               Report Abuse
             </MenuItem>
-            <MenuItem action={() => setShowConfirmation(true)} variant="danger">
+            <MenuItem
+              action={() => setShowConfirmation(true)}
+              variant="danger"
+              disabled={revokeDisabledReason !== undefined}
+              tip={revokeDisabledReason}
+            >
               <Cross2Icon />
               Revoke
             </MenuItem>

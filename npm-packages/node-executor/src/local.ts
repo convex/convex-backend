@@ -1,4 +1,4 @@
-import { Command } from "@commander-js/extra-typings";
+import { Command, Option } from "@commander-js/extra-typings";
 import { invoke } from "./executor";
 import { v4 as uuidv4 } from "uuid";
 import { log, setDebugLogging } from "./log";
@@ -9,7 +9,7 @@ import express, { Request, Response } from "express";
 const DEFAULT_PORT = 3002;
 
 async function startServer(
-  listenTarget: number | { fd: number },
+  listenTarget: number | { path: string },
   debug: boolean,
   tempdir: string,
 ) {
@@ -63,7 +63,9 @@ async function startServer(
     const addrStr =
       typeof addr === "object" && addr
         ? `port ${addr.port}`
-        : String(listenTarget);
+        : typeof listenTarget === "object" && "path" in listenTarget
+          ? `path ${listenTarget.path}`
+          : String(listenTarget);
     log(`Node executor server listening on ${addrStr}`);
   });
 }
@@ -77,9 +79,11 @@ program
   .usage("command [options]")
   .option("--debug", "print debug output", false)
   .option("--port <number>", "port to listen on", DEFAULT_PORT.toString())
-  .option(
-    "--fd <number>",
-    "inherit a pre-bound TCP listener from the given file descriptor",
+  .addOption(
+    new Option(
+      "--ipc-path <path>",
+      "listen on a Unix domain socket or Windows named pipe path",
+    ).conflicts(["port"]),
   )
   .option(
     "--tempdir <path>",
@@ -88,8 +92,8 @@ program
   )
   .action(async (options) => {
     const listenTarget =
-      options.fd !== undefined
-        ? { fd: parseInt(options.fd, 10) }
+      options.ipcPath !== undefined
+        ? { path: options.ipcPath }
         : parseInt(options.port, 10);
     await startServer(listenTarget, options.debug, options.tempdir);
   });

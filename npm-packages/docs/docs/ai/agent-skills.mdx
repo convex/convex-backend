@@ -1,0 +1,60 @@
+---
+title: "Convex Agent Skills"
+sidebar_position: 400
+sidebar_label: Agent Skills
+description:
+  "Install Convex Agent Skills to give your AI coding agent specialized Convex
+  workflows"
+---
+
+import { AgentSkills } from "@site/src/components/AgentSkills";
+
+[Agent Skills](https://agentskills.io) are portable packages of instructions and
+workflows that teach AI coding agents how to perform specialized tasks. Convex
+provides a set of ready-made skills for common workflows like setting up auth,
+designing a schema, and running migrations.
+
+## Install
+
+Use the `npx skills` CLI to add the Convex skills to your project:
+
+```sh
+# Choose which skills to install
+npx skills add convex/agent-skills
+
+# Or install all of them at once
+npx skills add convex/agent-skills --all
+```
+
+Skills are installed into `.agents/skills/` in your project and are
+automatically picked up by compatible agents including Cursor, Claude Code, and
+GitHub Copilot.
+
+## Available Skills
+
+<AgentSkills />
+
+## Using Skills
+
+Skills are applied automatically when the agent determines they're relevant. How
+you manually invoke them depends on your tool:
+
+| Tool                     | Manual invocation |
+| ------------------------ | ----------------- |
+| Cursor                   | `/skill-name`     |
+| VS Code (GitHub Copilot) | `/skill-name`     |
+| Claude Code              | `/skill-name`     |
+| Codex (OpenAI)           | `$skill-name`     |
+
+For example, to kick off auth setup in Cursor or Claude Code:
+
+```
+/convex-auth
+```
+
+## Learn More
+
+- [convex/agent-skills](https://github.com/convex/agent-skills) - full list of
+  skills, source code, and contributing guide
+- [Agent Skills standard](https://agentskills.io) - the open standard these
+  skills are built on

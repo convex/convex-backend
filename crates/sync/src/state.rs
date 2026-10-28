@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     hash::Hash,
     mem,
+    sync::Arc,
     time::SystemTime,
 };
 
@@ -32,8 +33,12 @@ use futures::{
     FutureExt,
     StreamExt,
 };
-use keybroker::Identity;
+use keybroker::{
+    Identity,
+    IdentityValidity,
+};
 use sync_types::{
+    AuthenticationToken,
     IdentityVersion,
     Query,
     QueryId,
@@ -49,6 +54,13 @@ use crate::metrics;
 type ValueDigest = Sha256Digest;
 type ErrorDigest = Sha256Digest;
 
+/// A query the sync worker needs to (re)run.
+#[derive(Clone)]
+pub struct QueryToFetch {
+    pub query: Query,
+    pub has_run_before: bool,
+}
+
 pub struct SyncedQuery {
     query: Query,
 
@@ -57,7 +69,7 @@ pub struct SyncedQuery {
     /// - Starts `None`: Query is newly inserted.
     /// - `None -> Some(subscription)`: `SyncState::complete_fetch`.
     /// - `Some(..) -> None`: `SyncState::prune_invalidated_queries`.
-    subscription: Option<Box<dyn SubscriptionTrait>>,
+    subscription: Option<Arc<dyn SubscriptionTrait>>,
 
     /// What was the hash of the last successful return value? This allows us to
     /// deduplicate transitions for queries whose results haven't actually
@@ -87,11 +99,14 @@ pub struct ClientVersion {
 impl ClientVersion {
     fn initial() -> Self {
         Self {
-            query_set: 0,
-            identity: 0,
+            query_set: QuerySetVersion::default(),
+            identity: IdentityVersion::default(),
         }
     }
 }
+
+/// Indicates that the protocol needs auth revalidation, providing the token
+pub struct NeedsAuthRevalidation(pub AuthenticationToken);
 
 /// Current state for the sync protocol's worker.
 ///
@@ -129,7 +144,6 @@ pub struct SyncState {
     queries: BTreeMap<QueryId, SyncedQuery>,
     /// Queries being computed for the next transition.
     in_progress_queries: BTreeMap<QueryId, Query>,
-    identity: Identity,
 
     // If this is true, it means we have invalidated but have not yet refilled
     // some query subscription. `next_invalidated_query` blocks forever until
@@ -140,11 +154,13 @@ pub struct SyncState {
     /// client since the last transition began computing.
     /// These are emptied before computing a new transition.
     pending_query_updates: Vec<QuerySetModification>,
-    pending_identity: Option<Identity>,
     /// These are the query set version and identity according to the client.
     received_client_version: ClientVersion,
 
     partition_id: u64,
+
+    auth_token: AuthenticationToken,
+    identity: Identity,
 }
 
 impl SyncState {
@@ -156,11 +172,11 @@ impl SyncState {
             queries: BTreeMap::new(),
             in_progress_queries: BTreeMap::new(),
             identity: Identity::Unknown(None),
+            auth_token: AuthenticationToken::None,
 
             refill_needed: false,
 
             pending_query_updates: vec![],
-            pending_identity: None,
             received_client_version: ClientVersion::initial(),
 
             partition_id,
@@ -228,16 +244,10 @@ impl SyncState {
 
     pub fn take_modifications(
         &mut self,
-    ) -> (
-        Vec<QuerySetModification>,
-        QuerySetVersion,
-        Option<Identity>,
-        IdentityVersion,
-    ) {
+    ) -> (Vec<QuerySetModification>, QuerySetVersion, IdentityVersion) {
         (
             mem::take(&mut self.pending_query_updates),
             self.received_client_version.query_set,
-            self.pending_identity.take(),
             self.received_client_version.identity,
         )
     }
@@ -247,35 +257,52 @@ impl SyncState {
     pub fn modify_identity(
         &mut self,
         new_identity: Identity,
+        new_auth_token: AuthenticationToken,
         base_version: IdentityVersion,
     ) -> anyhow::Result<()> {
-        let current_version = self.received_client_version.identity;
-        anyhow::ensure!(current_version == base_version);
-        self.pending_identity = Some(new_identity);
-        self.received_client_version.identity = current_version + 1;
+        anyhow::ensure!(self.received_client_version.identity == base_version);
+        self.identity = new_identity;
+        self.auth_token = new_auth_token;
+        self.received_client_version.identity.incr();
         Ok(())
     }
 
-    /// Immediately set the current identity.
-    pub fn insert_identity(&mut self, identity: Identity) {
-        self.identity = identity;
+    /// Set the pending identity for the current sync session, bumping the
+    /// pending identity version.
+    pub fn update_revalidated_identity(&mut self, new_identity: Identity) {
+        self.identity = new_identity;
     }
 
     // Returns the current session identity. If the identity is a user ID
     // token, also validates using the current SystemTime that it hasn't expired.
     // If there is a pending update to the identity, use that instead.
-    pub fn identity(&self, current_time: SystemTime) -> anyhow::Result<Identity> {
-        let identity = self
-            .pending_identity
-            .clone()
-            .unwrap_or_else(|| self.identity.clone());
+    //
+    // If it's an expired admin identity, instead return the authentication token as
+    // an error - for revalidation.
+    pub fn identity(
+        &self,
+        current_time: SystemTime,
+    ) -> anyhow::Result<Result<Identity, NeedsAuthRevalidation>> {
+        // Make sure identity is still valid, and valid a little bit into the future too
+        match self.identity.check_valid(current_time) {
+            IdentityValidity::Valid {
+                needs_revalidation_soon: false,
+            } => (),
+            IdentityValidity::Invalid
+            | IdentityValidity::Valid {
+                needs_revalidation_soon: true,
+            } => return Ok(Err(NeedsAuthRevalidation(self.auth_token.clone()))),
+        }
+
+        let identity = self.identity.clone();
         if let Identity::User(user) = &identity {
             anyhow::ensure!(
                 !user.is_expired(current_time),
                 ErrorMetadata::unauthenticated("TokenExpired", "Convex token identity expired")
             );
         }
-        Ok(identity)
+
+        Ok(Ok(identity))
     }
 
     /// Wait on the next invalidated query future to break.
@@ -332,7 +359,7 @@ impl SyncState {
         Ok(())
     }
 
-    pub fn take_subscriptions(&mut self) -> BTreeMap<QueryId, Box<dyn SubscriptionTrait>> {
+    pub fn take_subscriptions(&mut self) -> BTreeMap<QueryId, Arc<dyn SubscriptionTrait>> {
         let mut newly_invalidated = BTreeMap::new();
 
         for (query_id, query) in self.queries.iter_mut() {
@@ -349,18 +376,24 @@ impl SyncState {
     }
 
     /// Which queries do not have a token?
-    pub fn need_fetch(&self) -> impl Iterator<Item = Query> + '_ {
+    pub fn need_fetch(&self) -> impl Iterator<Item = QueryToFetch> + '_ {
         self.queries
             .values()
             .filter(|sq| sq.subscription.is_none())
-            .map(|sq| sq.query.clone())
-            .chain(self.in_progress_queries.values().cloned())
+            .map(|sq| QueryToFetch {
+                query: sq.query.clone(),
+                has_run_before: sq.result_hash.is_some(),
+            })
+            .chain(self.in_progress_queries.values().map(|query| QueryToFetch {
+                query: query.clone(),
+                has_run_before: false,
+            }))
     }
 
     pub fn refill_subscription(
         &mut self,
         query_id: QueryId,
-        subscription: Box<dyn SubscriptionTrait>,
+        subscription: Arc<dyn SubscriptionTrait>,
     ) -> anyhow::Result<()> {
         // Per the state machine, we should only be refilling subscriptions if we
         // had a valid subscription before, which means the query is non-pending
@@ -384,7 +417,7 @@ impl SyncState {
         result: Result<JsonPackedValue, RedactedJsError>,
         log_lines: RedactedLogLines,
         journal: SerializedQueryJournal,
-        subscription: Box<dyn SubscriptionTrait>,
+        subscription: Arc<dyn SubscriptionTrait>,
     ) -> anyhow::Result<Option<StateModification<JsonPackedValue>>> {
         if let Some(query) = self.in_progress_queries.remove(&query_id) {
             let sq = SyncedQuery {
@@ -480,6 +513,11 @@ impl SyncState {
     pub fn num_queries(&self) -> usize {
         self.queries.len() + self.in_progress_queries.len()
     }
+
+    pub fn has_client_work_pending(&self) -> bool {
+        self.received_client_version.query_set > self.current_version.query_set
+            || self.received_client_version.identity > self.current_version.identity
+    }
 }
 
 fn hash_result(
@@ -516,84 +554,5 @@ fn hash_log_lines(hasher: &mut Sha256, log_lines: &RedactedLogLines) {
         // prefix but has a different length.
         hasher.update(&line.len().to_le_bytes());
         hasher.update(line.as_bytes());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use application::redaction::RedactedLogLines;
-    use cmd_util::env::env_config;
-    use common::{
-        log_lines::{
-            LogLevel,
-            LogLine,
-            LogLines,
-        },
-        runtime::UnixTimestamp,
-        value::{
-            ConvexValue,
-            JsonPackedValue,
-        },
-    };
-    use proptest::prelude::*;
-
-    use crate::state::udf_result_sha256;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_sha256_deterministic(v in any::<ConvexValue>(), logs in any::<LogLines>()) {
-            let logs = RedactedLogLines::from_log_lines(logs, false);
-            let v = JsonPackedValue::pack(v);
-            let digest = udf_result_sha256(&v, &logs);
-            assert_eq!(udf_result_sha256(&v, &logs), digest);
-        }
-
-        #[test]
-        fn test_sha256_collisions(
-            v1 in any::<ConvexValue>(),
-            v1_logs in any::<LogLines>(),
-            v2 in any::<ConvexValue>(),
-            v2_logs in any::<LogLines>()
-        ) {
-            if v1 != v2 {
-                let v1_logs = RedactedLogLines::from_log_lines(v1_logs, false);
-                let v2_logs = RedactedLogLines::from_log_lines(v2_logs, false);
-                let v1 = JsonPackedValue::pack(v1);
-                let v2 = JsonPackedValue::pack(v2);
-                assert_ne!(udf_result_sha256(&v1, &v1_logs), udf_result_sha256(&v2, &v2_logs));
-            }
-        }
-    }
-
-    #[test]
-    fn test_sha256_does_not_collide_with_similar_logs() {
-        let v = ConvexValue::from(42);
-        let ts = UnixTimestamp::from_millis(1715980547440);
-        let v_logs = RedactedLogLines::from_log_lines(
-            vec![LogLine::new_developer_log_line(
-                LogLevel::Log,
-                vec!["foobar".to_string()],
-                ts,
-            )]
-            .into(),
-            false,
-        );
-        let v2_logs = RedactedLogLines::from_log_lines(
-            vec![
-                LogLine::new_developer_log_line(LogLevel::Log, vec!["foo".to_string()], ts),
-                LogLine::new_developer_log_line(LogLevel::Log, vec!["bar".to_string()], ts),
-            ]
-            .into(),
-            false,
-        );
-        let v = JsonPackedValue::pack(v);
-        assert_ne!(
-            udf_result_sha256(&v, &v_logs),
-            udf_result_sha256(&v, &v2_logs)
-        );
     }
 }

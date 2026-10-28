@@ -5,6 +5,7 @@
 import { performOp } from "udf-syscall-ffi";
 import { copyBuffer } from "./helpers.js";
 import inspect from "object-inspect";
+import { TransformStream } from "./06_streams.js";
 
 class TextEncoder {
   get encoding() {
@@ -15,35 +16,47 @@ class TextEncoder {
     return performOp("textEncoder/encode", text);
   }
   encodeInto(input: string, dest: Uint8Array) {
+    if (!(dest instanceof Uint8Array)) {
+      throw new TypeError(
+        "Failed to execute 'encodeInto' on 'TextEncoder': parameter 2 is not of type 'Uint8Array'.",
+      );
+    }
     const space = dest.length;
     const output = performOp("textEncoder/encodeInto", input, space);
     const { bytes, read, written } = output;
     dest.set(bytes, 0);
     return { read, written };
   }
-  get [Symbol.toStringTag]() {
-    return "TextEncoder";
-  }
 }
+
+Object.defineProperty(TextEncoder.prototype, Symbol.toStringTag, {
+  value: "TextEncoder",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 class TextDecoder {
   #encoding: string;
   #fatal: boolean;
   #ignoreBOM: boolean;
-  #rid: string | null;
+  // Opaque handle to the Rust-side decoder state, created lazily on the first
+  // streaming decode. The Rust state is garbage collected together with this
+  // object.
+  #decoder: object | null;
   constructor(label = "utf-8", options: TextDecoderOptions = {}) {
     const { label: encoding, error } = performOp(
       "textEncoder/normalizeLabel",
       label,
     );
     if (error) {
-      throw new DOMException(error, "RangeError");
+      throw new RangeError(error);
     }
 
     this.#encoding = encoding;
-    this.#fatal = options.fatal || false;
-    this.#ignoreBOM = options.ignoreBOM || false;
-    this.#rid = null;
+    this.#fatal = Boolean(options.fatal);
+    this.#ignoreBOM = Boolean(options.ignoreBOM);
+    this.#decoder = null;
   }
   get encoding() {
     return this.#encoding;
@@ -68,66 +81,81 @@ class TextDecoder {
     }
 
     try {
-      if (!stream && this.#rid === null) {
-        const { text } = performOp("textEncoder/decodeSingle", {
+      if (!stream && this.#decoder === null) {
+        const { text, error } = performOp("textEncoder/decodeSingle", {
           bytes: copyBuffer(buffer),
           encoding: this.encoding,
           fatal: this.fatal,
           ignoreBOM: this.ignoreBOM,
         });
+        if (error) {
+          throw new TypeError(error);
+        }
         return text;
       }
 
-      if (this.#rid === null) {
-        const { result } = performOp(
+      if (this.#decoder === null) {
+        this.#decoder = performOp(
           "textEncoder/newDecoder",
           this.#encoding,
           this.#fatal,
           this.#ignoreBOM,
         );
-
-        this.#rid = result;
       }
 
-      const { text } = performOp(
+      const { text, error } = performOp(
         "textEncoder/decode",
         copyBuffer(buffer),
-        this.#rid,
+        this.#decoder,
         stream,
       );
+      if (error) {
+        throw new TypeError(error);
+      }
       return text;
     } finally {
-      if (!stream && this.#rid !== null) {
-        performOp("textEncoder/cleanup", this.#rid);
+      if (!stream) {
+        this.#decoder = null;
       }
     }
   }
-  get [Symbol.toStringTag]() {
-    return "TextDecoder";
-  }
 }
 
-function atob(encoded: string): string {
-  const { decoded, error } = performOp("atob", String(encoded));
-  if (error) {
-    throw new DOMException(
-      `Failed to execute 'atob': ${error}`,
-      "InvalidCharacterError",
-    );
-  }
-  return decoded;
-}
+Object.defineProperty(TextDecoder.prototype, Symbol.toStringTag, {
+  value: "TextDecoder",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
-function btoa(text: string): string {
-  const { encoded, error } = performOp("btoa", String(text));
-  if (error) {
-    throw new DOMException(
-      `Failed to execute 'btoa': ${error}`,
-      "InvalidCharacterError",
-    );
-  }
-  return encoded;
-}
+const { atob, btoa } = {
+  atob(encoded: string): string {
+    if (arguments.length === 0) {
+      throw new TypeError('The "input" argument must be specified');
+    }
+    const { decoded, error } = performOp("atob", String(encoded));
+    if (error) {
+      throw new DOMException(
+        `Failed to execute 'atob': ${error}`,
+        "InvalidCharacterError",
+      );
+    }
+    return decoded;
+  },
+  btoa(text: string): string {
+    if (arguments.length === 0) {
+      throw new TypeError('The "input" argument must be specified');
+    }
+    const { encoded, error } = performOp("btoa", String(text));
+    if (error) {
+      throw new DOMException(
+        `Failed to execute 'btoa': ${error}`,
+        "InvalidCharacterError",
+      );
+    }
+    return encoded;
+  },
+};
 
 class TextDecoderStream {
   /** @type {TextDecoder} */
@@ -204,10 +232,6 @@ class TextDecoderStream {
     return this.#transform.writable;
   }
 
-  get [Symbol.toStringTag]() {
-    return "TextDecoderStream";
-  }
-
   inspect() {
     const properties = {
       encoding: this.encoding,
@@ -219,6 +243,13 @@ class TextDecoderStream {
     return `TextDecoderStream ${inspect(properties)}`;
   }
 }
+
+Object.defineProperty(TextDecoderStream.prototype, Symbol.toStringTag, {
+  value: "TextDecoderStream",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 class TextEncoderStream {
   /** @type {string | null} */
@@ -281,10 +312,6 @@ class TextEncoderStream {
     return this.#transform.writable;
   }
 
-  get [Symbol.toStringTag]() {
-    return "TextEncoderStream";
-  }
-
   inspect() {
     const properties = {
       encoding: this.encoding,
@@ -294,6 +321,13 @@ class TextEncoderStream {
     return `TextEncoderStream ${inspect(properties)}`;
   }
 }
+
+Object.defineProperty(TextEncoderStream.prototype, Symbol.toStringTag, {
+  value: "TextEncoderStream",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 export const setupTextEncoding = (global: any) => {
   global.atob = atob;

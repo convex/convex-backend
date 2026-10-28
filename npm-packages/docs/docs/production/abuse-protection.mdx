@@ -1,0 +1,178 @@
+---
+title: "Abuse Protection"
+sidebar_label: "Abuse Protection"
+sidebar_position: 4
+description:
+  "What Convex deployments are protected from by default, including DDoS
+  attacks, and how to add your own Cloudflare or Vercel edge for more control"
+---
+
+Protecting a Convex deployment from abuse — denial-of-service (DDoS) floods,
+scraping, credential stuffing, and other malicious or expensive traffic — is
+partly handled for you and partly up to you. This page covers what Convex
+protects against automatically, what it doesn't, and how to add your own edge
+for the rest.
+
+## Choosing an approach
+
+| You want…                                                         | Use                                                                                                             |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Network-layer protection only                                     | Nothing — [the built-in baseline](#what-convex-already-protects) covers it                                      |
+| Control over your domain's reputation                             | [A custom domain](#what-a-custom-domain-changes)                                                                |
+| Your own WAF / rate limits on the realtime API (`*.convex.cloud`) | A custom domain through [your own Cloudflare zone](#bringing-your-own-cloudflare-zone)                          |
+| Your own WAF / rate limits on HTTP actions (`*.convex.site`)      | [Your own Cloudflare zone](#bringing-your-own-cloudflare-zone), or [a Vercel project](#putting-vercel-in-front) |
+
+Bringing your own edge is about **policy control**, not basic survivability —
+reach for it when you have a specific application-layer concern, not as a
+default.
+
+## What Convex already protects
+
+Convex serves deployments through Cloudflare. This applies to your default
+`*.convex.cloud` and `*.convex.site` domains and to custom domains alike — **a
+custom domain is not required to get this baseline.** Because traffic passes
+through Cloudflare's network, it benefits from Cloudflare's network-layer
+(L3/L4) DDoS mitigation: volumetric floods that try to saturate the connection
+before a request is ever processed.
+
+For custom domains specifically:
+
+- You point a `CNAME` record at `convex.domains`, and TLS is terminated at
+  Cloudflare's edge.
+- TLS certificates are provisioned for you automatically.
+- Connections require TLS 1.2 or higher.
+
+This baseline applies with no extra configuration. It is not a guarantee against
+every kind of attack — see below — but basic network-layer survivability is not
+something you have to set up yourself.
+
+## What a custom domain changes
+
+<ProFeatureUpsell feature="Custom domains" verb="require" />
+
+Since the network-layer baseline already covers your default domains, a custom
+domain is not what gives you that protection. What it changes is **ownership**:
+
+- **Domain reputation is yours.** The default `*.convex.cloud` and
+  `*.convex.site` domains are shared across Convex deployments. A custom domain
+  is one you own, so its reputation and standing with ISPs, corporate networks,
+  browsers, and other intermediaries is yours to manage rather than shared.
+- **You can put your own edge in front.** A domain you control can be routed
+  through your own Cloudflare zone or a Vercel project, so your own WAF rules,
+  rate limiting, and bot management apply. See the sections below.
+
+## Native clients and custom domains
+
+Native and mobile clients usually bake the deployment URL into a build that's
+already on users' devices — unlike a web app, you can't change it just by
+redeploying. Plan for this **before** you ship:
+
+- **Build in a way to change the host.** Make the Convex URL something your app
+  can update remotely (for example, fetched from a configuration endpoint at
+  startup) rather than a hardcoded constant, so you can point existing installs
+  at a new host without shipping an app-store release.
+- **Or adopt a custom domain before you ship.** If you serve your deployment
+  from a custom domain from the start, you control the host for the life of the
+  app.
+
+If you later move your deployment exclusively to a custom domain and stop
+serving the default `*.convex.cloud` / `*.convex.site` endpoints, any client
+that was built against those endpoints — and has no way to be updated — will no
+longer be able to connect.
+
+## Application-layer controls you add yourself
+
+The network-layer baseline doesn't include **application-layer** protections —
+the tools you'd reach for against abuse like floods of expensive HTTP requests,
+scraping, or credential stuffing. Convex doesn't build these in, but you can add
+them by routing your domain through your own Cloudflare zone or Vercel project
+(see below):
+
+- Custom [WAF](https://developers.cloudflare.com/waf/) and firewall rules —
+  blocking by country, ASN, IP, path, header, or request shape.
+- Per-route or per-IP
+  [rate limiting](https://developers.cloudflare.com/waf/rate-limiting-rules/).
+- Bot management and challenge pages.
+- Caching, analytics, and log export for traffic to your domain.
+
+## Bringing your own Cloudflare zone
+
+If the domain is managed in your own Cloudflare account, you can route
+custom-domain traffic through your zone first, so your WAF rules, rate limiting,
+and bot management apply before traffic reaches Convex. This is the only option
+that works for the realtime Convex API (`*.convex.cloud`), and it works for HTTP
+actions too.
+
+Treat this as an **advanced setup**. Custom domains already sit behind
+Cloudflare (`convex.domains` is a Cloudflare zone), so fronting your domain with
+your own zone usually doesn't change the network-layer story — its practical
+value is the application-layer control listed above. You are also running
+"Cloudflare in front of Cloudflare" (Cloudflare calls this
+[orange-to-orange](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/saas-customers/)),
+which adds moving parts to certificate issuance and renewal.
+
+### Setup
+
+1. In Convex, add the custom domain from your Deployment Settings page as
+   described in [Custom Domains](/production/custom-domains.mdx).
+2. In your Cloudflare zone, create the records Convex shows you:
+   - A `CNAME` from your domain (e.g. `api.example.com`) to `convex.domains`,
+     with the Cloudflare proxy **enabled** (the orange cloud).
+   - The `TXT` record at `_convex_domains.<your domain>`. Convex reads this
+     record directly over DNS to verify that you own the domain.
+3. Configure WAF, rate limiting, and bot management rules on your zone.
+
+:::caution
+
+Convex issues the TLS certificate for your custom domain using HTTP-based
+validation. Before you rely on this in production, confirm that the domain
+reaches a verified state in your Convex Deployment Settings, and watch that the
+certificate continues to renew successfully over time.
+
+:::
+
+## Putting Vercel in front
+
+A [Vercel](https://vercel.com) project can front your domain and apply
+[Vercel's DDoS mitigation and firewall](https://vercel.com/docs/security/ddos-mitigation).
+Vercel proxies traffic using
+[rewrites](https://vercel.com/docs/edge-network/rewrites), which forward
+matching requests to an external origin.
+
+:::important
+
+This works for [HTTP actions](/functions/http-actions.mdx) (`*.convex.site`)
+**only**. Vercel rewrites proxy HTTP requests, not WebSocket connections, and
+the realtime Convex API (queries, mutations, and actions over `*.convex.cloud`)
+uses WebSockets — so it cannot be served through a Vercel rewrite. Vercel is not
+a general custom-domain protection strategy for Convex; it's an option for the
+HTTP-actions surface specifically.
+
+:::
+
+To proxy your HTTP actions through Vercel:
+
+1. Add your domain (e.g. `api.example.com`) to your Vercel project.
+2. Add a rewrite to `vercel.json` that forwards to your deployment's HTTP
+   actions URL:
+
+   ```json
+   {
+     "rewrites": [
+       {
+         "source": "/:path*",
+         "destination": "https://<your deployment>.convex.site/:path*"
+       }
+     ]
+   }
+   ```
+
+3. Configure [Vercel Firewall](https://vercel.com/docs/security/vercel-waf)
+   rules and rate limiting as desired.
+
+Because the domain points at Vercel rather than at `convex.domains`, you do not
+need to register it as a Convex custom domain for this to work — Vercel forwards
+to your deployment's default `*.convex.site` URL.
+
+Reach out to support@convex.dev if you have questions about hardening a custom
+domain.

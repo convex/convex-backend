@@ -33,6 +33,8 @@ message UdfOutcome {
   optional bool observed_identity = 10;
   uint64 memory_in_mb = 11;
   optional google.protobuf.Duration user_execution_time = 12;
+
+  repeated AuditLogLine audit_log_lines = 13;
 }
 
 message ActionOutcome {
@@ -94,4 +96,9 @@ message LogLine {
     StructuredLogLine line = 2;
     SubFunctionLogLines sub_function = 3;
   }
+}
+
+message AuditLogLine {
+  optional string body_json = 1;
+  reserved 2, 3, 4;
 }

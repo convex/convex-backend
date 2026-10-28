@@ -8,7 +8,6 @@ use serde::{
 use value::codegen_convex_serialization;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct DatabaseGlobals {
     /// Migration version of the database.
     pub version: DatabaseVersion,
@@ -50,7 +49,6 @@ impl From<SerializedDatabaseGlobals> for DatabaseGlobals {
 codegen_convex_serialization!(DatabaseGlobals, SerializedDatabaseGlobals);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum StorageType {
     S3 { s3_prefix: String },
     Local { dir: String },

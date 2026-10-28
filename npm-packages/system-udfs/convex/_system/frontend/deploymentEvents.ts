@@ -6,13 +6,14 @@ type PushConfigEvent = Doc<"_deployment_audit_log"> & {
   action: "push_config" | "push_config_with_components";
 };
 
-export const lastPushEvent = queryPrivateSystem({
+export const lastPushEvent = queryPrivateSystem("ViewData")({
   args: {
     componentId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async function ({ db }): Promise<PushConfigEvent | null> {
     const lastPushEvent = await db
       .query("_deployment_audit_log")
+      // eslint-disable-next-line @convex-dev/no-filter-in-query -- FIXME: _deployment_audit_log has no by_action index
       .filter((q) =>
         q.or(
           q.eq(q.field("action"), "push_config"),

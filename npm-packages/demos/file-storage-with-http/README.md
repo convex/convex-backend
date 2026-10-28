@@ -12,11 +12,11 @@ To learn more about storage see the
 
 ## Running the App
 
-### 1. Start dev
+### 1. Configure a deployment
 
 ```
 npm install
-npm run dev
+npx convex init
 ```
 
 ### 2. Add `VITE_CONVEX_SITE_URL` variable
@@ -32,7 +32,20 @@ VITE_CONVEX_SITE_URL="https://happy-animal-123.convex.site"
 
 ### 3. Set `CLIENT_ORIGIN` variable
 
-Also add a `CLIENT_ORIGIN`
+Set the `CLIENT_ORIGIN`
 [Convex environment variable](https://docs.convex.dev/production/environment-variables)
-on your [Convex dashboard](https://dashboard.convex.dev/) with the origin of
-your website (e.g. `http://localhost:5173` if developing locally).
+to the origin of your website (e.g. `http://localhost:5173` if developing
+locally). This app declares `CLIENT_ORIGIN` in `convex/convex.config.ts`, so the
+deployment won't accept code until it is set.
+
+```
+npx convex env set CLIENT_ORIGIN http://localhost:5173
+```
+
+You can also set it from your [Convex dashboard](https://dashboard.convex.dev/).
+
+### 4. Start dev
+
+```
+npm run dev
+```

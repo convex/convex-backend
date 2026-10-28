@@ -1,8 +1,12 @@
 import type { GetServerSideProps, GetServerSidePropsContext } from "next";
-import { getAccessToken, withPageAuthRequired } from "server/workos";
+import {
+  getAccessToken,
+  withPageAuthRequired,
+  WorkOSUnavailableError,
+} from "server/workos";
 import groupBy from "lodash/groupBy";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import { TeamResponse, ProjectDetails } from "generatedApi";
+import { TeamResponse, ProjectDetails, MemberPreferences } from "generatedApi";
 import fetchRetryFactory from "fetch-retry";
 import { getGoogleAnalyticsClientId } from "hooks/fetching";
 
@@ -34,6 +38,14 @@ const getProps: GetServerSideProps<{
   try {
     token = await getAccessToken(req);
   } catch (error) {
+    if (error instanceof WorkOSUnavailableError) {
+      // WorkOS is unreachable. Send the user to the retry pagerather
+      res.writeHead(307, {
+        Location: `/login-error?returnTo=${encodeURIComponent(req.url || "/")}`,
+      });
+      res.end();
+      return { props: {} };
+    }
     console.error("Couldn't fetch auth token", error);
     // If we can't get the token, we should try to login again
     res.writeHead(307, {
@@ -62,6 +74,7 @@ const getProps: GetServerSideProps<{
       authorization: `Bearer ${token.accessToken}`,
       "Google-Analytics-Client-Id": googleAnalyticsId,
     };
+
     const resp = await retryingFetch(
       `${process.env.NEXT_PUBLIC_BIG_BRAIN_URL}/api/dashboard/member_data`,
       {
@@ -112,11 +125,13 @@ const getProps: GetServerSideProps<{
       }
     }
 
+    // Note that the response only includes data for the first MAX_PROJECTS_PER_PAGE projects
     const {
       teams,
       projects,
       deployments,
       optInsToAccept,
+      preferences,
     }: {
       teams: TeamResponse[];
       projects: ProjectDetails[];
@@ -125,6 +140,7 @@ const getProps: GetServerSideProps<{
         optIn: string;
         message: string;
       }[];
+      preferences?: MemberPreferences;
     } = await resp.json();
     const { team, project, deploymentName } = query;
     if (team && !teams.find((t: TeamResponse) => t.slug === team.toString())) {
@@ -167,7 +183,10 @@ const getProps: GetServerSideProps<{
     const initialProjectsByTeam = Object.fromEntries(
       teams.map(({ id: teamId }) => [
         `/teams/${teamId}/projects`,
-        projectsByTeam[teamId] ?? [],
+        {
+          items: projectsByTeam[teamId] ?? [],
+          pagination: { hasMore: false },
+        },
       ]),
     );
 
@@ -185,7 +204,7 @@ const getProps: GetServerSideProps<{
     const initialDeployments = Object.fromEntries(
       projects.map(({ id: projectId }) => [
         `/projects/${projectId}/list_deployments`,
-        deploymentsByProject[projectId] ?? null,
+        deploymentsByProject[projectId] ?? [],
       ]),
     );
 
@@ -194,6 +213,7 @@ const getProps: GetServerSideProps<{
       ...initialProjectsByTeam,
       ...initialIndividualProjects,
       ...initialDeployments,
+      "/preferences": { preferences: preferences ?? {} },
     };
 
     if (optInsToAccept !== undefined) {

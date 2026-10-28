@@ -2,18 +2,15 @@
   "name": "convex-tour-chat-0",
   "version": "0.0.0",
   "scripts": {
-    "dev": "npm-run-all --parallel dev:backend dev:frontend",
-    "build": "tsc && vite build",
-    "dev:backend": "convex dev",
-    "dev:frontend": "vite --open",
-    "predev": "convex dev --run init --until-success"
+    "dev": "convex dev --run init --start 'vite --open'",
+    "build": "tsc && vite build"
   },
   "dependencies": {
     "@faker-js/faker": "^10.0.0",
     "convex": "workspace:*",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "prettier": "^3.8.0"
+    "prettier": "3.8.1"
   },
   "devDependencies": {
     "@types/babel__core": "^7.20.0",
@@ -21,8 +18,7 @@
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
     "@vitejs/plugin-react": "^4.2.1",
-    "npm-run-all2": "^8.0.0",
     "typescript": "~5.0.3",
-    "vite": "^6.4.1"
+    "vite": "^6.4.4"
   }
 }

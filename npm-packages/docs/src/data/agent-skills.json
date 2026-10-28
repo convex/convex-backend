@@ -1,0 +1,136 @@
+{
+  "skills": [
+    {
+      "name": "convex",
+      "description": "Convex is the backend agents get right on the first try: an all-TypeScript reactive platform where the database, server functions, scheduling, file storage, auth, and realtime sync are one type-safe system, every function is a transaction, and `tsc` catches most mistakes before deploy."
+    },
+    {
+      "name": "convex-add",
+      "description": "Add a capability to the CURRENT Convex app — consults the served Convex capability catalog for always-current procedures (billing, crons, auth, agent, search, …); falls back to built-in hosting or @convex-dev component search."
+    },
+    {
+      "name": "convex-advisor",
+      "description": "Read the Convex deployment's 72h insights (read limits, OCC contention), root-cause each event in code, report evidence-backed perf/cost findings with fixes."
+    },
+    {
+      "name": "convex-agent",
+      "description": "Add an AI agent / RAG backend (@convex-dev/agent) to the Convex app."
+    },
+    {
+      "name": "convex-auth",
+      "description": "Add authentication (passkeys/OAuth) to the current Convex app, including the auth.config.ts wiring."
+    },
+    {
+      "name": "convex-authz",
+      "description": "Audit and harden a Convex app's authorization: identity-from-arg impersonation, missing per-document ownership checks, public queries leaking data by a client-supplied id, and writes into a parent/container the caller doesn't own."
+    },
+    {
+      "name": "convex-backup",
+      "description": "Set up Convex backups and run a restore DRILL that proves recovery — snapshot, restore into a throwaway preview, assert the data came back — plus a schedule matched to your RPO and a gated recovery runbook."
+    },
+    {
+      "name": "convex-billing",
+      "description": "Add Stripe billing/payments to the Convex app via @convex-dev/stripe (checkout + webhook + gating)."
+    },
+    {
+      "name": "convex-cost",
+      "description": "Preview Convex spend — rank functions by bytes/documents-read × call-volume from insights, project each cost driver's growth curve, name the cheapest fix; confirm-cost for paid actions."
+    },
+    {
+      "name": "convex-create-component",
+      "description": "Builds reusable Convex components with isolated tables and app-facing APIs."
+    },
+    {
+      "name": "convex-crons",
+      "description": "Add recurring scheduled jobs (crons) to the Convex app."
+    },
+    {
+      "name": "convex-deploy-guard",
+      "description": "Classify + announce the target Convex deployment before any deployment-affecting command; fresh explicit consent for prod actions; session read-only mode."
+    },
+    {
+      "name": "convex-design",
+      "description": "Design and build reactive, type-safe, production-grade backends on Convex."
+    },
+    {
+      "name": "convex-docs",
+      "description": "Pull version-current Convex docs for the version this project uses — pin the installed version, fetch page-as-markdown or check node_modules types, freshness hierarchy — instead of writing a possibly-stale API from memory."
+    },
+    {
+      "name": "convex-domains",
+      "description": "Point a domain you already own at your Convex app (DNS records, custom-domain attach, auth-origin rebind)."
+    },
+    {
+      "name": "convex-env",
+      "description": "Set and wire Convex deployment env vars / secrets for the app."
+    },
+    {
+      "name": "convex-expert",
+      "description": "Convex backend specialist."
+    },
+    {
+      "name": "convex-explain-app",
+      "description": "Explain an existing Convex app — data model + relationships, public vs internal functions, auth/ownership model, components, a request→data flow — read from the schema and function surface."
+    },
+    {
+      "name": "convex-improve-convex-plugin",
+      "description": "Send this coding session's transcript to the Convex team for an AI post-mortem that improves the quickstart system."
+    },
+    {
+      "name": "convex-insights",
+      "description": "Query a running Convex app's logs + health in natural language (official MCP): failures, slow/expensive functions, deploy causality — scoped, evidence-backed, with a dashboard deep link."
+    },
+    {
+      "name": "convex-launch-readiness",
+      "description": "Run every Convex audit (authz, reviewer, advisor, insights) into one scored, deduped readiness report with an ordered fix plan — Lighthouse for your backend."
+    },
+    {
+      "name": "convex-migrate",
+      "description": "Migrate schema + backfill data on a deployed Convex app using @convex-dev/migrations."
+    },
+    {
+      "name": "convex-migrate-rehearse",
+      "description": "Rehearse a live-app schema change + backfill on a snapshot-seeded preview deployment, verify, then promote the proven change to prod with the snapshot as rollback."
+    },
+    {
+      "name": "convex-monitor",
+      "description": "Watch for the next dev/prod error or request in a Convex app and react to it."
+    },
+    {
+      "name": "convex-optimize",
+      "description": "Audit and optimize an existing Convex app: security, scale, upgrades, observability."
+    },
+    {
+      "name": "convex-quickstart",
+      "description": "Get a barebones Convex + web template running from a one-sentence idea."
+    },
+    {
+      "name": "convex-reviewer",
+      "description": "Convex code reviewer — security, auth, validators, performance, and pattern checks for code in a convex/ directory."
+    },
+    {
+      "name": "convex-seed",
+      "description": "Seed or import data into the Convex database."
+    },
+    {
+      "name": "convex-self-heal",
+      "description": "Production error → triaged, root-caused, repaired, and certified (tsc + rehearsal + reproduce-then-gone) fix PR for a human to merge — then confirm the error stops recurring."
+    },
+    {
+      "name": "convex-sentinel",
+      "description": "Set up Sentinel production error capture in your own Convex deployment."
+    },
+    {
+      "name": "convex-suggest",
+      "description": "Suggest the matching Convex component when the user hand-rolls a pattern it already solves (crons, sharded-counter, rate-limiter, storage, search, presence, workflow, RAG, prosemirror-sync)."
+    },
+    {
+      "name": "convex-test",
+      "description": "Generate convex-test tests for the app's Convex functions."
+    },
+    {
+      "name": "convex-verify",
+      "description": "Prove a Convex feature works — seed, drive as multiple mocked users via convex-test, assert behavior including the negative authz cases (wrong user refused, data-scope enforced)."
+    }
+  ]
+}

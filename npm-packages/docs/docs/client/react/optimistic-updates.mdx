@@ -7,8 +7,7 @@ description: "Make your React app more responsive with optimistic UI updates"
 ---
 
 import Simple from "!!raw-loader!@site/../private-demos/snippets/src/optimisticUpdatesSimple.tsx";
-import ComplexTS from "!!raw-loader!@site/../private-demos/snippets/src/optimisticUpdatesComplex.tsx";
-import ComplexJS from "!!raw-loader!@site/../private-demos/snippets/src/optimisticUpdatesComplexJS.jsx";
+import Complex from "!!raw-loader!@site/../private-demos/snippets/src/optimisticUpdatesComplex.tsx";
 
 Even though Convex queries are completely reactive, sometimes you'll want to
 update your UI before the mutation changes propagate back to the client. To
@@ -29,11 +28,7 @@ query results change, and rolled back when a mutation completes.
 Here is how an optimistic update could be added to an `increment` mutation in a
 simple counter app:
 
-<TSAndJSSnippet
-  title="src/IncrementCounter.tsx"
-  sourceTS={Simple}
-  sourceJS={Simple}
-/>
+<Snippet title="src/IncrementCounter.tsx" source={Simple} />
 
 Optimistic updates receive a
 [`localStore`](/api/interfaces/browser.OptimisticLocalStore), a view of the
@@ -47,11 +42,7 @@ higher if it's loaded.
 If we want to add an optimistic update to a multi-channel chat app, that might
 look like:
 
-<TSAndJSSnippet
-  title="src/MessageSender.tsx"
-  sourceTS={ComplexTS}
-  sourceJS={ComplexJS}
-/>
+<Snippet title="src/MessageSender.tsx" source={Complex} />
 
 This optimistic update changes the `api.messages.list` query for the current
 channel to include a new message. The newly created message object should match
@@ -82,9 +73,9 @@ To learn more, check out our API documentation:
 - [`OptimisticLocalStore`](/api/interfaces/browser.OptimisticLocalStore)
 
 If you'd like some hands on experience, try adding optimistic updates to the
-[tutorial app](https://github.com/get-convex/convex-tutorial)! If you do, you
-should notice the app feels snappier — just a little, Convex is pretty fast
-already! — but otherwise works the same.
+[tutorial app](https://github.com/convex/convex-tutorial)! If you do, you should
+notice the app feels snappier — just a little, Convex is pretty fast already!
+— but otherwise works the same.
 
 To explore even further, try inserting a mistake into this update! You should
 see a flicker as the optimistic update is applied and then rolled back.

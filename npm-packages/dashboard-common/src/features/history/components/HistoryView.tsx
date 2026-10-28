@@ -1,5 +1,5 @@
 import { endOfDay, endOfToday, startOfDay } from "date-fns";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useRouter } from "next/router";
 import { useCallback, useContext, useEffect, useState } from "react";
 import { DeploymentEventContent } from "@common/elements/DeploymentEventContent";
@@ -7,7 +7,10 @@ import {
   DateRangePicker,
   useDateFilters,
 } from "@common/elements/DateRangePicker";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import {
+  DeploymentInfoContext,
+  PermissionsContext,
+} from "@common/lib/deploymentContext";
 import {
   DeploymentAuditLogEvent,
   DeploymentAuditLogFilters,
@@ -17,6 +20,7 @@ import { Loading } from "@ui/Loading";
 import { Sheet } from "@ui/Sheet";
 import { PageContent } from "@common/elements/PageContent";
 import { DeploymentPageTitle } from "@common/elements/DeploymentPageTitle";
+import { NoPermissionMessage } from "@common/elements/NoPermissionMessage";
 import { Callout } from "@ui/Callout";
 import { Button } from "@ui/Button";
 import { LocalDevCallout } from "@common/elements/LocalDevCallout";
@@ -26,6 +30,21 @@ const PAGE_SIZE = 10;
 const DISTANCE_FROM_BOTTOM_THRESHOLD_PX = 300;
 
 export function HistoryView() {
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewAuditLog = useIsOperationAllowed("ViewAuditLog");
+
+  if (!canViewAuditLog) {
+    return (
+      <>
+        <DeploymentPageTitle title="History" />
+        <NoPermissionMessage
+          message="You do not have permission to view deployment history in this deployment."
+          missingPermission="deployment:auditLog:view"
+        />
+      </>
+    );
+  }
+
   return (
     <PageContent>
       <DeploymentPageTitle title="History" />
@@ -68,7 +87,7 @@ function History() {
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-4 p-6 py-4">
+    <div className="flex size-full flex-col gap-4 p-6 py-4">
       <h3>Deployment History</h3>
       {auditLogsEnabled ? (
         <>
@@ -101,7 +120,7 @@ function History() {
             <LocalDevCallout
               className="mt-6 flex-col"
               tipText="Tip: Run this to enable the deployment history locally:"
-              command={`cargo run --bin big-brain-tool -- --dev grant-entitlement --team-entitlement audit_log_retention_days --team-id ${team?.id} --reason "local" 90 --for-real`}
+              command={`just big-brain-tool-dev entitlement grant add --team-entitlement audit_log_retention_days --team-id ${team?.id} --reason "local" 90 --for-real`}
             />
           </Sheet>
         </div>
@@ -190,7 +209,6 @@ function EmptyHistory() {
           <Link
             passHref
             href="https://docs.convex.dev/dashboard/deployments/history"
-            className="text-content-link"
             target="_blank"
           >
             Learn more

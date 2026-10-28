@@ -1,4 +1,5 @@
 import { DateRangePicker } from "@common/elements/DateRangePicker";
+import { toDateInputValue } from "@common/lib/format";
 import { subDays, subMonths } from "date-fns";
 
 /**
@@ -12,13 +13,6 @@ export type Period = {
   to: string;
 };
 
-export function isoDateString(date: Date) {
-  const year = date.getFullYear();
-  const month = (date.getMonth() + 1).toString().padStart(2, "0");
-  const day = date.getDate().toString().padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 /**
  * @param dateString e.g. "2023-11-02"
  * @returns e.g. "2023-10-02"
@@ -27,7 +21,7 @@ function monthBefore(dateString: string): string {
   const [year, month, day] = dateString.split("-");
   const date = new Date(Number(year), Number(month) - 1, Number(day));
   date.setMonth(date.getMonth() - 1);
-  return isoDateString(date);
+  return toDateInputValue(date);
 }
 
 function startOfDayUTC(date: string): Date {
@@ -52,10 +46,10 @@ export function UsagePeriodSelector({
   );
   const lastBillingPeriodEnd = startOfDayUTC(currentBillingPeriod.start);
 
-  const today = startOfDayUTC(isoDateString(new Date()));
-  const weekAgo = startOfDayUTC(isoDateString(subDays(today, 7)));
-  const monthAgo = startOfDayUTC(isoDateString(subDays(today, 30)));
-  const quarterAgo = startOfDayUTC(isoDateString(subMonths(today, 3)));
+  const today = startOfDayUTC(toDateInputValue(new Date()));
+  const weekAgo = startOfDayUTC(toDateInputValue(subDays(today, 7)));
+  const monthAgo = startOfDayUTC(toDateInputValue(subDays(today, 30)));
+  const quarterAgo = startOfDayUTC(toDateInputValue(subMonths(today, 3)));
 
   return (
     <DateRangePicker
@@ -113,8 +107,8 @@ export function UsagePeriodSelector({
                   }
                 : {
                     type: "customPeriod",
-                    from: isoDateString(date.from),
-                    to: isoDateString(date.to),
+                    from: toDateInputValue(date.from),
+                    to: toDateInputValue(date.to),
                   },
           );
         }

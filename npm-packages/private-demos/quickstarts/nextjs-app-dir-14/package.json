@@ -1,28 +1,29 @@
 {
-  "name": "next-app-dir",
+  "name": "quickstart-nextjs-app-dir-14",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
-    "@convex-dev/eslint-plugin": "^1.0.0",
-    "@auth0/auth0-react": "^2.0.1",
-    "@tailwindcss/postcss": "^4.1.11",
-    "@types/node": "20.1.0",
-    "@types/react": "18.3.27",
-    "@types/react-dom": "18.3.7",
-    "convex": "file:../../../convex",
-    "eslint": "8.57.1",
-    "eslint-config-next": "14.2.25",
-    "next": "^16.0.0",
-    "postcss": "^8.4.19",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "tailwindcss": "^4.1.11",
-    "typescript": "~5.0.3"
+    "@convex-dev/eslint-plugin": "workspace:*",
+    "@auth0/auth0-react": "2.15.1",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^20",
+    "@eslint/eslintrc": "^3",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
+    "convex": "workspace:*",
+    "eslint": "^9.37.0",
+    "eslint-config-next": "^15.5.4",
+    "next": "^15.5.28",
+    "postcss": "^8.5.18",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.2"
   }
 }

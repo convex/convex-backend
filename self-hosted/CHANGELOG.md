@@ -1,9 +1,9 @@
 # Changelog
 
 Find the latest versions of the `convex-backend` package
-[here](https://github.com/get-convex/convex-backend/pkgs/container/convex-backend)
+[here](https://github.com/convex/convex-backend/pkgs/container/convex-backend)
 and `convex-dashboard` package
-[here](https://github.com/get-convex/convex-backend/pkgs/container/convex-dashboard).
+[here](https://github.com/convex/convex-backend/pkgs/container/convex-dashboard).
 Make sure to use the same version of `convex-backend` and `convex-dashboard`.
 Different versions are not guaranteed to be compatible with one another.
 
@@ -70,14 +70,13 @@ this changelog as frequently. Check `git log` for a detailed listing of changes.
 ## 2025-03-10 `5143fec81f146ca67495c12c6b7a15c5802c37e2`
 
 - Speed up Node actions by 50x. No more cold starts on every request. See
-  [this commit](https://github.com/get-convex/convex-backend/commit/6be386a490909dda5b8fb1c12b6cca25326847c6)
+  [this commit](https://github.com/convex/convex-backend/commit/6be386a490909dda5b8fb1c12b6cca25326847c6)
   for more details.
 
 ## 2025-03-06 `be8a4f397810ce3d04dc3cb32bc81969fe64685a`
 
-- Add R2 compatibility. See
-  https://github.com/get-convex/convex-backend/pull/53.
-  [Docs](https://github.com/get-convex/convex-backend/blob/main/self-hosted/README.md#using-s3-storage)
+- Add R2 compatibility. See https://github.com/convex/convex-backend/pull/53.
+  [Docs](https://github.com/convex/convex-backend/blob/main/self-hosted/README.md#using-s3-storage)
 - Tolerate missing or malformed sourcemaps (eg. from `ai` npm library).
 
 ## 2025-02-26 `161e32648a971fb8ef591e61212f7b9fb7ff4f2c`
@@ -91,7 +90,7 @@ this changelog as frequently. Check `git log` for a detailed listing of changes.
 - Support streaming import. Read more on how to set up streaming import
   [here](https://docs.convex.dev/production/integrations/streaming-import-export#streaming-import)
 - Fix bug in routing to HTTP actions. Read more
-  [here](https://github.com/get-convex/convex-backend/commit/1652ee81d8a01fdeed98b0e4c923a89d1672f8ad).
+  [here](https://github.com/convex/convex-backend/commit/1652ee81d8a01fdeed98b0e4c923a89d1672f8ad).
 
 ## 2025-02-19 `86ae5d34c8164075b66fa0c52beabd19212d8df7`
 

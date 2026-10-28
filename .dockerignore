@@ -11,13 +11,17 @@
 !/rust-toolchain
 !/self-hosted/*
 
+# mise version pins (the image builds read these to install protoc and uv)
+!/mise.toml
+!/mise.lock
+
 # Node/NPM-related includes
 !/.nvmrc
 !/npm-packages*/*
 !/scripts/*
 
 # Never use a build cache for the docker image
-/npm-packages/common/config/rush/build-cache.json
+**/.turbo/
 
 # Re-exclude common build/cache directories that might exist under the included directories above.
 # Docker uses the last matching-pattern for any file.

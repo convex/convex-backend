@@ -9,7 +9,7 @@ use fivetran_common::fivetran_sdk::{
 };
 
 use crate::{
-    api_types::selection::DEFAULT_FIVETRAN_SCHEMA_NAME,
+    conversions::selection::DEFAULT_FIVETRAN_SCHEMA_NAME,
     convex_api::{
         ComponentPath,
         FieldName,
@@ -67,101 +67,4 @@ fn compute_fivetran_table_list(tables: BTreeMap<TableName, Vec<FieldName>>) -> V
                 .collect(),
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use maplit::btreemap;
-
-    use super::*;
-
-    #[test]
-    fn test_fivetran_schema() -> anyhow::Result<()> {
-        let tables_by_component = btreemap! {
-            "".into() => btreemap! {
-                "users".into() => vec![
-                    "_id".into(),
-                    "_creationTime".into(),
-                    "otherField".into(),
-                ],
-            },
-            "crons".into() => btreemap! {
-                "jobs".into() => vec![
-                    "_id".into(),
-                    "_creationTime".into(),
-                    "name".into(),
-                ],
-            },
-        };
-
-        assert_eq!(
-            generate_fivetran_schema(tables_by_component),
-            SchemaList {
-                schemas: vec![
-                    Schema {
-                        name: "app".to_string(),
-                        tables: vec![Table {
-                            name: "users".to_string(),
-                            columns: vec![
-                                Column {
-                                    name: "_id".to_string(),
-                                    r#type: DataType::String as i32,
-                                    primary_key: true,
-                                    params: None,
-                                },
-                                Column {
-                                    name: "_creationTime".to_string(),
-                                    r#type: DataType::UtcDatetime as i32,
-                                    primary_key: false,
-                                    params: None,
-                                },
-                                Column {
-                                    name: "otherField".to_string(),
-                                    r#type: DataType::Unspecified as i32,
-                                    primary_key: false,
-                                    params: None,
-                                },
-                            ],
-                        }],
-                    },
-                    Schema {
-                        name: "crons".to_string(),
-                        tables: vec![Table {
-                            name: "jobs".to_string(),
-                            columns: vec![
-                                Column {
-                                    name: "_id".to_string(),
-                                    r#type: DataType::String as i32,
-                                    primary_key: true,
-                                    params: None,
-                                },
-                                Column {
-                                    name: "_creationTime".to_string(),
-                                    r#type: DataType::UtcDatetime as i32,
-                                    primary_key: false,
-                                    params: None,
-                                },
-                                Column {
-                                    name: "name".to_string(),
-                                    r#type: DataType::Unspecified as i32,
-                                    primary_key: false,
-                                    params: None,
-                                },
-                            ],
-                        }],
-                    },
-                ],
-            },
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_fivetran_schema_name() {
-        assert_eq!(fivetran_schema_name(ComponentPath::root()), "app");
-        assert_eq!(
-            fivetran_schema_name(ComponentPath("myComponent".to_string())),
-            "myComponent"
-        );
-    }
 }

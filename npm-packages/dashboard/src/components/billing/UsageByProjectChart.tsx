@@ -7,13 +7,11 @@ import groupBy from "lodash/groupBy";
 import sumBy from "lodash/sumBy";
 import { TeamResponse } from "generatedApi";
 import { toNumericUTC } from "@common/lib/format";
-import { Bar, Legend, Rectangle } from "recharts";
-import { useProfile } from "api/profile";
+import { Bar, Rectangle, ReferenceArea } from "recharts";
 import { useProjectById } from "api/projects";
 import { UsageNoDataError } from "./TeamUsageError";
 import { QuantityType, formatQuantity } from "./lib/formatQuantity";
 import { DailyChart } from "./DailyChart";
-import { DailyChartDetailView } from "./DailyChartDetailView";
 
 // When there is only a data point, we have to set the bar width manually to make it appear (https://github.com/recharts/recharts/issues/3640).
 // This value has been measured manually on a desktop screen size, but it should also look good in other contexts where there is only one bar.
@@ -44,18 +42,15 @@ function ProjectName({ projectId }: { projectId: number | string }) {
   }
 
   if (isLoading) {
-    // Project is loading
     return (
-      <span className="inline-block h-4 w-32 animate-pulse rounded bg-content-tertiary" />
+      <span className="inline-block h-4 w-32 animate-pulse rounded-sm bg-content-tertiary" />
     );
   }
 
   return project?.name ? (
     project.name
   ) : (
-    <span className="text-content-secondary">
-      Deleted Project ({projectId})
-    </span>
+    <span className="opacity-70">Deleted Project ({projectId})</span>
   );
 }
 
@@ -73,7 +68,7 @@ function ProjectTooltipItem({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <svg className="size-3 flex-shrink-0" viewBox="0 0 50 50" aria-hidden>
+      <svg className="size-3 shrink-0" viewBox="0 0 50 50" aria-hidden>
         <circle cx="25" cy="25" r="25" className={color} />
       </svg>
       <span className="tabular-nums">
@@ -153,94 +148,64 @@ function ProjectChartTooltip({
   );
 }
 
-// Component for rendering a single project legend item
-function ProjectLegendItem({
-  projectId,
-  color,
-  total,
-}: {
-  projectId: number | string;
-  color: string;
-  total: number;
-}) {
-  if (total <= 0) return null;
-
-  return (
-    <span className="flex items-center gap-2">
-      <svg className="w-4 flex-shrink-0" viewBox="0 0 50 50" aria-hidden>
-        <circle cx="25" cy="25" r="25" className={color} />
-      </svg>
-      <span className="max-w-80 truncate">
-        <ProjectName projectId={projectId} />
-      </span>
-    </span>
-  );
-}
-
 // Detail item that includes project ID for lazy loading
 interface ProjectDetailItem {
   projectId: number | string;
   value: number;
+  sortValue?: number;
   color: string;
 }
 
-// Component wrapper to convert project detail items to regular detail items
-function ProjectChartDetailView({
-  date,
-  items,
+// Inline detail row for a project
+function ProjectDetailRow({
+  item,
+  total,
   quantityType,
-  onBack,
-  team,
-  memberId,
 }: {
-  date: number;
-  items: ProjectDetailItem[];
+  item: ProjectDetailItem;
+  total: number;
   quantityType: QuantityType;
-  onBack: () => void;
-  team?: TeamResponse;
-  memberId?: number;
 }) {
-  // Convert ProjectDetailItem[] to DailyChartDetailItem[] by fetching projects
-  const detailItems = items.map((item) => {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    const { project } = useProjectById(
-      item.projectId === "_rest" ? undefined : (item.projectId as number),
-    );
-
-    return {
-      project: item.projectId === "_rest" ? null : (project ?? null),
-      value: item.value,
-      color: item.color,
-    };
-  });
+  const percentage = total > 0 ? (item.value / total) * 100 : 0;
 
   return (
-    <DailyChartDetailView
-      date={date}
-      items={detailItems}
-      quantityType={quantityType}
-      onBack={onBack}
-      team={team}
-      memberId={memberId}
-    />
+    <div className="flex items-center justify-between gap-4 rounded-sm px-2 py-1 text-sm hover:bg-slate-900/5 dark:hover:bg-white/5">
+      <span className="flex min-w-0 items-center gap-2">
+        <span
+          className="size-2.5 shrink-0 rounded-full"
+          style={{
+            backgroundColor: `var(--color-${item.color.replace("fill-", "")})`,
+          }}
+        />
+        <span className="truncate">
+          <ProjectName projectId={item.projectId} />
+        </span>
+      </span>
+      <span className="flex shrink-0 items-center gap-3 tabular-nums">
+        <span>{formatQuantity(item.value, quantityType)}</span>
+        <span className="w-12 text-right opacity-70">
+          {percentage.toFixed(1)}%
+        </span>
+      </span>
+    </div>
   );
 }
 
 export function UsageByProjectChart({
   rows,
   quantityType = "unit",
-  team,
+  isGauge = false,
   selectedDate,
   setSelectedDate,
 }: {
   rows: DailyPerTagMetricsByProject[] | DailyMetricByProject[];
   quantityType?: QuantityType;
+  /** If true, total shows the most recent day's value instead of summing all days */
+  isGauge?: boolean;
   team?: TeamResponse;
   selectedDate: number | null;
   setSelectedDate: (date: number | null) => void;
 }) {
-  const member = useProfile();
-
   const { chartData, projectIds, totalByProject } = useMemo(() => {
     // Helper to get the total value from a row (handles both data types)
     const getRowTotal = (
@@ -311,12 +276,24 @@ export function UsageByProjectChart({
       projectTotals.map((p) => [p.projectId, p.total]),
     );
 
+    // For gauge metrics, compute totals from the most recent day
+    let displayTotals = totals;
+    if (isGauge && filledData.length > 0) {
+      const lastDay = filledData[filledData.length - 1];
+      displayTotals = Object.fromEntries(
+        stackProjectIds.map((projectId) => [
+          projectId,
+          (lastDay[`project_${projectId}`] as number) || 0,
+        ]),
+      );
+    }
+
     return {
       chartData: filledData,
       projectIds: stackProjectIds,
-      totalByProject: totals,
+      totalByProject: displayTotals,
     };
-  }, [rows]);
+  }, [rows, isGauge]);
 
   const colorMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -327,22 +304,37 @@ export function UsageByProjectChart({
     return map;
   }, [projectIds]);
 
-  // Get detail items for selected date
+  // Items for the inline list: show day values when a date is selected, totals otherwise
   const detailItems = useMemo((): ProjectDetailItem[] => {
-    if (selectedDate === null) return [];
-
-    const dataPoint = chartData.find((d) => d.dateNumeric === selectedDate);
-    if (!dataPoint) return [];
+    if (selectedDate !== null) {
+      const dataPoint = chartData.find((d) => d.dateNumeric === selectedDate);
+      if (dataPoint) {
+        return projectIds.map((projectId, index) => {
+          const color = PROJECT_COLORS[index % PROJECT_COLORS.length];
+          return {
+            projectId,
+            value: (dataPoint[`project_${projectId}`] as number) || 0,
+            sortValue: totalByProject[projectId] || 0,
+            color,
+          };
+        });
+      }
+    }
 
     return projectIds.map((projectId, index) => {
       const color = PROJECT_COLORS[index % PROJECT_COLORS.length];
       return {
         projectId,
-        value: (dataPoint[`project_${projectId}`] as number) || 0,
+        value: totalByProject[projectId] || 0,
         color,
       };
     });
-  }, [selectedDate, chartData, projectIds]);
+  }, [selectedDate, chartData, projectIds, totalByProject]);
+
+  const detailTotal = useMemo(
+    () => detailItems.reduce((sum, item) => sum + item.value, 0),
+    [detailItems],
+  );
 
   if (
     !rows.some((row) => {
@@ -356,19 +348,8 @@ export function UsageByProjectChart({
   }
 
   return (
-    <div
-      className={`relative overflow-hidden transition-all duration-300 ${
-        selectedDate !== null ? "h-[32rem]" : "h-56"
-      }`}
-    >
-      {/* Background chart (slides out to left when detail view is shown) */}
-      <div
-        className="absolute inset-0 transition-transform duration-300 ease-in-out"
-        style={{
-          transform:
-            selectedDate !== null ? "translateX(-100%)" : "translateX(0)",
-        }}
-      >
+    <div className="flex flex-col gap-4">
+      <div className="h-56">
         <DailyChart
           data={chartData}
           quantityType={quantityType}
@@ -400,67 +381,58 @@ export function UsageByProjectChart({
                 tabIndex={0}
                 onClick={(data) => {
                   if (typeof data.payload?.dateNumeric === "number") {
-                    setSelectedDate(data.payload.dateNumeric);
+                    setSelectedDate(
+                      data.payload.dateNumeric === selectedDate
+                        ? null
+                        : data.payload.dateNumeric,
+                    );
                   }
                 }}
                 onKeyDown={(data, _idx, event) => {
                   if (event?.key === "Enter") {
                     if (typeof data.payload?.dateNumeric === "number") {
-                      setSelectedDate(data.payload.dateNumeric);
+                      setSelectedDate(
+                        data.payload.dateNumeric === selectedDate
+                          ? null
+                          : data.payload.dateNumeric,
+                      );
                     }
                   }
                 }}
-                shape={(props: any) => <Rectangle {...props} />}
+                shape={(props: any) => {
+                  const { dateNumeric } = props;
+                  const isDimmed =
+                    selectedDate !== null && selectedDate !== dateNumeric;
+
+                  return <Rectangle {...props} opacity={isDimmed ? 0.3 : 1} />;
+                }}
               />
             );
           })}
-          {selectedDate === null && (
-            <Legend
-              content={() => (
-                <div
-                  className="scrollbar flex max-h-20 flex-wrap gap-3 overflow-y-auto"
-                  style={{
-                    paddingLeft: `${quantityType === "actionCompute" ? 92 : 72}px`,
-                  }}
-                >
-                  {projectIds.map((projectId, index) => {
-                    const color = PROJECT_COLORS[index % PROJECT_COLORS.length];
-                    const total = totalByProject[projectId] || 0;
-
-                    return (
-                      <ProjectLegendItem
-                        key={projectId}
-                        projectId={projectId}
-                        color={color}
-                        total={total}
-                      />
-                    );
-                  })}
-                </div>
-              )}
+          {selectedDate !== null && (
+            <ReferenceArea
+              x1={selectedDate - MS_IN_DAY / 2}
+              x2={selectedDate + MS_IN_DAY / 2}
+              fill="currentColor"
+              fillOpacity={0.06}
+              ifOverflow="hidden"
             />
           )}
         </DailyChart>
       </div>
 
-      {/* Detail view (slides in from right) */}
-      <div
-        className="absolute inset-0 transition-transform duration-300 ease-in-out"
-        style={{
-          transform:
-            selectedDate !== null ? "translateX(0)" : "translateX(100%)",
-        }}
-      >
-        {selectedDate !== null && (
-          <ProjectChartDetailView
-            date={selectedDate}
-            items={detailItems}
-            quantityType={quantityType}
-            onBack={() => setSelectedDate(null)}
-            team={team}
-            memberId={member?.id}
-          />
-        )}
+      <div className="flex flex-col gap-1">
+        {detailItems
+          .filter((item) => (item.sortValue ?? item.value) > 0)
+          .sort((a, b) => (b.sortValue ?? b.value) - (a.sortValue ?? a.value))
+          .map((item, index) => (
+            <ProjectDetailRow
+              key={index}
+              item={item}
+              total={detailTotal}
+              quantityType={quantityType}
+            />
+          ))}
       </div>
     </div>
   );

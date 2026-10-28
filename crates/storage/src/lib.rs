@@ -1,4 +1,3 @@
-#![feature(try_blocks)]
 #![feature(try_blocks_heterogeneous)]
 #![feature(coroutines)]
 
@@ -33,14 +32,16 @@ use std::{
         Context,
         Poll,
     },
-    time::Duration,
+    time::{
+        Duration,
+        SystemTime,
+    },
 };
 
 use anyhow::Context as _;
 use async_trait::async_trait;
 use bytes::Bytes;
 use common::{
-    errors::report_error,
     runtime::Runtime,
     try_anyhow,
     types::{
@@ -108,24 +109,6 @@ pub struct StorageGetStream {
 }
 
 impl StorageGetStream {
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn collect_as_bytes(self) -> anyhow::Result<Bytes> {
-        use http_body_util::BodyExt;
-
-        let Self {
-            content_length,
-            stream,
-        } = self;
-        let content = BodyExt::collect(axum::body::Body::from_stream(stream))
-            .await?
-            .to_bytes();
-        anyhow::ensure!(
-            (content_length as usize) == content.len(),
-            "ContentLength mismatch"
-        );
-        Ok(content)
-    }
-
     pub fn into_reader(self) -> IntoAsyncRead<BoxStream<'static, io::Result<Bytes>>> {
         self.stream.into_async_read()
     }
@@ -145,140 +128,6 @@ pub struct ClientDrivenUploadPartToken(pub String);
 
 pub const DOWNLOAD_CHUNK_SIZE: u64 = 8 * (1 << 20);
 pub const MAX_CONCURRENT_CHUNK_DOWNLOADS: usize = 16;
-
-#[cfg(any(test, feature = "testing"))]
-pub mod test_utils {
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-    };
-
-    use anyhow::anyhow;
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use futures::{
-        future,
-        FutureExt,
-    };
-
-    use crate::{
-        BoxFuture,
-        ClientDrivenUploadPartToken,
-        ClientDrivenUploadToken,
-        FullyQualifiedObjectKey,
-        ObjectAttributes,
-        ObjectKey,
-        Storage,
-        StorageCacheKey,
-        StorageGetStream,
-    };
-
-    /// Minimal in-memory Storage useful for tests that only need to return
-    /// object sizes. All mutating operations are unimplemented.
-    #[derive(Clone, Default, Debug)]
-    pub struct FakeStorage {
-        sizes: Arc<HashMap<String, u64>>,
-    }
-
-    impl FakeStorage {
-        pub fn new(sizes: HashMap<String, u64>) -> Self {
-            Self {
-                sizes: Arc::new(sizes),
-            }
-        }
-
-        fn lookup(&self, key: &FullyQualifiedObjectKey) -> Option<ObjectAttributes> {
-            self.sizes
-                .get(key.as_str())
-                .copied()
-                .map(|size| ObjectAttributes { size })
-        }
-    }
-
-    #[async_trait]
-    impl Storage for FakeStorage {
-        async fn start_upload(&self) -> anyhow::Result<Box<crate::BufferedUpload>> {
-            anyhow::bail!("start_upload not implemented for FakeStorage")
-        }
-
-        async fn start_client_driven_upload(&self) -> anyhow::Result<ClientDrivenUploadToken> {
-            anyhow::bail!("start_client_driven_upload not implemented for FakeStorage")
-        }
-
-        async fn upload_part(
-            &self,
-            _token: ClientDrivenUploadToken,
-            _part_number: u16,
-            _part: Bytes,
-        ) -> anyhow::Result<ClientDrivenUploadPartToken> {
-            anyhow::bail!("upload_part not implemented for FakeStorage")
-        }
-
-        async fn finish_client_driven_upload(
-            &self,
-            _token: ClientDrivenUploadToken,
-            _part_tokens: Vec<ClientDrivenUploadPartToken>,
-        ) -> anyhow::Result<ObjectKey> {
-            anyhow::bail!("finish_client_driven_upload not implemented for FakeStorage")
-        }
-
-        async fn signed_url(
-            &self,
-            _key: ObjectKey,
-            _expires_in: std::time::Duration,
-        ) -> anyhow::Result<String> {
-            anyhow::bail!("signed_url not implemented for FakeStorage")
-        }
-
-        async fn presigned_upload_url(
-            &self,
-            _expires_in: std::time::Duration,
-        ) -> anyhow::Result<(ObjectKey, String)> {
-            anyhow::bail!("presigned_upload_url not implemented for FakeStorage")
-        }
-
-        async fn get_fq_object_attributes(
-            &self,
-            key: &FullyQualifiedObjectKey,
-        ) -> anyhow::Result<Option<ObjectAttributes>> {
-            Ok(self.lookup(key))
-        }
-
-        fn get_small_range(
-            &self,
-            _key: &FullyQualifiedObjectKey,
-            _bytes_range: std::ops::Range<u64>,
-        ) -> BoxFuture<'static, anyhow::Result<StorageGetStream>> {
-            future::ready(Err(anyhow!(
-                "get_small_range not implemented for FakeStorage"
-            )))
-            .boxed()
-        }
-
-        fn storage_type_proto(&self) -> pb::searchlight::StorageType {
-            pb::searchlight::StorageType::default()
-        }
-
-        fn cache_key(&self, key: &ObjectKey) -> StorageCacheKey {
-            StorageCacheKey::new(key.to_string())
-        }
-
-        fn fully_qualified_key(&self, key: &ObjectKey) -> FullyQualifiedObjectKey {
-            key.to_string().into()
-        }
-
-        fn test_only_decompose_fully_qualified_key(
-            &self,
-            key: FullyQualifiedObjectKey,
-        ) -> anyhow::Result<ObjectKey> {
-            key.as_str().try_into()
-        }
-
-        async fn delete_object(&self, _key: &ObjectKey) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-}
 
 #[async_trait]
 pub trait Storage: Send + Sync + Debug {
@@ -330,6 +179,17 @@ pub trait Storage: Send + Sync + Debug {
         key: &FullyQualifiedObjectKey,
         bytes_range: Range<u64>,
     ) -> BoxFuture<'static, anyhow::Result<StorageGetStream>>;
+    /// Returns None immediately if the caller should use
+    /// `get_fq_object_attributes` instead. The returned future yields None
+    /// if the object doesn't exist, and yields an InvalidGetRangeError if the
+    /// requested range starts after the object's size.
+    fn get_small_range_and_total_size(
+        &self,
+        _key: &FullyQualifiedObjectKey,
+        _bytes_range: Range<u64>,
+    ) -> Option<BoxFuture<'static, anyhow::Result<Option<(StorageGetStream, u64)>>>> {
+        None
+    }
     fn storage_type_proto(&self) -> pb::searchlight::StorageType;
     /// Return a cache key suitable for the given ObjectKey, even in
     /// a multi-tenant cache.
@@ -343,11 +203,30 @@ pub trait Storage: Send + Sync + Debug {
     ) -> anyhow::Result<ObjectKey>;
     /// Delete the given object.
     async fn delete_object(&self, key: &ObjectKey) -> anyhow::Result<()>;
+
+    /// Upload `bytes` to `key`, overwriting any object already at that key.
+    ///
+    /// This uploads the object in a single request. Objects above a size limit
+    /// can fail. Use `start_upload` for large objects.
+    async fn put_object(&self, key: ObjectKey, bytes: Bytes) -> anyhow::Result<()>;
+
+    /// List all objects whose key begins with `key_prefix`.
+    async fn list_objects(&self, key_prefix: &str) -> anyhow::Result<Vec<ObjectListing>>;
 }
 
 pub struct ObjectAttributes {
     pub size: u64,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObjectListing {
+    pub key: ObjectKey,
+    pub last_modified: SystemTime,
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("Requested get range exceeds object's size")]
+pub struct InvalidGetRangeError;
 
 pub struct SizeAndHash {
     sha256: Sha256,
@@ -744,29 +623,73 @@ impl StorageExt for Arc<dyn Storage> {
         key: &FullyQualifiedObjectKey,
         bytes_range: (std::ops::Bound<u64>, std::ops::Bound<u64>),
     ) -> anyhow::Result<Option<StorageGetStream>> {
-        let Some(attributes) = self.get_fq_object_attributes(key).await? else {
-            return Ok(None);
+        let start_byte = match bytes_range.0 {
+            std::ops::Bound::Included(bound) => bound,
+            std::ops::Bound::Excluded(bound) => bound.saturating_add(1),
+            std::ops::Bound::Unbounded => 0,
+        };
+        let end_byte_bound = match bytes_range.1 {
+            std::ops::Bound::Included(bound) => bound.saturating_add(1),
+            std::ops::Bound::Excluded(bound) => bound,
+            std::ops::Bound::Unbounded => u64::MAX, // this will be corrected later
+        };
+        let prefetch_end = start_byte
+            .saturating_add(DOWNLOAD_CHUNK_SIZE)
+            .min(end_byte_bound);
+        let (first_chunk, total_size) = if start_byte < prefetch_end
+            && let Some(f) = self.get_small_range_and_total_size(key, start_byte..prefetch_end)
+        {
+            // Fetch the first chunk and total size at the same time.
+            // This is faster for small files than calling `get_fq_object_attributes`.
+            match f.await {
+                Ok(Some((first_chunk, total_size))) => (
+                    Some(StorageGetStream {
+                        content_length: first_chunk.content_length,
+                        // wrap the returned stream in a retrying one
+                        stream: Box::pin(stream_object_with_retries(
+                            first_chunk.stream,
+                            self.clone(),
+                            key.clone(),
+                            start_byte..(start_byte + first_chunk.content_length as u64),
+                            STORAGE_GET_RETRIES,
+                        )),
+                    }),
+                    total_size,
+                ),
+                Ok(None) => return Ok(None),
+                // This function's contract is to return only the matching bytes, which is nothing
+                // in this case
+                Err(e) if e.is::<InvalidGetRangeError>() => {
+                    return Ok(Some(StorageGetStream {
+                        content_length: 0,
+                        stream: Box::pin(stream::empty()),
+                    }))
+                },
+                Err(e) => return Err(e),
+            }
+        } else {
+            let Some(attributes) = self.get_fq_object_attributes(key).await? else {
+                return Ok(None);
+            };
+            (None, attributes.size)
         };
         let start_byte = cmp::min(
-            match bytes_range.0 {
-                std::ops::Bound::Included(bound) => bound,
-                std::ops::Bound::Excluded(bound) => bound + 1,
-                std::ops::Bound::Unbounded => 0,
-            },
-            attributes.size,
+            start_byte
+                + first_chunk
+                    .as_ref()
+                    .map_or(0, |chunk| chunk.content_length as u64),
+            total_size,
         );
-        let end_byte_bound = cmp::min(
-            match bytes_range.1 {
-                std::ops::Bound::Included(bound) => bound + 1,
-                std::ops::Bound::Excluded(bound) => bound,
-                std::ops::Bound::Unbounded => attributes.size,
-            },
-            attributes.size,
-        );
-        Ok(Some(self.get_fq_object_exact_range(
-            key,
-            start_byte..end_byte_bound,
-        )))
+        let end_byte_bound = cmp::min(end_byte_bound, total_size);
+        let remaining_bytes = self.get_fq_object_exact_range(key, start_byte..end_byte_bound);
+        if let Some(first_chunk) = first_chunk {
+            Ok(Some(StorageGetStream {
+                content_length: first_chunk.content_length + remaining_bytes.content_length,
+                stream: first_chunk.stream.chain(remaining_bytes.stream).boxed(),
+            }))
+        } else {
+            Ok(Some(remaining_bytes))
+        }
     }
 
     fn get_fq_object_exact_range(
@@ -777,7 +700,13 @@ impl StorageExt for Arc<dyn Storage> {
             end: end_byte_bound,
         }: Range<u64>,
     ) -> StorageGetStream {
-        let num_chunks = 1 + (end_byte_bound - start_byte) / DOWNLOAD_CHUNK_SIZE;
+        if start_byte >= end_byte_bound {
+            return StorageGetStream {
+                content_length: 0,
+                stream: Box::pin(stream::empty()),
+            };
+        }
+        let num_chunks = (end_byte_bound - start_byte).div_ceil(DOWNLOAD_CHUNK_SIZE);
         // A list of futures, each of which resolves to a stream.
         let mut chunk_futures = vec![];
         for idx in 0..num_chunks {
@@ -865,11 +794,13 @@ async fn stream_object_with_retries(
                 return Err(e);
             },
             Err(e) => {
-                let mut toreport = anyhow::anyhow!(e).context(format!(
-                    "failed while reading stream for {key:?}. {retries_remaining} attempts \
-                     remaining"
-                ));
-                report_error(&mut toreport).await;
+                tracing::warn!(
+                    ?key,
+                    retries_remaining,
+                    bytes_yielded,
+                    error = ?e,
+                    "Retrying storage download after stream error"
+                );
                 let new_range =
                     (small_byte_range.start + bytes_yielded as u64)..small_byte_range.end;
                 let output = storage
@@ -880,23 +811,6 @@ async fn stream_object_with_retries(
                 retries_remaining -= 1;
             },
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::ObjectKey;
-
-    #[tokio::test]
-    async fn test_object_key() -> anyhow::Result<()> {
-        assert_eq!(
-            &String::from(ObjectKey::try_from(
-                "folder/name-to_test/9.json".to_owned()
-            )?),
-            "folder/name-to_test/9.json",
-        );
-        assert!(ObjectKey::try_from("folder>name".to_owned()).is_err());
-        Ok(())
     }
 }
 
@@ -999,6 +913,18 @@ impl TryFrom<ClientDrivenUploadToken> for ClientDrivenUpload {
             object_key,
             filepath,
         })
+    }
+}
+
+/// Removes the file backing a `LocalDirStorage` object. An already-absent file
+/// is a success, matching S3 DeleteObject semantics. A missing storage root is
+/// an error: treating it as success would let the caller record a deletion
+/// that never durably happened.
+fn remove_local_object(storage_root: &Path, path: &Path) -> anyhow::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound && storage_root.exists() => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("Failed to delete {}", path.display())),
     }
 }
 
@@ -1186,8 +1112,54 @@ impl<RT: Runtime> Storage for LocalDirStorage<RT> {
     async fn delete_object(&self, key: &ObjectKey) -> anyhow::Result<()> {
         let key = self.filename_for_key(key.clone());
         let path = self.dir.join(key);
-        fs::remove_file(path)?;
+        remove_local_object(&self.dir, &path)
+    }
+
+    async fn put_object(&self, key: ObjectKey, bytes: Bytes) -> anyhow::Result<()> {
+        let filename = self.filename_for_key(key);
+        let filepath = self.dir.join(filename);
+        fs::create_dir_all(filepath.parent().expect("Must have parent")).context(
+            "LocalDirStorage file creation failed. Perhaps the storage object key isn't valid?",
+        )?;
+        let mut file = File::create(filepath)?;
+        file.write_all(&bytes)?;
         Ok(())
+    }
+
+    async fn list_objects(&self, key_prefix: &str) -> anyhow::Result<Vec<ObjectListing>> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, SystemTime)>) -> anyhow::Result<()> {
+            if !dir.exists() {
+                return Ok(());
+            }
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out)?;
+                } else {
+                    out.push((path, entry.metadata()?.modified()?));
+                }
+            }
+            Ok(())
+        }
+
+        let mut files = Vec::new();
+        walk(&self.dir, &mut files)?;
+        let mut objects = Vec::new();
+        for (path, last_modified) in files {
+            let relative = path.strip_prefix(&self.dir)?.to_string_lossy();
+            let Some(key) = relative.strip_suffix(".blob") else {
+                continue;
+            };
+            if !key.starts_with(key_prefix) {
+                continue;
+            }
+            objects.push(ObjectListing {
+                key: ObjectKey::try_from(key)?,
+                last_modified,
+            });
+        }
+        Ok(objects)
     }
 }
 
@@ -1263,317 +1235,5 @@ impl Display for StorageUseCase {
             StorageUseCase::Files => write!(f, "files"),
             StorageUseCase::SearchIndexes => write!(f, "search"),
         }
-    }
-}
-
-#[cfg(test)]
-mod buffered_upload_tests {
-    use std::{
-        pin::Pin,
-        sync::Arc,
-    };
-
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use common::types::ObjectKey;
-    use futures::{
-        Stream,
-        StreamExt,
-        TryStreamExt,
-    };
-    use parking_lot::Mutex;
-    use runtime::{
-        prod::ProdRuntime,
-        testing::TestRuntime,
-    };
-    use tokio::{
-        io::AsyncWriteExt,
-        sync::mpsc,
-    };
-    use tokio_stream::wrappers::ReceiverStream;
-
-    use crate::{
-        BufferedUpload,
-        ChannelWriter,
-        Upload,
-        UploadExt,
-    };
-
-    struct NoopUpload {
-        parts: Arc<Mutex<Vec<Bytes>>>,
-    }
-
-    #[async_trait]
-    impl Upload for NoopUpload {
-        async fn write(&mut self, data: Bytes) -> anyhow::Result<()> {
-            self.parts.lock().push(data);
-            Ok(())
-        }
-
-        async fn try_write_parallel<'a>(
-            &'a mut self,
-            stream: &mut Pin<Box<dyn Stream<Item = anyhow::Result<Bytes>> + Send + 'a>>,
-        ) -> anyhow::Result<()> {
-            while let Some(value) = stream.try_next().await? {
-                self.write(value).await?;
-            }
-            Ok(())
-        }
-
-        async fn abort(self: Box<Self>) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn complete(self: Box<Self>) -> anyhow::Result<common::types::ObjectKey> {
-            Ok(ObjectKey::try_from("asdf")?)
-        }
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_buffered_upload(_rt: ProdRuntime) -> anyhow::Result<()> {
-        let (sender, receiver) = mpsc::channel::<Bytes>(1);
-        // NOTE: data flows from ChannelWriter -> sender -> receiver -> BufferedUpload
-        // -> NoopUpload
-        let parts = Arc::new(Mutex::new(vec![]));
-        let upload = NoopUpload {
-            parts: parts.clone(),
-        };
-        let mut upload: Box<BufferedUpload> = Box::new(BufferedUpload::new(upload, 100, 1000));
-        let uploader = upload.try_write_parallel_and_hash(ReceiverStream::new(receiver).map(Ok));
-        let mut writer = ChannelWriter::new(sender, 10);
-        let write_fut = async move {
-            writer.write_all(b"abcdefghijklmnopqrstuvwxyz").await?;
-            writer.shutdown().await?;
-            drop(writer); // drop closes sender, allowing uploader to complete
-            anyhow::Ok(())
-        };
-        // Regression test: if ChannelWriter::poll_write reserves a new permit in
-        // `sender` each time it's called, then the uploader will deadlock.
-        let _ = futures::try_join!(write_fut, uploader)?;
-        let _ = upload.complete().await?;
-        let parts = parts.lock();
-        assert_eq!(
-            *parts,
-            vec![Bytes::from_static(b"abcdefghijklmnopqrstuvwxyz")]
-        );
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_buffered_upload_max_size(_rt: TestRuntime) -> anyhow::Result<()> {
-        let (sender, receiver) = mpsc::channel::<Bytes>(1);
-        let parts = Arc::new(Mutex::new(vec![]));
-        let upload = NoopUpload {
-            parts: parts.clone(),
-        };
-        let mut upload: Box<BufferedUpload> = Box::new(BufferedUpload::new(upload, 10, 30));
-        let uploader = upload.try_write_parallel_and_hash(ReceiverStream::new(receiver).map(Ok));
-        // Intentionally test case where we write sizes that don't divide evenly
-        // into the min or max size.
-        let mut writer = ChannelWriter::new(sender, 7);
-        let data =
-            b"abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_abcdefghi_";
-        let write_fut = async move {
-            // 80 bytes
-            writer.write_all(data).await?;
-            writer.shutdown().await?;
-            drop(writer); // drop closes sender, allowing uploader to complete
-            anyhow::Ok(())
-        };
-        let _ = futures::try_join!(write_fut, uploader)?;
-        let _ = upload.complete().await?;
-        let parts = parts.lock();
-        let joined_parts: Bytes = parts.iter().flat_map(|p| p.iter().copied()).collect();
-        assert_eq!(joined_parts, Bytes::from_static(data));
-        let lengths: Vec<_> = parts.iter().map(|p| p.len()).collect();
-        // 14 is the first multiple of 7 that's greater than 10
-        // 21 is the first multiple of 7 that's greater than 20
-        // 30 is the maximum size
-        // 15 is the remainder
-        assert_eq!(lengths, vec![14, 21, 30, 15]);
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod local_storage_tests {
-    use std::{
-        fs::File,
-        io::{
-            self,
-            Read,
-        },
-        sync::Arc,
-        time::Duration,
-    };
-
-    use anyhow::{
-        anyhow,
-        Context,
-    };
-    use bytes::Bytes;
-    use common::runtime::testing::TestRuntime;
-    use futures::{
-        stream,
-        StreamExt,
-        TryStreamExt,
-    };
-    use url::Url;
-
-    use super::{
-        stream_object_with_retries,
-        LocalDirStorage,
-        Storage,
-        StorageExt,
-        Upload,
-        DOWNLOAD_CHUNK_SIZE,
-        LOCAL_DIR_MIN_PART_SIZE,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_upload(rt: TestRuntime) -> anyhow::Result<()> {
-        let storage = LocalDirStorage::new(rt)?;
-        let mut test_upload = storage.start_upload().await?;
-        test_upload
-            .write(vec![1; LOCAL_DIR_MIN_PART_SIZE].into())
-            .await?;
-        test_upload.write(vec![2, 3, 4].into()).await?;
-        let _object_key = test_upload.complete().await?;
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_upload_auto(rt: TestRuntime) -> anyhow::Result<()> {
-        let storage = LocalDirStorage::new(rt)?;
-        let mut test_upload = storage.start_upload().await?;
-        test_upload
-            .write(vec![1; LOCAL_DIR_MIN_PART_SIZE].into())
-            .await?;
-        test_upload.write(vec![2, 3, 4].into()).await?;
-        let _object_key = test_upload.complete().await?;
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_abort(rt: TestRuntime) -> anyhow::Result<()> {
-        let storage = LocalDirStorage::new(rt)?;
-        let mut test_upload = storage.start_upload().await?;
-        test_upload
-            .write(vec![1; LOCAL_DIR_MIN_PART_SIZE].into())
-            .await?;
-        test_upload.abort().await?;
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_local_storage(rt: TestRuntime) -> anyhow::Result<()> {
-        let storage: Arc<dyn Storage> = Arc::new(LocalDirStorage::new(rt)?);
-        let mut upload = storage.start_upload().await?;
-        upload.write(Bytes::from_static(b"pinna park")).await?;
-        let key = upload.complete().await?;
-
-        // Get via .get()
-        let contents = storage
-            .get(&key)
-            .await?
-            .context("Not found")?
-            .collect_as_bytes()
-            .await?;
-        assert_eq!(&contents, "pinna park");
-
-        // Get via signed_url
-        let uri = storage.signed_url(key, Duration::from_secs(10)).await?;
-        let mut f = File::open(
-            uri.parse::<Url>()?
-                .to_file_path()
-                .map_err(|()| anyhow!("not a file path?"))?,
-        )?;
-        let mut buf = String::new();
-        f.read_to_string(&mut buf)?;
-        assert_eq!(&buf, "pinna park");
-
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_storage_get_paginated(rt: TestRuntime) -> anyhow::Result<()> {
-        // Test that chunks are stitched together in the right order.
-        let storage: Arc<dyn Storage> = Arc::new(LocalDirStorage::new(rt)?);
-        let mut test_upload = storage.start_upload().await?;
-        let prefix_length = (DOWNLOAD_CHUNK_SIZE * 2) as usize;
-        let suffix_length = (DOWNLOAD_CHUNK_SIZE / 2) as usize;
-        let length = prefix_length + suffix_length;
-        test_upload.write(vec![1; prefix_length].into()).await?;
-        test_upload.write(vec![2; suffix_length].into()).await?;
-        let object_key = test_upload.complete().await?;
-
-        let stream = storage.get(&object_key).await?.unwrap();
-        assert_eq!(stream.content_length, length as i64);
-        let bytes = stream.collect_as_bytes().await?;
-        assert_eq!(bytes.len(), length);
-        assert_eq!(&bytes[..prefix_length], &vec![1; prefix_length]);
-        assert_eq!(&bytes[prefix_length..], &vec![2; suffix_length]);
-
-        let suffix_stream = storage
-            .get_range(
-                &object_key,
-                (
-                    std::ops::Bound::Included(prefix_length as u64),
-                    std::ops::Bound::Excluded(length as u64),
-                ),
-            )
-            .await?
-            .unwrap();
-        assert_eq!(suffix_stream.content_length, suffix_length as i64);
-        let bytes = suffix_stream.collect_as_bytes().await?;
-        assert_eq!(bytes.len(), suffix_length);
-        assert_eq!(&bytes, &vec![2; suffix_length]);
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_storage_get_with_retries(rt: TestRuntime) -> anyhow::Result<()> {
-        // Test that if the first storage range request disconnects after
-        // one chunk, the rest is fetched successfully and everything is
-        // stitched together.
-        let storage: Arc<dyn Storage> = Arc::new(LocalDirStorage::new(rt)?);
-        let mut test_upload = storage.start_upload().await?;
-        test_upload
-            .write(vec![0, 1, 2, 3, 4, 5, 6, 7, 8].into())
-            .await?;
-        let object_key = test_upload.complete().await?;
-        let disconnected_stream = stream::iter(vec![
-            Ok(vec![1, 2, 3].into()),
-            Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                anyhow::anyhow!("err"),
-            )),
-        ])
-        .boxed();
-        let object_key = storage.fully_qualified_key(&object_key);
-        let stream_with_retries = stream_object_with_retries(
-            disconnected_stream,
-            storage.clone(),
-            object_key.clone(),
-            1..8,
-            1,
-        );
-        let results: Vec<_> = stream_with_retries.try_collect().await?;
-        assert_eq!(
-            results,
-            vec![Bytes::from(vec![1, 2, 3]), Bytes::from(vec![4, 5, 6, 7])]
-        );
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_storage_delete(rt: TestRuntime) -> anyhow::Result<()> {
-        let storage: Arc<dyn Storage> = Arc::new(LocalDirStorage::new(rt)?);
-        let test_upload = storage.start_upload().await?;
-        let object_key = test_upload.complete().await?;
-        assert!(storage.get(&object_key).await?.is_some());
-        storage.delete_object(&object_key).await?;
-        assert!(storage.get(&object_key).await?.is_none());
-        Ok(())
     }
 }

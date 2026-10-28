@@ -6,13 +6,13 @@ description: "Insert, update, and remove data from the database"
 
 import Example from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsExample.ts";
 import Constructor from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsConstructor.ts";
-import ArgsWithoutValidationTS from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsArgsWithoutValidation.ts";
-import ArgsWithoutValidationJS from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsArgsWithoutValidationJS.js";
+import ArgsWithoutValidation from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsArgsWithoutValidation.ts";
+
 import ArgsWithValidation from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsArgsWithValidation.ts";
 import Context from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsContext.ts";
 import ContextDB from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsContextDB.ts";
 import Helper from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsHelper.ts";
-import HelperJS from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsHelperJS.js";
+
 import NPM from "!!raw-loader!@site/../private-demos/snippets/convex/mutationsNPM.ts";
 import Call from "!!raw-loader!@site/../private-demos/snippets/src/mutationsCall.tsx";
 
@@ -23,11 +23,7 @@ application.
 This is an example mutation, taking in named arguments, writing data to the
 database and returning a result:
 
-<TSAndJSSnippet
-  sourceTS={Example}
-  sourceJS={Example}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={Example} title="convex/myFunctions.ts" />
 
 Read on to understand how to build mutations yourself.
 
@@ -43,11 +39,7 @@ Queries and mutations can be defined in the same file when using named exports.
 To declare a mutation in Convex use the `mutation` constructor function. Pass it
 an object with a `handler` function, which performs the mutation:
 
-<TSAndJSSnippet
-  sourceTS={Constructor}
-  sourceJS={Constructor}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={Constructor} title="convex/myFunctions.ts" />
 
 Unlike a query, a mutation can but does not have to return a value.
 
@@ -56,11 +48,7 @@ Unlike a query, a mutation can but does not have to return a value.
 Just like queries, mutations accept named arguments, and the argument values are
 accessible as fields of the second parameter of the `handler` function:
 
-<TSAndJSSnippet
-  sourceTS={ArgsWithoutValidationTS}
-  sourceJS={ArgsWithoutValidationJS}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={ArgsWithoutValidation} title="convex/myFunctions.ts" />
 
 Arguments and responses are automatically serialized and deserialized, and you
 can pass and return most value-like JavaScript data to and from your mutation.
@@ -68,11 +56,7 @@ can pass and return most value-like JavaScript data to and from your mutation.
 To both declare the types of arguments and to validate them, add an `args`
 object using `v` validators:
 
-<TSAndJSSnippet
-  sourceTS={ArgsWithValidation}
-  sourceJS={ArgsWithValidation}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={ArgsWithValidation} title="convex/myFunctions.ts" />
 
 See [argument validation](/functions/validation.mdx) for the full list of
 supported types and validators.
@@ -92,14 +76,11 @@ mutation returns `undefined` **it is translated to `null`** on the client.
 ### Mutation context
 
 The `mutation` constructor enables writing data to the database, and other
-Convex features by passing a [MutationCtx](/generated-api/server.md#mutationctx)
-object to the handler function as the first parameter:
+Convex features by passing a
+[MutationCtx](/generated-api/server.mdx#mutationctx) object to the handler
+function as the first parameter:
 
-<TSAndJSSnippet
-  sourceTS={Context}
-  sourceJS={Context}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={Context} title="convex/myFunctions.ts" />
 
 Which part of the mutation context is used depends on what your mutation needs
 to do:
@@ -108,18 +89,14 @@ to do:
   the handler function an `async` function so we can `await` the promise
   returned by `db.insert()`:
 
-  <TSAndJSSnippet
-    sourceTS={ContextDB}
-    sourceJS={ContextDB}
-    title="convex/myFunctions.ts"
-  />
+  <Snippet source={ContextDB} title="convex/myFunctions.ts" />
 
   Read on about [Writing Data](/database/writing-data.mdx).
 
-- To generate upload URLs for storing files use the `storage` field. Read on
-  about [File Storage](/file-storage.mdx).
+- To generate upload URLs and to store, read, and delete files, use the
+  `storage` field. Read on about [File Storage](/file-storage/overview.mdx).
 - To check user authentication use the `auth` field. Read on about
-  [Authentication](/auth.mdx).
+  [Authentication](/auth/overview.mdx).
 - To schedule functions to run in the future, use the `scheduler` field. Read on
   about [Scheduled Functions](/scheduling/scheduled-functions.mdx).
 
@@ -128,18 +105,13 @@ to do:
 <>
   {/* Fragment for Prettier */}
   When you want to split up the code in your mutation or reuse logic across
-  multiple Convex functions you can define and call helper
-  <LanguageSelector verbose /> functions:
+  multiple Convex functions you can define and call helper functions:
 </>
 
-<TSAndJSSnippet
-  sourceTS={Helper}
-  sourceJS={HelperJS}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={Helper} title="convex/myFunctions.ts" />
 
 Mutations can call helpers that take a
-[QueryCtx](/generated-api/server.md#queryctx) as argument, since the mutation
+[QueryCtx](/generated-api/server.mdx#queryctx) as argument, since the mutation
 context can do everything query context can.
 
 You can `export` helpers to use them across multiple files. They will not be
@@ -159,21 +131,21 @@ packages are supported, see
 npm install @faker-js/faker
 ```
 
-<TSAndJSSnippet sourceTS={NPM} sourceJS={NPM} title="convex/myFunctions.ts" />
+<Snippet source={NPM} title="convex/myFunctions.ts" />
 
 ## Calling mutations from clients
 
-To call a mutation from [React](/client/react.mdx) use the
-[`useMutation`](/client/react.mdx#editing-data) hook along with the generated
-[`api`](/generated-api/api) object.
+To call a mutation from [React](/client/react/overview.mdx) use the
+[`useMutation`](/client/react/overview.mdx#editing-data) hook along with the
+generated [`api`](/generated-api/api) object.
 
-<TSAndJSSnippet sourceTS={Call} sourceJS={Call} title="src/myApp.tsx" />
+<Snippet source={Call} title="src/myApp.tsx" />
 
-See the [React](/client/react.mdx) client documentation for all the ways queries
-can be called.
+See the [React](/client/react/overview.mdx) client documentation for all the
+ways queries can be called.
 
-When mutations are called from the [React](/client/react.mdx) or
-[Rust](/client/rust.md) clients, they are executed one at a time in a single,
+When mutations are called from the [React](/client/react/overview.mdx) or
+[Rust](/client/rust.mdx) clients, they are executed one at a time in a single,
 ordered queue. You don't have to worry about mutations editing the database in a
 different order than they were triggered.
 
@@ -197,5 +169,11 @@ cannot call third party APIs. To call third party APIs, use
 Mutations have a limit to the amount of data they can read and write at once to
 guarantee good performance. Learn more in
 [Read/write limit errors](/functions/error-handling/error-handling.mdx#readwrite-limit-errors).
+
+See
+[Write performance and limits](/database/writing-data#write-performance-and-limits)
+for tools to stay within these limits: measuring document sizes, checking
+headroom via `ctx.meta.getTransactionMetrics()`, and bounding nested calls
+(`ctx.runQuery`, `ctx.runMutation`) with a `transactionLimits` option.
 
 For information on other limits, see [Limits](/production/state/limits.mdx).

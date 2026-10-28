@@ -14,6 +14,7 @@ bytes = { workspace = true }
 common = { workspace = true }
 database = { workspace = true }
 errors = { workspace = true }
+fastrace = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
 headers = { workspace = true }
@@ -21,6 +22,7 @@ keybroker = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
 model = { workspace = true }
+parking_lot = { workspace = true }
 storage = { workspace = true }
 tracing = { workspace = true }
 usage_tracking = { workspace = true }
@@ -28,7 +30,7 @@ value = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 events = { workspace = true, features = ["testing"] }

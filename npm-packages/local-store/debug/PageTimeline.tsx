@@ -5,18 +5,14 @@ import {
   PageArguments,
   PageResult,
 } from "../shared/types";
-import {
-  compareKeys,
-  compareValues,
-  maximalKey,
-  minimalKey,
-} from "../shared/compare";
+import { compareKeys, maximalKey, minimalKey } from "../shared/compare";
 import { cursorForSyncObject } from "../server/resolvers";
 import { Key } from "../shared/types";
 import { Divider } from "./Divider";
 import { ChevronRightIcon } from "@radix-ui/react-icons";
 import { ChevronDownIcon } from "@radix-ui/react-icons";
 import { SchemaDefinition } from "convex/server";
+import { compareValues } from "convex/values";
 
 export function PageTimelineOld({ pages }: { pages: any[] }) {
   const [selectedPage, setSelectedPage] = useState<number | null>(null);
@@ -53,7 +49,7 @@ export function PageTimelineOld({ pages }: { pages: any[] }) {
                       isLoading
                         ? "border-2 border-dashed border-gray-300"
                         : "border border-gray-400"
-                    } 
+                    }
                     ${selectedPage === i ? "border-blue-500 border-2" : ""}
                     rounded-lg flex items-center justify-center bg-white
                     hover:border-blue-400 transition-colors`}

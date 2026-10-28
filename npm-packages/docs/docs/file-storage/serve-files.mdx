@@ -6,11 +6,10 @@ description: "Serve files stored in Convex to users"
 ---
 
 import Messages from "!!raw-loader!@site/../demos/file-storage/convex/messages.ts";
-import AppTS from "!!raw-loader!@site/../demos/file-storage/src/App.tsx";
-import AppJS from "!!raw-loader!@site/../private-demos/snippets/src/fileStorageApp.jsx";
+import App from "!!raw-loader!@site/../demos/file-storage/src/App.tsx";
 import Http from "!!raw-loader!@site/../demos/file-storage-with-http/convex/http.ts";
-import HttpAppTS from "!!raw-loader!@site/../demos/file-storage-with-http/src/App.tsx";
-import HttpAppJS from "!!raw-loader!@site/../private-demos/snippets/src/fileStorageWithHttpImage.jsx";
+import HttpApp from "!!raw-loader!@site/../demos/file-storage-with-http/src/App.tsx";
+import FilesInMutations from "!!raw-loader!@site/../private-demos/snippets/convex/filesInMutations.ts";
 
 Files stored in Convex can be served to your users by generating a URL pointing
 to a given file.
@@ -27,46 +26,67 @@ A file URL can be generated from a storage ID by the
 [`MutationCtx`](/api/interfaces/server.GenericMutationCtx), or
 [`ActionCtx`](/api/interfaces/server.GenericActionCtx) object:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/listMessages.ts"
-  sourceTS={Messages}
-  sourceJS={Messages}
+  source={Messages}
   snippet="query"
   highlightPatterns={["storage.getUrl"]}
 />
 
 File URLs can be used in `img` elements to render images:
 
-<TSAndJSSnippet
-  title="src/App.tsx"
-  sourceTS={AppTS}
-  sourceJS={AppJS}
-  snippet="imageComponent"
-/>
+<Snippet title="src/App.tsx" source={App} snippet="imageComponent" />
 
-In your query you can control who gets access to a file when the URL is
-generated. If you need to control access when the file is _served_, you can
-define your own file serving HTTP actions instead.
+<Admonition type="caution" title="Security consideration">
+
+File IDs, like `Id<"_storage">`, are safe to store and pass through Convex
+functions. File URLs are different: **anyone with the URL can access the file**
+without further authentication from your app.
+
+In your query you can control who receives the URL, but once shared, that URL
+can be reused or shared. **To revoke a shared URL, delete the file.** If you
+still need to serve the file, upload it again and share the new URL only with
+authorized users.
+
+If you need to authenticate or authorize access each time the file is requested,
+use [HTTP actions](#serving-files-from-http-actions) and avoid exposing direct
+file URLs to the client.
+
+</Admonition>
 
 ## Serving files from HTTP actions
 
-You can serve files directly from [HTTP actions](/functions/http-actions.mdx).
-An HTTP action will need to take some parameter(s) that can be mapped to a
-storage ID, or a storage ID itself.
+For files requiring access control on every request, serve files directly from
+[HTTP actions](/functions/http-actions.mdx). The HTTP action should authenticate
+the request and check that the caller can access the file before returning
+bytes.
 
-This enables access control at the time the file is served, such as when an
-image is displayed on a website. But note that the HTTP actions response size is
-[currently limited](/functions/http-actions.mdx#limits) to 20MB. For larger
-files you need to use file URLs as described
-[above](#generating-file-urls-in-queries).
+If your permissions live on another app document, use that document's ID in the
+URL, such as a message ID or file document ID. Then look up the storage ID
+server-side after checking permissions.
+
+It is also fine for the client to pass an `Id<"_storage">` to an authenticated
+HTTP action, as long as the action checks that the caller can access that file.
+Do not use the storage ID as the only access check. HTTP action responses are
+[currently limited](/functions/http-actions.mdx#limits) to 100 MiB, so they
+aren't a fit for serving larger files through Convex.
+
+If you need file URLs that automatically expire after some time, consider the
+[Cloudflare R2 component](https://www.convex.dev/components/cloudflare-r2). Use
+Convex File Storage URLs as described [above](#generating-file-urls-in-queries)
+only when bearer URL access is acceptable for your use case.
+
+The small example below passes a storage ID in the URL so it can focus on
+`storage.get()`. For private files, add authentication and authorization checks
+before returning the file.
 
 A file [`Blob`](https://developer.mozilla.org/en-US/docs/Web/API/Blob) object
 can be generated from a storage ID by the
-[`storage.get`](/api/interfaces/server.StorageActionWriter#get) function of the
+[`storage.get`](/api/interfaces/server.StorageWriter#get) function of the
 [`ActionCtx`](/api/interfaces/server.GenericActionCtx) object, which can be
 returned in a `Response`:
 
-<TSAndJSSnippet title="convex/http.ts" sourceTS={Http} sourceJS={Http} snippet="getImage"
+<Snippet title="convex/http.ts" source={Http} snippet="getImage"
 highlightPatterns={["storage.get"]} prefix={
     `import { httpRouter } from "convex/server";
 import { httpAction } from "./\_generated/server";
@@ -79,9 +99,26 @@ const http = httpRouter();\
 The URL of such an action can be used directly in `img` elements to render
 images:
 
-<TSAndJSSnippet
-  title="src/App.tsx"
-  sourceTS={HttpAppTS}
-  sourceJS={HttpAppJS}
-  snippet="getImage"
+<Snippet title="src/App.tsx" source={HttpApp} snippet="getImage" />
+
+## Reading files in mutations
+
+Mutations can also read the contents of a file using
+[`storage.get()`](/api/interfaces/server.StorageWriter#get). For example, a
+mutation can parse an uploaded file and write documents based on its contents in
+a single transaction:
+
+<Snippet
+  title="convex/filesInMutations.ts"
+  source={FilesInMutations}
+  snippet="getInMutation"
+  highlightPatterns={["storage.get"]}
 />
+
+See the [limits](/production/state/limits.mdx#transactions) for the number and
+total size of files a mutation can read, including in mutations it calls with
+`ctx.runMutation`. Reading the same file more than once or reading a file stored
+earlier in the same mutation doesn't count toward the limits again. To read
+larger files, use an [action](/functions/actions.mdx).
+
+Queries can't read file contents.

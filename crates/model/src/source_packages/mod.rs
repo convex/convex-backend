@@ -1,12 +1,12 @@
-use std::sync::LazyLock;
+use std::{
+    collections::HashSet,
+    sync::Arc,
+};
 
 use anyhow::Context;
 use common::{
     components::ComponentId,
-    document::{
-        ParseDocument,
-        ParsedDocument,
-    },
+    document::ParsedDocument,
     runtime::Runtime,
 };
 use database::{
@@ -32,19 +32,13 @@ use crate::{
 pub mod types;
 pub mod upload_download;
 
-pub static SOURCE_PACKAGES_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_source_packages"
-        .parse()
-        .expect("invalid built-in source_packages table")
-});
+pub const SOURCE_PACKAGES_TABLE: TableName = TableName::const_new("_source_packages");
 
 pub struct SourcePackagesTable;
 impl SystemTable for SourcePackagesTable {
     type Metadata = SourcePackage;
 
-    fn table_name() -> &'static TableName {
-        &SOURCE_PACKAGES_TABLE
-    }
+    const TABLE_NAME: TableName = SOURCE_PACKAGES_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -73,18 +67,20 @@ impl<'a, RT: Runtime> SourcePackageModel<'a, RT> {
     pub async fn get(
         &mut self,
         source_package_id: SourcePackageId,
-    ) -> anyhow::Result<ParsedDocument<SourcePackage>> {
-        let id: DeveloperDocumentId = source_package_id.into();
-        let document_id = self.tx.resolve_developer_id(&id, self.namespace)?;
+    ) -> anyhow::Result<Arc<ParsedDocument<SourcePackage>>> {
         self.tx
-            .get(document_id)
+            .get_system::<SourcePackagesTable>(
+                self.namespace,
+                DeveloperDocumentId::from(source_package_id),
+            )
             .await?
-            .context("Couldn't find source package")?
-            .parse()
+            .context("Couldn't find source package")
     }
 
-    pub async fn get_latest(&mut self) -> anyhow::Result<Option<ParsedDocument<SourcePackage>>> {
-        let mut source_package_ids = vec![];
+    pub async fn get_latest(
+        &mut self,
+    ) -> anyhow::Result<Option<Arc<ParsedDocument<SourcePackage>>>> {
+        let mut latest_source_pkg: Option<Arc<ParsedDocument<SourcePackage>>> = None;
 
         // TODO(lee) pass component down, instead of deriving it from the tablet.
         let component = match self.namespace {
@@ -92,23 +88,25 @@ impl<'a, RT: Runtime> SourcePackageModel<'a, RT> {
             TableNamespace::ByComponent(id) => ComponentId::Child(id),
         };
 
+        let mut seen = HashSet::new();
         for module in ModuleModel::new(self.tx)
             .get_all_metadata(component)
             .await?
         {
-            source_package_ids.push(module.source_package_id);
+            if !seen.insert(module.source_package_id) {
+                // Small CPU optimization to avoid going through the transaction fetch machinery
+                continue;
+            }
+            let src_package = self.get(module.source_package_id).await?;
+            if let Some(latest) = &latest_source_pkg {
+                if src_package.creation_time() > latest.creation_time() {
+                    latest_source_pkg = Some(src_package);
+                }
+            } else {
+                latest_source_pkg = Some(src_package);
+            }
         }
 
-        // If there are no modules - then return None
-        let Some(source_package_id) = source_package_ids.pop() else {
-            return Ok(None);
-        };
-
-        // They should all match
-        anyhow::ensure!(source_package_ids
-            .into_iter()
-            .all(|id| &id == &source_package_id));
-
-        Ok(Some(self.get(source_package_id).await?))
+        Ok(latest_source_pkg)
     }
 }

@@ -13,7 +13,12 @@ import {
 import { functionIdentifierValue } from "@common/lib/functions/generateFileTree";
 import { ChartData } from "@common/lib/charts/types";
 
-export type UdfMetric = "invocations" | "errors" | "cacheHits" | "cacheMisses";
+export type UdfMetric =
+  | "invocations"
+  | "errors"
+  | "cacheHits"
+  | "cacheMisses"
+  | "subscriptionInvalidations";
 export type TableMetric = "rowsRead" | "rowsWritten";
 
 type TimeseriesResponse = [SerializedDate, number | null][];
@@ -86,9 +91,29 @@ export async function streamFunctionLogs(
     signal,
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    const text = await response.text();
+    if (response.status === 403) {
+      let message = text;
+      try {
+        const parsed = JSON.parse(text);
+        if (typeof parsed.message === "string") {
+          message = parsed.message;
+        }
+      } catch {
+        // not JSON, use raw text
+      }
+      throw new PermissionDeniedError(message);
+    }
+    throw new Error(text);
   }
   return response.json();
+}
+
+export class PermissionDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermissionDeniedError";
+  }
 }
 
 export function useSchedulerLag() {
@@ -166,9 +191,11 @@ export function useTopKCacheKey(
 
 export function useTopKFunctionMetrics(
   kind: "cacheHitPercentage" | "failurePercentage",
+  k: number = 3,
+  numBuckets: number = 60,
 ) {
   const url = `/api/app_metrics/${kind === "cacheHitPercentage" ? "cache_hit_percentage_top_k" : "failure_percentage_top_k"}`;
-  const cacheKey = useTopKCacheKey(kind);
+  const cacheKey = `${useTopKCacheKey(kind)}?k=${k}&numBuckets=${numBuckets}`;
   const isDisconnected = useDeploymentIsDisconnected();
   const deploymentUrl = useDeploymentUrl();
   const authHeader = useDeploymentAuthHeader();
@@ -178,10 +205,10 @@ export function useTopKFunctionMetrics(
     const windowArgs = {
       start: serializeDate(start),
       end: serializeDate(end),
-      num_buckets: 60,
+      num_buckets: numBuckets,
     };
     const window = JSON.stringify(windowArgs);
-    const params = { window, k: (3).toString() };
+    const params = { window, k: k.toString() };
     const queryString = new URLSearchParams(params).toString();
     return deploymentFetch([
       deploymentUrl,
@@ -196,7 +223,7 @@ export function useTopKFunctionMetrics(
     isDisconnected ? null : cacheKey,
     fetcher,
     {
-      refreshInterval: 2.5 * 1000,
+      refreshInterval: 8 * 1000,
     },
   );
   if (!d) {
@@ -273,6 +300,117 @@ export function useTopKFunctionMetrics(
   };
 }
 
+export type FunctionRateHeatmapRow = {
+  /// Function identifier (or "_rest" for the catch-all aggregate row).
+  key: string;
+  cells: Array<{
+    time: Date;
+    value: number | null;
+  }>;
+};
+
+export type FunctionRateHeatmapData = {
+  rows: FunctionRateHeatmapRow[];
+  bucketStartTimes: Date[];
+};
+
+/**
+ * Fetches per-function rate (cache hit % or failure %) over the last hour for
+ * the heatmap. Returns raw per-bucket values (no fill hack — missing buckets
+ * stay null so the heatmap can render them as empty cells). `numBuckets`
+ * controls the resolution: with the fixed 60-minute window, 12 buckets →
+ * 5-minute cells, 30 → 2-minute, 60 → 1-minute (the backend cap).
+ */
+export function useTopKFunctionRateHeatmap(
+  kind: "cacheHitPercentage" | "failurePercentage",
+  k: number,
+  numBuckets: number = 12,
+): FunctionRateHeatmapData | null | undefined {
+  const route =
+    kind === "cacheHitPercentage"
+      ? "cache_hit_percentage_top_k"
+      : "failure_percentage_top_k";
+  const url = `/api/app_metrics/${route}`;
+  const isDisconnected = useDeploymentIsDisconnected();
+  const deploymentUrl = useDeploymentUrl();
+  const authHeader = useDeploymentAuthHeader();
+  const cacheKey = `${deploymentUrl}${url}?k=${k}&numBuckets=${numBuckets}`;
+
+  const fetcher = async () => {
+    const start = new Date(Date.now() - 60 * 60 * 1000);
+    const end = new Date();
+    const windowArgs = {
+      start: serializeDate(start),
+      end: serializeDate(end),
+      num_buckets: numBuckets,
+    };
+    const params: Record<string, string> = {
+      window: JSON.stringify(windowArgs),
+      k: k.toString(),
+    };
+    const queryString = new URLSearchParams(params).toString();
+    return deploymentFetch([
+      deploymentUrl,
+      `${url}?${queryString}`,
+      authHeader,
+    ]);
+  };
+
+  // `keepPreviousData` means the hook returns the last successful response
+  // while a new fetch (triggered by a changed `k` or `numBuckets` — e.g.
+  // after a container resize) is in flight, so the heatmap keeps rendering
+  // instead of flashing a spinner.
+  const { data: d } = useSWR(isDisconnected ? null : cacheKey, fetcher, {
+    refreshInterval: 8 * 1000,
+    keepPreviousData: true,
+  });
+  if (!d) {
+    return undefined;
+  }
+  const mapFunctionToBuckets = multiResponseToTimeSeries(
+    d as TopKMetricsResponse,
+  );
+  const functions: string[] = [...mapFunctionToBuckets.keys()];
+  if (!functions.length) {
+    return null;
+  }
+
+  const bucketStartTimes: Date[] = mapFunctionToBuckets
+    .get(functions[0])!
+    .map((b: Bucket) => b.time);
+
+  // Forward-fill threshold is shared across functions: once *any* function
+  // has a data point at bucket i, all functions fill later null buckets
+  // (including the current one) with the "idle" value — 100 for cache hit,
+  // 0 for failure. This keeps rows aligned so a quiet function reads as
+  // "idle" rather than "no data" once the deployment is actively running.
+  // Buckets before the first data point from any function stay null.
+  const idleFill = kind === "cacheHitPercentage" ? 100 : 0;
+  const bucketCount = bucketStartTimes.length;
+  let firstDataBucketIdx = -1;
+  for (let i = 0; i < bucketCount; i++) {
+    const anyHasData = functions.some(
+      (f) => typeof mapFunctionToBuckets.get(f)![i].metric === "number",
+    );
+    if (anyHasData) {
+      firstDataBucketIdx = i;
+      break;
+    }
+  }
+  const rows: FunctionRateHeatmapRow[] = functions.map((f) => {
+    const buckets = mapFunctionToBuckets.get(f)!;
+    const cells = buckets.map(({ time, metric }: Bucket, i: number) => {
+      if (typeof metric === "number") return { time, value: metric };
+      const inFilledRegion =
+        firstDataBucketIdx !== -1 && i >= firstDataBucketIdx;
+      return { time, value: inFilledRegion ? idleFill : null };
+    });
+    return { key: identifierForMetricName(f), cells };
+  });
+
+  return { rows, bucketStartTimes };
+}
+
 export function useFunctionCallCountTopK(k: number = 5) {
   const url = "/api/app_metrics/function_call_count_top_k";
   const isDisconnected = useDeploymentIsDisconnected();
@@ -299,7 +437,7 @@ export function useFunctionCallCountTopK(k: number = 5) {
   };
 
   const { data: d } = useSWR(isDisconnected ? null : cacheKey, fetcher, {
-    refreshInterval: 2.5 * 1000,
+    refreshInterval: 8 * 1000,
   });
 
   if (!d) {
@@ -364,6 +502,124 @@ export function useFunctionCallCountTopK(k: number = 5) {
     };
     lineKeys.push(lineKey);
   }
+
+  return {
+    data: hadDataAt > -1 ? data.slice(hadDataAt === 59 ? 58 : hadDataAt) : data,
+    xAxisKey,
+    lineKeys,
+  };
+}
+
+export function useSubscriptionInvalidationsTopK(
+  k: number = 5,
+  opts?: {
+    udfIdentifier: string;
+    componentPath?: string;
+    udfType: UdfType;
+  },
+) {
+  const url = "/api/app_metrics/subscription_invalidations_top_k";
+  const isDisconnected = useDeploymentIsDisconnected();
+  const deploymentUrl = useDeploymentUrl();
+  const authHeader = useDeploymentAuthHeader();
+  const cacheKey = `${deploymentUrl}${url}?k=${k}${opts ? `&path=${opts.udfIdentifier}` : ""}`;
+
+  const fetcher = async () => {
+    const start = new Date(Date.now() - 60 * 60 * 1000);
+    const end = new Date();
+    const windowArgs = {
+      start: serializeDate(start),
+      end: serializeDate(end),
+      num_buckets: 60,
+    };
+    const params: Record<string, string> = {
+      window: JSON.stringify(windowArgs),
+      k: k.toString(),
+    };
+    if (opts) {
+      params.udfPath = opts.udfIdentifier;
+      params.udfType = opts.udfType;
+      if (opts.componentPath) {
+        params.componentPath = opts.componentPath;
+      }
+    }
+    const queryString = new URLSearchParams(params).toString();
+    return deploymentFetch([
+      deploymentUrl,
+      `${url}?${queryString}`,
+      authHeader,
+    ]);
+  };
+
+  const { data: d } = useSWR(isDisconnected ? null : cacheKey, fetcher, {
+    refreshInterval: 8 * 1000,
+  });
+
+  return useTopKChartData(d as TopKMetricsResponse | undefined);
+}
+
+function useTopKChartData(d: TopKMetricsResponse | undefined) {
+  if (!d) {
+    return undefined;
+  }
+
+  const mapFunctionToBuckets = multiResponseToTimeSeries(d);
+  const data = [];
+  const lineKeys = [];
+  const functions: string[] = [...mapFunctionToBuckets.keys()].sort((a, b) =>
+    a === "_rest" ? 1 : b === "_rest" ? -1 : 0,
+  );
+  const xAxisKey = "time";
+
+  if (!mapFunctionToBuckets || !functions.length) {
+    return null;
+  }
+
+  let hadDataAt = -1;
+  for (const [i, bucket] of mapFunctionToBuckets.get(functions[0])!.entries()) {
+    const dataPoint: any = {};
+    dataPoint[xAxisKey] = format(bucket.time, "h:mm a");
+    for (const f of functions) {
+      const { metric } = mapFunctionToBuckets.get(f)![i];
+      if (hadDataAt === -1) {
+        hadDataAt = metric !== null ? i : hadDataAt;
+      }
+      dataPoint[f] = metric ?? (hadDataAt > -1 ? 0 : null);
+    }
+    data.push(dataPoint);
+  }
+
+  const colorForFunction = new Map<string, string>();
+  for (const f of functions) {
+    if (f === "_rest") {
+      colorForFunction.set(f, restColor);
+      continue;
+    }
+
+    const colorIndex =
+      [...f].reduce((acc, char) => acc + char.charCodeAt(0), 0) %
+      lineColors.length;
+    let color = lineColors[colorIndex];
+    let attempts = 0;
+    while (
+      [...colorForFunction.values()].includes(color) &&
+      attempts < lineColors.length
+    ) {
+      attempts++;
+      color = lineColors[(colorIndex + attempts) % lineColors.length];
+    }
+    colorForFunction.set(f, color);
+  }
+
+  for (const f of functions) {
+    const lineKey = {
+      key: f,
+      name: f,
+      color: colorForFunction.get(f)!,
+    };
+    lineKeys.push(lineKey);
+  }
+  lineKeys.sort((a, b) => (a.key === "_rest" ? 1 : b.key === "_rest" ? -1 : 0));
 
   return {
     data: hadDataAt > -1 ? data.slice(hadDataAt === 59 ? 58 : hadDataAt) : data,
@@ -570,7 +826,7 @@ export function useFunctionConcurrency(): {
   };
 
   const { data: responseData } = useSWR(isDisconnected ? null : url, fetcher, {
-    refreshInterval: 2.5 * 1000,
+    refreshInterval: 8 * 1000,
   });
 
   if (!responseData) {
@@ -626,10 +882,20 @@ export function useFunctionConcurrency(): {
       data.push(dataPoint);
     }
 
+    const functionTypeColors: Record<string, string> = {
+      Queries: "var(--chart-line-3)",
+      Mutations: "var(--chart-line-2)",
+      Actions: "var(--chart-line-1)",
+      "Actions (Node)": "var(--chart-line-5)",
+      "HTTP Actions": "var(--chart-line-6)",
+    };
+
     const colorForFunction = new Map<string, string>();
     for (const [index, functionType] of functionTypes.entries()) {
-      const colorIndex = index % lineColors.length;
-      colorForFunction.set(functionType, lineColors[colorIndex]);
+      const color =
+        functionTypeColors[functionType] ??
+        lineColors[index % lineColors.length];
+      colorForFunction.set(functionType, color);
     }
 
     for (const functionType of functionTypes) {

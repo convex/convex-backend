@@ -5,6 +5,7 @@ use std::sync::{
     LazyLock,
 };
 
+use anyhow::Context as _;
 use common::{
     document::{
         ParsedDocument,
@@ -24,41 +25,33 @@ use crate::{
         SystemIndex,
         SystemTable,
     },
-    SchemaValidationProgressMetadata,
+    SchemaValidationProgress,
     SystemMetadataModel,
     Transaction,
 };
 
-pub static SCHEMA_VALIDATION_PROGRESS_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_schema_validation_progress"
-        .parse()
-        .expect("Invalid built-in _schema_validation_progress table")
-});
-
-pub static SCHEMA_VALIDATION_PROGRESS_BY_SCHEMA_ID: LazyLock<
+pub const SCHEMA_VALIDATION_PROGRESS_TABLE: TableName =
+    TableName::const_new("_schema_validation_progress");
+pub static SCHEMA_VALIDATION_PROGRESS_BY_VALIDATION_ID: LazyLock<
     SystemIndex<SchemaValidationProgressTable>,
 > = LazyLock::new(|| {
     SystemIndex::new(
-        "by_schema_id",
-        [&SCHEMA_ID_FIELD, &CREATION_TIME_FIELD_PATH],
+        "by_validation_id",
+        [&VALIDATION_ID_FIELD, &CREATION_TIME_FIELD_PATH],
     )
     .unwrap()
 });
-
-static SCHEMA_ID_FIELD: LazyLock<FieldPath> =
-    LazyLock::new(|| "schemaId".parse().expect("invalid schemaId field"));
+static VALIDATION_ID_FIELD: LazyLock<FieldPath> =
+    LazyLock::new(|| "validationId".parse().expect("invalid validationId field"));
 
 pub struct SchemaValidationProgressTable;
-
 impl SystemTable for SchemaValidationProgressTable {
-    type Metadata = types::SchemaValidationProgressMetadata;
+    type Metadata = SchemaValidationProgress;
 
-    fn table_name() -> &'static TableName {
-        &SCHEMA_VALIDATION_PROGRESS_TABLE
-    }
+    const TABLE_NAME: TableName = SCHEMA_VALIDATION_PROGRESS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
-        vec![SCHEMA_VALIDATION_PROGRESS_BY_SCHEMA_ID.clone()]
+        vec![SCHEMA_VALIDATION_PROGRESS_BY_VALIDATION_ID.clone()]
     }
 }
 
@@ -66,83 +59,94 @@ pub struct SchemaValidationProgressModel<'a, RT: Runtime> {
     tx: &'a mut Transaction<RT>,
     namespace: TableNamespace,
 }
-
 impl<'a, RT: Runtime> SchemaValidationProgressModel<'a, RT> {
     pub fn new(tx: &'a mut Transaction<RT>, namespace: TableNamespace) -> Self {
         Self { tx, namespace }
     }
 
-    pub async fn existing_schema_validation_progress(
+    pub async fn get(
         &mut self,
-        schema_id: ResolvedDocumentId,
-    ) -> anyhow::Result<Option<Arc<ParsedDocument<SchemaValidationProgressMetadata>>>> {
-        self.tx
-            .query_system(self.namespace, &*SCHEMA_VALIDATION_PROGRESS_BY_SCHEMA_ID)?
-            .eq(&[schema_id.developer_id.encode_into(&mut Default::default())])?
+        validation_id: ResolvedDocumentId,
+    ) -> anyhow::Result<Option<ParsedDocument<SchemaValidationProgress>>> {
+        Ok(self
+            .tx
+            .query_system(
+                self.namespace,
+                &*SCHEMA_VALIDATION_PROGRESS_BY_VALIDATION_ID,
+            )?
+            .eq(&[validation_id
+                .developer_id
+                .encode_into(&mut Default::default())])?
             .unique()
-            .await
+            .await?
+            .map(Arc::unwrap_or_clone))
     }
 
-    pub async fn initialize_schema_validation_progress(
+    pub async fn must_get(
         &mut self,
-        schema_id: ResolvedDocumentId,
-        total_docs: Option<u64>,
-    ) -> anyhow::Result<ResolvedDocumentId> {
-        let maybe_existing_metadata = self.existing_schema_validation_progress(schema_id).await?;
-        let mut system_model = SystemMetadataModel::new(self.tx, self.namespace);
-        let new_metadata = SchemaValidationProgressMetadata {
-            schema_id: schema_id.developer_id,
-            total_docs,
-            num_docs_validated: 0,
-        };
-        if let Some(existing_metadata) = maybe_existing_metadata {
-            system_model
-                .replace(existing_metadata.id(), new_metadata.try_into()?)
-                .await?;
-            Ok(existing_metadata.id())
-        } else {
-            system_model
-                .insert(&SCHEMA_VALIDATION_PROGRESS_TABLE, new_metadata.try_into()?)
-                .await
-        }
+        validation_id: ResolvedDocumentId,
+    ) -> anyhow::Result<ParsedDocument<SchemaValidationProgress>> {
+        self.get(validation_id)
+            .await?
+            .context("Validation attempt is missing its progress")
     }
 
-    /// Update the schema validation progress for a schema, adding
-    /// `num_docs_validated` to the existing progress.
-    /// Returns false if there is no existing progress metadata to update.
-    pub async fn update_schema_validation_progress(
+    pub(crate) async fn create(
         &mut self,
-        schema_id: ResolvedDocumentId,
+        validation_id: ResolvedDocumentId,
         num_docs_validated: u64,
-        // Only used if total_docs is missing
         total_docs: Option<u64>,
-    ) -> anyhow::Result<bool> {
-        let maybe_existing_metadata = self.existing_schema_validation_progress(schema_id).await?;
-        let mut system_model = SystemMetadataModel::new(self.tx, self.namespace);
-        let Some(existing_metadata) = maybe_existing_metadata else {
-            return Ok(false);
-        };
-
-        let num_docs_validated = existing_metadata.num_docs_validated + num_docs_validated;
-        let new_metadata = SchemaValidationProgressMetadata {
-            schema_id: schema_id.developer_id,
-            total_docs: existing_metadata.total_docs.or(total_docs),
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.get(validation_id).await?.is_none(),
+            "Validation attempt {validation_id} already has progress"
+        );
+        let metadata = SchemaValidationProgress {
+            validation_id: validation_id.developer_id,
             num_docs_validated,
+            total_docs,
         };
-        system_model
-            .replace(existing_metadata.id(), new_metadata.try_into()?)
+        SystemMetadataModel::new(self.tx, self.namespace)
+            .insert(&SCHEMA_VALIDATION_PROGRESS_TABLE, metadata.try_into()?)
             .await?;
-        Ok(true)
+        Ok(())
     }
 
-    pub async fn delete_schema_validation_progress(
+    pub(crate) async fn reset(
         &mut self,
-        schema_id: ResolvedDocumentId,
+        validation_id: ResolvedDocumentId,
+        total_docs: Option<u64>,
     ) -> anyhow::Result<()> {
-        if let Some(existing_metadata) = self.existing_schema_validation_progress(schema_id).await?
-        {
-            SystemMetadataModel::new_global(self.tx)
-                .delete(existing_metadata.id())
+        let doc = self.must_get(validation_id).await?;
+        let (id, mut metadata) = doc.into_id_and_value();
+        metadata.num_docs_validated = 0;
+        metadata.total_docs = total_docs;
+        SystemMetadataModel::new(self.tx, self.namespace)
+            .replace(id, metadata.try_into()?)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn record(
+        &mut self,
+        validation_id: ResolvedDocumentId,
+        count: u64,
+        total_docs: Option<u64>,
+    ) -> anyhow::Result<()> {
+        let doc = self.must_get(validation_id).await?;
+        let (id, mut metadata) = doc.into_id_and_value();
+        metadata.num_docs_validated += count;
+        metadata.total_docs = metadata.total_docs.or(total_docs);
+        SystemMetadataModel::new(self.tx, self.namespace)
+            .replace(id, metadata.try_into()?)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn delete(&mut self, validation_id: ResolvedDocumentId) -> anyhow::Result<()> {
+        if let Some(doc) = self.get(validation_id).await? {
+            SystemMetadataModel::new(self.tx, self.namespace)
+                .delete(doc.id())
                 .await?;
         }
         Ok(())

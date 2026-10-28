@@ -1,9 +1,9 @@
 import { useQuery } from "convex/react";
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
 import udfs from "@common/udfs";
 import { Module } from "system-udfs/convex/_system/frontend/common";
-import { useInvalidateSourceCode } from "@common/lib/deploymentApi";
 import { ComponentId, useNents } from "@common/lib/useNents";
+import { PermissionsContext } from "@common/lib/deploymentContext";
 
 export function useListModules(): Map<string, Module> | undefined {
   const { selectedNent } = useNents();
@@ -18,11 +18,16 @@ export function useListModules(): Map<string, Module> | undefined {
 export function useListModulesAllNents():
   | Map<ComponentId | null, Map<string, Module>>
   | undefined {
-  const rawModules = useQuery(udfs.modules.listForAllComponents);
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewData = useIsOperationAllowed("ViewData");
+  const rawModulesOrSkipped = useQuery(
+    udfs.modules.listForAllComponents,
+    canViewData ? {} : "skip",
+  );
 
-  const invalidateSourceCode = useInvalidateSourceCode();
   const allModules: Map<ComponentId | null, Map<string, Module>> | undefined =
     useMemo(() => {
+      const rawModules = canViewData ? rawModulesOrSkipped : [];
       if (rawModules === undefined) {
         return undefined;
       }
@@ -33,14 +38,10 @@ export function useListModulesAllNents():
           componentId as ComponentId | null,
           new Map(modules as [string, Module][]),
         );
-
-        for (const [path, _] of modules) {
-          void invalidateSourceCode(componentId, path);
-        }
       }
 
       return allModulesMap;
-    }, [invalidateSourceCode, rawModules]);
+    }, [canViewData, rawModulesOrSkipped]);
 
   return allModules;
 }

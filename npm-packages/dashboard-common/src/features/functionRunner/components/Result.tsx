@@ -151,6 +151,7 @@ function LiveLogs({
   const logsConnectivityCallbacks = useRef({
     onReconnected: () => {},
     onDisconnected: () => {},
+    onPermissionDenied: () => {},
   });
   const logs = useLogsForSingleFunction(
     logsConnectivityCallbacks.current,

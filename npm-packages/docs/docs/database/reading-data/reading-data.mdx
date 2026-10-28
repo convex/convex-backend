@@ -7,8 +7,7 @@ description: "Query and read data from Convex database tables"
 import getExample from "!!raw-loader!@site/../private-demos/snippets/convex/readingDataDbGet.ts";
 import queryExample from "!!raw-loader!@site/../private-demos/snippets/convex/readingDataDbQuery.ts";
 import averageExample from "!!raw-loader!@site/../private-demos/snippets/convex/readingDataAverage.ts";
-import groupByExampleTS from "!!raw-loader!@site/../private-demos/snippets/convex/readingDataGroupByTS.ts";
-import groupByExampleJS from "!!raw-loader!@site/../private-demos/snippets/convex/readingDataGroupByJS.js";
+import groupByExample from "!!raw-loader!@site/../private-demos/snippets/convex/readingDataGroupByTS.ts";
 import joinExample from "!!raw-loader!@site/../private-demos/snippets/convex/readingDataJoin.ts";
 
 [Query](/functions/query-functions.mdx) and
@@ -20,10 +19,9 @@ database tables using _document ids_ and _document queries_.
 Given a single document's id you can read its data with the
 [`db.get`](/api/interfaces/server.GenericDatabaseReader#get) method:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={getExample}
-  sourceJS={getExample}
+  source={getExample}
   highlightPatterns={["db.get"]}
 />
 
@@ -35,10 +33,9 @@ sure you are not exposing data from tables other than the ones you intended.
 Document queries always begin by choosing the table to query with the
 [`db.query`](/api/interfaces/server.GenericDatabaseReader#query) method:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.ts"
-  sourceTS={queryExample}
-  sourceJS={queryExample}
+  source={queryExample}
   highlightPatterns={["db.query"]}
 />
 
@@ -104,7 +101,7 @@ Convex approach leads to fewer surprises in the long run.
 
 You can create an index across multiple fields at once, query a specific range
 of data, and change the order of your query result.
-[Read the complete index documentation](/database/reading-data/indexes/indexes.md)
+[Read the complete index documentation](/database/reading-data/indexes/indexes.mdx)
 to learn more.
 
 Convex also supports a slower filtering mechanism that effectively loops through
@@ -116,7 +113,7 @@ index query further. You can read more about filters
 ## Ordering
 
 By default Convex always returns documents ordered by
-[`_creationTime`](/database/types.md#system-fields).
+[`_creationTime`](/database/types.mdx#system-fields).
 
 You can use [`.order("asc" | "desc")`](/api/interfaces/server.Query#order) to
 pick whether the order is ascending or descending. If the order isn't specified,
@@ -145,9 +142,9 @@ const topTenMostLikedMessages = recentMessages
 ```
 
 For document queries that return larger numbers of documents, you'll want to use
-an [index](/database/reading-data/indexes/indexes.md) to improve the
+an [index](/database/reading-data/indexes/indexes.mdx) to improve the
 performance. Document queries that use indexes will be
-[ordered based on the columns in the index](/database/reading-data/indexes/indexes.md#sorting-with-indexes)
+[ordered based on the columns in the index](/database/reading-data/indexes/indexes.mdx#sorting-with-indexes)
 and can avoid slow table scans.
 
 ```ts
@@ -159,11 +156,11 @@ const messages = await ctx.db
   .take(20);
 ```
 
-See [Limits](/database/reading-data/indexes/indexes.md#limits) for details.
+See [Limits](/database/reading-data/indexes/indexes.mdx#limits) for details.
 
 ### Ordering of different types of values
 
-A single field can have values of any [Convex type](/database/types.md). When
+A single field can have values of any [Convex type](/database/types.mdx). When
 there are values of different types in an indexed field, their ascending order
 is as follows:
 
@@ -235,11 +232,7 @@ the results will be consistent.
 
 Table join might look like:
 
-<TSAndJSSnippet
-  title="convex/events.ts"
-  sourceTS={joinExample}
-  sourceJS={joinExample}
-/>
+<Snippet title="convex/events.ts" source={joinExample} />
 
 Note: by using Promise.all, the user documents will be fetched from the database
 in parallel, making join patterns like this very fast.
@@ -248,11 +241,7 @@ in parallel, making join patterns like this very fast.
 
 Here's an example of computing an average:
 
-<TSAndJSSnippet
-  title="convex/grades.ts"
-  sourceTS={averageExample}
-  sourceJS={averageExample}
-/>
+<Snippet title="convex/grades.ts" source={averageExample} />
 
 <Admonition type="info" title="Computing aggregates over large sets of values">
 
@@ -271,11 +260,7 @@ without looping through the whole table.
 
 Here's an example of grouping and counting:
 
-<TSAndJSSnippet
-  title="convex/grades.ts"
-  sourceTS={groupByExampleTS}
-  sourceJS={groupByExampleJS}
-/>
+<Snippet title="convex/grades.ts" source={groupByExample} />
 
 As with the previous example, we use `.collect()` with the assumption that a
 given student won't have more grades than we can fetch in one query. See
@@ -285,6 +270,6 @@ given student won't have more grades than we can fetch in one query. See
 ## Explore the syntax on the dashboard
 
 You can try out the syntax described above directly from the dashboard by
-[writing a custom test query](/dashboard/deployments/data.md#writing-custom-queries).
+[writing a custom test query](/dashboard/deployments/data.mdx#writing-custom-queries).
 
 <StackPosts query="streams sql query data" />

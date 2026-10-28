@@ -1,5 +1,9 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { refreshSession, createSessionCookie } from "server/workos";
+import {
+  refreshSession,
+  createSessionCookie,
+  WorkOSUnavailableError,
+} from "server/workos";
 
 export default async function handler(
   req: NextApiRequest,
@@ -21,6 +25,13 @@ export default async function handler(
     res.setHeader("Set-Cookie", createSessionCookie(result.sealedSession));
     res.status(200).json({ accessToken: result.accessToken });
   } catch (error: any) {
+    if (error instanceof WorkOSUnavailableError) {
+      console.error("WorkOS unavailable while refreshing session:", error);
+      return res.status(503).json({
+        error: "Authentication service unavailable",
+        code: "AuthServiceUnavailable",
+      });
+    }
     console.error("Error refreshing session:", error);
     res.status(500).json({ error: error.message || "Internal server error" });
   }

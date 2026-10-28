@@ -71,7 +71,6 @@ pub type QueryFingerprint = Vec<u8>;
 /// A `CursorPosition` is a position within query results used to implement
 /// `paginate()`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum CursorPosition {
     After(IndexKeyBytes),
     End,
@@ -87,7 +86,6 @@ impl HeapSize for CursorPosition {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct Cursor {
     pub position: CursorPosition,
 
@@ -145,8 +143,7 @@ impl HeapSize for Cursor {
     }
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord, Debug)]
 /// The order to scan a range.
 pub enum Order {
     /// Ascending order, e.g. 1, 2, 3.
@@ -270,23 +267,23 @@ impl IndexRange {
         };
 
         let start = match start {
-            Bound::Unbounded => BinaryKey::from(values_to_bytes::<false>(&prefix)),
+            Bound::Unbounded => BinaryKey::from(values_to_bytes(&prefix)),
             Bound::Included(value) => {
                 let mut bound = prefix.clone();
                 bound.push(value.0);
-                BinaryKey::from(values_to_bytes::<false>(&bound))
+                BinaryKey::from(values_to_bytes(&bound))
             },
             Bound::Excluded(value) => {
                 let mut bound = prefix.clone();
                 bound.push(value.0);
-                BinaryKey::from(values_to_bytes::<false>(&bound))
+                BinaryKey::from(values_to_bytes(&bound))
                     .increment()
                     .ok_or_else(|| anyhow::anyhow!("{bound:?} should have an increment"))?
             },
         };
         let end = match end {
             Bound::Unbounded => {
-                let key = BinaryKey::from(values_to_bytes::<false>(&prefix));
+                let key = BinaryKey::from(values_to_bytes(&prefix));
                 if prefix.len() == indexed_fields.iter_with_id().count() {
                     // Special case: if all fields including the implicit _id field are specified,
                     // we can use a tighter bound
@@ -298,7 +295,7 @@ impl IndexRange {
             Bound::Included(value) => {
                 let mut bound = prefix;
                 bound.push(value.0);
-                let key = BinaryKey::from(values_to_bytes::<false>(&bound));
+                let key = BinaryKey::from(values_to_bytes(&bound));
                 if bound.len() == indexed_fields.iter_with_id().count() {
                     End::included(&key)
                 } else {
@@ -308,7 +305,7 @@ impl IndexRange {
             Bound::Excluded(value) => {
                 let mut bound = prefix;
                 bound.push(value.0);
-                End::Excluded(BinaryKey::from(values_to_bytes::<false>(&bound)))
+                End::Excluded(BinaryKey::from(values_to_bytes(&bound)))
             },
         };
         Ok(Interval {
@@ -498,7 +495,6 @@ pub enum IndexRangeExpression {
 
 /// A table to scan
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct FullTableScan {
     /// The name of the table to scan
     pub table_name: TableName,
@@ -509,7 +505,6 @@ pub struct FullTableScan {
 
 /// Version of full-text search to use
 #[derive(Debug, Copy, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum SearchVersion {
     V1,
     /// Prototype, experimental, don't use in production!
@@ -569,7 +564,6 @@ impl Search {
 /// `InternalSearch` is used within transaction and searchlight and uses
 /// TableIds.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct InternalSearch {
     /// The search index being queried.
     pub index_name: GenericIndexName<TabletId>,
@@ -600,13 +594,12 @@ const UNDEFINED_TAG: u8 = 0x1;
 /// A bytes representation of a value in a document that we filter on with a
 /// must clause.
 #[derive(Debug, Clone, PartialEq, Eq, From, Into)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct FilterValue(Vec<u8>);
 
 impl FilterValue {
     pub fn from_search_value(value: Option<&ConvexValue>) -> Self {
         let sort_key = match value {
-            Some(value) => value.sort_key::<false>(),
+            Some(value) => value.sort_key(),
             None => vec![UNDEFINED_TAG],
         };
         if sort_key.len() < MAX_FILTER_FIELD_LENGTH {
@@ -645,7 +638,6 @@ pub enum SearchFilterExpression {
 
 /// Filters to apply while querying a search index.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum InternalSearchFilterExpression {
     Search(FieldPath, String),
     Eq(FieldPath, FilterValue),
@@ -718,202 +710,6 @@ pub enum Expression {
     Literal(MaybeValue),
 }
 
-#[cfg(any(test, feature = "testing"))]
-mod proptest {
-    use proptest::prelude::*;
-    use value::ConvexValue;
-
-    use super::{
-        Expression,
-        IndexRange,
-        MaybeValue,
-        Query,
-        QuerySource,
-        Search,
-    };
-    use crate::{
-        paths::FieldPath,
-        query::{
-            FullTableScan,
-            IndexRangeExpression,
-            Order,
-            QueryOperator,
-            SearchFilterExpression,
-        },
-        types::IndexName,
-    };
-
-    impl Arbitrary for IndexRangeExpression {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = IndexRangeExpression>;
-
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            prop_oneof![
-                any::<(FieldPath, MaybeValue)>()
-                    .prop_map(|(field_path, v)| IndexRangeExpression::Eq(field_path, v)),
-                any::<(FieldPath, MaybeValue)>()
-                    .prop_map(|(field_path, v)| IndexRangeExpression::Gt(field_path, v)),
-                any::<(FieldPath, MaybeValue)>()
-                    .prop_map(|(field_path, v)| IndexRangeExpression::Gte(field_path, v)),
-                any::<(FieldPath, MaybeValue)>()
-                    .prop_map(|(field_path, v)| IndexRangeExpression::Lt(field_path, v)),
-                any::<(FieldPath, MaybeValue)>()
-                    .prop_map(|(field_path, v)| IndexRangeExpression::Lte(field_path, v)),
-            ]
-        }
-    }
-
-    impl Arbitrary for SearchFilterExpression {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = SearchFilterExpression>;
-
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            prop_oneof![
-                any::<(FieldPath, String)>()
-                    .prop_map(|(field_path, s)| SearchFilterExpression::Search(field_path, s)),
-                any::<(FieldPath, Option<ConvexValue>)>()
-                    .prop_map(|(field_path, v)| SearchFilterExpression::Eq(field_path, v)),
-            ]
-        }
-    }
-
-    impl Arbitrary for Expression {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = Expression>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            let leaf = prop_oneof![
-                any::<FieldPath>().prop_map(Expression::Field),
-                any::<Option<ConvexValue>>().prop_map(|v| Expression::Literal(MaybeValue(v))),
-            ];
-            leaf.prop_recursive(
-                4,  // 4 levels deep
-                10, // Shoot for max 8 nodes
-                4,  // Up to 4 items per collection
-                |inner| {
-                    // Separate helper based on the arguments to this type of expression.
-                    let unary = |constructor: fn(Box<Expression>) -> Expression| {
-                        inner
-                            .clone()
-                            .prop_map(move |expr| constructor(Box::new(expr)))
-                    };
-
-                    let binary =
-                        |constructor: fn(Box<Expression>, Box<Expression>) -> Expression| {
-                            (inner.clone(), inner.clone()).prop_map(move |(left, right)| {
-                                constructor(Box::new(left), Box::new(right))
-                            })
-                        };
-                    let variadic = |constructor: fn(Vec<Expression>) -> Expression| {
-                        prop::collection::vec(inner.clone(), 0..4).prop_map(constructor)
-                    };
-                    prop_oneof![
-                        binary(Expression::Eq),
-                        binary(Expression::Neq),
-                        binary(Expression::Lt),
-                        binary(Expression::Lte),
-                        binary(Expression::Gt),
-                        binary(Expression::Gte),
-                        binary(Expression::Add),
-                        binary(Expression::Sub),
-                        binary(Expression::Mul),
-                        binary(Expression::Div),
-                        binary(Expression::Mod),
-                        unary(Expression::Neg),
-                        variadic(Expression::And),
-                        variadic(Expression::Or),
-                        unary(Expression::Not),
-                    ]
-                },
-            )
-        }
-    }
-
-    impl Arbitrary for IndexRange {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = IndexRange>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            use proptest::prelude::*;
-            (
-                prop::collection::vec(any::<IndexRangeExpression>(), 0..4),
-                any::<(IndexName, Order)>(),
-            )
-                .prop_map(|(range, (index_name, order))| IndexRange {
-                    range,
-                    index_name,
-                    order,
-                })
-        }
-    }
-
-    impl Arbitrary for Search {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = Search>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            use proptest::prelude::*;
-            (
-                prop::collection::vec(any::<SearchFilterExpression>(), 0..4),
-                any::<IndexName>(),
-            )
-                .prop_map(|(search_filter_expressions, index_name)| Search {
-                    table: index_name.table().clone(),
-                    index_name,
-                    filters: search_filter_expressions,
-                })
-        }
-    }
-
-    impl Arbitrary for QuerySource {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = QuerySource>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            use proptest::prelude::*;
-            prop_oneof![
-                any::<FullTableScan>().prop_map(QuerySource::FullTableScan),
-                any::<IndexRange>().prop_map(QuerySource::IndexRange),
-                any::<Search>().prop_map(QuerySource::Search),
-            ]
-        }
-    }
-
-    impl Arbitrary for QueryOperator {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = QueryOperator>;
-
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            prop_oneof![
-                any::<Expression>().prop_map(QueryOperator::Filter),
-                any::<usize>().prop_map(QueryOperator::Limit)
-            ]
-        }
-    }
-
-    impl Arbitrary for Query {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = Query>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            use proptest::prelude::*;
-            (
-                any::<QuerySource>(),
-                prop::collection::vec(any::<QueryOperator>(), 0..4),
-            )
-                .prop_map(|(source, operators)| Query { source, operators })
-        }
-    }
-}
-
 fn binary_arithmetic<I, F>(
     name: &'static str,
     environ: &ConvexObject,
@@ -923,7 +719,7 @@ fn binary_arithmetic<I, F>(
     do_floats: F,
 ) -> anyhow::Result<ConvexValue>
 where
-    I: FnOnce(i64, i64) -> i64,
+    I: FnOnce(i64, i64) -> Option<i64>,
     F: FnOnce(f64, f64) -> f64,
 {
     let l = l_expr.eval(environ)?;
@@ -931,7 +727,15 @@ where
 
     let result = match (&l.0, &r.0) {
         (Some(ConvexValue::Int64(l)), Some(ConvexValue::Int64(r))) => {
-            val!(do_ints(*l, *r))
+            let result = do_ints(*l, *r).ok_or_else(|| {
+                let message = if *r == 0 {
+                    format!("Cannot {name} {l} by zero")
+                } else {
+                    format!("Cannot {name} {l} and {r}: the result is out of range for Int64")
+                };
+                ErrorMetadata::bad_request("EvalError", message)
+            })?;
+            val!(result)
         },
         (Some(ConvexValue::Float64(l)), Some(ConvexValue::Float64(r))) => {
             val!(do_floats(*l, *r))
@@ -1001,14 +805,16 @@ impl Expression {
             // Arithmetic operations only work on Int64 and Float64, so we don't have to worry about
             // mapping those from table names to table IDs.
             Expression::Add(l_expr, r_expr) => {
-                binary_arithmetic("add", environ, l_expr, r_expr, |l, r| l + r, |l, r| l + r)?
+                binary_arithmetic("add", environ, l_expr, r_expr, i64::checked_add, |l, r| {
+                    l + r
+                })?
             },
             Expression::Sub(l_expr, r_expr) => binary_arithmetic(
                 "subtract",
                 environ,
                 l_expr,
                 r_expr,
-                |l, r| l - r,
+                i64::checked_sub,
                 |l, r| l - r,
             )?,
             Expression::Mul(l_expr, r_expr) => binary_arithmetic(
@@ -1016,7 +822,7 @@ impl Expression {
                 environ,
                 l_expr,
                 r_expr,
-                |l, r| l * r,
+                i64::checked_mul,
                 |l, r| l * r,
             )?,
             Expression::Div(l_expr, r_expr) => binary_arithmetic(
@@ -1024,16 +830,26 @@ impl Expression {
                 environ,
                 l_expr,
                 r_expr,
-                |l, r| l / r,
+                i64::checked_div,
                 |l, r| l / r,
             )?,
             Expression::Mod(l_expr, r_expr) => {
-                binary_arithmetic("mod", environ, l_expr, r_expr, |l, r| l % r, |l, r| l % r)?
+                binary_arithmetic("mod", environ, l_expr, r_expr, i64::checked_rem, |l, r| {
+                    l % r
+                })?
             },
             Expression::Neg(x_expr) => {
                 let x = x_expr.eval(environ)?;
                 match &x.0 {
-                    Some(ConvexValue::Int64(x)) => ConvexValue::from(-*x),
+                    Some(ConvexValue::Int64(x)) => {
+                        let result = x.checked_neg().ok_or_else(|| {
+                            ErrorMetadata::bad_request(
+                                "EvalError",
+                                format!("Cannot negate {x}: the result is out of range for Int64"),
+                            )
+                        })?;
+                        ConvexValue::from(result)
+                    },
                     Some(ConvexValue::Float64(x)) => ConvexValue::from(-*x),
                     _ => anyhow::bail!(ErrorMetadata::bad_request(
                         "EvalError",
@@ -1171,401 +987,5 @@ impl Query {
         let mut hasher = Sha256::new();
         hasher.write_all(&vec)?;
         Ok(hasher.finalize().to_vec())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use sync_types::testing::assert_roundtrips;
-    use value::{
-        val,
-        ConvexValue,
-    };
-
-    use super::{
-        Expression,
-        Order,
-        Query,
-    };
-    use crate::{
-        assert_obj,
-        bootstrap_model::index::database_index::IndexedFields,
-        interval::{
-            End,
-            Interval,
-            StartIncluded,
-        },
-        maybe_val,
-        query::{
-            Cursor,
-            IndexRange,
-            IndexRangeExpression,
-            MaybeValue,
-            UNDEFINED_TAG,
-        },
-        testing::assert_contains,
-    };
-    #[test]
-    fn test_expr_eval() -> anyhow::Result<()> {
-        fn test_case(expr: Expression, expected: ConvexValue) -> anyhow::Result<()> {
-            let environ = assert_obj!(
-                "email" => "bw@convex.dev",
-                "salary" => 5,
-            );
-            assert_eq!(expr.eval(&environ)?, MaybeValue::from(expected));
-            Ok(())
-        }
-
-        test_case(
-            Expression::Eq(
-                Box::new(Expression::Literal(maybe_val!("foo"))),
-                Box::new(Expression::Literal(maybe_val!("foo"))),
-            ),
-            val!(true),
-        )?;
-        test_case(
-            Expression::Lt(
-                Box::new(Expression::Field("salary".parse()?)),
-                Box::new(Expression::Literal(maybe_val!(6))),
-            ),
-            val!(true),
-        )?;
-        test_case(
-            Expression::Gt(
-                Box::new(Expression::Field("level".parse()?)),
-                Box::new(Expression::Literal(maybe_val!(2))),
-            ),
-            ConvexValue::from(false),
-        )?;
-        test_case(
-            Expression::Neq(
-                Box::new(Expression::Field("level".parse()?)),
-                Box::new(Expression::Literal(maybe_val!(2))),
-            ),
-            // 2 is indeed not equal to null, even though it may be surprising to get a null value
-            // back when you were looking for values that are not 2
-            val!(true),
-        )?;
-        test_case(
-            Expression::Or(vec![
-                Expression::Gte(
-                    Box::new(Expression::Field("level".parse()?)),
-                    Box::new(Expression::Literal(maybe_val!(2))),
-                ),
-                Expression::Lt(
-                    Box::new(Expression::Field("level".parse()?)),
-                    Box::new(Expression::Literal(maybe_val!(2))),
-                ),
-            ]),
-            // Our total ordering on `Value` allows comparing values of different types.
-            val!(true),
-        )?;
-        test_case(
-            Expression::Lt(
-                Box::new(Expression::Field("salary".parse()?)),
-                Box::new(Expression::Literal(maybe_val!(4))),
-            ),
-            val!(false),
-        )?;
-        test_case(
-            Expression::Gt(
-                Box::new(Expression::Field("salary".parse()?)),
-                Box::new(Expression::Literal(maybe_val!(4))),
-            ),
-            val!(true),
-        )?;
-        test_case(
-            // -6
-            Expression::Div(
-                // -18
-                Box::new(Expression::Neg(
-                    // 15 + 3 = 18
-                    Box::new(Expression::Add(
-                        // 3 * 5 = 15
-                        Box::new(Expression::Mul(
-                            Box::new(Expression::Literal(maybe_val!(3))),
-                            Box::new(Expression::Literal(maybe_val!(5))),
-                        )),
-                        // 5 - 2 = 3
-                        Box::new(Expression::Sub(
-                            Box::new(Expression::Literal(maybe_val!(5))),
-                            // 11 % 3 = 2
-                            Box::new(Expression::Mod(
-                                Box::new(Expression::Literal(maybe_val!(11))),
-                                Box::new(Expression::Literal(maybe_val!(3))),
-                            )),
-                        )),
-                    )),
-                )),
-                Box::new(Expression::Literal(maybe_val!(3))),
-            ),
-            val!(-6),
-        )?;
-        test_case(
-            Expression::Not(Box::new(Expression::Literal(maybe_val!(true)))),
-            val!(false),
-        )?;
-        for i in 0..8 {
-            let a = (i & 1) != 0;
-            let b = (i & 2) != 0;
-            let c = (i & 4) != 0;
-
-            test_case(
-                Expression::And(vec![
-                    Expression::Literal(maybe_val!(a)),
-                    Expression::Literal(maybe_val!(b)),
-                    Expression::Literal(maybe_val!(c)),
-                ]),
-                val!(a && b && c),
-            )?;
-        }
-        for i in 0..8 {
-            let a = (i & 1) != 0;
-            let b = (i & 2) != 0;
-            let c = (i & 4) != 0;
-
-            test_case(
-                Expression::Or(vec![
-                    Expression::Literal(maybe_val!(a)),
-                    Expression::Literal(maybe_val!(b)),
-                    Expression::Literal(maybe_val!(c)),
-                ]),
-                val!(a || b || c),
-            )?;
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_eval_undefined() -> anyhow::Result<()> {
-        let environ = assert_obj!(
-            "email" => "alpastor@cvx.is",
-            "salary" => 5,
-        );
-        let expr = Expression::Field("name".parse()?);
-        assert_eq!(expr.eval(&environ)?, maybe_val!(undefined));
-
-        // Check missing fields equal undefined.
-        let expr = Expression::Eq(
-            Box::new(Expression::Field("name".parse()?)),
-            Box::new(Expression::Literal(maybe_val!(undefined))),
-        );
-        assert!(expr.eval(&environ)?.into_boolean()?);
-
-        // Check missing fields do not equal null.
-        let expr = Expression::Eq(
-            Box::new(Expression::Field("name".parse()?)),
-            Box::new(Expression::Literal(MaybeValue(Some(ConvexValue::Null)))),
-        );
-        assert!(!expr.eval(&environ)?.into_boolean()?);
-
-        // Check that nonexistent fields sort before everything else.
-        let expr = Expression::Lt(
-            Box::new(Expression::Field("name".parse()?)),
-            Box::new(Expression::Literal(ConvexValue::Null.into())),
-        );
-        assert!(expr.eval(&environ)?.into_boolean()?);
-        Ok(())
-    }
-
-    #[test]
-    fn test_query_fingerprint_stability() -> anyhow::Result<()> {
-        /*
-         * Do not change these hashes!
-         *
-         * Our pagination code relies on these query fingerprints being stable to
-         * check if a cursor is for this query. If our code changes such that
-         * our query fingerprints change, users will get pagination errors.
-         */
-
-        // Basic full table scan.
-        let indexed_fields = IndexedFields::creation_time();
-        assert_eq!(
-            Query::full_table_scan("MyTable".parse()?, Order::Asc).fingerprint(&indexed_fields)?,
-            [
-                45, 23, 15, 220, 143, 20, 24, 88, 163, 88, 155, 120, 148, 124, 127, 151, 49, 27,
-                45, 248, 63, 108, 127, 47, 211, 64, 13, 50, 103, 138, 80, 215
-            ]
-        );
-
-        // Complex full table scan.
-        let indexed_fields = IndexedFields::creation_time();
-        assert_eq!(
-            Query::full_table_scan("MyTable".parse()?, Order::Desc)
-                .filter(Expression::Eq(
-                    Box::new(Expression::Field("channel".parse()?)),
-                    Box::new(Expression::Literal(maybe_val!("#general")))
-                ))
-                .limit(10)
-                .fingerprint(&indexed_fields)?,
-            vec![
-                233, 109, 19, 167, 42, 182, 84, 206, 253, 212, 63, 102, 251, 238, 171, 251, 103, 7,
-                15, 237, 13, 236, 235, 161, 87, 58, 96, 81, 138, 157, 30, 194
-            ],
-        );
-
-        // Indexed query.
-        let indexed_fields = vec!["channel".parse()?].try_into()?;
-        assert_eq!(
-            Query::index_range(IndexRange {
-                index_name: "MyTable.my_index".parse()?,
-                range: vec![IndexRangeExpression::Eq(
-                    "channel".parse()?,
-                    maybe_val!("#general")
-                )],
-                order: Order::Desc
-            })
-            .fingerprint(&indexed_fields)?,
-            vec![
-                95, 29, 74, 125, 185, 179, 152, 46, 196, 122, 164, 117, 79, 97, 116, 222, 88, 148,
-                238, 241, 117, 13, 129, 67, 108, 84, 35, 89, 100, 65, 114, 114
-            ],
-        );
-        Ok(())
-    }
-
-    proptest! {
-            #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn proptest_cursor_serialization(v in any::<Cursor>()) {
-            assert_roundtrips::<Cursor, pb::convex_cursor::Cursor>(v);
-        }
-    }
-
-    fn compile(
-        range: Vec<IndexRangeExpression>,
-        indexed_fields: IndexedFields,
-    ) -> anyhow::Result<Interval> {
-        IndexRange {
-            order: Order::Asc,
-            index_name: "table.index".parse()?,
-            range,
-        }
-        .compile(indexed_fields)
-    }
-    #[test]
-    fn test_compile_index_range() -> anyhow::Result<()> {
-        assert_eq!(compile(vec![], IndexedFields::by_id())?, Interval::all());
-        assert_eq!(
-            compile(
-                vec![IndexRangeExpression::Eq("_id".parse()?, maybe_val!("foo"))],
-                IndexedFields::by_id()
-            )?,
-            Interval::singleton(b"\x10foo\x00".to_vec().into())
-        );
-        assert_eq!(
-            compile(
-                vec![
-                    IndexRangeExpression::Gte("_id".parse()?, maybe_val!("foo")),
-                    IndexRangeExpression::Lte("_id".parse()?, maybe_val!("foo")),
-                ],
-                IndexedFields::by_id(),
-            )?,
-            Interval::singleton(b"\x10foo\x00".to_vec().into()),
-        );
-        assert_eq!(
-            compile(
-                vec![IndexRangeExpression::Eq(
-                    "a".parse()?,
-                    maybe_val!(undefined)
-                )],
-                IndexedFields::try_from(vec!["a".parse()?])?
-            )?,
-            Interval::prefix(vec![UNDEFINED_TAG].into())
-        );
-        // We're allowed to use the implicit _id field, even if that doesn't make sense
-        assert_eq!(
-            compile(
-                vec![
-                    IndexRangeExpression::Eq("a".parse()?, maybe_val!(undefined)),
-                    IndexRangeExpression::Gt("_id".parse()?, maybe_val!(undefined))
-                ],
-                IndexedFields::try_from(vec!["a".parse()?])?
-            )?,
-            Interval {
-                start: StartIncluded(b"\x01\x02".to_vec().into()),
-                end: End::Excluded(b"\x02".to_vec().into()),
-            },
-        );
-        assert_eq!(
-            compile(
-                vec![IndexRangeExpression::Lte("_id".parse()?, maybe_val!("foo"))],
-                IndexedFields::by_id()
-            )?,
-            Interval {
-                start: StartIncluded(b"".to_vec().into()),
-                end: End::Excluded(b"\x10foo\x00\x00".to_vec().into()),
-            },
-        );
-        // Input order doesn't matter
-        assert_eq!(
-            compile(
-                vec![
-                    IndexRangeExpression::Lt("b".parse()?, maybe_val!("foob")),
-                    IndexRangeExpression::Eq("a".parse()?, maybe_val!(undefined)),
-                    IndexRangeExpression::Gt("b".parse()?, maybe_val!("foo")),
-                ],
-                IndexedFields::try_from(vec!["a".parse()?, "b".parse()?])?
-            )?,
-            Interval {
-                start: StartIncluded(b"\x01\x10foo\x01".to_vec().into()),
-                end: End::Excluded(b"\x01\x10foob\x00".to_vec().into()),
-            },
-        );
-        Ok(())
-    }
-    #[test]
-    fn test_compile_index_range_errors() -> anyhow::Result<()> {
-        assert_contains(
-            &compile(
-                vec![IndexRangeExpression::Lt(
-                    "c".parse()?,
-                    maybe_val!(undefined),
-                )],
-                IndexedFields::try_from(vec!["a".parse()?, "b".parse()?])?,
-            )
-            .unwrap_err(),
-            r#"The index range included a comparison with "c", but table.index with fields ["a", "b"] doesn't index this field"#,
-        );
-        assert_contains(
-            &compile(
-                vec![IndexRangeExpression::Eq(
-                    "b".parse()?,
-                    maybe_val!(undefined),
-                )],
-                IndexedFields::try_from(vec!["a".parse()?, "b".parse()?])?,
-            )
-            .unwrap_err(),
-            "the query didn't use the index fields in order",
-        );
-        assert_contains(
-            &compile(
-                vec![
-                    IndexRangeExpression::Eq("a".parse()?, maybe_val!(undefined)),
-                    IndexRangeExpression::Eq("a".parse()?, maybe_val!(1)),
-                ],
-                IndexedFields::try_from(vec!["a".parse()?])?,
-            )
-            .unwrap_err(),
-            "Already defined equality bound in index range",
-        );
-        assert_contains(
-            &compile(
-                vec![
-                    IndexRangeExpression::Gt("a".parse()?, maybe_val!(undefined)),
-                    IndexRangeExpression::Gt("b".parse()?, maybe_val!(undefined)),
-                ],
-                IndexedFields::try_from(vec!["a".parse()?, "b".parse()?])?,
-            )
-            .unwrap_err(),
-            "Already defined lower bound in index range",
-        );
-        Ok(())
     }
 }

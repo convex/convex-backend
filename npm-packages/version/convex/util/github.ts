@@ -1,3 +1,5 @@
+import { env } from "../_generated/server";
+
 export type GitHubRelease = {
   tag_name: string;
   prerelease: boolean;
@@ -16,7 +18,7 @@ type LinkHeader = {
  * Get headers for GitHub API requests with authentication if available
  */
 export function getGitHubHeaders(): HeadersInit {
-  const githubToken = process.env.GITHUB_TOKEN;
+  const githubToken = env.GITHUB_TOKEN;
   if (!githubToken) {
     console.warn(
       "GITHUB_TOKEN environment variable not set. GitHub API requests will have lower rate limits.",

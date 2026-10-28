@@ -24,6 +24,7 @@ import type * as _system_cli_tableData from "../_system/cli/tableData.js";
 import type * as _system_cli_tableSize from "../_system/cli/tableSize.js";
 import type * as _system_cli_tables from "../_system/cli/tables.js";
 import type * as _system_frontend_addDocument from "../_system/frontend/addDocument.js";
+import type * as _system_frontend_backendState from "../_system/frontend/backendState.js";
 import type * as _system_frontend_clearTablePage from "../_system/frontend/clearTablePage.js";
 import type * as _system_frontend_common from "../_system/frontend/common.js";
 import type * as _system_frontend_components from "../_system/frontend/components.js";
@@ -67,6 +68,7 @@ import type * as _system_server from "../_system/server.js";
 import type * as tableDefs_awsLambdaVersions from "../tableDefs/awsLambdaVersions.js";
 import type * as tableDefs_deploymentAuditLogTable from "../tableDefs/deploymentAuditLogTable.js";
 import type * as tableDefs_snapshotImport from "../tableDefs/snapshotImport.js";
+import type * as tableDefs_streamingExport from "../tableDefs/streamingExport.js";
 
 /**
  * A utility for referencing Convex functions in your app's API.
@@ -88,6 +90,7 @@ declare const fullApi: ApiFromModules<{
   "_system/cli/tableSize": typeof _system_cli_tableSize;
   "_system/cli/tables": typeof _system_cli_tables;
   "_system/frontend/addDocument": typeof _system_frontend_addDocument;
+  "_system/frontend/backendState": typeof _system_frontend_backendState;
   "_system/frontend/clearTablePage": typeof _system_frontend_clearTablePage;
   "_system/frontend/common": typeof _system_frontend_common;
   "_system/frontend/components": typeof _system_frontend_components;
@@ -131,6 +134,7 @@ declare const fullApi: ApiFromModules<{
   "tableDefs/awsLambdaVersions": typeof tableDefs_awsLambdaVersions;
   "tableDefs/deploymentAuditLogTable": typeof tableDefs_deploymentAuditLogTable;
   "tableDefs/snapshotImport": typeof tableDefs_snapshotImport;
+  "tableDefs/streamingExport": typeof tableDefs_streamingExport;
 }>;
 export declare const api: FilterApi<
   typeof fullApi,

@@ -39,6 +39,10 @@ export function createManagementClient(accessToken: string) {
   return client;
 }
 
+/**
+ * A bare deployment name assumes US East (N. Virginia). For any other region,
+ * pass the full URL, such as `https://<name>.eu-west-1.convex.cloud`.
+ */
 export function createDeploymentClient(nameOrUrl: string, token: string) {
   const deploymentUrl = nameOrUrl.startsWith("http")
     ? nameOrUrl

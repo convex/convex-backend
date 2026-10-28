@@ -2,37 +2,42 @@ import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { ConnectionState, ConvexHttpClient } from "convex/browser";
 import {
   createContext,
+  JSX,
   ReactNode,
   useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useRouter } from "next/router";
 import { cn } from "@ui/cn";
 import { LoadingLogo } from "@ui/Loading";
-import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
 import { Button } from "@ui/Button";
-import {
-  CheckCircledIcon,
-  CrossCircledIcon,
-  ExternalLinkIcon,
-  InfoCircledIcon,
-  LinkBreak2Icon,
-} from "@radix-ui/react-icons";
-import { Sheet } from "@ui/Sheet";
-import { Spinner } from "@ui/Spinner";
-import { Tooltip } from "@ui/Tooltip";
 import { Callout } from "@ui/Callout";
+import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
+import { DeploymentOp } from "system-udfs/convex/_system/server";
 
 export const PROVISION_PROD_PAGE_NAME = "production";
 export const PROVISION_DEV_PAGE_NAME = "development";
 
+/** The copy and Sentry grouping for one entry point into the feedback sheet. */
+export type FeedbackContext = {
+  /** Sentry message the feedback is attached to, which groups it. */
+  event: string;
+  /** Heading of the sheet. */
+  title: string;
+  /** One line under the heading, saying what we're asking about. */
+  prompt: string;
+  /** Label and placeholder of the message field. */
+  question: string;
+};
+
 type FallbackRender = (errorData: {
-  error: Error;
+  error: unknown;
   componentStack: string;
   eventId: string;
   resetError(): void;
@@ -72,15 +77,26 @@ export type DeploymentInfo = (
   useTeamMembers(
     teamId?: number,
   ): { id: number; name?: string | null; email?: string }[] | undefined;
+  /** Display name of the signed-in member, where the dashboard knows one. */
+  useCurrentMemberName(): string | undefined;
+  useMemberPreference(name: string): {
+    value: boolean | undefined;
+    set: (value: boolean) => Promise<void>;
+  };
   useTeamEntitlements(teamId?: number):
     | {
         auditLogRetentionDays?: number;
         logStreamingEnabled?: boolean;
         streamingExportEnabled?: boolean;
+        customAuditLogsInLogStreamsConfigEnabled?: boolean;
       }
     | undefined;
   useTeamUsageState(teamId: number | null): string | undefined;
   useCurrentUsageBanner(teamId: number | null): string | null;
+  // The team's Orb plan type (e.g. "CONVEX_BUSINESS"), or null when there is no
+  // subscription (Free) or plan tier isn't available (self-hosted). Note that
+  // Business and Enterprise share the "CONVEX_BUSINESS" plan type.
+  useTeamPlanType(teamId: number | null): string | null | undefined;
   useCurrentProject():
     | {
         id: number;
@@ -106,35 +122,50 @@ export type DeploymentInfo = (
     refreshInterval?: number,
   ): { configs: ProjectEnvVarConfig[] } | undefined;
   useHasProjectAdminPermissions(projectId: number | undefined): boolean;
+  /** Whether the current member has a custom role (as opposed to a built-in
+   *  admin/developer role). Returns `false` for self-hosted and local
+   *  deployments. */
+  useHasCustomRole(): boolean;
+  /**
+   * Check whether the current admin key is allowed to perform a specific
+   * deployment operation (e.g. "ViewData", "WriteData").
+   *
+   * Returns `true` when all operations are allowed (full admin key) or when
+   * the operation is in the key's allowed list.
+   */
+  useIsOperationAllowed(operation: DeploymentOp): boolean | undefined;
   useIsDeploymentPaused(): boolean | undefined;
   useLogDeploymentEvent(): (msg: string, props?: object | null) => void;
   workOSOperations: {
-    useDeploymentWorkOSEnvironment(deploymentName?: string):
-      | {
-          teamId: number;
-          environment?:
-            | {
-                deploymentName: string;
-                workosEnvironmentId: string;
-                workosEnvironmentName: string;
-                workosClientId: string;
-                workosTeamId: string;
-                isProduction: boolean;
-              }
-            | undefined
-            | null;
-          workosTeam?:
-            | {
-                convexTeamId: number;
-                workosTeamId: string;
-                workosTeamName: string;
-                workosAdminEmail: string;
-                creatorMemberId: number;
-              }
-            | undefined
-            | null;
-        }
-      | undefined;
+    useDeploymentWorkOSEnvironment(deploymentName?: string): {
+      data?:
+        | {
+            teamId: number;
+            environment?:
+              | {
+                  deploymentName: string;
+                  workosEnvironmentId: string;
+                  workosEnvironmentName: string;
+                  workosClientId: string;
+                  workosTeamId: string;
+                  isProduction: boolean;
+                }
+              | undefined
+              | null;
+            workosTeam?:
+              | {
+                  convexTeamId: number;
+                  workosTeamId: string;
+                  workosTeamName: string;
+                  workosAdminEmail: string;
+                  creatorMemberId: number;
+                }
+              | undefined
+              | null;
+          }
+        | undefined;
+      error?: any;
+    };
     useTeamWorkOSIntegration(teamId?: string):
       | {
           teamAssociation?:
@@ -164,7 +195,11 @@ export type DeploymentInfo = (
                   | {
                       id: string;
                       name: string;
-                      productionState: "active" | "inactive";
+                      productionState:
+                        | "active"
+                        | "inactive"
+                        | "suspended"
+                        | "deleting";
                     }
                   | null
                   | undefined;
@@ -283,6 +318,13 @@ export type DeploymentInfo = (
     memberId?: number | null;
     name: string;
   }): JSX.Element;
+  Link(props: {
+    href: string;
+    className?: string;
+    target?: string;
+    rel?: string;
+    children?: ReactNode;
+  }): ReactNode;
   ErrorBoundary(props: {
     children: ReactNode;
     fallback?: FallbackRender;
@@ -296,12 +338,87 @@ export type DeploymentInfo = (
   deploymentsURI: string;
   isSelfHosted: boolean;
   workosIntegrationEnabled: boolean;
+  /** Shows schema validation and index backfill progress on the health page. */
+  healthDeployProgressEnabled: boolean;
+  s3ExportIntegrationEnabled: boolean;
   connectionStateCheckIntervalMs: number;
+  /** Whether the Fivetran integration card reports the progress of active
+   *  data syncs. */
+  showFivetranSyncProgress: boolean;
+  /** Shows the component switcher as a tree of nested components. */
+  componentSwitcherTreeEnabled: boolean;
+  /** Opens the feedback sheet. Absent where there is nowhere to send it,
+   *  such as the self-hosted dashboard. */
+  openFeedbackForm?: (context: FeedbackContext) => void;
+  /** Sends a product analytics event. Absent where there is no analytics
+   *  sink, such as the self-hosted dashboard. */
+  captureEvent?: (event: string, properties?: Record<string, unknown>) => void;
 };
 
 export const DeploymentInfoContext = createContext<DeploymentInfo>(
   undefined as unknown as DeploymentInfo,
 );
+
+type PermissionsContextValue = {
+  // canViewDataCached is used in placed where we don't want to initiate a live useSWR subscription for performance reasons.
+  canViewDataCached: boolean;
+  useIsOperationAllowed: (operation: DeploymentOp) => boolean;
+};
+
+export const PermissionsContext = createContext<PermissionsContextValue>({
+  canViewDataCached: true,
+  useIsOperationAllowed: () => true,
+});
+
+export function PermissionsProvider({ children }: { children: ReactNode }) {
+  const { useIsOperationAllowed } = useContext(DeploymentInfoContext);
+  const canViewDataCached = useIsOperationAllowed("ViewData");
+
+  // While permissions are loading, show a loading indicator to avoid flashing a "no permission" view while permissions are stil loading.
+  if (canViewDataCached === undefined) {
+    return (
+      <div className="flex size-full items-center justify-center">
+        <LoadingLogo />
+      </div>
+    );
+  }
+
+  return (
+    <PermissionsProviderInner
+      useIsOperationAllowed={
+        // We know that this will not return undefined since canViewDataCached is set.
+        useIsOperationAllowed as (operation: DeploymentOp) => boolean
+      }
+      canViewDataCached={canViewDataCached}
+    >
+      {children}
+    </PermissionsProviderInner>
+  );
+}
+
+function PermissionsProviderInner({
+  children,
+  useIsOperationAllowed,
+  canViewDataCached,
+}: {
+  children: ReactNode;
+  useIsOperationAllowed: (operation: DeploymentOp) => boolean;
+  canViewDataCached: boolean;
+}) {
+  const value = useMemo(
+    () => ({
+      canViewDataCached,
+      useIsOperationAllowed,
+    }),
+    [canViewDataCached, useIsOperationAllowed],
+  );
+
+  return (
+    <PermissionsContext.Provider value={value}>
+      {children}
+    </PermissionsContext.Provider>
+  );
+}
 
 export type ConnectedDeployment = {
   client: ConvexReactClient;
@@ -316,6 +433,7 @@ type MaybeConnectedDeployment = {
   deploymentName?: string;
   loading: boolean;
   errorKind: "None" | "DoesNotExist" | "NotConnected";
+  errorMessage?: string;
 };
 
 export const ConnectedDeploymentContext = createContext<{
@@ -329,14 +447,105 @@ export const ConnectedDeploymentContext = createContext<{
   },
 );
 
-const MaybeConnectedDeploymentContext = createContext<MaybeConnectedDeployment>(
-  // use a bad default value to detect being used incorrectly
-  undefined as unknown as {
-    deployment: undefined;
-    loading: false;
-    errorKind: "DoesNotExist";
-  },
-);
+export const MaybeConnectedDeploymentContext =
+  createContext<MaybeConnectedDeployment>(
+    // use a bad default value to detect being used incorrectly
+    undefined as unknown as {
+      deployment: undefined;
+      loading: false;
+      errorKind: "DoesNotExist";
+    },
+  );
+
+export function useMaybeConnectedDeployment():
+  | MaybeConnectedDeployment
+  | undefined {
+  return useContext(MaybeConnectedDeploymentContext);
+}
+
+type ClientState =
+  | {
+      ok: true;
+      deployment: {
+        client: ConvexReactClient;
+        deploymentUrl: string;
+        deploymentName: string;
+      };
+    }
+  | {
+      ok: false;
+      errorCode: string;
+      errorMessage: string;
+      deployment: undefined;
+    };
+
+function useClientState({
+  deploymentName,
+  deploymentUrl,
+  adminKey,
+  errorCode,
+  errorMessage,
+}: {
+  deploymentName: string | undefined;
+  deploymentUrl: string | undefined;
+  adminKey: string | undefined;
+  errorCode: string | undefined;
+  errorMessage: string | undefined;
+}): ClientState | undefined {
+  const [state, setState] = useState<ClientState>();
+
+  // Read the key through a ref so rotating it doesn't rebuild the client: the
+  // effect in useConnectedDeployment pushes rotations over the open socket.
+  const adminKeyRef = useRef(adminKey);
+  useEffect(() => {
+    adminKeyRef.current = adminKey;
+  }, [adminKey]);
+
+  useEffect(() => {
+    if (
+      deploymentName === undefined ||
+      deploymentName === PROVISION_PROD_PAGE_NAME ||
+      deploymentName === PROVISION_DEV_PAGE_NAME
+    )
+      return undefined;
+
+    setState(undefined);
+
+    if (deploymentUrl === undefined) {
+      // Not connected: either still loading (no error) or the deployment failed
+      // to authenticate.
+      if (errorCode !== undefined) {
+        setState({
+          ok: false,
+          errorCode,
+          errorMessage: errorMessage ?? "",
+          deployment: undefined,
+        });
+      }
+      return undefined;
+    }
+
+    const client = new ConvexReactClient(deploymentUrl, {
+      reportDebugInfoToConvex: true,
+    });
+    if (adminKeyRef.current !== undefined) {
+      // Before publishing: descendant queries subscribe in the same commit this
+      // state update causes, and their effects run before this component's.
+      // An internal-only API
+      client.setAdminAuth(adminKeyRef.current);
+    }
+    setState({
+      ok: true,
+      deployment: { client, deploymentUrl, deploymentName },
+    });
+
+    return () => {
+      void client.close();
+    };
+  }, [deploymentUrl, deploymentName, errorCode, errorMessage]);
+
+  return state;
+}
 
 const useConnectedDeployment = (
   deploymentName: string | undefined,
@@ -349,95 +558,47 @@ const useConnectedDeployment = (
       deployment: undefined;
     }
   | undefined => {
-  // Use a single setState to batch updates.
-  const [state, setState] = useState<
-    | {
-        ok: true;
-        deployment: {
-          client: ConvexReactClient;
-          adminKey: string;
-          deploymentUrl: string;
-          deploymentName: string;
-        };
-      }
-    | {
-        ok: false;
-        errorCode: string;
-        errorMessage: string;
-        deployment: undefined;
-      }
-  >();
-
   const data = useContext(DeploymentInfoContext);
 
+  const deploymentUrl = data?.ok ? data.deploymentUrl : undefined;
+  const adminKey = data?.ok ? data.adminKey : undefined;
+  const errorCode = data && !data.ok ? data.errorCode : undefined;
+  const errorMessage = data && !data.ok ? data.errorMessage : undefined;
+
+  const state = useClientState({
+    deploymentName,
+    deploymentUrl,
+    adminKey,
+    errorCode,
+    errorMessage,
+  });
+
+  // Carries key rotations to a client that's already published, pushing the new
+  // key over the open socket instead of reconnecting. The initial key is
+  // installed at construction above, before anything can subscribe.
+  const client = state?.ok ? state.deployment.client : undefined;
   useEffect(() => {
-    if (
-      deploymentName === undefined ||
-      // TODO(ari): Refactor out of dashboard-common. This is only used in the cloud dashboard.
-      deploymentName === PROVISION_PROD_PAGE_NAME ||
-      deploymentName === PROVISION_DEV_PAGE_NAME
-    )
-      return;
-
-    setState(undefined);
-
-    let canceled = false;
-    let client: ConvexReactClient;
-    const getClient = async () => {
-      if (canceled) return;
-      if (data === undefined) {
-        return;
-      }
-      if (!data.ok) {
-        setState({
-          ok: false,
-          errorCode: data.errorCode,
-          errorMessage: data.errorMessage,
-          deployment: undefined,
-        });
-        return;
-      }
-      const { deploymentUrl, adminKey } = data;
-
-      client = new ConvexReactClient(deploymentUrl, {
-        reportDebugInfoToConvex: true,
-      });
-      // An internal-only API
-      client.setAdminAuth(adminKey);
-      setState({
-        ok: true,
-        deployment: { client, adminKey, deploymentUrl, deploymentName },
-      });
-    };
-    void getClient();
-
-    return () => {
-      canceled = true;
-      setState((prev) => {
-        if (prev?.deployment?.client) {
-          void prev.deployment.client.close();
-        }
-        return undefined;
-      });
-    };
-  }, [data, deploymentName]);
+    if (client === undefined || adminKey === undefined) return;
+    // An internal-only API
+    client.setAdminAuth(adminKey);
+  }, [client, adminKey]);
 
   return useMemo(() => {
     if (!state) return undefined;
     if (state.ok) {
-      const {
-        deployment: { deploymentUrl },
-      } = state;
       return {
         ok: true,
         deployment: {
-          httpClient: new ConvexHttpClient(deploymentUrl),
+          httpClient: new ConvexHttpClient(state.deployment.deploymentUrl),
           ...state.deployment,
+          // The admin key comes straight from context so the HTTP/SWR consumers
+          // always see the current (rotated) key.
+          adminKey: adminKey ?? "",
         },
       };
     }
     return state;
-  }, [state]);
+  }, [state, adminKey]);
 };
 
 export type DeploymentApiProviderProps = {
@@ -473,7 +634,6 @@ export function DeploymentApiProvider({
   const deploymentInfoContext = useContext(DeploymentInfoContext);
 
   const connected = useConnectedDeployment(deploymentName);
-  // eslint-disable-next-line react/jsx-no-constructed-context-values
   let value: MaybeConnectedDeployment = {
     deployment: undefined,
     deploymentName,
@@ -502,6 +662,15 @@ export function DeploymentApiProvider({
       `Can't connect to deployment ${connected?.errorCode} ${connected?.errorMessage}`,
       "warning",
     );
+    // Surface the failure rather than leaving `loading` set, which renders as a
+    // spinner that never resolves: nothing retries this on its own.
+    value = {
+      deployment: undefined,
+      deploymentName,
+      loading: false,
+      errorKind: "NotConnected",
+      errorMessage: connected.errorMessage,
+    };
   }
 
   return (
@@ -526,18 +695,31 @@ export function WaitForDeploymentApi({
     );
   }
 
-  const { deployment, loading, errorKind } = connected;
+  const { deployment, loading, errorKind, errorMessage } = connected;
   if (errorKind === "DoesNotExist") {
     void router.push("/404?reason=deployment_not_found");
     return null;
   }
-  if (loading) {
+  if (errorKind === "NotConnected") {
     return (
       <div
         className={cn(
-          "flex h-full w-full items-center justify-center",
+          "flex size-full flex-col items-center justify-center gap-4",
           sizeClass,
         )}
+      >
+        <Callout variant="error" className="flex-col">
+          <p className="font-semibold">Could not connect to this deployment.</p>
+          {errorMessage && <p>{errorMessage}</p>}
+        </Callout>
+        <Button onClick={() => router.reload()}>Try again</Button>
+      </div>
+    );
+  }
+  if (loading) {
+    return (
+      <div
+        className={cn("flex size-full items-center justify-center", sizeClass)}
       >
         <LoadingLogo />
       </div>
@@ -730,287 +912,5 @@ function DeploymentWithConnectionState({
         {children}
       </ConnectedDeploymentContext.Provider>
     </>
-  );
-}
-
-function useIsSafari(): boolean {
-  const [isSafari, setIsSafari] = useState(false);
-  useEffect(() => {
-    setIsSafari(
-      // https://stackoverflow.com/a/23522755
-      /^((?!chrome|android).)*safari/i.test(navigator.userAgent),
-    );
-  }, []);
-  return isSafari;
-}
-
-function useIsBrave(): boolean {
-  const [isBrave, setIsBrave] = useState(false);
-  useEffect(() => {
-    setIsBrave("brave" in navigator);
-  }, []);
-  return isBrave;
-}
-
-function DisconnectedOverlay({ children }: { children: ReactNode }) {
-  return (
-    <div className="absolute z-50 mt-[3.5rem] flex h-[calc(100vh-3.5rem)] w-full items-center justify-center backdrop-blur-[4px]">
-      <Sheet className="scrollbar flex max-h-[80vh] max-w-[28rem] animate-fadeInFromLoading flex-col items-start gap-2 overflow-y-auto rounded-xl bg-background-secondary/90 backdrop-blur-[8px]">
-        <h3 className="mb-4 flex items-center gap-3">
-          <div className="flex aspect-square h-[2.625rem] shrink-0 items-center justify-center rounded-lg border bg-gradient-to-tr from-yellow-200 to-util-brand-yellow text-yellow-900 shadow-md">
-            <LinkBreak2Icon className="size-6" />
-          </div>
-          Connection Issue
-        </h3>
-        {children}
-      </Sheet>
-    </div>
-  );
-}
-
-export function LocalDeploymentDisconnectOverlay() {
-  const isSafari = useIsSafari();
-  const isBrave = useIsBrave();
-
-  return (
-    <DisconnectedOverlay>
-      {isSafari ? (
-        <>
-          <p className="mb-1">Safari blocks connections to localhost.</p>
-          <p className="mb-4">
-            We recommend using another browser when using local deployments.
-          </p>
-          <Button
-            href="https://docs.convex.dev/cli/local-deployments#safari"
-            variant="neutral"
-            icon={<ExternalLinkIcon />}
-            target="_blank"
-          >
-            Learn more
-          </Button>
-        </>
-      ) : isBrave ? (
-        <>
-          <p className="mb-2">
-            Brave blocks connections to localhost by default. We recommend using
-            another browser or{" "}
-            <a
-              href="https://docs.convex.dev/cli/local-deployments#brave"
-              target="_blank"
-              rel="noreferrer"
-              className="text-content-link hover:underline"
-            >
-              setting up Brave to allow localhost connections
-            </a>
-            .
-          </p>
-          <Button
-            href="https://docs.convex.dev/cli/local-deployments#brave"
-            variant="neutral"
-            icon={<ExternalLinkIcon />}
-            target="_blank"
-          >
-            Learn more
-          </Button>
-        </>
-      ) : (
-        <>
-          <p className="mb-2">
-            Check that <code className="text-sm">npx convex dev</code> is
-            running successfully.
-          </p>
-          <p>
-            If you have multiple devices you use with this Convex project, the
-            local deployment may be running on a different device, and can only
-            be accessed on that machine.
-          </p>
-        </>
-      )}
-    </DisconnectedOverlay>
-  );
-}
-
-export function SelfHostedDisconnectOverlay() {
-  const deploymentInfo = useContext(DeploymentInfoContext);
-  const deploymentUrl = deploymentInfo.ok ? deploymentInfo.deploymentUrl : "";
-  return (
-    <DisconnectedOverlay>
-      <p className="mb-2">
-        Check that your Convex server is running and accessible at{" "}
-        <code className="text-sm">{deploymentUrl}</code>.
-      </p>
-      <p>If you continue to have issues, try restarting your Convex server.</p>
-    </DisconnectedOverlay>
-  );
-}
-
-function useCanReachDeploymentOverHTTP(deploymentUrl: string): boolean | null {
-  const [isReachable, setIsReachable] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    let canceled = false;
-
-    const checkReachability = async () => {
-      try {
-        await fetch(deploymentUrl, {
-          method: "HEAD",
-          mode: "no-cors",
-        });
-        if (!canceled) {
-          setIsReachable(true);
-        }
-      } catch {
-        if (!canceled) {
-          setIsReachable(false);
-        }
-      }
-    };
-
-    void checkReachability();
-
-    return () => {
-      canceled = true;
-    };
-  }, [deploymentUrl]);
-
-  return isReachable;
-}
-
-export function CloudDisconnectOverlay({
-  deployment,
-  deploymentName,
-  openSupportForm,
-  statusWidget,
-}: {
-  deployment: ConnectedDeployment;
-  deploymentName: string;
-  openSupportForm?: (defaultSubject: string, defaultMessage: string) => void;
-  statusWidget?: React.ReactNode;
-}) {
-  const isReachable = useCanReachDeploymentOverHTTP(deployment.deploymentUrl);
-
-  const handleContactSupport = useCallback(() => {
-    const defaultMessage = `I'm unable to connect to my deployment "${deploymentName}".
-
-Deployment URL: ${deployment.deploymentUrl}
-HTTP reachable: ${isReachable === null ? "checking..." : isReachable ? "yes" : "no"}
-Browser Version: ${navigator.userAgent}
-
-Please help me troubleshoot this connection issue.`;
-
-    const defaultSubject = `Unable to connect to ${deploymentName}`;
-
-    if (openSupportForm) {
-      openSupportForm(defaultSubject, defaultMessage);
-    }
-  }, [deploymentName, deployment.deploymentUrl, isReachable, openSupportForm]);
-
-  return (
-    <DisconnectedOverlay>
-      <div className="space-y-4">
-        <div>
-          <h4 className="mb-2">Connection Status</h4>
-          <div className="flex flex-col gap-2">
-            <p className="flex items-center gap-1 text-sm">
-              <div className="w-fit rounded-full bg-background-error p-1">
-                <CrossCircledIcon
-                  className="text-content-error"
-                  aria-hidden="true"
-                />
-              </div>
-              WebSocket connection failed
-            </p>
-            {isReachable === null ? (
-              <p className="flex items-center gap-1 text-sm text-content-secondary">
-                <div className="p-1">
-                  <Spinner />
-                </div>
-                Checking HTTP connection...
-              </p>
-            ) : isReachable ? (
-              <p className="flex items-center gap-1 text-sm">
-                <div className="w-fit rounded-full bg-background-success p-1">
-                  <CheckCircledIcon
-                    className="text-content-success"
-                    aria-hidden="true"
-                  />
-                </div>
-                HTTP connection successful
-              </p>
-            ) : (
-              <p className="flex items-center gap-1 text-sm">
-                <div className="w-fit rounded-full bg-background-error p-1">
-                  <CrossCircledIcon
-                    className="text-content-error"
-                    aria-hidden="true"
-                  />
-                </div>
-                HTTP connection failed
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <h4 className="mb-2">Troubleshooting</h4>
-          {isReachable ? (
-            <>
-              <Callout className="mb-3" variant="hint">
-                <div className="flex flex-col gap-2">
-                  <h5 className="flex items-center gap-1">
-                    <InfoCircledIcon />
-                    Your deployment is online
-                  </h5>
-                  <p>
-                    This connection issue is likely due to a problem with your
-                    browser or network connection.
-                  </p>
-                </div>
-              </Callout>
-              <p className="mb-2">
-                Please try the following troubleshooting steps:
-              </p>
-            </>
-          ) : (
-            <p className="mb-2 text-sm">
-              There may be a client-side network issue. Try:
-            </p>
-          )}
-          <ul className="ml-2 list-inside list-disc space-y-1 text-sm">
-            <li>
-              Switching to a different network. (i.e. WiFi, ethernet, or
-              cellular)
-            </li>
-            <li>
-              <span className="inline-flex items-center gap-1">
-                Reloading the browser page
-                <Tooltip tip="The Convex dashboard will automatically attempt to reconnect to your deployment, but refreshing the page may help in some cases.">
-                  <InfoCircledIcon className="shrink-0" />
-                </Tooltip>
-              </span>
-            </li>
-            <li>Disabling your VPN</li>
-            <li>Disabling browser extensions</li>
-          </ul>
-        </div>
-
-        {statusWidget && (
-          <div>
-            <h4 className="mb-2">Convex Status</h4>
-            {statusWidget}
-          </div>
-        )}
-
-        {isReachable === false && openSupportForm && (
-          <div className="border-t pt-2">
-            <p className="text-sm text-content-secondary">
-              <Button inline onClick={handleContactSupport}>
-                Tried all of the troubleshooting steps? Contact support
-              </Button>
-            </p>
-          </div>
-        )}
-      </div>
-    </DisconnectedOverlay>
   );
 }

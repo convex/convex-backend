@@ -16,6 +16,10 @@ pub struct MetricLabel<'a> {
 }
 
 impl<'a> MetricLabel<'a> {
+    pub const STATUS_AUTH_UPDATE_FAILED_ERROR: StaticMetricLabel = MetricLabel {
+        key: "status",
+        value: Cow::Borrowed("auth_update_failed_error"),
+    };
     pub const STATUS_CANCELED: StaticMetricLabel = MetricLabel {
         key: "status",
         value: Cow::Borrowed("canceled"),
@@ -31,6 +35,10 @@ impl<'a> MetricLabel<'a> {
     pub const STATUS_SUCCESS: StaticMetricLabel = MetricLabel {
         key: "status",
         value: Cow::Borrowed("success"),
+    };
+    pub const STATUS_UNAUTHENTICATED_ERROR: StaticMetricLabel = MetricLabel {
+        key: "status",
+        value: Cow::Borrowed("unauthenticated_error"),
     };
 
     pub fn new(key: &'static str, value: impl Into<Cow<'a, str>>) -> Self {
@@ -80,4 +88,22 @@ impl IntoLabel for bool {
 pub const CLUSTER_LABEL: &str = "cluster";
 pub fn cluster_label(cluster: &'static str) -> StaticMetricLabel {
     StaticMetricLabel::new(CLUSTER_LABEL, cluster)
+}
+
+pub const METHOD_LABEL: &str = "method";
+/// Maps an arbitrary (potentially client-controlled) HTTP method to a bounded
+/// set of static label values so metric cardinality can't be inflated by
+/// unusual/custom method tokens.
+pub fn method_label(method: &str) -> StaticMetricLabel {
+    let value = match method {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "PATCH" => "PATCH",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        _ => "other",
+    };
+    StaticMetricLabel::new(METHOD_LABEL, value)
 }

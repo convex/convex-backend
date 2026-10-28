@@ -163,7 +163,7 @@ export async function fetchRawInsightsData(
     from: fromDate,
     to: toDate,
   });
-  const bbFetch = await bigBrainFetch(ctx);
+  const bbFetch = bigBrainFetch(ctx);
   const res = await bbFetch(
     new URL(
       `dashboard/teams/${teamId}/usage/query?${queryParams.toString()}`,

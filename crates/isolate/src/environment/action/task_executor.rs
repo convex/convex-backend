@@ -1,6 +1,9 @@
 use std::{
     collections::BTreeMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        OnceLock,
+    },
     time::Duration,
 };
 
@@ -8,6 +11,7 @@ use common::{
     components::{
         CanonicalizedComponentFunctionPath,
         ComponentId,
+        ComponentPath,
         Reference,
         Resource,
     },
@@ -20,7 +24,11 @@ use common::{
         UnixTimestamp,
     },
     sync::spsc,
-    types::ConvexOrigin,
+    types::{
+        ConvexOrigin,
+        DeploymentMetadata,
+        HttpActionRoute,
+    },
 };
 use errors::ErrorMetadata;
 use fastrace::future::FutureExt as _;
@@ -37,13 +45,18 @@ use keybroker::{
 };
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
+use sync_types::CanonicalizedUdfPath;
 use tokio::sync::mpsc;
-use udf::SyscallTrace;
+use udf::{
+    ActionCallbacks,
+    SyscallTrace,
+};
 use usage_tracking::FunctionUsageTracker;
 
 use crate::{
     environment::{
         action::{
+            service_token::ServiceTokenCache,
             task::{
                 TaskId,
                 TaskRequest,
@@ -57,7 +70,6 @@ use crate::{
     },
     metrics::log_http_action_with_unknown_identity,
     module_cache::ModuleCache,
-    ActionCallbacks,
 };
 
 /// TaskExecutor is able to execute async syscalls and ops for actions.
@@ -79,7 +91,12 @@ pub struct TaskExecutor<RT: Runtime> {
     pub context: ExecutionContext,
     pub resources: Arc<Mutex<BTreeMap<Reference, Resource>>>,
     pub component_id: ComponentId,
+    pub udf_path: CanonicalizedUdfPath,
+    pub component_path: ComponentPath,
     pub convex_origin_override: Arc<Mutex<Option<ConvexOrigin>>>,
+    pub http_action_route: Arc<OnceLock<HttpActionRoute>>,
+    pub deployment: DeploymentMetadata,
+    pub(crate) service_token: Arc<ServiceTokenCache>,
 }
 
 impl<RT: Runtime> TaskExecutor<RT> {
@@ -200,7 +217,7 @@ impl<RT: Runtime> TaskExecutor<RT> {
             _ => None,
         };
         if let Some(user_identity) = user_identity {
-            return user_identity.try_into();
+            return Arc::unwrap_or_clone(user_identity).try_into();
         }
         Ok(JsonValue::Null)
     }

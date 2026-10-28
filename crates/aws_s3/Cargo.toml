@@ -27,7 +27,7 @@ tokio = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }
 runtime = { workspace = true }

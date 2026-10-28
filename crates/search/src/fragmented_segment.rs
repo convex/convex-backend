@@ -49,7 +49,10 @@ use vector::{
 };
 
 use crate::{
-    archive::cache::ArchiveCacheManager,
+    archive::cache::{
+        ArchiveCacheManager,
+        CachedArchive,
+    },
     disk_index::{
         download_single_file_zip,
         upload_single_file,
@@ -74,11 +77,19 @@ pub(crate) struct FragmentedSegmentFetcher<RT: Runtime> {
     archive_cache: ArchiveCacheManager<RT>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct FragmentedSegmentStorageKeys {
     pub segment: ObjectKey,
     pub id_tracker: ObjectKey,
     pub deleted_bitset: ObjectKey,
+}
+
+/// The on-disk files of a fragmented vector segment fetched through the
+/// archive cache. `archives` keeps the files under `paths` on disk; drop it
+/// only once nothing reads from them anymore.
+pub struct FetchedVectorSegment {
+    pub paths: UntarredVectorDiskSegmentPaths,
+    pub archives: Vec<CachedArchive>,
 }
 
 impl<RT: Runtime> FragmentedSegmentFetcher<RT> {
@@ -97,7 +108,7 @@ impl<RT: Runtime> FragmentedSegmentFetcher<RT> {
         search_storage: Arc<dyn Storage>,
         fragments: Vec<T>,
         metric_labels: SearchIndexMetricLabels<'a>,
-    ) -> impl Stream<Item = anyhow::Result<UntarredVectorDiskSegmentPaths>> + 'a
+    ) -> impl Stream<Item = anyhow::Result<FetchedVectorSegment>> + 'a
     where
         anyhow::Error: From<T::Error>,
     {
@@ -120,7 +131,7 @@ impl<RT: Runtime> FragmentedSegmentFetcher<RT> {
         search_storage: Arc<dyn Storage>,
         fragment: T,
         metric_labels: SearchIndexMetricLabels<'_>,
-    ) -> anyhow::Result<UntarredVectorDiskSegmentPaths>
+    ) -> anyhow::Result<FetchedVectorSegment>
     where
         anyhow::Error: From<T::Error>,
     {
@@ -148,9 +159,14 @@ impl<RT: Runtime> FragmentedSegmentFetcher<RT> {
         );
         let (segment, id_tracker, bitset) =
             futures::try_join!(fetch_segment, fetch_id_tracker, fetch_bitset)?;
-        Ok(UntarredVectorDiskSegmentPaths::new(
-            segment, id_tracker, bitset,
-        ))
+        Ok(FetchedVectorSegment {
+            paths: UntarredVectorDiskSegmentPaths::new(
+                segment.path().to_owned(),
+                id_tracker.path().to_owned(),
+                bitset.path().to_owned(),
+            ),
+            archives: vec![segment, id_tracker, bitset],
+        })
     }
 }
 
@@ -196,13 +212,13 @@ impl<RT: Runtime> FragmentedSegmentCompactor<RT> {
         let segments: Vec<_> = self
             .segment_fetcher
             .stream_fetch_fragmented_segments(search_storage.clone(), segments, labels)
-            .and_then(|paths| async move {
-                let paths_clone = paths.clone();
+            .and_then(|fetched| async move {
+                let paths = fetched.paths.clone();
                 let segment = self
                     .blocking_thread_pool
                     .execute(|| load_disk_segment(paths))
                     .await??;
-                anyhow::Ok((paths_clone, segment))
+                anyhow::Ok((fetched, segment))
             })
             .try_collect()
             .await?;
@@ -222,7 +238,7 @@ impl<RT: Runtime> FragmentedSegmentCompactor<RT> {
                 let result = merge_disk_segments_hnsw(
                     segments
                         .iter()
-                        .map(|(paths, segment)| (Some(paths.clone()), segment))
+                        .map(|(fetched, segment)| (Some(fetched.paths.clone()), segment))
                         .collect_vec(),
                     dimension,
                     &scratch_dir,

@@ -1,16 +1,21 @@
 import { Command, Option } from "@commander-js/extra-typings";
-import { oneoffContext } from "../bundler/context.js";
-import { logVerbose } from "../bundler/log.js";
+import { chalkStderr } from "chalk";
+import { installSigintHandler, oneoffContext } from "../bundler/context.js";
 import { deploymentCredentialsOrConfigure } from "./configure.js";
+import { announceDeploymentTarget } from "./lib/announceDeploymentTarget.js";
 import { usageStateWarning } from "./lib/usage.js";
 import { normalizeDevOptions } from "./lib/command.js";
 import { devAgainstDeployment } from "./lib/dev.js";
 import {
   CONVEX_DEPLOYMENT_ENV_VAR_NAME,
   CONVEX_SELF_HOSTED_URL_VAR_NAME,
+  ensureHasConvexDependency,
 } from "./lib/utils/utils.js";
-import { getDeploymentSelection } from "./lib/deploymentSelection.js";
-import { checkVersion } from "./lib/updates.js";
+import {
+  getDeploymentSelection,
+  type DeploymentSelection,
+} from "./lib/deploymentSelection.js";
+import { checkVersionAndAiFilesStaleness } from "./lib/updates.js";
 
 export const dev = new Command("dev")
   .summary("Develop against a dev deployment, watching for changes")
@@ -18,7 +23,7 @@ export const dev = new Command("dev")
     "Develop against a dev deployment, watching for changes\n\n" +
       "  1. Configures a new or existing project (if needed)\n" +
       "  2. Updates generated types and pushes code to the configured dev deployment\n" +
-      "  3. Runs the provided command (if `--run` or `--run-sh` is used)\n" +
+      "  3. Runs the provided command (if `--start` or `--run` is used)\n" +
       "  4. Watches for file changes, and repeats step 2\n",
   )
   .allowExcessArguments(false)
@@ -61,32 +66,42 @@ export const dev = new Command("dev")
   )
   .addOption(
     new Option(
+      "--start <command>",
+      "Start a long-running command alongside `npx convex dev`, like a frontend " +
+        "dev server. The command inherits stdin/stdout so you can interact " +
+        "with it directly. Example: npx convex dev --start 'vite --open'",
+    ).conflicts(["--run", "--run-sh"]),
+  )
+  .addOption(
+    new Option("--run-sh <command>", "Deprecated: use --start instead.")
+      .conflicts(["--start", "--run"])
+      .hideHelp(),
+  )
+  .addOption(
+    new Option(
       "--run <functionName>",
       "The identifier of the function to run in step 3, " +
         "like `api.init.createData` or `myDir/myFile:myFunction`",
-    ).conflicts(["--run-sh"]),
+    ).conflicts(["--start"]),
   )
   .option(
     "--run-component <functionName>",
-    "If --run is used and the function is in a component, the path the component tree defined in convex.config.ts. " +
+    'If --run is used and the function is in a component, the path to the component (e.g. "workflow" or "workflow/workpool"). ' +
       "Components are a beta feature. This flag is unstable and may change in subsequent releases.",
   )
   .addOption(
     new Option(
-      "--run-sh <command>",
-      "A shell command to run in step 3, like `node myScript.js`. " +
-        "If you just want to run a Convex function, use `--run` instead.",
-    ).conflicts(["--run"]),
-  )
-  .addOption(
-    new Option(
       "--tail-logs [mode]",
-      "Choose whether to tail Convex function logs in this terminal",
+      [
+        "Choose whether to tail Convex function logs in this terminal: ",
+        "• `always` shows logs continuously",
+        "• `pause-on-deploy` (the default) pauses logs during deploys so you can spot sync issues",
+        "• `disable` hides logs while developing.",
+      ].join("\n"),
     )
       .choices(["always", "pause-on-deploy", "disable"] as const)
       .default("pause-on-deploy"),
   )
-  .addOption(new Option("--log-jsonl").default(false).hideHelp())
   .addOption(new Option("--trace-events").default(false).hideHelp())
   .addOption(new Option("--debug-bundle-path <path>").hideHelp())
   .addOption(new Option("--debug-node-apis").hideHelp())
@@ -97,7 +112,7 @@ export const dev = new Command("dev")
       "Ignore existing configuration and configure new or existing project, interactively or set by --team <team_slug>, --project <project_slug>, and --dev-deployment local|cloud",
     )
       .choices(["new", "existing"] as const)
-      .conflicts(["--local", "--cloud"]),
+      .conflicts(["--url", "--admin-key", "--env-file"]),
   )
   .addOption(
     new Option(
@@ -129,6 +144,15 @@ export const dev = new Command("dev")
       .hideHelp(),
   )
   .addOption(
+    // Only `--prod` pushes check this; hidden alongside it.
+    new Option(
+      "--allow-unstaging-schema",
+      "Skip the confirmation prompt when a push to production discards a staged table validator that is validating or already validated.",
+    )
+      .default(false)
+      .hideHelp(),
+  )
+  .addOption(
     new Option(
       "--env-file <envFile>",
       `Path to a custom file of environment variables, for choosing the \
@@ -148,33 +172,59 @@ Same format as .env.local or .env files, and overrides them.`,
   .addOption(new Option("--local-site-port <port>").hideHelp())
   .addOption(new Option("--local-backend-version <version>").hideHelp())
   .addOption(new Option("--local-force-upgrade").default(false).hideHelp())
-  .addOption(
-    new Option(
-      "--local",
-      "Use local deployment regardless of last used backend. DB data will not be downloaded from any cloud deployment.",
-    )
-      .default(false)
-      .conflicts(["--prod", "--url", "--admin-key", "--cloud"])
-      .hideHelp(),
-  )
-  .addOption(
-    new Option(
-      "--cloud",
-      "Use cloud deployment regardles of last used backend. DB data will not be uploaded from local.",
-    )
-      .default(false)
-      .conflicts(["--prod", "--url", "--admin-key", "--local"])
-      .hideHelp(),
-  )
+  .addOption(new Option("--deployment <deployment>").hideHelp())
+  .addOption(new Option("--local").default(false).hideHelp())
+  .addOption(new Option("--cloud").default(false).hideHelp())
   .showHelpAfterError()
   .action(async (cmdOptions) => {
     const ctx = await oneoffContext(cmdOptions);
-    process.on("SIGINT", async () => {
-      logVerbose("Received SIGINT, cleaning up...");
-      await ctx.flushAndExit(-2);
-    });
+    installSigintHandler(ctx);
+
+    if (cmdOptions.deployment !== undefined) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage:
+          "`--deployment` can’t be used with `npx convex dev`. \n\n" +
+          "  To select this deployment for development, run: \n" +
+          chalkStderr.bold(
+            `      npx convex deployment select ${cmdOptions.deployment}\n`,
+          ) +
+          "  Then, run `npx convex dev` again.",
+      });
+    }
+
+    if (cmdOptions.local) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage:
+          "`--local` is deprecated. \n\n" +
+          "  To select your local deployment, run: \n" +
+          chalkStderr.bold("      npx convex deployment select local\n") +
+          "  Then, run `npx convex dev` again.",
+      });
+    }
+
+    if (cmdOptions.cloud) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage:
+          "`--cloud` is deprecated. \n\n" +
+          "  To select your personal cloud dev deployment, run: \n" +
+          chalkStderr.bold("      npx convex deployment select dev\n") +
+          "  Then, run `npx convex dev` again.",
+      });
+    }
 
     const devOptions = await normalizeDevOptions(ctx, cmdOptions);
+
+    // Check that we're in a Convex project (a package.json with a `convex`
+    // dependency) before doing anything else, so we fail fast with a clear
+    // error instead of prompting to create/select a project and only then
+    // crashing because there's nothing to push.
+    await ensureHasConvexDependency(ctx, "run `npx convex dev`");
 
     if (cmdOptions.configure === undefined) {
       if (cmdOptions.team || cmdOptions.project || cmdOptions.devDeployment)
@@ -187,46 +237,37 @@ Same format as .env.local or .env files, and overrides them.`,
     }
 
     const localOptions: {
-      ports?: { cloud: number; site: number };
-      backendVersion?: string | undefined;
+      ports: { cloud: number | undefined; site: number | undefined };
+      backendVersion: string | undefined;
       forceUpgrade: boolean;
-    } = { forceUpgrade: false };
-    if (!cmdOptions.local && cmdOptions.devDeployment !== "local") {
-      if (
-        cmdOptions.localCloudPort !== undefined ||
-        cmdOptions.localSitePort !== undefined ||
-        cmdOptions.localBackendVersion !== undefined ||
-        cmdOptions.localForceUpgrade === true
-      ) {
-        return await ctx.crash({
-          exitCode: 1,
-          errorType: "fatal",
-          printedMessage:
-            "`--local-*` options can only be used with `--configure --dev-deployment local` or `--local`.",
-        });
-      }
-    } else {
-      if (cmdOptions.localCloudPort !== undefined) {
-        if (cmdOptions.localSitePort === undefined) {
-          return await ctx.crash({
-            exitCode: 1,
-            errorType: "fatal",
-            printedMessage:
-              "`--local-cloud-port` requires `--local-site-port` to be set.",
-          });
-        }
-        localOptions["ports"] = {
-          cloud: parseInt(cmdOptions.localCloudPort),
-          site: parseInt(cmdOptions.localSitePort),
-        };
-      }
-      localOptions["backendVersion"] = cmdOptions.localBackendVersion;
-      localOptions["forceUpgrade"] = cmdOptions.localForceUpgrade;
-    }
+    } = {
+      ports: {
+        cloud:
+          cmdOptions.localCloudPort !== undefined
+            ? parseInt(cmdOptions.localCloudPort)
+            : undefined,
+        site:
+          cmdOptions.localSitePort !== undefined
+            ? parseInt(cmdOptions.localSitePort)
+            : undefined,
+      },
+      backendVersion: cmdOptions.localBackendVersion,
+      forceUpgrade: cmdOptions.localForceUpgrade,
+    };
 
     const configure =
       cmdOptions.configure === true ? "ask" : (cmdOptions.configure ?? null);
-    const deploymentSelection = await getDeploymentSelection(ctx, cmdOptions);
+    // --configure means "pick a project" — skip deployment selection entirely
+    const deploymentSelection =
+      configure !== null
+        ? ({
+            kind: "chooseProject",
+            selectionWithinProject: {
+              // For backwards compatibility, allow `--configure --prod`
+              kind: cmdOptions.prod ? "prod" : "unspecified",
+            },
+          } satisfies DeploymentSelection)
+        : await getDeploymentSelection(ctx, cmdOptions);
     const credentials = await deploymentCredentialsOrConfigure(
       ctx,
       deploymentSelection,
@@ -236,6 +277,8 @@ Same format as .env.local or .env files, and overrides them.`,
         localOptions,
       },
     );
+
+    announceDeploymentTarget("Developing against deployment:", credentials);
 
     await Promise.all([
       ...(!cmdOptions.skipPush
@@ -253,6 +296,7 @@ Same format as .env.local or .env files, and overrides them.`,
                         credentials.deploymentFields.deploymentType,
                     }
                   : {}),
+                backendVersion: localOptions.backendVersion,
               },
               devOptions,
             ),
@@ -261,7 +305,7 @@ Same format as .env.local or .env files, and overrides them.`,
       ...(credentials.deploymentFields !== null
         ? [
             usageStateWarning(ctx, credentials.deploymentFields.deploymentName),
-            checkVersion(ctx),
+            checkVersionAndAiFilesStaleness(ctx),
           ]
         : []),
     ]);

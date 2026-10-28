@@ -75,7 +75,6 @@ export const LinkOnClick: Story = {
   args: {
     href: "https://convex.dev",
     onClickOfAnchorLink: () => {
-      // eslint-disable-next-line no-alert
       alert("When you dismiss you'll be redirected");
     },
     children: "Redirect after alert",

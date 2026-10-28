@@ -6,9 +6,13 @@ description: "Adding WorkOS AuthKit to an existing Convex application"
 ---
 
 import AuthConfigTs from "@site/docs/auth/authkit/_auth_config_ts.mdx";
-import ConfigTS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/_mainAuthKit.tsx";
-import ConfigJS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite/src/_mainAuthKit.jsx";
+import Config from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/_mainAuthKit.tsx";
 import Functions from "!!raw-loader!@site/../private-demos/snippets/convex/workosFunctions.ts";
+import tanstackStartRouter from "!!raw-loader!@site/../private-demos/tanstack-start-workos/src/router.tsx";
+import tanstackStartRoot from "!!raw-loader!@site/../private-demos/tanstack-start-workos/src/routes/__root.tsx";
+import tanstackStartCallback from "!!raw-loader!@site/../private-demos/tanstack-start-workos/src/routes/callback.tsx";
+import tanstackStartSignIn from "!!raw-loader!@site/../private-demos/tanstack-start-workos/src/routes/sign-in.tsx";
+import tanstackStartSignUp from "!!raw-loader!@site/../private-demos/tanstack-start-workos/src/routes/sign-up.tsx";
 import Tabs from "@theme/Tabs";
 import TabItem from "@theme/TabItem";
 
@@ -26,6 +30,14 @@ your Convex project properly configured. Most users should opt for using a
 WorkOS environments for projects and deployments. If you have an existing WorkOS
 team and account that you want to use with your Convex application then you
 should follow the **Standard WorkOS team** instructions.
+
+<Admonition type="info">
+  Setting up the Managed WorkOS team and inviting members to it require **team
+  admin**. Per-deployment WorkOS environments use the deployment's own
+  management permission, so any team member can provision one for their
+  dev/preview deployment, while prod envs and shared project-level envs require
+  team admin or project admin.
+</Admonition>
 
 <Tabs groupId="workos-integration">
 <TabItem value="managed-workos" label="Managed WorkOS team" default>
@@ -46,6 +58,7 @@ should follow the **Standard WorkOS team** instructions.
       <TabItem value="vite" label="React (Vite)" default>
         ```json title="convex.json"
         {
+          "$schema": "./node_modules/convex/schemas/convex.schema.json",
           "authKit": {
             "dev": {
               "configure": {
@@ -81,6 +94,7 @@ should follow the **Standard WorkOS team** instructions.
         <TabItem value="nextjs" label="Next.js">
         ```json title="convex.json"
         {
+          "$schema": "./node_modules/convex/schemas/convex.schema.json",
           "authKit": {
             "dev": {
               "configure": {
@@ -116,10 +130,48 @@ should follow the **Standard WorkOS team** instructions.
         ```
 
         </TabItem>
+        <TabItem value="tanstack-start" label="TanStack Start">
+        ```json title="convex.json"
+        {
+          "$schema": "./node_modules/convex/schemas/convex.schema.json",
+          "authKit": {
+            "dev": {
+              "configure": {
+                "redirectUris": ["http://localhost:3000/callback"],
+                "appHomepageUrl": "http://localhost:3000",
+                "corsOrigins": ["http://localhost:3000"]
+              },
+              "localEnvVars": {
+                "WORKOS_CLIENT_ID": "${authEnv.WORKOS_CLIENT_ID}",
+                "WORKOS_API_KEY": "${authEnv.WORKOS_API_KEY}",
+                "WORKOS_REDIRECT_URI": "http://localhost:3000/callback"
+              }
+            },
+            "preview": {
+              "configure": {
+                "redirectUris": ["https://${buildEnv.VERCEL_BRANCH_URL}/callback"],
+                "appHomepageUrl": "https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}",
+                "corsOrigins": ["https://${buildEnv.VERCEL_BRANCH_URL}"]
+              }
+            },
+            "prod": {
+              "configure": {
+                "redirectUris": [
+                  "https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}/callback"
+                ],
+                "appHomepageUrl": "https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}",
+                "corsOrigins": ["https://${buildEnv.VERCEL_PROJECT_PRODUCTION_URL}"]
+              }
+            }
+          }
+        }
+        ```
+
+        </TabItem>
         </Tabs>
     </Step>
     <Step title="Create or update auth.config.ts">
-      In your app's `convex/` folder, create or update the <JSDialectFileName name="auth.config.ts" />
+      In your app's `convex/` folder, create or update the `auth.config.ts`
       file with the following code. This is the server-side configuration for validating access tokens.
 
       <AuthConfigTs/>
@@ -159,7 +211,7 @@ should follow the **Standard WorkOS team** instructions.
 
     </Step>
       <Step title="Configure auth with the WorkOS Client ID">
-      In your app's `convex/` folder, create a new file <JSDialectFileName name="auth.config.ts" /> with the following code. This is the server-side configuration for validating access tokens.
+      In your app's `convex/` folder, create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
 
       <AuthConfigTs/>
     </Step>
@@ -193,7 +245,7 @@ See the following sections for the WorkOS SDK that you're using.
   <TabItem value="react" label="React" default>
 
 **Example:**
-[React with Convex and AuthKit](https://github.com/get-convex/templates/tree/main/template-react-vite-authkit)
+[React with Convex and AuthKit](https://github.com/convex/templates/tree/main/template-react-vite-authkit)
 
 This guide assumes you have [AuthKit set up](#project-configuration) and have a
 working React app with Convex. If not follow the
@@ -248,10 +300,9 @@ working React app with Convex. If not follow the
       Then, wrap it with `<AuthKitProvider>`. `<AuthKitProvider>` requires `clientId` and `redirectUri` props, which you can set to `VITE_WORKOS_CLIENT_ID` and `VITE_WORKOS_REDIRECT_URI`, respectively.
 
 
-      <TSAndJSSnippet
+      <Snippet
         title="src/main.tsx"
-        sourceTS={ConfigTS}
-        sourceJS={ConfigJS}
+        source={Config}
         highlightPatterns={["AuthKitProvider", "clientId", "redirectUri", "ConvexProviderWithAuthKit"]}
       />
 
@@ -259,7 +310,7 @@ working React app with Convex. If not follow the
 
     <Step title="Show UI based on authentication state">
       You can control which UI is shown when the user is signed in or signed out using
-      Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+      Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
       In the following example, the `<Content />` component is a child of `<Authenticated>`,
       so its content and any of its child components are guaranteed to have an authenticated
@@ -322,10 +373,9 @@ working React app with Convex. If not follow the
       **Make sure that the component calling this query is a child of `<Authenticated>` from
       `convex/react`**. Otherwise, it will throw on page load.
 
-      <TSAndJSSnippet
+      <Snippet
         title="convex/myFunctions.ts"
-        sourceTS={Functions}
-        sourceJS={Functions}
+        source={Functions}
       />
 
     </Step>
@@ -333,7 +383,7 @@ working React app with Convex. If not follow the
   </StepByStep>
 
 **Note:** The
-[React template](https://github.com/get-convex/templates/tree/main/template-react-vite-authkit)
+[React template](https://github.com/convex/templates/tree/main/template-react-vite-authkit)
 includes additional features and functions for a complete working application.
 This tutorial covers the core integration steps, but the template provides a
 more comprehensive implementation.
@@ -342,7 +392,7 @@ more comprehensive implementation.
 
   <TabItem value="nextjs" label="Next.js">
   **Example:**
-  [Next.js with Convex and AuthKit](https://github.com/get-convex/templates/tree/main/template-nextjs-authkit)
+  [Next.js with Convex and AuthKit](https://github.com/convex/templates/tree/main/template-nextjs-authkit)
 
 This guide assumes you have [AuthKit set up](#project-configuration) and have a
 working Next.js app with Convex. If not follow the
@@ -582,7 +632,7 @@ working Next.js app with Convex. If not follow the
 
     <Step title="Show UI based on authentication state">
       You can control which UI is shown when the user is signed in or signed out using
-      Convex's `<Authenticated>`, `<Unauthenticated>` and `<AuthLoading>` helper components.
+      Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
 
       In the following example, the `<Content />` component is a child of `<Authenticated>`,
       so its content and any of its child components are guaranteed to have an authenticated
@@ -661,10 +711,9 @@ working Next.js app with Convex. If not follow the
       **Make sure that the component calling this query is a child of `<Authenticated>` from
       `convex/react`**. Otherwise, it will throw on page load.
 
-      <TSAndJSSnippet
+      <Snippet
         title="convex/myFunctions.ts"
-        sourceTS={Functions}
-        sourceJS={Functions}
+        source={Functions}
       />
 
     </Step>
@@ -672,7 +721,239 @@ working Next.js app with Convex. If not follow the
   </StepByStep>
 
 **Note:** The
-[Next.js template](https://github.com/get-convex/templates/tree/main/template-nextjs-authkit)
+[Next.js template](https://github.com/convex/templates/tree/main/template-nextjs-authkit)
+includes additional features and functions for a complete working application.
+This tutorial covers the core integration steps, but the template provides a
+more comprehensive implementation.
+
+  </TabItem>
+
+  <TabItem value="tanstack-start" label="TanStack Start">
+
+**Example:**
+[TanStack Start with Convex and WorkOS AuthKit](https://github.com/convex/templates/tree/main/template-tanstack-start-authkit)
+
+This guide assumes you have [AuthKit set up](#project-configuration) and have a
+working TanStack Start app with Convex. If not, follow the
+[Convex TanStack Start Quickstart](/quickstart/tanstack-start.mdx) first. Then:
+
+  <StepByStep>
+    <Step title="Set up your environment variables">
+      <Admonition type="tip">
+        If you're using a Convex-managed WorkOS team, this was done for you in [Project configuration](#project-configuration).
+      </Admonition>
+
+      In your `.env.local` file, set the following environment variables.
+
+      **Note:** `WORKOS_CLIENT_ID` and `WORKOS_API_KEY` can be found in your
+      [WorkOS Dashboard](https://dashboard.workos.com/).
+
+      `WORKOS_COOKIE_PASSWORD`: A secure password used to encrypt session cookies. This
+      must be at least 32 characters long. You can generate a random one with
+      `openssl rand -base64 24`.
+
+      ```env title=".env.local"
+      # WorkOS AuthKit Configuration
+      WORKOS_CLIENT_ID=client_your_client_id_here
+      WORKOS_API_KEY=sk_test_your_api_key_here
+      WORKOS_COOKIE_PASSWORD=your_secure_password_here_must_be_at_least_32_characters_long
+      WORKOS_REDIRECT_URI=http://localhost:3000/callback
+
+      # Convex Configuration (you don't have to fill these out, they're generated by Convex)
+      VITE_CONVEX_URL=https://your-convex-url.convex.cloud
+      ```
+
+    </Step>
+
+    <Step title="Install AuthKit">
+      In a new terminal window, install the AuthKit TanStack Start SDK:
+
+      ```sh
+      npm install @workos/authkit-tanstack-react-start
+      ```
+
+    </Step>
+
+    <Step title="Configure Start middleware">
+      WorkOS AuthKit requires server-side middleware to manage authentication
+      sessions. Update your `src/start.ts` to include the AuthKit middleware:
+
+      ```ts title="src/start.ts"
+      import { createStart } from '@tanstack/react-start';
+      import { authkitMiddleware } from '@workos/authkit-tanstack-react-start';
+
+      export const startInstance = createStart(() => {
+        return {
+          requestMiddleware: [authkitMiddleware()],
+        };
+      });
+      ```
+
+    </Step>
+
+    <Step title="Configure ConvexProviderWithAuth">
+      Update your `src/router.tsx` to wrap the router with `<AuthKitProvider>`
+      and `<ConvexProviderWithAuth>`, and provide a custom `useAuthFromAuthKit`
+      hook that bridges WorkOS's auth state to Convex.
+
+      <Snippet
+        source={tanstackStartRouter}
+        title="src/router.tsx"
+        highlightPatterns={[
+          "AuthKitProvider",
+          "ConvexProviderWithAuth",
+          "useAuthFromAuthKit",
+          "useAccessToken",
+          "fetchAccessToken",
+        ]}
+      />
+
+    </Step>
+
+    <Step title="Add SSR auth in the root route">
+      To make authenticated Convex queries work during server-side rendering,
+      call WorkOS's `getAuth()` in `beforeLoad` and pass the access token to the
+      Convex client.
+
+      <Snippet
+        source={tanstackStartRoot}
+        title="src/routes/__root.tsx"
+        highlightPatterns={[{ from: "beforeLoad", to: "^  \\}," }]}
+      />
+
+    </Step>
+
+    <Step title="Add callback route">
+      Unlike the React SPA integration, TanStack Start uses server-side
+      authentication which requires an explicit callback route to handle the
+      OAuth redirect from WorkOS.
+
+      <Snippet
+        source={tanstackStartCallback}
+        title="src/routes/callback.tsx"
+        highlightPatterns={["handleCallbackRoute"]}
+      />
+
+    </Step>
+
+    <Step title="Add sign-in and sign-up redirect routes">
+      Create dedicated server routes that call `getSignInUrl()` / `getSignUpUrl()`
+      and redirect. Link to these routes from your UI.
+
+      <Snippet
+        source={tanstackStartSignIn}
+        title="src/routes/sign-in.tsx"
+        highlightPatterns={["getSignInUrl", "Location"]}
+      />
+
+      <Snippet
+        source={tanstackStartSignUp}
+        title="src/routes/sign-up.tsx"
+        highlightPatterns={["getSignUpUrl", "Location"]}
+      />
+
+    </Step>
+
+    <Step title="Show UI based on authentication state">
+      You can control which UI is shown when the user is signed in or signed out using
+      Convex's `<Authenticated>`, `<Unauthenticated>`, `<AuthLoading>` and `<AuthRefreshing>` helper components.
+
+      In TanStack Start, you can use WorkOS's server-side `getAuth()` in a
+      route loader to get the user before the page renders.
+
+      <Admonition type="tip">
+      If you choose to build your own auth-integrated components without using the helpers,
+      it's important to use the [`useConvexAuth()`](/api/modules/react#useconvexauth) hook
+      instead of AuthKit's `useAuth()` hook when you need to check whether the user is logged
+      in or not. The `useConvexAuth()` hook makes sure that the browser has fetched the auth
+      token needed to make authenticated requests to your Convex backend, and that the
+      Convex backend has validated it.
+      </Admonition>
+
+      ```tsx title="src/routes/index.tsx"
+      import { createFileRoute } from '@tanstack/react-router';
+      import { Authenticated, Unauthenticated } from 'convex/react';
+      import { useAuth } from '@workos/authkit-tanstack-react-start/client';
+      import { getAuth } from '@workos/authkit-tanstack-react-start';
+      import { convexQuery } from '@convex-dev/react-query';
+      import { useSuspenseQuery } from '@tanstack/react-query';
+      import { api } from '../../convex/_generated/api';
+
+      export const Route = createFileRoute('/')({
+        component: Home,
+        loader: async () => {
+          const { user } = await getAuth();
+          return { user };
+        },
+      });
+
+      function Home() {
+        const { user } = Route.useLoaderData();
+        const { signOut } = useAuth();
+
+        return (
+          <div className="p-4">
+            <div className="flex justify-between items-center mb-4">
+              <h1>Convex + TanStack Start + WorkOS</h1>
+              {user ? (
+                <button onClick={() => signOut()}>Sign out</button>
+              ) : (
+                <div className="flex gap-2">
+                  <a href="/sign-in">
+                    <button>Sign in</button>
+                  </a>
+                  <a href="/sign-up">
+                    <button>Sign up</button>
+                  </a>
+                </div>
+              )}
+            </div>
+            <Authenticated>
+              <Content />
+            </Authenticated>
+            <Unauthenticated>
+              <p>Please sign in to view data</p>
+            </Unauthenticated>
+          </div>
+        );
+      }
+
+      function Content() {
+        const { data } = useSuspenseQuery(
+          convexQuery(api.myFunctions.listNumbers, { count: 10 }),
+        );
+
+        return (
+          <div>
+            <p>Welcome {data.viewer}!</p>
+            <p>Numbers: {data.numbers?.join(', ') || 'None'}</p>
+          </div>
+        );
+      }
+      ```
+
+    </Step>
+
+    <Step title="Use authentication state in your Convex functions">
+      If the client is authenticated, you can access the information
+      stored in the JWT via `ctx.auth.getUserIdentity`.
+
+      If the client isn't authenticated, `ctx.auth.getUserIdentity` will return `null`.
+
+      **Make sure that the component calling this query is a child of `<Authenticated>` from
+      `convex/react`**. Otherwise, it will throw on page load.
+
+      <Snippet
+        title="convex/myFunctions.ts"
+        source={Functions}
+      />
+
+    </Step>
+
+  </StepByStep>
+
+**Note:** The
+[TanStack Start template](https://github.com/convex/templates/tree/main/template-tanstack-start-authkit)
 includes additional features and functions for a complete working application.
 This tutorial covers the core integration steps, but the template provides a
 more comprehensive implementation.

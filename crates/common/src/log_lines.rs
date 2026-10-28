@@ -11,8 +11,6 @@ use std::{
 
 use futures::future::BoxFuture;
 use itertools::Itertools;
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use serde::{
     Deserialize,
     Serialize,
@@ -54,7 +52,6 @@ pub struct LogLines(WithHeapSize<Vec<LogLine>>);
 pub type RawLogLines = WithHeapSize<Vec<String>>;
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum LogLevel {
     Debug,
     Error,
@@ -98,7 +95,6 @@ impl HeapSize for LogLevel {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SystemLogMetadata {
     pub code: String,
 }
@@ -320,17 +316,6 @@ impl LogLines {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for LogLines {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = LogLines>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        prop::collection::vec(any::<LogLine>(), 0..6).prop_map(LogLines::from)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum LogLine {
     Structured(LogLineStructured),
@@ -338,58 +323,6 @@ pub enum LogLine {
         path: CanonicalizedComponentFunctionPath,
         log_lines: LogLines,
     },
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for LogLineStructured {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = LogLineStructured>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        (
-            prop::collection::vec(any::<String>(), 1..4),
-            any::<LogLevel>(),
-            any::<bool>(),
-            (u64::MIN..(i64::MAX as u64)),
-            any::<Option<SystemLogMetadata>>(),
-        )
-            .prop_map(
-                |(messages, level, is_truncated, timestamp_ms, system_metadata)| {
-                    LogLineStructured {
-                        messages: messages.into(),
-                        level,
-                        is_truncated,
-                        timestamp: UnixTimestamp::from_millis(timestamp_ms),
-                        system_metadata,
-                    }
-                },
-            )
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for LogLine {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = LogLine>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        let leaf = any::<LogLineStructured>().prop_map(LogLine::Structured);
-        leaf.prop_recursive(3, 8, 2, |inner| {
-            prop_oneof![
-                (
-                    any::<CanonicalizedComponentFunctionPath>(),
-                    prop::collection::vec(inner.clone(), 1..4)
-                )
-                    .prop_map(|(path, log_lines)| LogLine::SubFunction {
-                        path,
-                        log_lines: log_lines.into()
-                    }),
-                inner
-            ]
-        })
-    }
 }
 
 impl LogLine {
@@ -401,11 +334,6 @@ impl LogLine {
                 .flat_map(LogLine::to_pretty_strings)
                 .collect::<Vec<_>>(),
         }
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn to_pretty_string_test_only(self) -> String {
-        self.to_pretty_strings().join("\n")
     }
 
     pub fn to_jsons(
@@ -583,7 +511,6 @@ impl TryFrom<LogLine> for ConvexValue {
 
 // JSON representation of LogLevel with uppercase string serialization
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 pub enum LogLevelJson {
     #[serde(rename = "DEBUG")]
     Debug,
@@ -622,7 +549,6 @@ impl From<LogLevelJson> for LogLevel {
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct LogLineJson {
     pub messages: Vec<String>,
@@ -637,7 +563,6 @@ pub struct LogLineJson {
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SystemLogMetadataJson {
     pub code: String,
@@ -792,49 +717,4 @@ pub async fn run_function_and_collect_log_lines<Outcome>(
         LogLines::from(full_log_lines)
     };
     tokio::join!(get_outcome, log_line_consumer)
-}
-
-#[cfg(test)]
-mod tests {
-
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use serde_json::Value as JsonValue;
-    use value::{
-        testing::assert_roundtrips,
-        ConvexValue,
-    };
-
-    use crate::{
-        log_lines::{
-            LogLine,
-            LogLineStructured,
-        },
-        runtime::UnixTimestamp,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_structured_round_trips(log_line in any::<LogLine>()) {
-            assert_roundtrips::<LogLine, ConvexValue>(log_line);
-        }
-
-        #[test]
-        fn test_json_round_trips(log_line in any::<LogLineStructured>()) {
-            assert_roundtrips::<LogLineStructured, JsonValue>(log_line);
-        }
-    }
-
-    #[test]
-    pub fn empty_log_line() {
-        // This used to panic due to a underflow bug when calculating message length.
-        LogLineStructured::new_developer_log_line(
-            super::LogLevel::Info,
-            vec![],
-            UnixTimestamp::from_secs_f64(1733952824.).unwrap(),
-        );
-    }
 }

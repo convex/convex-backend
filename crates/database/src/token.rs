@@ -3,15 +3,8 @@
 
 use std::sync::Arc;
 
-#[cfg(any(test, feature = "testing"))]
-use common::types::TabletIndexName;
 use common::types::Timestamp;
-#[cfg(any(test, feature = "testing"))]
-use search::query::TextQueryTerm;
 use value::heap_size::HeapSize;
-#[cfg(any(test, feature = "testing"))]
-use value::FieldPath;
-
 use crate::reads::ReadSet;
 
 /// Serialized representation of [`Token`].
@@ -21,10 +14,6 @@ pub type SerializedToken = String;
 /// for a transaction. This can be externalized to a user and used to represent
 /// current transaction state.
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, Eq, PartialEq)
-)]
 pub struct Token {
     read_set: Arc<ReadSet>,
     ts: Timestamp,
@@ -32,47 +21,7 @@ pub struct Token {
 
 impl Token {
     #[allow(unused)]
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_for_testing(read_set: ReadSet, ts: Timestamp) -> Self {
-        Self::new(Arc::new(read_set), ts)
-    }
-
     #[allow(unused)]
-    #[cfg(any(test, feature = "testing"))]
-    pub fn text_search_token(
-        index_name: TabletIndexName,
-        field_path: FieldPath,
-        terms: Vec<TextQueryTerm>,
-    ) -> Self {
-        use std::time::Duration;
-
-        use common::types::TabletIndexName;
-        use pb::searchlight::TextQueryTerm;
-        use search::{
-            QueryReads,
-            TextQueryTermRead,
-        };
-        use value::heap_size::WithHeapSize;
-
-        use crate::TransactionReadSet;
-
-        let mut read_set = TransactionReadSet::new();
-        let mut text_queries: WithHeapSize<Vec<TextQueryTermRead>> = WithHeapSize::default();
-
-        for term in terms {
-            text_queries.push(TextQueryTermRead::new(field_path.clone(), term));
-        }
-
-        let query_reads = QueryReads::new(text_queries, WithHeapSize::default());
-
-        read_set.record_search(index_name, query_reads);
-        let read_set = read_set.into_read_set();
-        Token::new_for_testing(
-            read_set,
-            Timestamp::MIN.add(Duration::from_secs(1)).unwrap(),
-        )
-    }
-
     pub fn new(read_set: Arc<ReadSet>, ts: Timestamp) -> Self {
         Self { read_set, ts }
     }

@@ -13,7 +13,6 @@ use serde::{
 };
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AxiomConfig {
     pub api_key: PII<String>,
     pub dataset_name: String,
@@ -73,7 +72,6 @@ impl fmt::Display for AxiomConfig {
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AxiomAttribute {
     pub key: String,
     pub value: String,

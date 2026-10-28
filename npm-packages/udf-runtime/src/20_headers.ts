@@ -113,10 +113,6 @@ class Headers {
     return this._headersList.map(([, value]) => value)[Symbol.iterator]();
   }
 
-  get [Symbol.toStringTag]() {
-    return "Headers";
-  }
-
   inspect() {
     const headers = {};
     for (const header of this._headersList) {
@@ -139,6 +135,13 @@ class Headers {
     return values;
   }
 }
+
+Object.defineProperty(Headers.prototype, Symbol.toStringTag, {
+  value: "Headers",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 export const setupHeaders = (global: any) => {
   global.Headers = Headers;

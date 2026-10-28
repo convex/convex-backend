@@ -1,7 +1,4 @@
-#![feature(type_alias_impl_trait)]
-#![feature(iterator_try_collect)]
 #![feature(impl_trait_in_assoc_type)]
-#![feature(try_blocks)]
 use std::{
     collections::BTreeMap,
     ops::Deref,
@@ -27,19 +24,16 @@ use value::{
 mod buffer;
 mod debug;
 mod flexbuilder;
-mod json;
 mod walk;
-
-#[cfg(test)]
-mod tests;
 
 pub use self::buffer::{
     ByteBuffer,
     StringBuffer,
 };
 use self::flexbuilder::FlexBuilder;
+use crate::buffer::PARENT_BUFFER;
 
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq))]
+#[derive(PartialEq, Eq)]
 pub struct PackedValue<B: Buffer>
 where
     B::BufferString: Clone,
@@ -68,12 +62,6 @@ where
 
     pub fn open(self) -> anyhow::Result<OpenedValue<B>> {
         OpenedValue::new(Reader::get_root(self.buf)?)
-    }
-
-    pub fn parse<T: ConvexSerializable>(self) -> anyhow::Result<T> {
-        value::serde::from_value::<_, T::Serialized>(self.as_ref().open()?)?
-            .try_into()
-            .map_err(Into::<anyhow::Error>::into)
     }
 
     pub fn size(&self) -> usize {
@@ -114,6 +102,18 @@ where
     }
 }
 
+impl PackedValue<ByteBuffer> {
+    pub fn parse<T: ConvexSerializable>(&self) -> anyhow::Result<T> {
+        // make the `Bytes` reference available to `StringBuffer`'s deserializer
+        // via the PARENT_BUFFER thread-local; this is a bit hacky
+        PARENT_BUFFER.set(&self.buf.inner, || {
+            value::serde::from_value::<_, T::Serialized>(self.as_ref().open()?)?
+                .try_into()
+                .map_err(Into::<anyhow::Error>::into)
+        })
+    }
+}
+
 impl<B: Buffer> HeapSize for PackedValue<B>
 where
     B::BufferString: Clone,
@@ -124,6 +124,12 @@ where
 }
 
 impl PackedValue<ByteBuffer> {
+    pub fn shrink(self) -> Self {
+        Self {
+            buf: self.buf.shrink(),
+        }
+    }
+
     pub fn pack(value: &ConvexValue) -> Self {
         let mut builder = Builder::default();
         Self::_pack(value, &mut builder);
@@ -439,26 +445,5 @@ where
             },
         };
         Ok(result)
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-mod proptest {
-    use proptest::prelude::*;
-    use value::ConvexValue;
-
-    use super::{
-        buffer::ByteBuffer,
-        PackedValue,
-    };
-
-    impl Arbitrary for PackedValue<ByteBuffer> {
-        type Parameters = ();
-
-        type Strategy = impl Strategy<Value = PackedValue<ByteBuffer>>;
-
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            any::<ConvexValue>().prop_map(|v| PackedValue::pack(&v))
-        }
     }
 }

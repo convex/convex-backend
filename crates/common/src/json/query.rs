@@ -28,7 +28,23 @@ use crate::{
         MaybeValue,
         TableName,
     },
+    value::{
+        PendingValue,
+        MAX_COMMIT_TS,
+    },
 };
+
+/// Parse an index range value, additionally accepting the
+/// `{"$commitTs": null}` token, which resolves to `Int64(MAX_COMMIT_TS)`.
+/// e.g. `q.eq("commitTs", db.vars.commitTs)` matches exactly the rows inserted
+/// by the current transaction.
+fn range_value(json: JsonValue) -> Result<MaybeValue> {
+    if json == serde_json::json!({ "$undefined": null }) {
+        return json.try_into();
+    }
+    let value = PendingValue::from_uncommitted_json(json)?;
+    Ok(MaybeValue(Some(value.into_resolved(MAX_COMMIT_TS)?)))
+}
 
 fn try_order_from_string(order: Option<String>) -> anyhow::Result<Order> {
     match order.as_deref() {
@@ -86,23 +102,23 @@ impl TryFrom<JsonIndexRangeExpression> for IndexRangeExpression {
         match json_range_expression {
             JsonIndexRangeExpression::Eq(field_and_value) => Ok(IndexRangeExpression::Eq(
                 FieldPath::from_str(&field_and_value.field_path)?,
-                field_and_value.value.try_into()?,
+                range_value(field_and_value.value)?,
             )),
             JsonIndexRangeExpression::Gt(field_and_value) => Ok(IndexRangeExpression::Gt(
                 FieldPath::from_str(&field_and_value.field_path)?,
-                field_and_value.value.try_into()?,
+                range_value(field_and_value.value)?,
             )),
             JsonIndexRangeExpression::Gte(field_and_value) => Ok(IndexRangeExpression::Gte(
                 FieldPath::from_str(&field_and_value.field_path)?,
-                field_and_value.value.try_into()?,
+                range_value(field_and_value.value)?,
             )),
             JsonIndexRangeExpression::Lt(field_and_value) => Ok(IndexRangeExpression::Lt(
                 FieldPath::from_str(&field_and_value.field_path)?,
-                field_and_value.value.try_into()?,
+                range_value(field_and_value.value)?,
             )),
             JsonIndexRangeExpression::Lte(field_and_value) => Ok(IndexRangeExpression::Lte(
                 FieldPath::from_str(&field_and_value.field_path)?,
-                field_and_value.value.try_into()?,
+                range_value(field_and_value.value)?,
             )),
         }
     }

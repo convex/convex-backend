@@ -4,34 +4,28 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "npm-run-all --parallel dev:frontend dev:backend",
-    "dev:frontend": "vite --open",
-    "dev:backend": "convex dev",
-    "predev": "convex dev --until-success && convex dashboard",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "dev": "convex dev --start 'vite --open'",
+    "build": "tsc -b && vite build"
   },
   "dependencies": {
     "@faker-js/faker": "^10.0.0",
     "@heroicons/react": "2.2.0",
     "clsx": "2.1.1",
     "convex": "workspace:*",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.1.13",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^18.17.0",
-    "@types/react": "^18.0.0",
-    "@types/react-dom": "^18.0.0",
+    "@types/react": "^19.2.4",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.1",
-    "npm-run-all2": "^8.0.0",
-    "postcss": "^8.4.19",
-    "prettier": "^3.8.0",
-    "tailwindcss": "^4.1.11",
+    "postcss": "^8.5.18",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.2",
-    "vite": "^6.4.1"
+    "vite": "^6.4.4"
   }
 }

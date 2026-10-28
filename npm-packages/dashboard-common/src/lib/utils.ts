@@ -96,6 +96,10 @@ export function getVisibleTableName(tableName: string) {
   return tableName;
 }
 
+export function encodeFilters(filters: FilterExpression): string {
+  return base64.encodeURI(JSON.stringify(filters));
+}
+
 export function documentHref({
   deploymentsURI,
   tableName,
@@ -149,7 +153,7 @@ export function documentHref({
     pathname: `${deploymentsURI}/data`,
     query: {
       table: tableName,
-      filters: base64.encodeURI(JSON.stringify(filter)),
+      filters: encodeFilters(filter),
       ...(componentId ? { component: componentId } : {}),
     },
   };

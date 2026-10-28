@@ -1,0 +1,73 @@
+name: Promote Local Backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Precompiled release tag to promote
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    name: Validate and promote release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tag and assets
+        id: validate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^precompiled-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{7}$ ]]; then
+            echo "::error::Invalid precompiled release tag: $RELEASE_TAG"
+            exit 1
+          fi
+          required_assets='[
+            "convex-local-backend-aarch64-apple-darwin.zip",
+            "convex-local-backend-aarch64-unknown-linux-gnu.zip",
+            "convex-local-backend-x86_64-apple-darwin.zip",
+            "convex-local-backend-x86_64-pc-windows-msvc.zip",
+            "convex-local-backend-x86_64-unknown-linux-gnu.zip",
+            "dashboard.zip",
+            "LICENSE.md"
+          ]'
+          release=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,url)
+          missing_assets=$(jq -r --argjson required "$required_assets" '
+            [.assets[] | select(.state == "uploaded" and .size > 0) | .name] as $uploaded
+            | ($required - $uploaded)[]?
+          ' <<< "$release")
+          if [[ -n "$missing_assets" ]]; then
+            echo "::error::Release $RELEASE_TAG is missing uploaded assets: $(tr '\n' ' ' <<< "$missing_assets")"
+            exit 1
+          fi
+          if [[ $(jq -r .isDraft <<< "$release") == true ]]; then
+            echo "::error::Release $RELEASE_TAG is still a draft"
+            exit 1
+          fi
+          tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          expected_short_sha=${RELEASE_TAG##*-}
+          if [[ "$tag_sha" != "$expected_short_sha"* ]]; then
+            echo "::error::Release tag $RELEASE_TAG points to $tag_sha"
+            exit 1
+          fi
+          echo "url=$(jq -r .url <<< "$release")" >> "$GITHUB_OUTPUT"
+
+      - name: Promote release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
+
+      - name: Summarize promotion
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_URL: ${{ steps.validate.outputs.url }}
+        run: |
+          echo "Promoted [$RELEASE_TAG]($RELEASE_URL) to Latest." >> "$GITHUB_STEP_SUMMARY"

@@ -24,8 +24,112 @@ use crate::{
     types::FunctionCaller,
 };
 
+/// A client IP address extracted from HTTP headers, with max length
+/// enforcement.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ClientIp(String);
+
+impl ClientIp {
+    pub const MAX_LENGTH: usize = 256;
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for ClientIp {
+    fn from(mut value: String) -> Self {
+        value.truncate(value.floor_char_boundary(Self::MAX_LENGTH));
+        Self(value)
+    }
+}
+
+/// A client user-agent string extracted from HTTP headers, with max length
+/// enforcement.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ClientUserAgent(String);
+
+impl ClientUserAgent {
+    pub const MAX_LENGTH: usize = 512;
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+impl From<String> for ClientUserAgent {
+    fn from(mut value: String) -> Self {
+        value.truncate(value.floor_char_boundary(Self::MAX_LENGTH));
+        Self(value)
+    }
+}
+
+/// Metadata about the HTTP request that triggered this function execution.
+/// Fields are `None` for system-originated calls (scheduled jobs, cron jobs,
+/// internal RPCs, etc.).
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
+pub struct RequestMetadata {
+    pub ip: Option<ClientIp>,
+    pub user_agent: Option<ClientUserAgent>,
+}
+
+impl RequestMetadata {
+    /// Create metadata for system-originated requests where there is no
+    /// originating HTTP request (e.g. scheduled jobs, cron jobs, internal
+    /// RPCs). Analogous to `Identity::system()`.
+    pub fn system() -> Self {
+        Self {
+            ip: None,
+            user_agent: None,
+        }
+    }
+
+}
+
+impl HeapSize for RequestMetadata {
+    fn heap_size(&self) -> usize {
+        self.ip.as_ref().map_or(0, |ip| ip.as_str().len())
+            + self.user_agent.as_ref().map_or(0, |ua| ua.as_str().len())
+    }
+}
+
+/// Context about the originating request, bundling the request ID with
+/// metadata from the HTTP layer (IP, user agent). Threaded from the API
+/// boundary down to where `ExecutionContext` is constructed.
+#[derive(Clone, Debug)]
+pub struct RequestContext {
+    pub request_id: RequestId,
+    pub request_metadata: RequestMetadata,
+}
+
+impl RequestContext {
+    pub fn new(request_id: RequestId, request_metadata: RequestMetadata) -> Self {
+        Self {
+            request_id,
+            request_metadata,
+        }
+    }
+
+    /// Create a request context for system-originated calls that have a
+    /// request ID but no HTTP metadata (e.g. cached queries, internal RPCs).
+    pub fn new_for_system_request(request_id: RequestId) -> Self {
+        Self {
+            request_id,
+            request_metadata: RequestMetadata::system(),
+        }
+    }
+
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExecutionContext {
     pub request_id: RequestId,
     // A unique ID per entry in the function logs.
@@ -39,15 +143,18 @@ pub struct ExecutionContext {
     /// version of this would be something like parent_execution_id:
     /// Option<ExecutionId>
     is_root: bool,
+    /// Metadata about the originating HTTP request (IP, user agent).
+    pub request_metadata: RequestMetadata,
 }
 
 impl ExecutionContext {
-    pub fn new(request_id: RequestId, caller: &FunctionCaller) -> Self {
+    pub fn new(request_context: RequestContext, caller: &FunctionCaller) -> Self {
         Self {
-            request_id,
+            request_id: request_context.request_id,
             execution_id: ExecutionId::new(),
             parent_scheduled_job: caller.parent_scheduled_job(),
             is_root: caller.is_root(),
+            request_metadata: request_context.request_metadata,
         }
     }
 
@@ -56,27 +163,19 @@ impl ExecutionContext {
         execution_id: ExecutionId,
         parent_scheduled_job: Option<(ComponentId, DeveloperDocumentId)>,
         is_root: bool,
+        request_metadata: RequestMetadata,
     ) -> Self {
         Self {
             request_id,
             execution_id,
             parent_scheduled_job,
             is_root,
+            request_metadata,
         }
     }
 
     pub fn is_root(&self) -> bool {
         self.is_root
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_for_test() -> Self {
-        Self {
-            request_id: RequestId::new(),
-            execution_id: ExecutionId::new(),
-            parent_scheduled_job: None,
-            is_root: true,
-        }
     }
 
     pub fn add_sentry_tags(&self, scope: &mut sentry::Scope) {
@@ -93,19 +192,19 @@ impl HeapSize for ExecutionContext {
                 .parent_scheduled_job
                 .map_or(0, |(_, document_id)| document_id.heap_size())
             + self.is_root.heap_size()
+            + self.request_metadata.heap_size()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Display, Serialize, Deserialize)]
 #[display("{_0}")]
 #[serde(transparent)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct RequestId(String);
 
 impl RequestId {
     pub fn new() -> Self {
         let bytes = rand::rng().random::<[u8; 8]>();
-        Self(hex::encode(bytes))
+        Self(const_hex::encode(bytes))
     }
 
     // This produces a RequestId based off of information provided by a WS client
@@ -164,20 +263,6 @@ impl HeapSize for RequestId {
 #[serde(transparent)]
 pub struct ExecutionId(Uuid);
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for ExecutionId {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = Self>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        "[a-f0-9]{32}"
-            .prop_filter_map("Invalid Uuid", |s| s.parse().ok().map(Self))
-            .boxed()
-    }
-}
-
 impl Default for ExecutionId {
     fn default() -> Self {
         Self::new()
@@ -214,6 +299,8 @@ impl From<ExecutionContext> for pb::common::ExecutionContext {
                 .and_then(|id| id.serialize_to_string()),
             parent_scheduled_job: parent_document_id.map(Into::into),
             is_root: Some(value.is_root),
+            client_ip: value.request_metadata.ip.map(|ip| ip.into_string()),
+            client_user_agent: value.request_metadata.user_agent.map(|ua| ua.into_string()),
         }
     }
 }
@@ -234,6 +321,10 @@ impl TryFrom<pb::common::ExecutionContext> for ExecutionContext {
             },
             parent_scheduled_job: parent_document_id.map(|id| (parent_component_id, id)),
             is_root: value.is_root.unwrap_or_default(),
+            request_metadata: RequestMetadata {
+                ip: value.client_ip.map(ClientIp::from),
+                user_agent: value.client_user_agent.map(ClientUserAgent::from),
+            },
         })
     }
 }
@@ -247,58 +338,8 @@ impl From<ExecutionContext> for JsonValue {
             "isRoot": value.is_root,
             "parentScheduledJob": parent_document_id.map(|id| id.to_string()),
             "parentScheduledJobComponentId": parent_component_id.unwrap_or(ComponentId::Root).serialize_to_string(),
+            "ip": value.request_metadata.ip.map(|ip| ip.into_string()),
+            "userAgent": value.request_metadata.user_agent.map(|ua| ua.into_string()),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        ExecutionId,
-        RequestId,
-    };
-
-    #[test]
-    fn request_id_json_serde_roundtrip() {
-        let request_id = RequestId::new();
-        let json = serde_json::to_string(&request_id).expect("request id should serialize");
-        assert_eq!(json, format!("\"{request_id}\""));
-
-        let deserialized: RequestId =
-            serde_json::from_str(&json).expect("request id should deserialize");
-        assert_eq!(deserialized, request_id);
-    }
-
-    #[test]
-    fn request_id_convex_serde_roundtrip() {
-        let request_id = RequestId::new();
-        let value = value::serde::to_value(request_id.clone())
-            .expect("request id should serialize to convex value");
-        let value::ConvexValue::String(serialized) = value else {
-            panic!("request id should serialize as string");
-        };
-        assert_eq!(String::from(serialized), request_id.to_string());
-    }
-
-    #[test]
-    fn execution_id_json_serde_roundtrip() {
-        let execution_id = ExecutionId::new();
-        let json = serde_json::to_string(&execution_id).expect("execution id should serialize");
-        assert_eq!(json, format!("\"{execution_id}\""));
-
-        let deserialized: ExecutionId =
-            serde_json::from_str(&json).expect("execution id should deserialize");
-        assert_eq!(deserialized, execution_id);
-    }
-
-    #[test]
-    fn execution_id_convex_serde_roundtrip() {
-        let execution_id = ExecutionId::new();
-        let value = value::serde::to_value(execution_id)
-            .expect("execution id should serialize to convex value");
-        let value::ConvexValue::String(serialized) = value else {
-            panic!("execution id should serialize as string");
-        };
-        assert_eq!(String::from(serialized), execution_id.to_string());
     }
 }

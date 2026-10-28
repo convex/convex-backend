@@ -1,5 +1,6 @@
 import {
   Auth,
+  MutationAuth,
   GenericDatabaseReader,
   GenericDatabaseReaderWithTable,
   GenericDatabaseWriter,
@@ -9,10 +10,18 @@ import {
   StorageWriter,
 } from "./index.js";
 import {
-  FunctionReference,
+  ActionMeta,
+  MutationMeta,
+  QueryMeta,
+  TransactionLimits,
+} from "./meta.js";
+import {
+  ArgsAndOptions,
   FunctionReturnType,
   OptionalRestArgs,
   ValidatorTypeToReturnType,
+  FunctionReference,
+  FunctionReference_future,
 } from "../server/api.js";
 import {
   GenericValidator,
@@ -79,12 +88,14 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
   db: GenericDatabaseWriter<DataModel>;
 
   /**
-   * Information about the currently authenticated user.
+   * Auth functionality for mutations.
    *
    * Call `await ctx.auth.getUserIdentity()` to get the current user's identity,
    * or `null` if the user is not authenticated.
+   *
+   * `ctx.auth.signJwt` is available for creating deployment issued JWTs.
    */
-  auth: Auth;
+  auth: MutationAuth;
 
   /**
    * A utility for reading and writing files in storage.
@@ -126,9 +137,13 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
    * const user = await ctx.runQuery(internal.users.getUser, { userId });
    * ```
    */
-  runQuery: <Query extends FunctionReference<"query", "public" | "internal">>(
+  runQuery: <
+    Query extends
+      | FunctionReference<"query", "public" | "internal">
+      | FunctionReference_future<"query", "public" | "internal">,
+  >(
     query: Query,
-    ...args: OptionalRestArgs<Query>
+    ...args: ArgsAndOptions<Query, AdvancedRunQueryOptions>
   ) => Promise<FunctionReturnType<Query>>;
 
   /**
@@ -142,11 +157,15 @@ export interface GenericMutationCtx<DataModel extends GenericDataModel> {
    * validation, and creating a new isolated JS context.
    */
   runMutation: <
-    Mutation extends FunctionReference<"mutation", "public" | "internal">,
+    Mutation extends
+      | FunctionReference<"mutation", "public" | "internal">
+      | FunctionReference_future<"mutation", "public" | "internal">,
   >(
     mutation: Mutation,
-    ...args: OptionalRestArgs<Mutation>
+    ...args: ArgsAndOptions<Mutation, { transactionLimits?: TransactionLimits }>
   ) => Promise<FunctionReturnType<Mutation>>;
+
+  meta: MutationMeta;
 }
 
 /**
@@ -234,10 +253,16 @@ export interface GenericQueryCtx<DataModel extends GenericDataModel> {
    * `runQuery` incurs overhead of running argument and return value validation,
    * and creating a new isolated JS context.
    */
-  runQuery: <Query extends FunctionReference<"query", "public" | "internal">>(
+  runQuery: <
+    Query extends
+      | FunctionReference<"query", "public" | "internal">
+      | FunctionReference_future<"query", "public" | "internal">,
+  >(
     query: Query,
-    ...args: OptionalRestArgs<Query>
+    ...args: ArgsAndOptions<Query, { transactionLimits?: TransactionLimits }>
   ) => Promise<FunctionReturnType<Query>>;
+
+  meta: QueryMeta;
 }
 
 /**
@@ -315,7 +340,11 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
    * @param args - The arguments to the query function.
    * @returns A promise of the query's result.
    */
-  runQuery<Query extends FunctionReference<"query", "public" | "internal">>(
+  runQuery<
+    Query extends
+      | FunctionReference<"query", "public" | "internal">
+      | FunctionReference_future<"query", "public" | "internal">,
+  >(
     query: Query,
     ...args: OptionalRestArgs<Query>
   ): Promise<FunctionReturnType<Query>>;
@@ -336,7 +365,9 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
    * @returns A promise of the mutation's result.
    */
   runMutation<
-    Mutation extends FunctionReference<"mutation", "public" | "internal">,
+    Mutation extends
+      | FunctionReference<"mutation", "public" | "internal">
+      | FunctionReference_future<"mutation", "public" | "internal">,
   >(
     mutation: Mutation,
     ...args: OptionalRestArgs<Mutation>
@@ -358,7 +389,11 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
    * @param args - The arguments to the action function.
    * @returns A promise of the action's result.
    */
-  runAction<Action extends FunctionReference<"action", "public" | "internal">>(
+  runAction<
+    Action extends
+      | FunctionReference<"action", "public" | "internal">
+      | FunctionReference_future<"action", "public" | "internal">,
+  >(
     action: Action,
     ...args: OptionalRestArgs<Action>
   ): Promise<FunctionReturnType<Action>>;
@@ -398,6 +433,8 @@ export interface GenericActionCtx<DataModel extends GenericDataModel> {
       VectorSearchQuery<NamedTableInfo<DataModel, TableName>, IndexName>
     >,
   ): Promise<Array<{ _id: Id<TableName>; _score: number }>>;
+
+  meta: ActionMeta;
 }
 
 /**
@@ -460,14 +497,16 @@ export type FunctionVisibility = "public" | "internal";
  * Given a {@link FunctionVisibility}, should this function have `isPublic: true`
  * or `isInternal: true`?
  */
-type VisibilityProperties<Visiblity extends FunctionVisibility> =
-  Visiblity extends "public"
-    ? {
-        isPublic: true;
-      }
-    : {
-        isInternal: true;
-      };
+type VisibilityProperties<Visiblity extends FunctionVisibility> = {
+  /** Phantom type marker; not present at runtime. */
+  _visibility: Visiblity;
+} & (Visiblity extends "public"
+  ? {
+      isPublic: true;
+    }
+  : {
+      isInternal: true;
+    });
 
 /**
  * A mutation function that is part of this app.
@@ -748,8 +787,8 @@ export type MutationBuilder<
       | Validator<any, "required", any>
       | void,
     ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
-    OneOrZeroArgs extends
-      ArgsArrayForOptionalValidator<ArgsValidator> = DefaultArgsForOptionalValidator<ArgsValidator>,
+    OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
+      DefaultArgsForOptionalValidator<ArgsValidator>,
   >(
     mutation:
       | {
@@ -841,8 +880,8 @@ export type MutationBuilderWithTable<
       | Validator<any, "required", any>
       | void,
     ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
-    OneOrZeroArgs extends
-      ArgsArrayForOptionalValidator<ArgsValidator> = DefaultArgsForOptionalValidator<ArgsValidator>,
+    OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
+      DefaultArgsForOptionalValidator<ArgsValidator>,
   >(
     mutation:
       | {
@@ -934,8 +973,8 @@ export type QueryBuilder<
       | Validator<any, "required", any>
       | void,
     ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
-    OneOrZeroArgs extends
-      ArgsArrayForOptionalValidator<ArgsValidator> = DefaultArgsForOptionalValidator<ArgsValidator>,
+    OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
+      DefaultArgsForOptionalValidator<ArgsValidator>,
   >(
     query:
       | {
@@ -1023,8 +1062,8 @@ export type QueryBuilderWithTable<
       | Validator<any, "required", any>
       | void,
     ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
-    OneOrZeroArgs extends
-      ArgsArrayForOptionalValidator<ArgsValidator> = DefaultArgsForOptionalValidator<ArgsValidator>,
+    OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
+      DefaultArgsForOptionalValidator<ArgsValidator>,
   >(
     query:
       | {
@@ -1112,8 +1151,8 @@ export type ActionBuilder<
       | Validator<any, "required", any>
       | void,
     ReturnValue extends ReturnValueForOptionalValidator<ReturnsValidator> = any,
-    OneOrZeroArgs extends
-      ArgsArrayForOptionalValidator<ArgsValidator> = DefaultArgsForOptionalValidator<ArgsValidator>,
+    OneOrZeroArgs extends ArgsArrayForOptionalValidator<ArgsValidator> =
+      DefaultArgsForOptionalValidator<ArgsValidator>,
   >(
     func:
       | {
@@ -1196,3 +1235,28 @@ export type ActionBuilder<
 export type HttpActionBuilder = (
   func: (ctx: GenericActionCtx<any>, request: Request) => Promise<Response>,
 ) => PublicHttpAction;
+
+export interface AdvancedRunQueryOptions {
+  /**
+   * Custom limits for a nested transaction. Each field specifies the absolute
+   * maximum allowed for the nested function call. Values are capped at the
+   * global transaction limits, so they can only lower limits, never raise them.
+   */
+  transactionLimits?: TransactionLimits;
+  /**
+   * Run a query on a recent snapshot of the database that is not guaranteed
+   * to be up-to-date when this transaction commits.
+   *
+   * This is an advanced feature which can introduce subtle race conditions,
+   * so its use is generally discouraged except for specific use-cases where
+   * database read conflicts are expected, e.g. reading from an append-only
+   * table with immutable records where the only read conflicts are from
+   * concurrent appends.
+   *
+   * To determine the snapshot of the nested query, you can call
+   * `ctx.meta.getSnapshotTs()` from within the stale snapshot query. To
+   * compare to the parent mutation's snapshot timestamp, you can return that
+   * value from the query and call `ctx.meta.getSnapshotTs()` from the parent.
+   */
+  useStaleSnapshot?: boolean;
+}

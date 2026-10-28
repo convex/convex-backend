@@ -143,7 +143,7 @@ if (process.argv.includes("standalone-cli")) {
       bundle: true,
       platform: "node",
       sourcemap: true,
-      target: "node14",
+      target: "node20",
       external: [
         // contains a binary
         "esbuild",

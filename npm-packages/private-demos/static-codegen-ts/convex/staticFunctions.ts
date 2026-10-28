@@ -25,7 +25,7 @@ export const q = query({
     vBranded,
   ),
   handler: async (ctx, args) => {
-    const document = await ctx.db.get(args.id);
+    const document = await ctx.db.get("empty", args.id);
     return document ?? ("" as Branded);
   },
 });

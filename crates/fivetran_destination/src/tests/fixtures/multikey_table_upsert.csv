@@ -1,4 +1,0 @@
-id1,id2,text,_fivetran_deleted,_fivetran_synced
-1,100,"first row",false,"2024-01-09T04:10:19.156057706Z"
-2,200,"second row",false,"2024-01-09T04:10:19.156057706Z"
-3,300,"third row",false,"2024-01-09T04:10:19.156057706Z"

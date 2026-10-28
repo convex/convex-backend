@@ -2,7 +2,7 @@ import { GenericDocument } from "convex/server";
 import { queryGeneric } from "../secretSystemTables";
 import { v } from "convex/values";
 
-export default queryGeneric({
+export default queryGeneric("ViewData")({
   args: {
     table: v.string(),
     limit: v.number(),

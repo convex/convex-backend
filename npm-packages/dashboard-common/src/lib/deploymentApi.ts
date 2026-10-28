@@ -1,6 +1,6 @@
-import { useCallback, useContext, useMemo } from "react";
+import { useContext, useMemo } from "react";
 import { Shape, shapeSchema } from "shapes";
-import useSWR, { BareFetcher, Middleware, useSWRConfig } from "swr";
+import useSWR, { BareFetcher, Middleware } from "swr";
 import { z } from "zod";
 import { useNents } from "@common/lib/useNents";
 import {
@@ -58,8 +58,7 @@ export function useTableShapes(): {
     fetcher,
     {
       use: [deploymentAuthMiddleware],
-      refreshWhenHidden: true,
-      refreshInterval: 5000,
+      refreshInterval: 60000,
     },
   );
   return {
@@ -75,24 +74,6 @@ export function useTableShapes(): {
     }, [data]),
     hadError: !!error,
   };
-}
-
-export function useInvalidateSourceCode() {
-  const { mutate } = useSWRConfig();
-  const deploymentUrl = useDeploymentUrl();
-  const authHeader = useDeploymentAuthHeader();
-
-  return useCallback(
-    async (componentId: string | null, path: string) => {
-      const componentQuery = componentId ? `&component=${componentId}` : "";
-      return mutate([
-        deploymentUrl,
-        `/api/get_source_code?path=${path}${componentQuery}`,
-        authHeader,
-      ]);
-    },
-    [authHeader, deploymentUrl, mutate],
-  );
 }
 
 // componentId: undefined means use the current selected component.

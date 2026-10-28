@@ -137,28 +137,6 @@ impl TryFrom<ConvexValue> for IndexedFields {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for IndexedFields {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = IndexedFields>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        // Use collection::hash_set to ensure that the fields in the index are unique.
-        // Filter out `_id` - because those aren't allowed in indexes. Surprisingly,
-        // proptest does randomly generate `_id` once in a while.
-        prop::collection::hash_set(
-            any::<FieldPath>()
-                .prop_filter("_id not allowed in index", |path| path != &*ID_FIELD_PATH),
-            1..8,
-        )
-        .prop_filter_map("Invalid IndexedFields", |set| {
-            IndexedFields::try_from(set.into_iter().collect::<Vec<_>>()).ok()
-        })
-    }
-}
-
 impl From<IndexedFields> for Vec<FieldPathProto> {
     fn from(fields: IndexedFields) -> Self {
         Vec::<FieldPath>::from(fields)

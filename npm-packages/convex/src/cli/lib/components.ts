@@ -43,16 +43,33 @@ import { typeCheckFunctionsInMode, TypeCheckMode } from "./typecheck.js";
 import { withTmpDir } from "../../bundler/fs.js";
 import { handleDebugBundlePath } from "./debugBundlePath.js";
 import { chalkStderr } from "chalk";
-import { StartPushRequest, StartPushResponse } from "./deployApi/startPush.js";
-import { loadSelectedDeploymentCredentials } from "./api.js";
+import {
+  startPushResponseForLogging,
+  redactEnvironmentVariableValues,
+  StartPushRequest,
+  StartPushResponse,
+} from "./deployApi/startPush.js";
+import { DetailedDeploymentCredentials } from "./api.js";
 import { FinishPushDiff } from "./deployApi/finishPush.js";
 import { Reporter, Span } from "./tracing.js";
 import { DEFINITION_FILENAME_TS } from "./components/constants.js";
-import { DeploymentSelection } from "./deploymentSelection.js";
 import { DeploymentType } from "./api.js";
 import { deploymentDashboardUrlPage } from "./dashboard.js";
 import { formatIndex, LargeIndexDeletionCheck } from "./indexes.js";
 import { checkForLargeIndexDeletion } from "./checkForLargeIndexDeletion.js";
+import { checkForSlowSchemaValidation } from "./checkForSlowSchemaValidation.js";
+import {
+  checkForLargeIndexBackfill,
+  LargeIndexBackfillCheck,
+} from "./checkForLargeIndexBackfill.js";
+import {
+  pushStagesValidators,
+  sharedSchemaEvaluation,
+} from "./schemaEvaluation.js";
+import {
+  checkForStagedValidatorDeletion,
+  StagedValidatorDeletionCheck,
+} from "./checkForStagedValidatorDeletion.js";
 import { LogManager } from "./logs.js";
 import { createHash } from "crypto";
 import { Bundle, BundleHash } from "../../bundler/index.js";
@@ -76,11 +93,18 @@ export type PushOptions = {
   pushAllModules: boolean;
   logManager?: LogManager | undefined;
   largeIndexDeletionCheck: LargeIndexDeletionCheck;
+  largeIndexBackfillCheck: LargeIndexBackfillCheck;
+  stagedValidatorDeletionCheck: StagedValidatorDeletionCheck;
+  // Whether a dry run should warn when the schema change would block the
+  // deploy on a slow table walk. On for deploys; off for commands whose dry
+  // runs never deploy (e.g. codegen).
+  warnOnSlowSchemaValidation: boolean;
+  message: string | null;
 };
 
 export async function runCodegen(
   ctx: Context,
-  deploymentSelection: DeploymentSelection,
+  credentials: DetailedDeploymentCredentials | null,
   options: CodegenOptions,
 ) {
   // This also ensures the current directory is the project root.
@@ -97,19 +121,9 @@ export async function runCodegen(
   }
 
   if (!options.systemUdfs) {
-    // Early exit for a better error message trying to use a preview key.
-    if (deploymentSelection.kind === "preview") {
-      return await ctx.crash({
-        exitCode: 1,
-        errorType: "invalid filesystem data",
-        printedMessage: `Codegen requires an existing deployment so doesn't support CONVEX_DEPLOY_KEY.\nGenerate code in dev and commit it to the repo instead.\nhttps://docs.convex.dev/understanding/best-practices/other-recommendations#check-generated-code-into-version-control`,
-      });
+    if (credentials === null) {
+      return;
     }
-
-    const credentials = await loadSelectedDeploymentCredentials(
-      ctx,
-      deploymentSelection,
-    );
 
     await startComponentsPushAndCodegen(
       ctx,
@@ -130,6 +144,11 @@ export async function runCodegen(
         liveComponentSources: options.liveComponentSources,
         typecheckComponents: false,
         debugNodeApis: options.debugNodeApis,
+        // Code generation uses the source schema independently of deployment data.
+        largeIndexDeletionCheck: "no verification",
+        largeIndexBackfillCheck: "no verification",
+        stagedValidatorDeletionCheck: "no verification",
+        warnOnSlowSchemaValidation: false,
       },
     );
   } else {
@@ -239,6 +258,9 @@ async function startComponentsPushAndCodegen(
     pushAllModules?: boolean;
     debugNodeApis: boolean;
     largeIndexDeletionCheck: LargeIndexDeletionCheck;
+    largeIndexBackfillCheck: LargeIndexBackfillCheck;
+    stagedValidatorDeletionCheck: StagedValidatorDeletionCheck;
+    warnOnSlowSchemaValidation: boolean;
     codegenOnlyThisComponent?: string | undefined;
   },
 ): Promise<StartPushResponse | null> {
@@ -443,6 +465,7 @@ async function startComponentsPushAndCodegen(
     componentDefinitions,
     nodeDependencies: appImplementation.externalNodeDependencies,
     nodeVersion: projectConfig.node.nodeVersion,
+    forCodegen: !!options.codegenOnlyThisComponent,
   };
   if (options.writePushRequest) {
     const pushRequestPath = path.resolve(options.writePushRequest);
@@ -454,6 +477,11 @@ async function startComponentsPushAndCodegen(
   }
   logStartPushSizes(parentSpan, startPushRequest);
 
+  const schemaEvaluation = sharedSchemaEvaluation(
+    ctx,
+    startPushRequest,
+    options,
+  );
   if (options.largeIndexDeletionCheck !== "no verification") {
     await parentSpan.enterAsync("checkForLargeIndexDeletion", (span) =>
       checkForLargeIndexDeletion({
@@ -461,8 +489,60 @@ async function startComponentsPushAndCodegen(
         span,
         request: startPushRequest,
         options,
+        schemaEvaluation,
         askForConfirmation:
           options.largeIndexDeletionCheck === "ask for confirmation",
+      }),
+    );
+  }
+
+  const largeIndexBackfillCheck = options.largeIndexBackfillCheck;
+  if (largeIndexBackfillCheck !== "no verification") {
+    await parentSpan.enterAsync("checkForLargeIndexBackfill", (span) =>
+      checkForLargeIndexBackfill({
+        ctx,
+        span,
+        schemaEvaluation,
+        options,
+        // A dry run never blocks on a backfill, so it only reports.
+        mode: options.dryRun ? "warn" : largeIndexBackfillCheck,
+      }),
+    );
+  }
+
+  const stagedValidatorDeletionCheck = options.stagedValidatorDeletionCheck;
+  if (stagedValidatorDeletionCheck !== "no verification") {
+    await parentSpan.enterAsync(
+      "checkForStagedValidatorDeletion",
+      async (span) => {
+        const response = await schemaEvaluation(span);
+        await checkForStagedValidatorDeletion({
+          ctx,
+          response,
+          askForConfirmation:
+            stagedValidatorDeletionCheck === "ask for confirmation",
+          // A dry run previews the confirmation required by a real push.
+          dryRun: options.dryRun,
+        });
+      },
+    );
+  }
+
+  // A real push evaluates the schema only when the evaluation is already
+  // paid for by the unstaging check or the pushed schema stages a validator,
+  // so `dev` pushes of ordinary schemas skip the isolate evaluation and round
+  // trip that the status report would otherwise add on every save.
+  if (
+    options.warnOnSlowSchemaValidation &&
+    (options.dryRun ||
+      stagedValidatorDeletionCheck !== "no verification" ||
+      pushStagesValidators(startPushRequest))
+  ) {
+    await parentSpan.enterAsync("checkForSlowSchemaValidation", (span) =>
+      checkForSlowSchemaValidation({
+        span,
+        schemaEvaluation,
+        dryRun: options.dryRun,
       }),
     );
   }
@@ -473,7 +553,10 @@ async function startComponentsPushAndCodegen(
   );
 
   if (options.verbose) {
-    logMessage("startPush: " + JSON.stringify(startPushResponse, null, 2));
+    logMessage(
+      "startPush: " +
+        JSON.stringify(startPushResponseForLogging(startPushResponse), null, 2),
+    );
   }
 
   if (options.codegen) {
@@ -659,7 +742,14 @@ function printDiff(
   opts: { verbose: boolean; dryRun: boolean; deploymentName: string | null },
 ) {
   if (opts.verbose) {
-    const diffString = JSON.stringify(finishPushResponse, null, 2);
+    const diffString = JSON.stringify(
+      redactEnvironmentVariableValues(
+        finishPushResponse,
+        startPushResponse.environmentVariables,
+      ),
+      null,
+      2,
+    );
     logMessage(diffString);
     return;
   }

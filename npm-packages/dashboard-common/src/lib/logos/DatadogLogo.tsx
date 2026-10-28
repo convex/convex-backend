@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { useTheme } from "next-themes";
+import { useCurrentTheme } from "../useCurrentTheme";
 
 type DatadogLogoProps = {
   className?: string;
@@ -7,7 +7,7 @@ type DatadogLogoProps = {
 };
 
 export function DatadogLogo({ className, size }: DatadogLogoProps) {
-  const { resolvedTheme: currentTheme } = useTheme();
+  const currentTheme = useCurrentTheme();
   const image =
     currentTheme === "dark" ? "/dd_icon_white.png" : "/dd_icon_rgb.png";
   return (

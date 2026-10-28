@@ -6,7 +6,6 @@ use serde::{
 use value::codegen_convex_serialization;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct CanonicalUrl {
     pub request_destination: RequestDestination,
     pub url: String,

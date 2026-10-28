@@ -1,0 +1,105 @@
+---
+title: "Chef Migration Guide"
+slug: "migration-guide"
+sidebar_position: 20
+sidebar_label: "Migration Guide"
+description:
+  "How to continue developing your existing Chef projects after Chef's
+  deprecation."
+---
+
+Convex Chef has had a good run but we’re in the process of replacing it with a
+new incarnation better suited to long-term application development on Convex.
+Your Chef projects will continue running but your Chef development flow will be
+impacted in the meantime. We apologize for the inconvenience! Read on for
+instructions on how to continue developing your existing Chef projects.
+
+## Continuing to develop on Chef projects
+
+If you’re a new user we recommend getting started on Convex directly via a
+coding agent or tutorial. If you have an existing Chef app however and don’t
+want to wait for the Chef successor, we recommend exporting your project for
+local development.
+
+Chef projects are fully fledged Convex projects and can be maintained either by
+hand or via a coding agent such as [OpenCode](https://opencode.ai/) or
+[Claude Code](https://claude.com/claude-code). Your data will still be intact
+and your Convex project will continue to run as normal.
+
+### Download your project
+
+Go to [chef.convex.dev/projects](https://chef.convex.dev/projects) and navigate
+to your chat. Click the download code button in the Chef UI to get a zip file of
+your project.
+
+Unzip the file and put the folder in your desired location. We recommend
+renaming the folder to the name of your app for convenience.
+
+### Open the project in your IDE
+
+Open the folder in the IDE of your choice
+([VS Code](https://code.visualstudio.com/), [Cursor](https://cursor.com/),
+[IntelliJ](https://www.jetbrains.com/idea/), etc.). From here you can use any
+coding agent — like [OpenCode](https://opencode.ai/) or
+[Claude Code](https://claude.com/claude-code) — to continue developing your
+project.
+
+### Install dependencies
+
+Open the terminal, `cd` into your app folder, and install all dependencies:
+
+```sh
+cd ~/<app folder>
+npm i
+```
+
+### Run your app
+
+Run the following command to start your app, and set up Convex if you haven’t
+already:
+
+```sh
+npm run dev
+```
+
+Follow any instructions to log in to Convex from your machine. This will run
+your Chef app locally — you will need to deploy using the CLI to get your app on
+the `convex.app` domain (see [Deploying to convex.app](#deploying-to-convexapp)
+below).
+
+<Admonition type="caution">
+  You have now taken over from Chef for development of this app. Chef doesn't
+  have the ability to re-import a project or track any progress from outside it.
+  Going back to this project on Chef will cause conflicts in your project.
+</Admonition>
+
+Happy building! Reach out to Convex support if you have any questions.
+
+## Deploying to convex.app
+
+The Convex platform doesn’t natively support hosting frontend code, just the
+backend for your application. We typically recommend using a hosting provider
+like [Netlify](/production/hosting/netlify.mdx) or
+[Vercel](/production/hosting/vercel.mdx) for hosting.
+
+If you’re a regular Chef developer however, you will have been able to host your
+app frontend on a `*.convex.app` domain and may want to keep using this. You can
+continue pushing changes to this same hosted frontend via a special CLI tool.
+
+<Admonition type="note">
+  Detailed CLI instructions for pushing to your existing `*.convex.app` frontend
+  are coming soon.
+</Admonition>
+
+Note that this tool will only allow you to push to existing Chef projects. If
+you’d love to see built-in hosting as a generally available Convex service, feel
+free to put in a request at [ship.convex.dev](https://ship.convex.dev/).
+
+## Advanced: Running Chef locally
+
+The Chef codebase is open source and available to run locally or to fork and
+modify. Projects created by open source Chef will still run on the Convex cloud
+with the same guarantees as regular Convex projects.
+
+See the Running Locally section at
+[github.com/convex/chef](https://github.com/convex/chef) for instructions.

@@ -1,11 +1,11 @@
 import { PaginationResult, SystemDataModel } from "convex/server";
-import { mutationGeneric } from "../server";
+import { mutationGeneric, writeAuditLog } from "../server";
 import { Id } from "../../_generated/dataModel";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { queryGeneric } from "../secretSystemTables";
 
-export const numFiles = queryGeneric({
+export const numFiles = queryGeneric("ViewData")({
   args: { componentId: v.optional(v.union(v.string(), v.null())) },
   handler: async ({ db }): Promise<number> => {
     return await db.system.query("_storage").count();
@@ -16,7 +16,7 @@ export type FileMetadata = SystemDataModel["_storage"]["document"] & {
   url: string;
 };
 
-export const fileMetadata = queryGeneric({
+export const fileMetadata = queryGeneric("ViewData")({
   args: {
     paginationOpts: paginationOptsValidator,
     filters: v.optional(
@@ -70,13 +70,14 @@ export const fileMetadata = queryGeneric({
   },
 });
 
-export const getFile = queryGeneric({
+export const getFile = queryGeneric("ViewData")({
   args: {
     storageId: v.string(),
+    componentId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (
     { db, storage },
-    { storageId }: { storageId: string },
+    { storageId },
   ): Promise<FileMetadata | null> => {
     const file = await db.system.get(storageId as Id<"_storage">);
     if (!file) {
@@ -90,7 +91,7 @@ export const getFile = queryGeneric({
   },
 });
 
-export const deleteFile = mutationGeneric({
+export const deleteFile = mutationGeneric("WriteData")({
   args: {
     storageId: v.id("_storage"),
     componentId: v.optional(v.union(v.string(), v.null())),
@@ -99,11 +100,14 @@ export const deleteFile = mutationGeneric({
     { storage },
     { storageId }: { storageId: Id<"_storage"> },
   ): Promise<void> => {
-    return await storage.delete(storageId);
+    await storage.delete(storageId);
+    await writeAuditLog("delete_files", {
+      storage_ids: [storageId],
+    });
   },
 });
 
-export const deleteFiles = mutationGeneric({
+export const deleteFiles = mutationGeneric("WriteData")({
   args: {
     storageIds: v.array(v.id("_storage")),
     componentId: v.optional(v.union(v.string(), v.null())),
@@ -112,12 +116,17 @@ export const deleteFiles = mutationGeneric({
     for (const storageId of storageIds) {
       await storage.delete(storageId);
     }
+    await writeAuditLog("delete_files", {
+      storage_ids: storageIds,
+    });
   },
 });
 
-export const generateUploadUrl = mutationGeneric({
+export const generateUploadUrl = mutationGeneric("WriteData")({
   args: { componentId: v.optional(v.union(v.string(), v.null())) },
   handler: async ({ storage }): Promise<string> => {
-    return await storage.generateUploadUrl();
+    const url = await storage.generateUploadUrl();
+    await writeAuditLog("generate_upload_url", {});
+    return url;
   },
 });

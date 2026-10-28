@@ -13,6 +13,7 @@ export const reportContentiously = mutation({
   handler: async ({ db }, { x, y, ts, session }): Promise<Id<"positions">> => {
     let pos = await db
       .query("positions")
+      // eslint-disable-next-line @convex-dev/no-filter-in-query -- intentionally writing a query that causes contention
       .filter((q) => q.eq(q.field("session"), session))
       .first();
     if (pos === null) {

@@ -1,7 +1,12 @@
 {
+  "name": "quickstart-nodejs",
+  "version": "0.0.0",
   "type": "module",
+  "scripts": {
+    "build": ""
+  },
   "dependencies": {
-    "convex": "^1.28.0",
-    "dotenv": "^16.0.3"
+    "convex": "workspace:*",
+    "dotenv": "^16.4.7"
   }
 }

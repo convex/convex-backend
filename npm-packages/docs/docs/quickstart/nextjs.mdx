@@ -11,10 +11,6 @@ import layout from "!!raw-loader!@site/../private-demos/quickstarts/nextjs-app-d
 import ConvexClientProvider from "!!raw-loader!@site/../private-demos/quickstarts/nextjs-app-dir/app/ConvexClientProvider.tsx";
 import tasks from "!!raw-loader!@site/../private-demos/quickstarts/nextjs-app-dir/convex/tasks.ts";
 import page from "!!raw-loader!@site/../private-demos/quickstarts/nextjs-app-dir/app/page.tsx";
-import layoutJs from "!!raw-loader!@site/../private-demos/quickstarts/nextjs-app-dir-js/app/layout.js";
-import ConvexClientProviderJs from "!!raw-loader!@site/../private-demos/quickstarts/nextjs-app-dir-js/app/ConvexClientProvider.jsx";
-import tasksJs from "!!raw-loader!@site/../private-demos/quickstarts/nextjs-app-dir-js/convex/tasks.js";
-import pageJs from "!!raw-loader!@site/../private-demos/quickstarts/nextjs-app-dir-js/app/page.js";
 
 <Admonition type="tip" title="Convex + Next.js">
 
@@ -40,8 +36,7 @@ or follow the guide below.
 
 ---
 
-Learn how to query data from Convex in a Next.js app using the App Router
-and<LanguageSelector verbose />
+Learn how to query data from Convex in a Next.js app using the App Router.
 
 Alternatively see the
 [Pages Router](/client/nextjs/pages-router/quickstart-nextjs-pages-router.mdx)
@@ -53,15 +48,9 @@ version of this quickstart.
 
     Choose the default option for every prompt (hit Enter).
 
-    <JSDialectVariants>
-      ```sh
-      npx create-next-app@latest my-app
-      ```
-
-      ```sh
-      npx create-next-app@latest my-app --js
-      ```
-    </JSDialectVariants>
+    ```sh
+    npx create-next-app@latest my-app --js
+    ```
 
   </Step>
   <Step title="Install the Convex client and server library">
@@ -106,22 +95,21 @@ version of this quickstart.
   <Step title="Add the sample data to your database">
     Use the [`import`](/database/import-export/import) command to add a `tasks` table with the sample data into your Convex database.
 
-    ```
+    ```sh
     npx convex import --table tasks sampleData.jsonl
     ```
 
   </Step>
 
   <Step title="Expose a database query">
-    In the `convex/` folder, add a new file <JSDialectFileName name="tasks.ts" /> with a query function that loads the data.
+    In the `convex/` folder, add a new file `tasks.ts` with a query function that loads the data.
 
     Exporting a query function from this file
     declares an API function named after the file
     and the export name: `api.tasks.get`.
 
-    <TSAndJSSnippet
-      sourceTS={tasks}
-      sourceJS={tasksJs}
+    <Snippet
+      source={tasks}
       title="convex/tasks.ts"
     />
 
@@ -130,39 +118,34 @@ version of this quickstart.
   <Step title="Create a client component for the Convex provider">
     For `<ConvexProvider>` to work on the client, `ConvexReactClient` must be passed to it.
 
-    In the `app/` folder, add a new file <JSDialectFileName name="ConvexClientProvider.tsx" /> with the following code. This creates a client component that wraps `<ConvexProvider>` and passes it the `<ConvexReactClient>`.
+    In the `app/` folder, add a new file `ConvexClientProvider.tsx` with the following code. This creates a client component that wraps `<ConvexProvider>` and passes it the `<ConvexReactClient>`.
 
-    <TSAndJSSnippet
-      sourceTS={ConvexClientProvider}
-      sourceJS={ConvexClientProviderJs}
+    <Snippet
+      source={ConvexClientProvider}
       title="app/ConvexClientProvider.tsx"
     />
 
   </Step>
 
   <Step title="Wire up the ConvexClientProvider">
-    In <JSDialectFileName name="app/layout.tsx" ext="js" />, wrap the children of the `body` element with the `<ConvexClientProvider>`.
+    In `app/layout.tsx`, wrap the children of the `body` element with the `<ConvexClientProvider>`.
 
-    <TSAndJSSnippet
-      sourceTS={layout}
-      sourceJS={layoutJs}
+    <Snippet
+      source={layout}
       title="app/layout.tsx"
-      jsExtension="js"
       highlightPatterns={[ "Convex", ]}
     />
 
   </Step>
 
   <Step title="Display the data in your app">
-    In <JSDialectFileName name="app/page.tsx" ext="js" />, use the `useQuery()` hook to fetch from your `api.tasks.get`
+    In `app/page.tsx`, use the `useQuery()` hook to fetch from your `api.tasks.get`
     API function.
 
-    <TSAndJSSnippet
-      sourceTS={page}
-      sourceJS={pageJs}
+    <Snippet
+      source={page}
       title="app/page.tsx"
-      jsExtension="js"
-      highlightPatterns={[ "use client", "useQuery", "api", "tasks", "text", "\\)\\)\\}" ]}
+      highlightPatterns={[ "use client", "useQuery", "api", "tasks", "text" ]}
     />
 
   </Step>

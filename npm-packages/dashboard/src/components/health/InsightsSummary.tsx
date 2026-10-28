@@ -32,7 +32,7 @@ export function InsightsSummary({
     );
   }
   return (
-    <div className="flex h-full w-full animate-fadeInFromLoading flex-col">
+    <div className="flex size-full animate-fadeInFromLoading flex-col">
       <div className="flex min-w-fit gap-2 border-b px-2 pt-2 pb-1 text-xs text-content-secondary">
         <p className="min-w-20">Severity</p>
         <p className="min-w-72">Function</p>

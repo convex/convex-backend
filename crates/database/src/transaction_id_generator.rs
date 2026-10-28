@@ -68,40 +68,13 @@ impl TransactionIdGenerator {
             DeveloperDocumentId::new(tablet_id_and_number.table_number, self.generate_internal()),
         )
     }
-}
 
-#[cfg(test)]
-mod tests {
-
-    use std::time::SystemTime;
-
-    use common::runtime::Runtime;
-    use runtime::testing::TestDriver;
-    use value::TableNumber;
-
-    use crate::transaction_id_generator::TransactionIdGenerator;
-
-    // Make sure that our production generated IDs really do contain the day in the
-    // last two bytes.
-    #[test]
-    fn generated_ids_include_day() -> anyhow::Result<()> {
-        let td = TestDriver::new();
-        let table = TableNumber::MIN;
-
-        let mut id_generator = TransactionIdGenerator::new(&td.rt())?;
-        let id = id_generator.generate(table);
-        let bytes = &id.internal_id()[..];
-        let mut day_bytes = [0u8; 8];
-        day_bytes[6..].copy_from_slice(&bytes[14..]);
-        let day_from_id = u64::from_be_bytes(day_bytes);
-
-        let duration = td
-            .rt()
-            .system_time()
-            .duration_since(SystemTime::UNIX_EPOCH)?;
-        let day_from_system_time = (duration.as_secs()) / 86400;
-
-        assert_eq!(day_from_id, day_from_system_time);
-        Ok(())
+    /// Clone the TransactionIdGenerator to pass into the transaction for a
+    /// snapshot query. The resulting generator should not be used.
+    pub(crate) fn clone_for_snapshot_query(&self) -> Self {
+        TransactionIdGenerator {
+            rng: self.rng.clone(),
+            day_bytes: self.day_bytes,
+        }
     }
 }

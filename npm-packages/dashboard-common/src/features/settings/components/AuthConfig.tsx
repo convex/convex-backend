@@ -1,15 +1,14 @@
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import React, { useContext } from "react";
 import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { Sheet } from "@ui/Sheet";
 import { CopyTextButton } from "@common/elements/CopyTextButton";
-import { ExternalLinkIcon } from "@radix-ui/react-icons";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 
 export function AuthConfig() {
   const authProviders = useQuery(udfs.listAuthProviders.default);
-  const { deploymentsURI } = useContext(DeploymentInfoContext);
+  const { deploymentsURI, isSelfHosted } = useContext(DeploymentInfoContext);
   return (
     <div className="flex flex-col gap-2">
       <Sheet>
@@ -21,10 +20,9 @@ export function AuthConfig() {
               <Link
                 passHref
                 href="https://docs.convex.dev/auth"
-                className="flex items-center gap-1 text-content-link hover:underline"
                 target="_blank"
+                externalIcon
               >
-                <ExternalLinkIcon />
                 Learn more about authentication
               </Link>
             </p>
@@ -61,7 +59,7 @@ export function AuthConfig() {
                           <span className="font-semibold">Type</span>
                           <Link
                             href="https://docs.convex.dev/auth/advanced/custom-jwt"
-                            className="border-y border-transparent py-1 text-sm font-normal text-content-link"
+                            className="border-y border-transparent py-1 text-sm font-normal"
                             target="_blank"
                           >
                             Custom JWT provider
@@ -82,7 +80,7 @@ export function AuthConfig() {
                           <span className="font-semibold">Type</span>
                           <Link
                             href="https://docs.convex.dev/auth/advanced/custom-auth"
-                            className="border-y border-transparent py-1 text-sm font-normal text-content-link"
+                            className="border-y border-transparent py-1 text-sm font-normal"
                             target="_blank"
                           >
                             OIDC provider
@@ -97,16 +95,15 @@ export function AuthConfig() {
           )}
         </div>
       </Sheet>
-      <p className="text-sm text-content-secondary">
-        Looking to create a Deploy Key? You can do so in{" "}
-        <Link
-          href={`${deploymentsURI}/settings`}
-          className="text-content-link hover:underline"
-        >
-          General Deployment Settings
-        </Link>
-        .
-      </p>
+      {!isSelfHosted && (
+        <p className="text-sm text-content-secondary">
+          Looking to create a Deploy Key? You can do so in{" "}
+          <Link href={`${deploymentsURI}/settings`}>
+            General Deployment Settings
+          </Link>
+          .
+        </p>
+      )}
     </div>
   );
 }

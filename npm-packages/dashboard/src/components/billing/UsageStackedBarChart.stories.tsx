@@ -40,7 +40,6 @@ const meta = {
       <UsageStackedBarChartWrapper {...args} />
     </Sheet>
   ),
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof UsageStackedBarChartWrapper>;
 
 export default meta;
@@ -95,7 +94,6 @@ export const Storage: Story = {
   args: {
     rows,
     quantityType: "storage",
-    showCategoryTotals: false,
   },
 };
 

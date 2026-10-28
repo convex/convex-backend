@@ -252,25 +252,14 @@ macro_rules! obj {
     });
 }
 
-#[cfg(any(test, feature = "testing"))]
-#[macro_export(local_inner_macros)]
-macro_rules! assert_val {
-    ( $($tt:tt)+ ) => ({
-        try bikeshed anyhow::Result<_> {
-            val!( $($tt)+ )
-        }.unwrap()
-    });
-}
-
-#[cfg(any(test, feature = "testing"))]
-#[macro_export(local_inner_macros)]
-macro_rules! assert_obj {
-    () => ({
-        $crate::ConvexObject::empty()
-    });
-    ( $($tt:tt)+ ) => ({
-        try bikeshed anyhow::Result<_> {
-            obj!( $($tt)+ )?
-        }.unwrap()
+#[macro_export]
+macro_rules! pending_obj {
+    ( $($key:expr => $value:expr),* $(,)? ) => ({
+        let mut fields =
+            std::collections::BTreeMap::<$crate::FieldName, $crate::PendingValue>::new();
+        $(
+            fields.insert($key.parse()?, $crate::PendingValue::try_from($value)?);
+        )*
+        $crate::PendingValue::object(fields)
     });
 }

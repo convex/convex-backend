@@ -11,6 +11,7 @@ use common::http::{
         Json,
         MtState,
     },
+    ExtractRequestMetadata,
     HttpResponseError,
 };
 use http::StatusCode;
@@ -22,6 +23,7 @@ use model::environment_variables::{
     },
     EnvironmentVariablesModel,
 };
+use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
     Serialize,
@@ -30,10 +32,6 @@ use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 
 use crate::{
-    admin::{
-        must_be_admin,
-        must_be_admin_with_write_access,
-    },
     authentication::ExtractIdentity,
     LocalAppState,
 };
@@ -77,6 +75,7 @@ pub struct UpdateEnvVarsRequest {
 #[utoipa::path(
     post,
     path = "/update_environment_variables",
+    tag = "Environment Variables",
     request_body = UpdateEnvVarsRequest,
     responses((status = 200)),
     security(
@@ -89,9 +88,10 @@ pub struct UpdateEnvVarsRequest {
 pub async fn update_environment_variables(
     State(st): State<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(UpdateEnvVarsRequest { changes }): Json<UpdateEnvVarsRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::WriteEnvironmentVariables)?;
 
     let mut env_var_changes = vec![];
     for change in changes {
@@ -106,7 +106,7 @@ pub async fn update_environment_variables(
         .await?;
 
     st.application
-        .commit_with_audit_log_events(tx, audit_events, "update_env_vars")
+        .commit_with_audit_log_events(tx, audit_events, request_metadata, "update_env_vars")
         .await?;
 
     Ok(StatusCode::OK)
@@ -126,6 +126,7 @@ pub struct ListEnvVarsResponse {
 #[utoipa::path(
     get,
     path = "/list_environment_variables",
+    tag = "Environment Variables",
     responses(
         (status = 200, body = ListEnvVarsResponse)
     ),
@@ -140,7 +141,7 @@ pub async fn list_environment_variables(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ViewEnvironmentVariables)?;
 
     let mut tx = st.application.begin(identity).await?;
     let env_vars = EnvironmentVariablesModel::new(&mut tx).get_all().await?;
@@ -170,129 +171,4 @@ where
         update_environment_variables,
         list_environment_variables
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use axum_extra::headers::authorization::Credentials;
-    use common::types::{
-        EnvVarName,
-        EnvVarValue,
-    };
-    use http::Request;
-    use keybroker::Identity;
-    use maplit::btreemap;
-    use model::environment_variables::EnvironmentVariablesModel;
-    use runtime::prod::ProdRuntime;
-    use serde_json::json;
-
-    use crate::test_helpers::{
-        setup_backend_for_test,
-        TestLocalBackend,
-    };
-
-    async fn update_environment_variables(
-        backend: &TestLocalBackend,
-        changes: serde_json::Value,
-    ) -> anyhow::Result<()> {
-        let json_body = json!({"changes": changes});
-        let body = axum::body::Body::from(serde_json::to_vec(&json_body)?);
-        let req = Request::builder()
-            .uri("/api/update_environment_variables")
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(body)?;
-        let () = backend.expect_success(req).await?;
-        Ok(())
-    }
-
-    async fn list_environment_variables(
-        backend: &TestLocalBackend,
-    ) -> anyhow::Result<BTreeMap<EnvVarName, EnvVarValue>> {
-        let mut tx = backend.st.application.begin(Identity::system()).await?;
-        let envs = EnvironmentVariablesModel::new(&mut tx).get_all().await?;
-        Ok(envs)
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_env_vars(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-        update_environment_variables(
-            &backend,
-            json!([
-                {"name": "name1", "value": "value1"},
-                {"name": "name2", "value": "value2"},
-            ]),
-        )
-        .await?;
-        assert_eq!(
-            list_environment_variables(&backend).await?,
-            btreemap! {
-                "name1".parse()? => "value1".parse()?,
-                "name2".parse()? => "value2".parse()?,
-            }
-        );
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_update_env_vars(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-        update_environment_variables(
-            &backend,
-            json!([
-                {"name": "name1", "value": "value1"},
-                {"name": "name2", "value": "value2"},
-            ]),
-        )
-        .await?;
-        update_environment_variables(
-            &backend,
-            json!([
-                {"name": "name2", "value": "value2b"},
-                {"name": "name3", "value": "value3"},
-            ]),
-        )
-        .await?;
-        assert_eq!(
-            list_environment_variables(&backend).await?,
-            btreemap! {
-                "name1".parse()? => "value1".parse()?,
-                "name2".parse()? => "value2b".parse()?,
-                "name3".parse()? => "value3".parse()?,
-            }
-        );
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_delete_env_vars(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-        update_environment_variables(
-            &backend,
-            json!([
-                {"name": "name1", "value": "value1"},
-                {"name": "name2", "value": "value2"},
-            ]),
-        )
-        .await?;
-        update_environment_variables(
-            &backend,
-            json!([
-                {"name": "name2"},
-                {"name": "name3"},
-            ]),
-        )
-        .await?;
-        assert_eq!(
-            list_environment_variables(&backend).await?,
-            btreemap! {
-                "name1".parse()? => "value1".parse()?,
-            }
-        );
-        Ok(())
-    }
 }

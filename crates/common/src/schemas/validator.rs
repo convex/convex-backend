@@ -1,5 +1,3 @@
-#[cfg(any(test, feature = "testing"))]
-use std::collections::BTreeSet;
 use std::{
     borrow::Borrow,
     collections::BTreeMap,
@@ -11,8 +9,6 @@ use std::{
 };
 
 use errors::ErrorMetadata;
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use serde_json::{
     Number,
     Value as JsonValue,
@@ -44,6 +40,7 @@ use value::{
 
 use super::DocumentSchema;
 use crate::{
+    bootstrap_model::components::handles::FunctionHandle,
     document::{
         CREATION_TIME_FIELD,
         ID_FIELD,
@@ -64,63 +61,19 @@ pub enum Validator {
     Null,
     Float64,
     Int64,
+    /// CommitTs at rest should be an `Int64`, but in a pending write can be a
+    /// placeholder value. The CommitTs is injected at commit time.
+    CommitTs,
     Boolean,
     String,
     Bytes,
+    Function(FunctionValidator),
     Literal(LiteralValidator),
     Array(Box<Validator>),
     Record(Box<Validator>, Box<Validator>),
     Object(ObjectValidator),
     Union(Vec<Validator>),
     Any,
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for Validator {
-    type Parameters = BTreeSet<TableName>;
-
-    type Strategy = impl proptest::strategy::Strategy<Value = Validator>;
-
-    fn arbitrary_with(table_names: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        let id_validator = if table_names.is_empty() {
-            any::<TableName>().prop_map(Validator::Id).boxed()
-        } else {
-            let table_names: Vec<_> = table_names.into_iter().collect();
-            proptest::sample::select(table_names)
-                .prop_map(Validator::Id)
-                .boxed()
-        };
-        let leaf = prop_oneof![
-            Just(Validator::Null),
-            id_validator,
-            Just(Validator::Float64),
-            Just(Validator::Int64),
-            Just(Validator::Boolean),
-            Just(Validator::String),
-            Just(Validator::Bytes),
-            any::<LiteralValidator>().prop_map(Validator::Literal),
-            Just(Validator::Any),
-        ];
-        leaf.prop_recursive(3, 8, 8, move |inner| {
-            prop_oneof![
-                inner.clone().prop_map(Box::new).prop_map(Validator::Array),
-                prop::collection::btree_map(
-                    any::<IdentifierFieldName>(),
-                    (inner.clone(), proptest::bool::ANY).prop_map(|(validator, optional)| {
-                        FieldValidator {
-                            validator,
-                            optional,
-                        }
-                    }),
-                    0..8
-                )
-                .prop_map(ObjectValidator)
-                .prop_map(Validator::Object),
-                prop::collection::vec(inner, 1..8).prop_map(Validator::Union),
-            ]
-        })
-    }
 }
 
 impl Display for Validator {
@@ -130,6 +83,8 @@ impl Display for Validator {
             Validator::Null => write!(f, "v.null()"),
             Validator::Float64 => write!(f, "v.float64()"),
             Validator::Int64 => write!(f, "v.int64()"),
+            Validator::CommitTs => write!(f, "v.commitTs()"),
+            Validator::Function(function_validator) => write!(f, "{function_validator}"),
             Validator::Boolean => write!(f, "v.boolean()"),
             Validator::String => write!(f, "v.string()"),
             Validator::Bytes => write!(f, "v.bytes()"),
@@ -154,14 +109,13 @@ impl Validator {
     ) -> Result<(), ValidationError> {
         let all_tables_number_to_name =
             all_tables_number_to_name(table_mapping, virtual_system_mapping);
-        self.check_value_internal(value, &all_tables_number_to_name, ValidationContext::new())
+        self.check_value_internal(value, &all_tables_number_to_name)
     }
 
     fn check_value_internal(
         &self,
         value: &ConvexValue,
         all_tables_number_to_name: &impl Fn(TableNumber) -> anyhow::Result<TableName>,
-        context: ValidationContext,
     ) -> Result<(), ValidationError> {
         match (self, value) {
             (Validator::Id(validator_table), ConvexValue::String(s)) => {
@@ -170,85 +124,88 @@ impl Validator {
                 {
                     if &table_name != validator_table {
                         if table_name.is_system() {
-                            let err = ValidationError::SystemTableReference {
+                            return Err(ValidationError::SystemTableReference {
                                 id,
                                 validator_table: validator_table.clone(),
-                                context,
-                            };
-                            return Err(err);
+                                context: ValidationContext::new(),
+                            });
                         } else {
-                            let err = ValidationError::TableNamesDoNotMatch {
+                            return Err(ValidationError::TableNamesDoNotMatch {
                                 id,
                                 found_table_name: table_name,
                                 validator_table: validator_table.clone(),
-                                context,
-                            };
-                            return Err(err);
+                                context: ValidationContext::new(),
+                            });
                         }
                     }
                 } else {
-                    let err = ValidationError::NoMatch {
+                    return Err(ValidationError::NoMatch {
                         value: value.clone(),
                         validator: self.clone(),
-                        context,
-                    };
-                    return Err(err);
+                        context: ValidationContext::new(),
+                    });
                 }
             },
             (Validator::Null, ConvexValue::Null)
             | (Validator::Float64, ConvexValue::Float64(_))
             | (Validator::Int64, ConvexValue::Int64(_))
+            | (Validator::CommitTs, ConvexValue::Int64(_))
             | (Validator::Boolean, ConvexValue::Boolean(_))
             | (Validator::String, ConvexValue::String(_))
             | (Validator::Bytes, ConvexValue::Bytes(_)) => return Ok(()),
+            (Validator::Function(_), ConvexValue::String(s)) => {
+                if s.parse::<FunctionHandle>().is_err() {
+                    return Err(ValidationError::NoMatch {
+                        value: value.clone(),
+                        validator: self.clone(),
+                        context: ValidationContext::new(),
+                    });
+                }
+                return Ok(());
+            },
             (Validator::Literal(literal), value) => {
                 let literal_as_value: ConvexValue = literal.clone().into();
                 if value != &literal_as_value {
                     return Err(ValidationError::LiteralValuesDoNotMatch {
                         value: value.clone(),
                         literal_validator: literal.clone(),
-                        context,
+                        context: ValidationContext::new(),
                     });
                 }
             },
             (Validator::Array(t), ConvexValue::Array(v)) => {
                 for (i, elt) in v.into_iter().enumerate() {
-                    t.check_value_internal(
-                        elt,
-                        all_tables_number_to_name,
-                        context.with(format!("[{i}]")),
-                    )?;
+                    t.check_value_internal(elt, all_tables_number_to_name)
+                        .map_err(|e| e.with_context(format!("[{i}]")))?;
                 }
             },
             (Validator::Record(key_type, value_type), ConvexValue::Object(object)) => {
                 for (key, value) in object.iter() {
-                    key_type.check_value_internal(
-                        &ConvexValue::from(key.clone()),
-                        all_tables_number_to_name,
-                        context.with(format!(".keys()")),
-                    )?;
-                    value_type.check_value_internal(
-                        value,
-                        all_tables_number_to_name,
-                        context.with(format!(".values()")),
-                    )?;
+                    key_type
+                        .check_value_internal(
+                            &ConvexValue::from(key.clone()),
+                            all_tables_number_to_name,
+                        )
+                        .map_err(|e| e.with_context(".keys()".to_string()))?;
+                    value_type
+                        .check_value_internal(value, all_tables_number_to_name)
+                        .map_err(|e| e.with_context(".values()".to_string()))?;
                 }
             },
             (Validator::Object(object_validator), ConvexValue::Object(object)) => {
                 for (field_name, field_type) in &object_validator.0 {
                     let maybe_value = object.get::<str>(field_name.borrow());
                     if let Some(value) = maybe_value {
-                        field_type.validator.check_value_internal(
-                            value,
-                            all_tables_number_to_name,
-                            context.with(format!(".{field_name}")),
-                        )?
+                        field_type
+                            .validator
+                            .check_value_internal(value, all_tables_number_to_name)
+                            .map_err(|e| e.with_context(format!(".{field_name}")))?
                     } else if !field_type.optional {
                         return Err(ValidationError::MissingRequiredField {
                             object: object.clone(),
                             field_name: field_name.clone(),
                             object_validator: object_validator.clone(),
-                            context,
+                            context: ValidationContext::new(),
                         });
                     }
                 }
@@ -258,24 +215,20 @@ impl Validator {
                             object: object.clone(),
                             field_name: field.clone(),
                             object_validator: object_validator.clone(),
-                            context,
+                            context: ValidationContext::new(),
                         });
                     }
                 }
             },
             (Validator::Union(validators), value) => {
                 if validators.len() == 1 {
-                    return validators[0].check_value_internal(
-                        value,
-                        all_tables_number_to_name,
-                        context,
-                    );
+                    return validators[0].check_value_internal(value, all_tables_number_to_name);
                 }
 
                 // TODO: This is dropping the error messages from the individual
                 // validators. Maybe we should combine them if this fails?
                 for t in validators {
-                    if t.check_value_internal(value, all_tables_number_to_name, context.clone())
+                    if t.check_value_internal(value, all_tables_number_to_name)
                         .is_ok()
                     {
                         return Ok(());
@@ -284,7 +237,7 @@ impl Validator {
                 return Err(ValidationError::NoMatch {
                     value: value.clone(),
                     validator: self.clone(),
-                    context,
+                    context: ValidationContext::new(),
                 });
             },
             (Validator::Any, _) => return Ok(()),
@@ -292,7 +245,7 @@ impl Validator {
                 return Err(ValidationError::NoMatch {
                     value: value.clone(),
                     validator: self.clone(),
-                    context,
+                    context: ValidationContext::new(),
                 })
             },
         };
@@ -413,13 +366,21 @@ impl Validator {
             // Identical types
             (v1, v2) if v1 == v2 => true,
 
+            // Function handles are considered identical
+            (Validator::Function(_), Validator::Function(_)) => true,
+
             // Types that are subsets of other ones
             (_, Validator::Any)
             | (Validator::Literal(LiteralValidator::String(_)), Validator::String)
             | (Validator::Literal(LiteralValidator::Int64(_)), Validator::Int64)
+            // CommitTs and Int64 accept the same set of values.
+            | (Validator::CommitTs, Validator::Int64)
+            | (Validator::Int64, Validator::CommitTs)
+            | (Validator::Literal(LiteralValidator::Int64(_)), Validator::CommitTs)
             | (Validator::Literal(LiteralValidator::Float64(_)), Validator::Float64)
             | (Validator::Literal(LiteralValidator::Boolean(_)), Validator::Boolean)
-            | (Validator::Id(_), Validator::String) => true,
+            | (Validator::Id(_), Validator::String)
+            | (Validator::Function(_), Validator::String) => true,
 
             // Unions
             (Validator::Union(left_cases), _) => left_cases
@@ -441,6 +402,19 @@ impl Validator {
         }
     }
 
+    /// Accepts only string-backed validators: `v.string()`, string
+    /// `v.literal("...")`, and `v.union(...)` of those (with arbitrary
+    /// nesting). Used to restrict component env-var declarations, since env
+    /// var values stay string-backed on the wire and in storage.
+    pub fn is_string_like_validator(&self) -> bool {
+        match self {
+            Validator::String => true,
+            Validator::Literal(LiteralValidator::String(_)) => true,
+            Validator::Union(cases) => cases.iter().all(|c| c.is_string_like_validator()),
+            _ => false,
+        }
+    }
+
     /// Is this something like `v.union(v.literal("foo"), v.literal("bar"))`
     /// These need to be treated differently if they are the key type for
     /// Validator::Record
@@ -450,9 +424,11 @@ impl Validator {
             | Validator::Null
             | Validator::Float64
             | Validator::Int64
+            | Validator::CommitTs
             | Validator::Boolean
             | Validator::String
             | Validator::Bytes
+            | Validator::Function(_)
             | Validator::Array(_)
             | Validator::Record(..)
             | Validator::Object(_)
@@ -549,9 +525,11 @@ impl Validator {
             | Validator::Null
             | Validator::Float64
             | Validator::Int64
+            | Validator::CommitTs
             | Validator::Boolean
             | Validator::String
             | Validator::Bytes
+            | Validator::Function(_)
             | Validator::Literal(_)
             // Values that map to `any`
             | Validator::Record(_, _)
@@ -592,9 +570,11 @@ impl Validator {
             Validator::Null => json_schemas::null(),
             Validator::Float64 => json_schemas::float64(true, value_format),
             Validator::Int64 => json_schemas::int64(value_format),
+            Validator::CommitTs => json_schemas::int64(value_format),
             Validator::Boolean => json_schemas::boolean(),
             Validator::String => json_schemas::string(),
             Validator::Bytes => json_schemas::bytes(value_format),
+            Validator::Function(_) => json_schemas::string(),
             Validator::Literal(literal_validator) => match literal_validator {
                 LiteralValidator::Float64(_) => json_schemas::float64(true, value_format),
                 LiteralValidator::Int64(_) => json_schemas::int64(value_format),
@@ -657,7 +637,9 @@ impl Validator {
                 | Self::Literal(_)
                 | Self::Null
                 | Self::Float64
-                | Self::Int64 => {},
+                | Self::Int64
+                | Self::CommitTs
+                | Self::Function(_) => {},
             },
         ))
     }
@@ -669,9 +651,11 @@ impl Validator {
             | Validator::Null
             | Validator::Float64
             | Validator::Int64
+            | Validator::CommitTs
             | Validator::Boolean
             | Validator::String
             | Validator::Bytes
+            | Validator::Function(_)
             | Validator::Literal(_)
             | Validator::Array(_)
             | Validator::Record(..)
@@ -708,33 +692,81 @@ impl From<Option<DocumentSchema>> for Validator {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ValidationContext(Option<String>);
+pub struct ValidationContext {
+    reversed_path: Vec<String>,
+}
 
 impl ValidationContext {
     pub fn new() -> Self {
-        ValidationContext(None)
-    }
-
-    pub fn with(&self, new_context: String) -> Self {
-        match &self.0 {
-            Some(context) => Self(Some(format!("{context}{new_context}"))),
-            None => Self(Some(new_context)),
+        ValidationContext {
+            reversed_path: vec![],
         }
     }
 }
 
 impl Display for ValidationContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(context) = &self.0 {
-            write!(f, "Path: {context}")
+        if !self.reversed_path.is_empty() {
+            write!(f, "Path: ")?;
+            for elem in self.reversed_path.iter().rev() {
+                write!(f, "{elem}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// These parameters are only used in codegen for function validator types, and
+/// should not be checked at runtime.
+#[derive(Clone, Debug, Default, Eq, Ord, PartialOrd, PartialEq)]
+pub struct FunctionValidator {
+    pub fn_type: Option<FunctionHandleType>,
+    pub args: Option<Box<Validator>>,
+    pub returns: Option<Box<Validator>>,
+}
+
+impl Display for FunctionValidator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut fields = vec![];
+        if let Some(fn_type) = self.fn_type {
+            fields.push(format!("fnType: \"{fn_type}\""));
+        }
+        if let Some(args) = &self.args {
+            fields.push(format!("args: {args}"));
+        }
+        if let Some(returns) = &self.returns {
+            fields.push(format!("returns: {returns}"));
+        }
+        if fields.is_empty() {
+            write!(f, "v.function()")
         } else {
-            Ok(())
+            write!(f, "v.function({{ {} }})", fields.join(", "))
         }
     }
 }
 
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Ord,
+    PartialOrd,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::Display,
+    strum::EnumString,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum FunctionHandleType {
+    Query,
+    Mutation,
+    Action,
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialOrd, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum LiteralValidator {
     Float64(TotalOrdF64),
     Int64(i64),
@@ -790,19 +822,7 @@ impl TryFrom<ConvexValue> for LiteralValidator {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    proptest(params = "BTreeSet<TableName>")
-)]
 pub struct ObjectValidator(
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::btree_map(any::<IdentifierFieldName>(), \
-                        any_with::<FieldValidator>(params), 0..8)"
-        )
-    )]
     pub BTreeMap<IdentifierFieldName, FieldValidator>,
 );
 
@@ -894,16 +914,7 @@ impl ObjectValidator {
 
 /// Object fields can be optional.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    proptest(params = "BTreeSet<TableName>")
-)]
 pub struct FieldValidator {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "any_with::<Validator>(params)")
-    )]
     pub validator: Validator,
     pub optional: bool,
 }
@@ -1005,803 +1016,20 @@ Validator: {validator}"
     },
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::BTreeMap,
-        str::FromStr,
-    };
-
-    use cmd_util::env::env_config;
-    use errors::ErrorMetadataAnyhowExt;
-    use json_trait::JsonForm as _;
-    use maplit::{
-        btreemap,
-        btreeset,
-    };
-    use proptest::prelude::*;
-    use serde_json::json;
-    use shape_inference::{
-        testing::TestConfig,
-        CountedShape,
-    };
-    use value::{
-        array,
-        assert_obj,
-        assert_val,
-        export::ValueFormat,
-        id_v6::DeveloperDocumentId,
-        proptest::{
-            RestrictNaNs,
-            ValueBranching,
-        },
-        ConvexObject,
-        ConvexValue,
-        FieldName,
-        FieldType,
-        InternalId,
-        NamespacedTableMapping,
-        TableMapping,
-        TableName,
-        TableNamespace,
-    };
-
-    use super::Validator;
-    use crate::{
-        schemas::{
-            validator::{
-                FieldValidator,
-                LiteralValidator,
-                ObjectValidator,
-                ValidationContext,
-                ValidationError,
-            },
-            DocumentSchema,
-        },
-        testing::TestIdGenerator,
-        virtual_system_mapping::{
-            all_tables_name_to_number,
-            VirtualSystemMapping,
-        },
-    };
-
-    fn empty_table_mapping() -> NamespacedTableMapping {
-        TableMapping::new().namespace(TableNamespace::test_user())
-    }
-
-    // Arbitrary `TryFrom` implementation for testing `check_value`.
-    fn value_from_validator(
-        validator: Validator,
-        id_generator: &TestIdGenerator,
-    ) -> anyhow::Result<ConvexValue> {
-        let value = match validator {
-            Validator::Id(table_name) => {
-                let id = InternalId::MIN;
-                let table_number = all_tables_name_to_number(
-                    TableNamespace::test_user(),
-                    id_generator,
-                    &id_generator.virtual_system_mapping,
-                )(table_name)?;
-                let doc_idv6 = DeveloperDocumentId::new(table_number, id);
-                ConvexValue::String(doc_idv6.encode().try_into()?)
-            },
-            Validator::Null => assert_val!(null),
-            Validator::Float64 => assert_val!(0.),
-            Validator::Int64 => assert_val!(0),
-            Validator::Boolean => assert_val!(false),
-            Validator::String => assert_val!(""),
-            Validator::Bytes => ConvexValue::Bytes(vec![1, 2, 3].try_into()?),
-            Validator::Literal(literal) => literal.into(),
-            Validator::Array(v) => {
-                assert_val!([value_from_validator(*v, id_generator)?])
-            },
-            Validator::Record(k, v) => {
-                let key = value_from_validator(*k, id_generator)?;
-                let field_name = match key {
-                    ConvexValue::String(s) => FieldName::from_str(&s)?,
-                    _ => anyhow::bail!("Record key was not a string"),
-                };
-                assert_val!({field_name => value_from_validator(*v, id_generator)?})
-            },
-            Validator::Object(object) => {
-                let map: BTreeMap<_, _> = object
-                    .0
-                    .into_iter()
-                    .map(|(field_name, field_type)| {
-                        let value = value_from_validator(field_type.validator, id_generator)?;
-                        anyhow::Ok::<(FieldName, ConvexValue)>((field_name.into(), value))
-                    })
-                    .try_collect()?;
-                ConvexValue::Object(map.try_into()?)
-            },
-            Validator::Union(validators) => {
-                let validator = validators.into_iter().next().ok_or_else(|| {
-                    anyhow::anyhow!("Union validator must have at least one validator")
-                })?;
-                value_from_validator(validator, id_generator)?
-            },
-            Validator::Any => assert_val!(null),
-        };
-        Ok(value)
-    }
-
-    // Arbitrary implementation for testing `check_object`.
-    fn object_from_schema(
-        schema: DocumentSchema,
-        id_generator: &TestIdGenerator,
-    ) -> anyhow::Result<ConvexObject> {
-        match schema {
-            DocumentSchema::Any => Ok(btreemap! {}.try_into()?),
-            DocumentSchema::Union(objects) => {
-                let object = objects.into_iter().next().ok_or_else(|| {
-                    anyhow::anyhow!("Union validator must have at least one validator")
-                })?;
-                value_from_validator(Validator::Object(object), id_generator)?.try_into()
-            },
+impl ValidationError {
+    fn context(&mut self) -> &mut ValidationContext {
+        match self {
+            ValidationError::TableNamesDoNotMatch { context, .. }
+            | ValidationError::SystemTableReference { context, .. }
+            | ValidationError::LiteralValuesDoNotMatch { context, .. }
+            | ValidationError::MissingRequiredField { context, .. }
+            | ValidationError::ExtraField { context, .. }
+            | ValidationError::NoMatch { context, .. } => context,
         }
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 64 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-        #[test]
-        fn test_check_value(v in any_with::<DocumentSchema>(btreeset! { "table_name".parse::<TableName>().unwrap(), "table_name_2".parse::<TableName>().unwrap()}, )) {
-            let mut id_generator = TestIdGenerator::new();
-            id_generator.user_generate(&"table_name".parse().unwrap());
-            id_generator.generate_virtual(&"table_name_2".parse().unwrap());
-            // Test that `check_value` succeeds for objects created from arbitrary document schemas.
-            let object = object_from_schema(v.clone(), &id_generator).unwrap();
-            v.check_value(
-                &object,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &id_generator.virtual_system_mapping,
-            ).unwrap();
-        }
-
-    }
-
-    #[test]
-    fn test_record_can_have_string_keys() -> anyhow::Result<()> {
-        // Tests validator with type
-        // `v.object({ myArg: v.record(v.string(), v.number()) })`
-        let validator_json = json!({
-            "type": "object",
-            "value": {
-                "myArg": {
-                    "fieldType": {
-                        "type": "record",
-                        "keys": {
-                            "type": "string",
-                        },
-                        "values": {
-                            "fieldType": { "type": "number" },
-                            "optional": false,
-                        }
-                    },
-                    "optional": false
-                },
-            }
-        });
-        assert!(Validator::json_deserialize_value(validator_json).is_ok());
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_can_have_string_subset_as_key() -> anyhow::Result<()> {
-        // Tests validator with type
-        // `v.object({ myArg: v.record(v.id("users"), v.number()) })`
-        let validator_json = json!({
-            "type": "object",
-            "value": {
-                "myArg": {
-                    "fieldType": {
-                        "type": "record",
-                        "keys": {
-                            "type": "id",
-                            "tableName": "users",
-                        },
-                        "values": {
-                            "fieldType": { "type": "number" },
-                            "optional": false,
-                        }
-                    },
-                    "optional": false
-                },
-            }
-        });
-        assert!(Validator::json_deserialize_value(validator_json).is_ok());
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_key_any() -> anyhow::Result<()> {
-        // Tests validator with type
-        // `v.object({ myArg: v.record(v.any(), v.number()) })`
-        let validator_json = json!({
-            "type": "object",
-            "value": {
-                "myArg": {
-                    "fieldType": {
-                        "type": "record",
-                        "keys": {
-                            "type": "any",
-                        },
-                        "values": {
-                            "fieldType": { "type": "number" },
-                            "optional": false,
-
-                        }
-                    },
-                    "optional": false
-                },
-            }
-        });
-        must_let::must_let!(let Err(e) = Validator::json_deserialize_value(validator_json));
-        assert_eq!(e.short_msg(), "InvalidRecordType");
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_cannot_have_number_keys() -> anyhow::Result<()> {
-        // Tests validator with type
-        // `v.object({ myArg: v.record(v.number(), v.number()) })`
-        let validator_json = json!({
-            "type": "object",
-            "value": {
-                "myArg": {
-                    "fieldType": {
-                        "type": "record",
-                        "keys": {
-                            "type": "number",
-                        },
-                        "values": {
-                            "fieldType": { "type": "number" },
-                            "optional": false,
-                        }
-                    },
-                    "optional": false
-                },
-            }
-        });
-        must_let::must_let!(let Err(e) = Validator::json_deserialize_value(validator_json));
-        assert_eq!(e.short_msg(), "InvalidRecordType");
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_cannot_have_optional_values() -> anyhow::Result<()> {
-        // Tests validator with type
-        // `v.object({ myArg: v.record(v.id("users"), v.optional(v.number())) })`
-        let validator_json = json!({
-            "type": "object",
-            "value": {
-                "myArg": {
-                    "fieldType": {
-                        "type": "record",
-                        "keys": {
-                            "type": "id",
-                            "tableName": "users",
-                        },
-                        "values": {
-                            "fieldType": { "type": "number" },
-                            "optional": true,
-                        }
-                    },
-                    "optional": false
-                },
-            }
-        });
-        must_let::must_let!(let Err(e) = Validator::json_deserialize_value(validator_json));
-        assert_eq!(e.short_msg(), "InvalidRecordType");
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_can_have_unions() -> anyhow::Result<()> {
-        // Tests validator with type
-        // `v.object({ myArg: v.record(v.union(v.id("users"), v.string()),
-        // v.optional(v.number())) })`
-        let validator_json = json!({
-            "type": "object",
-            "value": {
-                "myArg": {
-                    "fieldType": {
-                        "type": "record",
-                        "keys": {
-                            "type": "union",
-                            "value": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "tableName": "users",
-                                "type": "id"
-                              }
-                            ]
-                        },
-                        "values": {
-                            "fieldType": { "type": "number" },
-                            "optional": false,
-                        }
-                    },
-                    "optional": false
-                },
-            }
-        });
-        assert!(Validator::json_deserialize_value(validator_json).is_ok());
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_cannot_have_unions_with_literals() -> anyhow::Result<()> {
-        // Tests validator with type
-        // `v.object({ myArg: v.record(v.union(v.literal("abc"), v.string()),
-        // v.optional(v.number())) })`
-        let validator_json = json!({
-            "type": "object",
-            "value": {
-                "myArg": {
-                    "fieldType": {
-                        "type": "record",
-                        "keys": {
-                            "type": "union",
-                            "value": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "literal",
-                                "value": "abc",
-                            }
-                            ]
-                        },
-                        "values": {
-                            "fieldType": { "type": "number" },
-                            "optional": false,
-                        }
-                    },
-                    "optional": false
-                },
-            }
-        });
-        must_let::must_let!(let Err(e) = Validator::json_deserialize_value(validator_json));
-        assert_eq!(e.short_msg(), "InvalidRecordType");
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_cannot_have_string_literal_keys() -> anyhow::Result<()> {
-        let validator_json = json!({
-            "type": "object",
-            "value": {
-                "myArg": {
-                    "fieldType": {
-                        "type": "record",
-                        "keys": {
-                            "type": "literal",
-                            "value": "abc",
-                        },
-                        "values": {
-                            "fieldType": { "type": "number" },
-                            "optional":false,
-                        }
-                    },
-                    "optional": false
-                },
-            }
-        });
-        must_let::must_let!(let Err(e) = Validator::json_deserialize_value(validator_json));
-        assert_eq!(e.short_msg(), "InvalidRecordType");
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_check_value() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-        let table_name: TableName = "users".parse()?;
-        let key_validator = Validator::Id(table_name.clone());
-        let value_validator = Validator::Float64;
-        let validator = Validator::Record(
-            Box::new(key_validator.clone()),
-            Box::new(value_validator.clone()),
-        );
-
-        let value_wrong_type = ConvexValue::String("hello".try_into()?);
-        let err = validator
-            .check_value(
-                &value_wrong_type,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &VirtualSystemMapping::default(),
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::NoMatch {
-                value: value_wrong_type,
-                context: ValidationContext::new(),
-                validator: validator.clone()
-            }
-        );
-
-        let user_id1 = id_generator.user_generate(&table_name);
-        let user_id2 = id_generator.user_generate(&table_name);
-
-        let value_wrong_key: ConvexValue = assert_obj!(
-            user_id1.to_string() => ConvexValue::Float64(0.0),
-            user_id2.to_string() => ConvexValue::Float64(0.0),
-            "hello" => ConvexValue::Float64(0.0),
-        )
-        .into();
-        let err: ValidationError = validator
-            .check_value(
-                &value_wrong_key,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &VirtualSystemMapping::default(),
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::NoMatch {
-                value: ConvexValue::String("hello".try_into()?),
-                context: ValidationContext::new().with(".keys()".to_string()),
-                validator: key_validator
-            }
-        );
-
-        let value_wrong_value: ConvexValue = assert_obj!(
-            user_id1.to_string() => ConvexValue::Boolean(true),
-            user_id2.to_string() => ConvexValue::Float64(0.0),
-        )
-        .into();
-        let err: ValidationError = validator
-            .check_value(
-                &value_wrong_value,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &VirtualSystemMapping::default(),
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::NoMatch {
-                value: ConvexValue::Boolean(true),
-                context: ValidationContext::new().with(".values()".to_string()),
-                validator: value_validator
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_record_check_value_with_virtual_ids() -> anyhow::Result<()> {
-        let mut id_generator = TestIdGenerator::new();
-        let table_name: TableName = "users".parse()?;
-        let key_validator = Validator::Id(table_name.clone());
-        let value_validator = Validator::Float64;
-        let validator = Validator::Record(
-            Box::new(key_validator.clone()),
-            Box::new(value_validator.clone()),
-        );
-
-        let value_wrong_type = ConvexValue::String("hello".try_into()?);
-        let err = validator
-            .check_value(
-                &value_wrong_type,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &id_generator.virtual_system_mapping,
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::NoMatch {
-                value: value_wrong_type,
-                context: ValidationContext::new(),
-                validator: validator.clone()
-            }
-        );
-
-        let user_id1 = id_generator.generate_virtual(&table_name);
-        let user_id2 = id_generator.generate_virtual(&table_name);
-
-        let value_wrong_key: ConvexValue = assert_obj!(
-            user_id1.to_string() => ConvexValue::Float64(0.0),
-            user_id2.to_string() => ConvexValue::Float64(0.0),
-            "hello" => ConvexValue::Float64(0.0),
-        )
-        .into();
-        let err: ValidationError = validator
-            .check_value(
-                &value_wrong_key,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &id_generator.virtual_system_mapping,
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::NoMatch {
-                value: ConvexValue::String("hello".try_into()?),
-                context: ValidationContext::new().with(".keys()".to_string()),
-                validator: key_validator
-            }
-        );
-
-        let value_wrong_value: ConvexValue = assert_obj!(
-            user_id1.to_string() => ConvexValue::Boolean(true),
-            user_id2.to_string() => ConvexValue::Float64(0.0),
-        )
-        .into();
-        let err: ValidationError = validator
-            .check_value(
-                &value_wrong_value,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &id_generator.virtual_system_mapping,
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::NoMatch {
-                value: ConvexValue::Boolean(true),
-                context: ValidationContext::new().with(".values()".to_string()),
-                validator: value_validator
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_display() -> anyhow::Result<()> {
-        // Test the display of our complex validator types.
-
-        let id_validator = Validator::Id("tableName".parse()?);
-        assert_eq!(id_validator.to_string(), "v.id(\"tableName\")");
-
-        let float_literal = Validator::Literal(LiteralValidator::Float64(123f64.into()));
-        assert_eq!(float_literal.to_string(), "v.literal(123.0)");
-
-        let int_literal = Validator::Literal(LiteralValidator::Int64(123));
-        assert_eq!(int_literal.to_string(), "v.literal(<bigint>)");
-
-        let string_literal =
-            Validator::Literal(LiteralValidator::String("abc".to_string().try_into()?));
-        assert_eq!(string_literal.to_string(), "v.literal(\"abc\")");
-
-        let boolean_literal = Validator::Literal(LiteralValidator::Boolean(true));
-        assert_eq!(boolean_literal.to_string(), "v.literal(true)");
-
-        let array_validator = Validator::Array(Box::new(Validator::String));
-        assert_eq!(array_validator.to_string(), "v.array(v.string())");
-
-        let object_validator = Validator::Object(
-            object_validator!("required" => FieldValidator::required_field_type(Validator::String), "optional" => FieldValidator::optional_field_type(Validator::Float64)),
-        );
-        assert_eq!(
-            object_validator.to_string(),
-            "v.object({optional: v.optional(v.float64()), required: v.string()})"
-        );
-
-        let union_validator = Validator::Union(vec![Validator::String, Validator::Float64]);
-        assert_eq!(
-            union_validator.to_string(),
-            "v.union(v.string(), v.float64())"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_id_match() -> anyhow::Result<()> {
-        let table1: TableName = "table1".parse()?;
-        let table2: TableName = "table2".parse()?;
-        let id_validator = Validator::Id(table1.clone());
-        let mut id_generator = TestIdGenerator::new();
-
-        // generate an ID so it's in the table mapping
-        id_generator.user_generate(&table1);
-        let document_id = id_generator.user_generate(&table2);
-        let id_v6 = DeveloperDocumentId::from(document_id);
-        let value: ConvexValue = id_v6.into();
-
-        let err = id_validator
-            .check_value(
-                &value,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &id_generator.virtual_system_mapping,
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::TableNamesDoNotMatch {
-                validator_table: table1,
-                context: ValidationContext::new(),
-                id: id_v6,
-                found_table_name: table2
-            }
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_id_match_with_virtual_ids() -> anyhow::Result<()> {
-        let table1: TableName = "table1".parse()?;
-        let table2: TableName = "table2".parse()?;
-        let id_validator = Validator::Id(table1.clone());
-        let mut id_generator = TestIdGenerator::new();
-
-        // generate an ID so it's in the table mapping
-        id_generator.user_generate(&table1);
-        let id_v6 = id_generator.generate_virtual(&table2);
-        let value: ConvexValue = id_v6.into();
-
-        let err = id_validator
-            .check_value(
-                &value,
-                &id_generator.namespace(TableNamespace::test_user()),
-                &id_generator.virtual_system_mapping,
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::TableNamesDoNotMatch {
-                validator_table: table1,
-                context: ValidationContext::new(),
-                id: id_v6,
-                found_table_name: table2
-            }
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_schema_literal_match() -> anyhow::Result<()> {
-        let schema_literal = LiteralValidator::String("hello".to_string().try_into()?);
-        let string_literal = Validator::Literal(schema_literal.clone());
-        string_literal
-            .check_value(
-                &ConvexValue::String("hello".try_into()?),
-                &empty_table_mapping(),
-                &VirtualSystemMapping::default(),
-            )
-            .unwrap();
-
-        let value = ConvexValue::Int64(0);
-        let err = string_literal
-            .check_value(
-                &value,
-                &empty_table_mapping(),
-                &VirtualSystemMapping::default(),
-            )
-            .unwrap_err();
-        assert_eq!(
-            err,
-            ValidationError::LiteralValuesDoNotMatch {
-                value,
-                literal_validator: schema_literal,
-                context: ValidationContext::new()
-            }
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_error_messages_include_context() -> anyhow::Result<()> {
-        // The validator expects `property` to be an array of strings,
-        // but it actually contains an int.
-        let validator = Validator::Object(ObjectValidator(btreemap! {
-            "property".parse()? => FieldValidator::required_field_type(
-                Validator::Array(Box::new(Validator::String))
-            )
-        }));
-        let object =
-            ConvexValue::Object(assert_obj!("property" => ConvexValue::Array(array!(123.into())?)));
-
-        // Check that the error message includes the path to the
-        assert!(validator
-            .check_value(
-                &object,
-                &empty_table_mapping(),
-                &VirtualSystemMapping::default(),
-            )
-            .unwrap_err()
-            .to_string()
-            .contains(".property[0]"));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_ensure_supported_for_streaming_export() -> anyhow::Result<()> {
-        let simple_object_validator = Validator::Object(ObjectValidator(btreemap! {
-            "property".parse()? => FieldValidator::required_field_type(Validator::String)
-        }));
-        assert!(simple_object_validator
-            .ensure_supported_for_streaming_export()
-            .is_ok());
-        let any_validator = Validator::Any;
-        assert!(any_validator
-            .ensure_supported_for_streaming_export()
-            .is_ok());
-
-        let union_object_validator = Validator::Union(vec![
-            Validator::Object(ObjectValidator(btreemap! {
-                "propertyA".parse()? => FieldValidator::required_field_type(Validator::String)
-            })),
-            Validator::Object(ObjectValidator(btreemap! {
-                "propertyB".parse()? => FieldValidator::required_field_type(Validator::String)
-            })),
-        ]);
-        must_let::must_let!(
-            let Err(e) = union_object_validator.ensure_supported_for_streaming_export()
-        );
-        assert_eq!(e.short_msg(), "UnsupportedSchemaForExport");
-        let nested_union_object_validator = Validator::Array(Box::new(Validator::Union(vec![
-            Validator::Object(ObjectValidator(btreemap! {
-                "propertyA".parse()? => FieldValidator::required_field_type(Validator::String)
-            })),
-            Validator::Object(ObjectValidator(btreemap! {
-                "propertyB".parse()? => FieldValidator::required_field_type(Validator::String)
-            })),
-        ])));
-        must_let::must_let!(
-            let Err(e) = nested_union_object_validator.ensure_supported_for_streaming_export()
-        );
-        assert_eq!(e.short_msg(), "UnsupportedSchemaForExport");
-
-        Ok(())
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 64 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-
-        #[test]
-        fn test_validators_are_subsets_of_themselves(validator in any_with::<Validator>(btreeset! { "table_name".parse::<TableName>().unwrap()})) {
-            prop_assert!(validator.is_subset(&validator));
-        }
-
-        #[test]
-        fn test_all_types_are_a_subset_of_any(validator in any_with::<Validator>(btreeset! { "table_name".parse::<TableName>().unwrap()})) {
-            prop_assert!(validator.is_subset(&Validator::Any));
-        }
-
-        #[test]
-        fn test_no_type_is_a_subset_of_never(validator in any_with::<Validator>(btreeset! { "table_name".parse::<TableName>().unwrap()})) {
-            let never = Validator::Union(vec![]);
-            prop_assert!(!validator.is_subset(&never));
-        }
-
-        #[test]
-        fn test_union_of_one_element_is_equivalent_to_this_element(validator in any_with::<Validator>(btreeset! { "table_name".parse::<TableName>().unwrap()})) {
-            let union_of_one = Validator::Union(vec![validator.clone()]);
-            prop_assert!(validator.is_subset(&union_of_one));
-            prop_assert!(union_of_one.is_subset(&validator));
-        }
-
-        #[test]
-        fn test_to_json_schema(
-            v in any_with::<Validator>(btreeset! { "table_name".parse::<TableName>().unwrap()}),
-            value_format in any::<ValueFormat>(),
-        ) {
-            jsonschema::validator_for(&v.to_json_schema(value_format)).unwrap();
-        }
-
-        #[test]
-        fn test_validator_from_a_shape_validates_it(
-            resolved_value in any_with::<ConvexValue>(
-                (
-                    FieldType::User,
-                    ValueBranching::default(),
-                    RestrictNaNs(false),
-                )
-            )
-        ) {
-            let table_mapping = empty_table_mapping();
-            let virtual_system_mapping = VirtualSystemMapping::default();
-            let shape = CountedShape::<TestConfig>::empty().insert_value(&resolved_value);
-            let validator = Validator::from_shape(&shape, &table_mapping, &virtual_system_mapping);
-            prop_assert!(validator.check_value(
-                &resolved_value,
-                &table_mapping,
-                &virtual_system_mapping
-            ).is_ok());
-        }
+    fn with_context(mut self, context: String) -> Self {
+        self.context().reversed_path.push(context);
+        self
     }
 }

@@ -18,9 +18,11 @@ Storage IDs correspond to documents in the `"_storage"` system table (see
 [Metadata](/file-storage/file-metadata.mdx)), so they can be validated using the
 `v.id("_storage")`.
 
-<TSAndJSSnippet
+If a mutation deletes a file it stored earlier in the same transaction, the file
+is never stored.
+
+<Snippet
   title="convex/images.ts"
-  sourceTS={DeleteImage}
-  sourceJS={DeleteImage}
+  source={DeleteImage}
   highlightPatterns={["delete\\("]}
 />

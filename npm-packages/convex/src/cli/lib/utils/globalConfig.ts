@@ -15,13 +15,10 @@ export function globalConfigPath(): string {
 // GlobalConfig is deleted on logout. It is primarily used for the accessToken.
 export type GlobalConfig = {
   accessToken: string;
-  // Means "Don't use local dev unless CLI version is at least 1.19" (actual version TBD)
-  optOutOfLocalDevDeploymentsUntilBetaOver?: boolean | undefined;
 };
 
 const schema = z.object({
   accessToken: z.string().min(1),
-  optOutOfLocalDevDeploymentsUntilBetaOver: z.boolean().optional(),
 });
 
 export function readGlobalConfig(ctx: Context): GlobalConfig | null {

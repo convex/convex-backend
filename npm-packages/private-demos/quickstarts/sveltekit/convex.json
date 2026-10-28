@@ -1,4 +1,7 @@
 {
-	"$schema": "../../../convex/schemas/convex.schema.json",
-	"functions": "src/convex/"
+	"$schema": "node_modules/convex/schemas/convex.schema.json",
+	"functions": "src/convex/",
+	"aiFiles": {
+		"enabled": false
+	}
 }

@@ -1,8 +1,9 @@
 import {
-  FunctionReference,
   FunctionReturnType,
   OptionalRestArgs,
   getFunctionName,
+  FunctionReference,
+  FunctionReference_future,
 } from "../server/api.js";
 import { parseArgs, validateDeploymentUrl } from "../common/index.js";
 import { version } from "../index.js";
@@ -68,7 +69,9 @@ export class ConvexHttpClient {
   private fetch?: typeof globalThis.fetch | undefined;
   private logger: Logger;
   private mutationQueue: Array<{
-    mutation: FunctionReference<"mutation">;
+    mutation:
+      | FunctionReference<"mutation">
+      | FunctionReference_future<"mutation">;
     args: FunctionArgs<any>;
     resolve: (value: any) => void;
     reject: (error: any) => void;
@@ -223,7 +226,11 @@ export class ConvexHttpClient {
    *
    * @deprecated This API is experimental: it may change or disappear.
    */
-  async consistentQuery<Query extends FunctionReference<"query">>(
+  async consistentQuery<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
     ...args: OptionalRestArgs<Query>
   ): Promise<FunctionReturnType<Query>> {
@@ -267,7 +274,11 @@ export class ConvexHttpClient {
    * the arguments will be `{}`.
    * @returns A promise of the query's result.
    */
-  async query<Query extends FunctionReference<"query">>(
+  async query<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
     ...args: OptionalRestArgs<Query>
   ): Promise<FunctionReturnType<Query>> {
@@ -275,7 +286,11 @@ export class ConvexHttpClient {
     return await this.queryInner(query, queryArgs, {});
   }
 
-  private async queryInner<Query extends FunctionReference<"query">>(
+  private async queryInner<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
     queryArgs: FunctionArgs<Query>,
     options: { timestampPromise?: Promise<string> },
@@ -339,7 +354,11 @@ export class ConvexHttpClient {
     }
   }
 
-  private async mutationInner<Mutation extends FunctionReference<"mutation">>(
+  private async mutationInner<
+    Mutation extends
+      | FunctionReference<"mutation">
+      | FunctionReference_future<"mutation">,
+  >(
     mutation: Mutation,
     mutationArgs: FunctionArgs<Mutation>,
   ): Promise<FunctionReturnType<Mutation>> {
@@ -408,7 +427,11 @@ export class ConvexHttpClient {
     this.isProcessingQueue = false;
   }
 
-  private enqueueMutation<Mutation extends FunctionReference<"mutation">>(
+  private enqueueMutation<
+    Mutation extends
+      | FunctionReference<"mutation">
+      | FunctionReference_future<"mutation">,
+  >(
     mutation: Mutation,
     args: FunctionArgs<Mutation>,
   ): Promise<FunctionReturnType<Mutation>> {
@@ -427,7 +450,11 @@ export class ConvexHttpClient {
    * @param options - An optional object containing
    * @returns A promise of the mutation's result.
    */
-  async mutation<Mutation extends FunctionReference<"mutation">>(
+  async mutation<
+    Mutation extends
+      | FunctionReference<"mutation">
+      | FunctionReference_future<"mutation">,
+  >(
     mutation: Mutation,
     ...args: ArgsAndOptions<Mutation, HttpMutationOptions>
   ): Promise<FunctionReturnType<Mutation>> {
@@ -450,7 +477,11 @@ export class ConvexHttpClient {
    * the arguments will be `{}`.
    * @returns A promise of the action's result.
    */
-  async action<Action extends FunctionReference<"action">>(
+  async action<
+    Action extends
+      | FunctionReference<"action">
+      | FunctionReference_future<"action">,
+  >(
     action: Action,
     ...args: OptionalRestArgs<Action>
   ): Promise<FunctionReturnType<Action>> {
@@ -513,7 +544,9 @@ export class ConvexHttpClient {
    * @internal
    */
   async function<
-    AnyFunction extends FunctionReference<"query" | "mutation" | "action">,
+    AnyFunction extends
+      | FunctionReference<"query" | "mutation" | "action">
+      | FunctionReference_future<"query" | "mutation" | "action">,
   >(
     anyFunction: AnyFunction | string,
     componentPath?: string,

@@ -1,72 +1,82 @@
-import { useState } from "react";
-import { TeamAccessTokenResponse } from "generatedApi";
-import { AccessTokenListKind } from "api/accessTokens";
+import { PlatformDeployKeyResponse } from "@convex-dev/platform/managementApi";
 
 import { LoadingTransition } from "@ui/Loading";
-import { AccessTokenListItem } from "components/AccessTokenListItem";
+import { Button } from "@ui/Button";
+import { PlusIcon } from "@radix-ui/react-icons";
+import { JSX, useState } from "react";
+import { DeployKeyListItem } from "components/DeployKeyListItem";
 import {
-  GenerateDeployKeyWithNameButton,
-  GenerateDeployKeyWithNameButtonProps,
+  CreateDeployKeyForm,
+  CreateDeployKeyFormProps,
   DeployKeyGenerationDisabledReason,
+  DEPLOY_KEY_GENERATION_DISABLED_REASONS,
+  getGenerateButtonText,
 } from "./GenerateDeployKeyButton";
 
 export function DeploymentAccessTokenList({
-  identifier,
-  tokenPrefix,
-  accessTokens,
-  kind,
+  deploymentType,
+  onDelete,
+  canDelete = true,
+  deployKeys,
   disabledReason,
   buttonProps,
   header,
   description,
   headingLevel = "h4",
 }: {
-  identifier: string;
-  tokenPrefix: string;
-  accessTokens: TeamAccessTokenResponse[] | undefined;
-  kind: AccessTokenListKind;
+  deploymentType: string;
+  onDelete: (args: { id: string }) => Promise<unknown>;
+  canDelete?: boolean;
+  deployKeys: PlatformDeployKeyResponse[] | undefined;
   disabledReason: DeployKeyGenerationDisabledReason | null;
-  buttonProps: Omit<
-    GenerateDeployKeyWithNameButtonProps,
-    "onCreateAccessToken"
-  >;
+  buttonProps: CreateDeployKeyFormProps;
   header: string;
   description: React.ReactNode;
   headingLevel?: "h3" | "h4";
 }) {
-  const [latestToken, setLatestToken] = useState<string | null>(null);
   const HeadingTag = (headingLevel ?? "h4") as keyof JSX.IntrinsicElements;
+  const [showForm, setShowForm] = useState(false);
   return (
     <>
       <div className="mb-2 flex w-full items-center justify-between">
         <HeadingTag>{header}</HeadingTag>
-        <GenerateDeployKeyWithNameButton
-          {...buttonProps}
-          onCreateAccessToken={setLatestToken}
-        />
+        <Button
+          disabled={buttonProps.disabledReason !== null}
+          tip={
+            buttonProps.disabledReason === null
+              ? undefined
+              : DEPLOY_KEY_GENERATION_DISABLED_REASONS[
+                  buttonProps.disabledReason
+                ]
+          }
+          onClick={() => setShowForm(true)}
+          icon={<PlusIcon />}
+        >
+          {getGenerateButtonText(buttonProps.deploymentType)}
+        </Button>
       </div>
       {description}
-      {disabledReason === null && (
+      {/* Local deployments don't have remote deploy keys, so the list
+          isn't applicable there. For any other disabled reason
+          (e.g. the member can view but not create), still render the
+          list — including the empty-state message — so they can see
+          existing keys. */}
+      {disabledReason !== "LocalDeployment" && (
         <LoadingTransition
           loadingProps={{ fullHeight: false, className: "h-14 w-full" }}
         >
-          {accessTokens && (
+          {deployKeys && (
             <div className="flex w-full flex-col divide-y">
-              {accessTokens.length > 0 ? (
-                accessTokens
+              {deployKeys.length > 0 ? (
+                deployKeys
                   ?.sort((a, b) => b.creationTime - a.creationTime)
-                  .map((token) => (
-                    <AccessTokenListItem
-                      token={token}
-                      identifier={identifier}
-                      tokenPrefix={tokenPrefix}
-                      kind={kind}
-                      key={token.accessToken}
-                      shouldShow={
-                        !!latestToken &&
-                        latestToken.endsWith(token.serializedAccessToken)
-                      }
-                      showMemberName
+                  .map((deployKey) => (
+                    <DeployKeyListItem
+                      deployKey={deployKey}
+                      deploymentType={deploymentType}
+                      onDelete={onDelete}
+                      canDelete={canDelete}
+                      key={deployKey.name}
                     />
                   ))
               ) : (
@@ -77,6 +87,12 @@ export function DeploymentAccessTokenList({
             </div>
           )}
         </LoadingTransition>
+      )}
+      {showForm && (
+        <CreateDeployKeyForm
+          {...buttonProps}
+          onClose={() => setShowForm(false)}
+        />
       )}
     </>
   );

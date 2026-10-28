@@ -8,9 +8,8 @@ use serde::{
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 /// Represents the different states a backend can be in.
-pub enum BackendState {
+pub enum OldBackendState {
     /// Disabled - will not serve any requests. Set when exceeds the allowed
     /// usage based on the tier etc. May leave this state after some time.
     Disabled,
@@ -24,37 +23,56 @@ pub enum BackendState {
     Suspended,
 }
 
-impl BackendState {
-    pub fn is_stopped(&self) -> bool {
-        matches!(
-            self,
-            BackendState::Disabled | BackendState::Paused | BackendState::Suspended
-        )
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BackendState {
+    pub system: SystemStopState,
+    pub usage_limit: UsageLimitStopState,
+    pub user: UserStopState,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::BackendState;
+/// Indicates whether the backend has been stopped for a system-initiated reason
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::Display, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum SystemStopState {
+    None,
 
-    #[test]
-    fn test_backend_state_strum_serde_match() -> anyhow::Result<()> {
-        let variants = [
-            BackendState::Disabled,
-            BackendState::Paused,
-            BackendState::Running,
-            BackendState::Suspended,
-        ];
-        for variant in variants {
-            let strum_str = variant.to_string();
-            let serde_json = serde_json::to_string(&variant)?;
-            // serde serializes strings with surrounding quotes
-            let serde_str = serde_json.trim_matches('"');
-            assert_eq!(strum_str, serde_str, "Mismatch for {variant:?}");
-            // Also verify round-trip via strum
-            let parsed: BackendState = strum_str.parse()?;
-            assert_eq!(parsed, variant);
-        }
-        Ok(())
+    /// Stopped by going over the free plan limits or spending limits
+    Disabled,
+
+    /// Stopped manually by an admin
+    Suspended,
+}
+
+/// Indicates whether the backend has been paused by the user
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum UserStopState {
+    None,
+
+    /// The user paused the backend
+    Paused,
+}
+
+/// Indicates whether the backend has been stopped by a configured usage limit.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::Display, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum UsageLimitStopState {
+    None,
+
+    /// Stopped by exceeding a deployment usage limit.
+    Disabled,
+}
+
+impl BackendState {
+    pub fn is_stopped(&self) -> bool {
+        self.system != SystemStopState::None
+            || self.usage_limit != UsageLimitStopState::None
+            || self.user != UserStopState::None
     }
 }

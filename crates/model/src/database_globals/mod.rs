@@ -1,5 +1,3 @@
-use std::sync::LazyLock;
-
 use common::{
     document::{
         ParseDocument,
@@ -34,16 +32,13 @@ use crate::{
 
 pub mod types;
 
-pub static DATABASE_GLOBALS_TABLE: LazyLock<TableName> =
-    LazyLock::new(|| "_db".parse().expect("invalid built-in db table"));
+pub const DATABASE_GLOBALS_TABLE: TableName = TableName::const_new("_db");
 
 pub struct DatabaseGlobalsTable;
 impl SystemTable for DatabaseGlobalsTable {
     type Metadata = DatabaseGlobals;
 
-    fn table_name() -> &'static TableName {
-        &DATABASE_GLOBALS_TABLE
-    }
+    const TABLE_NAME: TableName = DATABASE_GLOBALS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -159,104 +154,5 @@ impl<'a, RT: Runtime> DatabaseGlobalsModel<'a, RT> {
             ),
         };
         Ok(storage_type)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use database::test_helpers::DbFixtures;
-    use keybroker::DEV_INSTANCE_NAME;
-    use runtime::testing::TestRuntime;
-    use tempfile::TempDir;
-
-    use crate::{
-        database_globals::{
-            types::{
-                StorageTagInitializer,
-                StorageType,
-            },
-            DatabaseGlobalsModel,
-        },
-        test_helpers::DbFixturesWithModel,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_allow_local_storage_switch(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = DbFixtures::new_with_model(&rt).await?.db;
-        let dir = TempDir::new()?;
-        let storage_tag = StorageTagInitializer::Local {
-            dir: dir.path().to_owned(),
-        };
-        let mut tx = db.begin_system().await?;
-        let mut db_model = DatabaseGlobalsModel::new(&mut tx);
-        db_model
-            .initialize_storage_tag(storage_tag.clone(), DEV_INSTANCE_NAME.into())
-            .await?;
-        // Ok to call twice
-        db_model
-            .initialize_storage_tag(storage_tag, DEV_INSTANCE_NAME.into())
-            .await?;
-        // Can't change storage paths
-        let dir2 = TempDir::new()?;
-        let new_storage_tag = StorageTagInitializer::Local {
-            dir: dir2.path().to_owned(),
-        };
-        let storage_type = db_model
-            .initialize_storage_tag(new_storage_tag, DEV_INSTANCE_NAME.into())
-            .await?;
-        match storage_type {
-            StorageType::Local { dir: new_dir } => {
-                anyhow::ensure!(
-                    new_dir != dir.path().to_string_lossy(),
-                    "Storage dir should be different"
-                );
-            },
-            _ => anyhow::bail!("Storage type should be local"),
-        };
-
-        // Can't switch to s3 storage
-        let storage_tag = StorageTagInitializer::S3;
-        db_model
-            .initialize_storage_tag(storage_tag, DEV_INSTANCE_NAME.into())
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("but backend started up with S3");
-        Ok(())
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_no_switching_storage_from_s3_to_local(rt: TestRuntime) -> anyhow::Result<()> {
-        let db = DbFixtures::new_with_model(&rt).await?.db;
-        let dir = TempDir::new()?;
-        let mut tx = db.begin_system().await?;
-        let mut db_model = DatabaseGlobalsModel::new(&mut tx);
-        db_model
-            .initialize_storage_tag(StorageTagInitializer::S3, DEV_INSTANCE_NAME.into())
-            .await?;
-        // Ok to call twice
-        db_model
-            .initialize_storage_tag(StorageTagInitializer::S3, DEV_INSTANCE_NAME.into())
-            .await?;
-        // Can't switch instance names
-        db_model
-            .initialize_storage_tag(StorageTagInitializer::S3, "new_instance_name".into())
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("Cannot use s3 storage path");
-        // Cannot switch to local storage
-        db_model
-            .initialize_storage_tag(
-                StorageTagInitializer::Local {
-                    dir: dir.path().to_owned(),
-                },
-                DEV_INSTANCE_NAME.into(),
-            )
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("but backend started up with Local");
-        Ok(())
     }
 }

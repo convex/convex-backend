@@ -18,9 +18,9 @@ messages. For streaming, see
 modified version of this query.
 
 See
-[chat/basic.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/basic.ts)
+[chat/basic.ts](https://github.com/convex/agent/blob/main/example/convex/chat/basic.ts)
 for the server-side code, and
-[chat/streaming.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/streaming.ts)
+[chat/streaming.ts](https://github.com/convex/agent/blob/main/example/convex/chat/streaming.ts)
 for the streaming example.
 
 ```ts
@@ -53,9 +53,9 @@ If you want to get MessageDocs, you can use `listMessages` instead.
 ## Showing messages in React
 
 See
-[ChatStreaming.tsx](https://github.com/get-convex/agent/blob/main/example/ui/chat/ChatStreaming.tsx)
+[ChatStreaming.tsx](https://github.com/convex/agent/blob/main/example/ui/chat/ChatStreaming.tsx)
 for a streaming example, or
-[ChatBasic.tsx](https://github.com/get-convex/agent/blob/main/example/ui/chat/ChatBasic.tsx)
+[ChatBasic.tsx](https://github.com/convex/agent/blob/main/example/ui/chat/ChatBasic.tsx)
 for a non-streaming example.
 
 ### `useUIMessages` hook
@@ -95,9 +95,8 @@ metadata for rendering messages.
 
 The core UIMessage type from the AI SDK is:
 
-- `parts` is an array of parts (e.g. "text", "file", "image", "toolCall",
-  "toolResult")
-- `content` is a string of the message content.
+- `parts` is an array of parts (e.g. "text", "file", "reasoning",
+  `tool-${toolName}`, "dynamic-tool")
 - `role` is the role of the message (e.g. "user", "assistant", "system").
 
 The helper adds these additional fields:
@@ -266,14 +265,23 @@ const result = await thread.generateText({ messages }, {
 Each message has `order` and `stepOrder` fields, which are incrementing integers
 specific to a thread.
 
-When `saveMessage` or `generateText` is called, the message is added to the
-thread's next `order` with a `stepOrder` of 0.
+User messages saved by `saveMessage` or `generateText` are added to the thread's
+next `order` with a `stepOrder` of 0. Standalone assistant or tool messages
+append to the latest order by default.
 
 As response message(s) are generated in response to that message, they are added
 at the same `order` with the next `stepOrder`.
 
 To associate a response message with a previous message, you can pass in the
 `promptMessageId` to `generateText` and others.
+
+To start a standalone message at the next order, pass `order: "next"` to
+`saveMessage` or `saveMessages`. The component allocates that order atomically.
+To place a standalone message at a specific order, pass a number instead. If
+that order is empty, the first message is saved with `stepOrder: 0`; otherwise
+it is appended at the next `stepOrder`. `order` cannot be combined with
+`promptMessageId` or `pendingMessageId`; numeric orders must be non-negative
+safe integers less than `Number.MAX_SAFE_INTEGER`.
 
 Note: if the `promptMessageId` is not the latest message in the thread, the
 context for the message generation will not include any messages following the

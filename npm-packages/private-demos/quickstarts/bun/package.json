@@ -1,5 +1,6 @@
 {
-  "name": "bun-demo",
+  "name": "quickstart-bun",
+  "version": "0.0.0",
   "module": "index.ts",
   "type": "module",
   "devDependencies": {
@@ -8,7 +9,10 @@
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
+  "scripts": {
+    "build": ""
+  },
   "dependencies": {
-    "convex": "^1.10.0"
+    "convex": "workspace:*"
   }
 }

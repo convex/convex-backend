@@ -21,7 +21,7 @@ export const set = mutationWithSession({
   },
   handler: async (ctx, { name }) => {
     if (ctx.user) {
-      await ctx.db.patch(ctx.user._id, { name });
+      await ctx.db.patch("users", ctx.user._id, { name });
     } else {
       await ctx.db.insert("users", { name, sessionId: ctx.sessionId });
     }

@@ -1,6 +1,10 @@
-import type { TSESTree } from "@typescript-eslint/utils";
-import { CONVEX_REGISTRARS, createRule } from "../util.js";
+import type { TSESTree } from "@typescript-eslint/types";
 import {
+  CONVEX_REGISTRARS,
+  createRule,
+  getRegisteredFunction,
+} from "../util.js";
+import type {
   ReportFixFunction,
   RuleContext,
 } from "@typescript-eslint/utils/ts-eslint";
@@ -40,30 +44,6 @@ function handlerHasArgsParameter(
 }
 
 /**
- * Helper function to get the handler property from an object expression
- */
-function getHandlerProperty(
-  objectExpr: TSESTree.ObjectExpression,
-): TSESTree.ArrowFunctionExpression | TSESTree.FunctionExpression | null {
-  const maybeHandler = objectExpr.properties.find(
-    (prop) =>
-      prop.type === "Property" &&
-      prop.key.type === "Identifier" &&
-      prop.key.name === "handler",
-  ) as TSESTree.Property | undefined;
-  if (!maybeHandler) return null;
-
-  if (
-    maybeHandler.value.type === "ArrowFunctionExpression" ||
-    maybeHandler.value.type === "FunctionExpression"
-  ) {
-    return maybeHandler.value;
-  }
-
-  return null;
-}
-
-/**
  * Helper function to create a fix for missing args property
  */
 function createArgsFix(
@@ -71,8 +51,7 @@ function createArgsFix(
   objectArg: TSESTree.ObjectExpression,
 ): ReportFixFunction {
   return (fixer) => {
-    const sourceCode = context.getSourceCode();
-    const objectText = sourceCode.getText(objectArg);
+    const objectText = context.sourceCode.getText(objectArg);
     const firstBracePos = objectText.indexOf("{");
 
     if (firstBracePos === -1) return null;
@@ -125,7 +104,7 @@ export const requireArgsValidator = createRule<Options, MessageIds>({
   create: (context, options) => {
     const { ignoreUnusedArguments } = options[0];
 
-    const filename = context.getFilename();
+    const { filename } = context;
 
     // Generated files don’t define functions, so we skip them to avoid unnecessary work
     const isGenerated = filename.includes("_generated");
@@ -148,25 +127,15 @@ export const requireArgsValidator = createRule<Options, MessageIds>({
         }
 
         // Convex function declaration?
-        if (
-          !(
-            node.init?.type === "CallExpression" &&
-            node.init.callee.type === "Identifier" &&
-            CONVEX_REGISTRARS.includes(node.init.callee.name) &&
-            node.init.arguments.length === 1
-          )
-        )
-          return;
+        const registered = getRegisteredFunction(node.init, CONVEX_REGISTRARS);
+        if (!registered) return;
 
         // Old function argument syntax?
-        if (
-          node.init.arguments[0].type === "ArrowFunctionExpression" ||
-          node.init.arguments[0].type === "FunctionExpression"
-        ) {
-          const handler = node.init.arguments[0];
+        if (!registered.objectArg && registered.handler) {
+          const handler = registered.handler;
           if (handlerHasArgsParameter(handler)) {
             context.report({
-              node: node.init,
+              node: registered.call,
               messageId: "missing-args",
               // Not fixable since we don’t know the type
             });
@@ -175,17 +144,15 @@ export const requireArgsValidator = createRule<Options, MessageIds>({
 
           if (!ignoreUnusedArguments) {
             context.report({
-              node: node.init,
+              node: registered.call,
               messageId: "missing-empty-args",
               fix: (fixer) => {
                 let fixText = "{\n";
                 fixText += "  args: {},\n";
 
-                // Preserve the original function as much as possible
-                const sourceCode = context.getSourceCode();
-
                 // Get the original function text without the outer parentheses
-                const originalFunctionText = sourceCode.getText(handler);
+                const originalFunctionText =
+                  context.sourceCode.getText(handler);
 
                 // Add the handler property with the original function
                 fixText += `  handler: ${originalFunctionText}`;
@@ -201,13 +168,13 @@ export const requireArgsValidator = createRule<Options, MessageIds>({
         }
 
         // New syntax with object argument
-        if (node.init.arguments[0].type === "ObjectExpression") {
-          const objectArg = node.init.arguments[0] as TSESTree.ObjectExpression;
+        if (registered.objectArg) {
+          const objectArg = registered.objectArg;
           if (hasArgsProperty(objectArg)) {
             return;
           }
 
-          const handlerProp = getHandlerProperty(objectArg);
+          const handlerProp = registered.handler;
           const handlerHasArgs =
             handlerProp && handlerHasArgsParameter(handlerProp);
 

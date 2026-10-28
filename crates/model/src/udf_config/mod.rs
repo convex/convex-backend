@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    LazyLock,
-};
+use std::sync::Arc;
 
 use common::{
     document::ParsedDocument,
@@ -26,19 +23,13 @@ use crate::{
     SystemTable,
 };
 
-pub static UDF_CONFIG_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_udf_config"
-        .parse()
-        .expect("Invalid built-in UDF config table")
-});
+pub const UDF_CONFIG_TABLE: TableName = TableName::const_new("_udf_config");
 
 pub struct UdfConfigTable;
 impl SystemTable for UdfConfigTable {
     type Metadata = UdfConfig;
 
-    fn table_name() -> &'static TableName {
-        &UDF_CONFIG_TABLE
-    }
+    const TABLE_NAME: TableName = UDF_CONFIG_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -73,15 +64,21 @@ impl<'a, RT: Runtime> UdfConfigModel<'a, RT> {
             anyhow::bail!(unauthorized_error("set_udf_config"));
         }
         let new_server_version = new_config.server_version.clone();
-        let value = new_config.try_into()?;
 
         let existing_doc = self.get().await?;
         let opt_previous_version = if let Some(existing_doc) = existing_doc {
-            SystemMetadataModel::new(self.tx, self.namespace)
-                .replace(existing_doc.id(), value)
-                .await?;
-            Some(existing_doc.server_version.clone())
+            let previous_version = existing_doc.server_version.clone();
+            // Only replaces the udf config if it changes. Otherwise, we keep it the same to
+            // avoid invalidating all queries on every push.
+            if **existing_doc != new_config {
+                let value = new_config.try_into()?;
+                SystemMetadataModel::new(self.tx, self.namespace)
+                    .replace(existing_doc.id(), value)
+                    .await?;
+            }
+            Some(previous_version)
         } else {
+            let value = new_config.try_into()?;
             SystemMetadataModel::new(self.tx, self.namespace)
                 .insert(&UDF_CONFIG_TABLE, value)
                 .await?;

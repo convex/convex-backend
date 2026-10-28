@@ -9,14 +9,13 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@clerk/clerk-react": "^5.20.0",
-    "@clerk/nextjs": "^6.23.3",
+    "@clerk/nextjs": "^7.2.1",
     "convex": "workspace:*",
-    "next": "^15.5.10",
+    "next": "^15.5.28",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "eslint-plugin-react-hooks": "^5.2.0",
-    "@next/eslint-plugin-next": "~15.1.0"
+    "@next/eslint-plugin-next": "~15.5.0"
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "workspace:*",
@@ -24,8 +23,8 @@
     "@types/node": "^20",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.1",
-    "eslint": "^9",
-    "eslint-config-next": "15.2.3",
+    "eslint": "^9.37.0",
+    "eslint-config-next": "^15.5.4",
     "typescript": "^5.1.3"
   }
 }

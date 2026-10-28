@@ -4,8 +4,13 @@ import { Loading } from "@ui/Loading";
 import { Sheet } from "@ui/Sheet";
 import { useTeamMembers, useTeamEntitlements } from "api/teams";
 import { useTeamInvites } from "api/invitations";
-import { useIsCurrentMemberTeamAdmin } from "api/roles";
-import Link from "next/link";
+import {
+  useHasCustomRolePermission,
+  useIsCurrentMemberTeamAdmin,
+} from "api/roles";
+import { MEMBER_RESOURCE } from "lib/permissions";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
+import { Link } from "@ui/Link";
 import { TeamResponse } from "generatedApi";
 import startCase from "lodash/startCase";
 
@@ -15,6 +20,45 @@ import { InviteMemberForm } from "./InviteMemberForm";
 import { TeamMemberList } from "./TeamMemberList";
 
 export function TeamMembers({ team }: { team: TeamResponse }) {
+  const canViewMembers = useHasCustomRolePermission(
+    team.id,
+    "member:view",
+    MEMBER_RESOURCE,
+    true,
+  );
+  const isTeamAdmin = useIsCurrentMemberTeamAdmin();
+  const canInviteCustom = useHasCustomRolePermission(
+    team.id,
+    "member:invite",
+    MEMBER_RESOURCE,
+    false,
+  );
+  // `member:invite` is admin-only by default; custom roles need an explicit
+  // grant.
+  const canInvite = isTeamAdmin || canInviteCustom;
+
+  if (canViewMembers === false) {
+    return (
+      <>
+        <h2>Members</h2>
+        <NoPermissionMessage
+          message="You do not have permission to view team members."
+          missingPermission="member:view"
+        />
+      </>
+    );
+  }
+
+  return <MembersContent team={team} canInvite={canInvite} />;
+}
+
+function MembersContent({
+  team,
+  canInvite,
+}: {
+  team: TeamResponse;
+  canInvite: boolean | undefined;
+}) {
   const members = useTeamMembers(team.id);
   const invites = useTeamInvites(team.id);
   const entitlements = useTeamEntitlements(team.id);
@@ -23,13 +67,11 @@ export function TeamMembers({ team }: { team: TeamResponse }) {
   const canAddMembers =
     !isLoading && members.length < entitlements.maxTeamMembers!;
 
-  const hasAdminPermissions = useIsCurrentMemberTeamAdmin();
-
   let inviteMembers = null;
   if (isLoading) {
     // Data isn't loaded yet, show a skeleton.
     inviteMembers = (
-      <Loading className="h-[9.5rem] w-full rounded-sm" fullHeight={false} />
+      <Loading className="h-38 w-full rounded-sm" fullHeight={false} />
     );
   } else if (team.managedBy === "vercel") {
     inviteMembers = (
@@ -46,11 +88,7 @@ export function TeamMembers({ team }: { team: TeamResponse }) {
   } else if (canAddMembers) {
     // Show invite form if you can add members.
     inviteMembers = (
-      <InviteMemberForm
-        team={team}
-        members={members}
-        hasAdminPermissions={hasAdminPermissions}
-      />
+      <InviteMemberForm team={team} members={members} canInvite={canInvite} />
     );
   } else if (members.length >= entitlements.maxTeamMembers!) {
     // Show an action item to upgrade if you have reached your member limit.
@@ -61,7 +99,7 @@ export function TeamMembers({ team }: { team: TeamResponse }) {
             You've reached the member limit for this team.{" "}
             <Link
               href={`/${team.slug}/settings/billing`}
-              className="items-center text-content-link"
+              className="items-center"
             >
               Upgrade
             </Link>{" "}
@@ -82,7 +120,7 @@ export function TeamMembers({ team }: { team: TeamResponse }) {
             <Link
               href="mailto:support@convex.dev"
               passHref
-              className="items-center text-content-link"
+              className="items-center"
             >
               <EnvelopeClosedIcon className="mr-0.5 inline" />
               support@convex.dev

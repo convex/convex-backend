@@ -1,8 +1,14 @@
-import { TeamResponse } from "generatedApi";
+import type { TeamResponse } from "generatedApi";
 import { useLastViewedTeam } from "hooks/useLastViewed";
 import { useInitialData } from "hooks/useServerSideData";
 import { useRouter } from "next/router";
-import { useBBMutation, useBBQuery } from "./api";
+import {
+  useBBMutation,
+  useBBQuery,
+  useManagementApiQuery,
+  useMutateManagementApi,
+} from "./api";
+import { useCallback } from "react";
 
 export function useTeams(): {
   selectedTeamSlug?: string;
@@ -59,13 +65,13 @@ export function useCurrentTeam() {
 }
 
 export function useTeamMembers(teamId: number | undefined) {
-  const { data: members } = useBBQuery({
-    path: "/teams/{team_id}/members",
+  const { data } = useManagementApiQuery({
+    path: "/teams/{team_id}/list_members",
     pathParams: {
-      team_id: teamId?.toString() || "",
+      team_id: teamId?.toString() ?? "",
     },
   });
-  return members;
+  return data?.items;
 }
 
 export function useTeamEntitlements(teamId: number | undefined) {
@@ -110,17 +116,27 @@ export function useUpdateTeam(teamId: number, toast: boolean = true) {
 }
 
 export function useRemoveTeamMember(teamId: number) {
-  return useBBMutation({
+  const remove = useBBMutation({
     path: `/teams/{team_id}/remove_member`,
     pathParams: {
       team_id: teamId.toString(),
     },
-    mutateKey: "/teams/{team_id}/members",
-    mutatePathParams: {
-      team_id: teamId.toString(),
-    },
     successToast: "Member removed from team.",
   });
+  // The team-members list now comes from the management API, so we
+  // invalidate that cache by hand after the BB mutation lands.
+  const mutateMgmt = useMutateManagementApi();
+  return useCallback(
+    async (body: { memberId: number }) => {
+      const result = await remove(body);
+      await mutateMgmt([
+        "/teams/{team_id}/list_members",
+        { params: { path: { team_id: teamId.toString() } } },
+      ] as any);
+      return result;
+    },
+    [remove, mutateMgmt, teamId],
+  );
 }
 
 export function useUnpauseTeam(teamId: number) {
@@ -134,28 +150,24 @@ export function useUnpauseTeam(teamId: number) {
   });
 }
 
-export function useGetSSO(teamId: number | undefined) {
-  const { data: ssoOrganization, isLoading } = useBBQuery({
+export function useGetSSO(
+  teamId: number | undefined,
+  { isPaused = false }: { isPaused?: boolean } = {},
+) {
+  const {
+    data: ssoOrganization,
+    isLoading,
+    error,
+  } = useBBQuery({
     path: "/teams/{team_id}/get_sso",
     pathParams: {
-      team_id: teamId?.toString() || "",
+      team_id: isPaused ? "" : (teamId?.toString() ?? ""),
+    },
+    swrOptions: {
+      revalidateOnFocus: true,
     },
   });
-  return { data: ssoOrganization, isLoading };
-}
-
-export function useEnableSSO(teamId: number) {
-  return useBBMutation({
-    path: `/teams/{team_id}/enable_sso`,
-    pathParams: {
-      team_id: teamId.toString(),
-    },
-    mutateKey: "/teams/{team_id}/get_sso",
-    mutatePathParams: {
-      team_id: teamId.toString(),
-    },
-    successToast: "SSO has been enabled for your team.",
-  });
+  return { data: ssoOrganization, isLoading, error };
 }
 
 export function useDisableSSO(teamId: number) {
@@ -169,6 +181,8 @@ export function useDisableSSO(teamId: number) {
       team_id: teamId.toString(),
     },
     successToast: "SSO has been disabled for your team.",
+    // The disable confirmation dialog renders the failure inline.
+    toastOnError: false,
   });
 }
 
@@ -192,5 +206,24 @@ export function useUpdateSSO(teamId: number) {
       team_id: teamId.toString(),
     },
     successToast: "SSO settings updated.",
+    // The confirmation dialog renders the failure inline.
+    toastOnError: false,
+  });
+}
+
+export function usePotentialVercelTeams() {
+  const { data, error } = useBBQuery({
+    path: "/vercel/potential_teams",
+    pathParams: undefined,
+  });
+  return { data, error };
+}
+
+export function useJoinVercelTeam(proposedTeamId: number) {
+  return useBBMutation({
+    path: "/vercel/potential_teams/{proposed_team_id}/join",
+    pathParams: { proposed_team_id: proposedTeamId.toString() },
+    mutateKey: "/teams",
+    successToast: "Joined team.",
   });
 }

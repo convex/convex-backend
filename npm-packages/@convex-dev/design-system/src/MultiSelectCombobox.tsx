@@ -18,7 +18,15 @@ import { useHoverDirty } from "react-use";
 import { test } from "fuzzy";
 import { Button } from "@ui/Button";
 import { createPortal } from "react-dom";
-import { usePopper } from "react-popper";
+import {
+  useFloating,
+  autoUpdate,
+  offset as offsetMiddleware,
+  flip,
+  shift,
+} from "@floating-ui/react";
+import { usePortalContainer } from "./PortalContainer";
+import { useIsNarrowScreen } from "./useIsNarrowScreen";
 
 const MAX_DISPLAYED_OPTIONS = 100;
 
@@ -48,13 +56,16 @@ export function MultiSelectCombobox({
   processFilterOption?: (option: string) => string;
 }) {
   const [query, setQuery] = useState("");
+  const portalContainer = usePortalContainer();
   const [referenceElement, setReferenceElement] =
     useState<HTMLDivElement | null>(null);
   const [popperElement, setPopperElement] = useState<HTMLDivElement | null>(
     null,
   );
 
-  // Force tabindex to 0
+  // Force tabindex to 0 - HeadlessUI sets tabIndex={-1} on the button when
+  // a ComboboxInput exists, but our input is inside the portal and only
+  // rendered when open.
   useEffect(() => {
     if (referenceElement?.children[0]) {
       (referenceElement.children[0] as HTMLElement).tabIndex = 0;
@@ -62,22 +73,24 @@ export function MultiSelectCombobox({
   }, [referenceElement]);
 
   const [isOpen, setIsOpen] = useState(false);
+  const wasOpen = useRef(false);
+  const isNarrow = useIsNarrowScreen();
 
-  const { styles, attributes, update } = usePopper(
-    referenceElement,
-    popperElement,
-    {
-      placement: "bottom-start",
-      modifiers: [
-        {
-          name: "offset",
-          options: {
-            offset: [0, 4],
-          },
-        },
-      ],
-    },
-  );
+  // Restore focus to the button when the dropdown closes
+  useEffect(() => {
+    if (wasOpen.current && !isOpen) {
+      const button = referenceElement?.querySelector("button");
+      button?.focus();
+    }
+    wasOpen.current = isOpen;
+  }, [isOpen, referenceElement]);
+
+  const { floatingStyles } = useFloating({
+    placement: "bottom-start",
+    middleware: [offsetMiddleware(4), flip(), shift()],
+    whileElementsMounted: autoUpdate,
+    elements: { reference: referenceElement, floating: popperElement },
+  });
 
   // Get the width for the dropdown
   const getOptionsWidth = () => {
@@ -107,13 +120,6 @@ export function MultiSelectCombobox({
     selectedOptions === "all"
       ? `All ${unitPlural}`
       : `${count} ${count !== 1 ? unitPlural : unit}`;
-
-  // Update popper position when dropdown opens
-  useEffect(() => {
-    if (isOpen && update) {
-      void update();
-    }
-  }, [isOpen, update]);
 
   const handleSelectAll = () => {
     if (selectedOptions === "all") {
@@ -171,7 +177,7 @@ export function MultiSelectCombobox({
                   {displayValue}
                   <ChevronDownIcon
                     className={cn(
-                      "relative z-30 -ml-6 h-5 w-5 text-content-primary transition-all",
+                      "relative z-30 -ml-6 size-5 text-content-primary transition-all",
                       open && "rotate-180",
                     )}
                   />
@@ -181,23 +187,46 @@ export function MultiSelectCombobox({
               {open &&
                 createPortal(
                   <div
-                    ref={setPopperElement}
-                    style={{
-                      ...styles.popper,
-                      width: getOptionsWidth(),
-                    }}
-                    {...attributes.popper}
-                    className="z-50"
+                    ref={isNarrow ? undefined : setPopperElement}
+                    style={
+                      isNarrow
+                        ? undefined
+                        : { ...floatingStyles, width: getOptionsWidth() }
+                    }
+                    className={
+                      isNarrow ? "fixed inset-0 z-50 flex items-end" : "z-50"
+                    }
                   >
+                    {isNarrow && (
+                      <div
+                        className="absolute inset-0 bg-black/50"
+                        aria-hidden="true"
+                      />
+                    )}
                     <HeadlessComboboxOptions
                       modal={false}
                       static
-                      className="scrollbar max-h-60 w-fit max-w-80 min-w-full overflow-auto rounded-md border bg-background-secondary pb-1 text-xs shadow-sm focus:outline-hidden"
+                      className={cn(
+                        "scrollbar overflow-auto border bg-background-secondary focus:outline-hidden",
+                        isNarrow
+                          ? "relative max-h-[70dvh] w-full rounded-t-xl pb-2 text-sm shadow-xl"
+                          : "max-h-60 w-fit max-w-80 min-w-full rounded-md pb-1 text-xs shadow-sm",
+                      )}
                     >
                       <div className="min-w-fit">
-                        {!disableSearch && (
+                        {disableSearch ? (
+                          // Hidden input to enable keyboard navigation
+                          // (arrow keys, Enter, Escape) via HeadlessUI
+                          <HeadlessComboboxInput
+                            onChange={() => {}}
+                            value=""
+                            autoFocus
+                            className="sr-only"
+                            aria-hidden
+                          />
+                        ) : (
                           <div className="sticky top-0 left-0 z-20 flex w-full items-center gap-1 border-b bg-background-secondary px-2 pt-1">
-                            <MagnifyingGlassIcon className="h-4 w-4 text-content-secondary" />
+                            <MagnifyingGlassIcon className="size-4 text-content-secondary" />
                             <HeadlessComboboxInput
                               onChange={(event) => setQuery(event.target.value)}
                               value={query}
@@ -247,7 +276,7 @@ export function MultiSelectCombobox({
                       </div>
                     </HeadlessComboboxOptions>
                   </div>,
-                  document.body,
+                  portalContainer ?? document.body,
                 )}
             </div>
           </>
@@ -266,8 +295,9 @@ function ComboboxOption({
   label: React.ReactNode | string;
   onOnly: () => void;
 }) {
-  const onlyRefs = useRef(null);
-  const isHoveringOnly = useHoverDirty(onlyRefs);
+  const onlyRefs = useRef<HTMLElement | null>(null);
+  // react-use's types predate React 19's nullable RefObject.
+  const isHoveringOnly = useHoverDirty(onlyRefs as React.RefObject<Element>);
   return (
     <HeadlessComboboxOption
       value={value}
@@ -283,11 +313,11 @@ function ComboboxOption({
         <>
           {selected ? (
             <CheckIcon
-              className="h-4 min-w-[1rem] text-neutral-7 dark:text-neutral-4"
+              className="h-4 min-w-4 text-neutral-7 dark:text-neutral-4"
               aria-hidden="true"
             />
           ) : (
-            <span className="min-w-[1rem]" />
+            <span className="min-w-4" />
           )}
           <span
             className={classNames(

@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { useTheme } from "next-themes";
+import { useCurrentTheme } from "../useCurrentTheme";
 
 export function WorkosLogo({
   className,
@@ -8,7 +8,7 @@ export function WorkosLogo({
   className?: string;
   size: number;
 }) {
-  const { resolvedTheme: currentTheme } = useTheme();
+  const currentTheme = useCurrentTheme();
   const image =
     currentTheme === "dark" ? "/workos-blue.svg" : "/workos-blue.svg";
   return (

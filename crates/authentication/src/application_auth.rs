@@ -1,12 +1,11 @@
 use std::sync::Arc;
-
 use anyhow::Context;
+use common::runtime::Runtime;
 use errors::ErrorMetadata;
 use keybroker::{
     Identity,
     KeyBroker,
 };
-
 use crate::{
     access_token_auth::AccessTokenAuth,
     metrics::{
@@ -15,26 +14,28 @@ use crate::{
     },
 };
 
-pub struct ApplicationAuth {
+pub struct ApplicationAuth<RT: Runtime> {
     key_broker: KeyBroker,
     access_token_auth: Arc<dyn AccessTokenAuth>,
+    rt: RT,
+
 }
 
 // Encapsulates auth logic supporting both legacy Deploy Keys and new Convex
 // Access tokens
-impl ApplicationAuth {
-    pub fn new(key_broker: KeyBroker, access_token_auth: Arc<dyn AccessTokenAuth>) -> Self {
+impl<RT: Runtime> ApplicationAuth<RT> {
+    pub fn new(key_broker: KeyBroker, access_token_auth: Arc<dyn AccessTokenAuth>, rt: RT) -> Self {
         Self {
             key_broker,
             access_token_auth,
+            rt,
         }
     }
 
-    pub async fn check_key(
-        &self,
-        admin_key_or_access_token: String,
-        instance_name: String,
-    ) -> anyhow::Result<Identity> {
+    pub async fn check_key(&self, admin_key_or_access_token: String) -> anyhow::Result<Identity> {
+        let now = self.rt.system_time();
+        tracing::debug!("Checking admin_key/access token at {now:?}");
+
         if self
             .key_broker
             .is_encrypted_admin_key(&admin_key_or_access_token)
@@ -42,13 +43,13 @@ impl ApplicationAuth {
             // assume this is a legacy Deploy Key
             let result = self
                 .key_broker
-                .check_admin_key(&admin_key_or_access_token)
+                .check_admin_key(&admin_key_or_access_token, self.rt.system_time())
                 .context(ErrorMetadata::unauthenticated(
                     "BadAdminKey",
                     "The provided admin key was invalid for this instance",
                 ));
             match &result {
-                Ok(Identity::InstanceAdmin(_)) => {
+                Ok(Identity::DeploymentAdmin(_)) => {
                     log_deploy_key_use(DeployKeyType::Legacy);
                 },
                 Ok(Identity::System(_)) => {
@@ -64,8 +65,9 @@ impl ApplicationAuth {
             // Access Tokens are base64 encoded strings
             log_deploy_key_use(DeployKeyType::AccessToken);
             self.access_token_auth
-                .is_authorized(&instance_name, &admin_key_or_access_token)
+                .is_authorized(&admin_key_or_access_token)
                 .await
         }
     }
+
 }

@@ -1,0 +1,79 @@
+---
+title: "Using Conductor with Convex"
+sidebar_position: 225
+sidebar_label: Using Conductor
+description: "Tips and best practices for using Conductor with Convex"
+slug: "using-conductor"
+---
+
+[Conductor](https://conductor.build) is a Mac app that lets you run many coding
+agents in parallel, each in its own isolated workspace. Conductor pairs
+naturally with Convex because each agent can run its own `convex dev` against
+its own deployment without stepping on the others.
+
+## Starting a new project
+
+Create a new Conductor workspace on an empty directory and describe what you
+want to build. The agent handles the rest. It runs `npm create convex@latest`,
+`npx convex ai-files install` (which writes a managed Convex section into
+`CLAUDE.md` and `AGENTS.md` and installs Convex
+[Agent Skills](/ai/agent-skills.mdx) into `.agents/skills/`), and
+`npx convex dev --once`, which
+[auto-provisions a local backend](/cli/agent-mode#local-backend) without
+prompting for login because the agent's shell is non-interactive.
+
+To give each Conductor workspace its own cloud dev deployment automatically,
+wire the [per-worktree recipe](/cli/agent-mode#worktree-setups) into your
+project's `conductor.json` setup script.
+
+If you'd rather scaffold the project yourself first and then point Conductor at
+it, the manual sequence is:
+
+```sh
+npm create convex@latest my-app
+cd my-app
+npx convex ai-files install
+```
+
+Then in Conductor, click **New workspace** and point it at `my-app`.
+
+## Adding to an existing project
+
+If your project already has Convex set up, run these two steps from a Conductor
+workspace terminal to make the agent Convex-aware.
+
+### Add Convex Rules
+
+Conductor workspaces use Claude Code under the hood, so the same Convex AI files
+apply.
+
+```sh
+npx convex ai-files install
+```
+
+This creates or updates `CLAUDE.md` (and `AGENTS.md`) and installs Convex
+[Agent Skills](/ai/agent-skills.mdx) into `.agents/skills/` so the agent can use
+specialized workflows like setting up auth, designing a schema, and running
+migrations.
+
+See [Convex AI files](/ai/overview.mdx#convex-ai-files) for more on managing
+these files.
+
+### Setup the Convex MCP Server
+
+The Convex CLI comes with a
+[Convex Model Context Protocol](/ai/convex-mcp-server.mdx) (MCP) server built
+in. The Convex MCP server gives the agent access to your Convex deployment to
+query and optimize your project.
+
+In each Conductor workspace, add the MCP server with:
+
+```sh
+claude mcp add-json convex '{"type":"stdio","command":"npx","args":["convex","mcp","start"]}'
+```
+
+Now you can ask the agent questions like:
+
+- Evaluate my convex schema and suggest improvements
+- What are this app's public endpoints?
+- Run the `my_convex_function` query

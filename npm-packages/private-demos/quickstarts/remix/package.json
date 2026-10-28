@@ -1,5 +1,6 @@
 {
-  "name": "remix",
+  "name": "quickstart-remix",
+  "version": "0.0.0",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -11,34 +12,34 @@
     "typecheck": "tsc"
   },
   "dependencies": {
-    "@remix-run/node": "^2.17.1",
-    "@remix-run/react": "^2.17.1",
-    "@remix-run/serve": "^2.17.1",
-    "convex": "^1.27.3",
+    "@remix-run/node": "^2.17.5",
+    "@remix-run/react": "^2.17.5",
+    "@remix-run/serve": "^2.17.5",
+    "convex": "workspace:*",
     "isbot": "^5.0.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
   },
   "devDependencies": {
-    "@convex-dev/eslint-plugin": "^1.0.0",
+    "@convex-dev/eslint-plugin": "workspace:*",
     "@eslint/compat": "~2.0.0",
     "@eslint/eslintrc": "^3",
     "@eslint/js": "~9.39.0",
-    "@remix-run/dev": "^2.17.1",
-    "@types/react": "^18.2.20",
-    "@types/react-dom": "^18.2.7",
+    "@remix-run/dev": "^2.17.5",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.37.0",
     "eslint-import-resolver-typescript": "^4.0.0",
-    "eslint-plugin-import": "^2.28.1",
-    "eslint-plugin-jsx-a11y": "^6.7.1",
+    "eslint-plugin-import": "^2.30.0",
+    "eslint-plugin-jsx-a11y": "^6.6.0",
     "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-hooks": "^5.0.0",
-    "globals": "~17.0.0",
-    "typescript": "^5.1.6",
-    "vite": "^6.4.1",
-    "vite-tsconfig-paths": "^5.1.4"
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "~17.4.0",
+    "typescript": "^5.9.2",
+    "vite": "^6.4.4",
+    "vite-tsconfig-paths": "^6.0.0"
   },
   "engines": {
     "node": ">=18.0.0"

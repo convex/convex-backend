@@ -10,8 +10,17 @@ import { getDeploymentSelection } from "./lib/deploymentSelection.js";
 export const convexExport = new Command("export")
   .summary("Export data from your deployment to a ZIP file")
   .description(
-    "Export data, and optionally file storage, from your Convex deployment to a ZIP file.\n" +
+    [
+      "Export data, and optionally file storage, from your Convex deployment to a ZIP file.",
+      "",
+      "• Export to a directory: `npx convex export --path dir/`",
+      "• Export to a ZIP file: `npx convex export --path snapshot.zip`",
+      "• Include file storage: `npx convex export --include-file-storage --path dir/`",
+      "",
       "By default, this exports from your dev deployment.",
+      "",
+      "See the data export guide (https://docs.convex.dev/database/import-export/export) for details and use cases.",
+    ].join("\n"),
   )
   .allowExcessArguments(false)
   .addExportOptions()
@@ -37,7 +46,7 @@ export const convexExport = new Command("export")
       deploymentNotice,
       snapshotExportDashboardLink: deploymentDashboardUrlPage(
         deployment.deploymentFields?.deploymentName ?? null,
-        "/settings/snapshot-export",
+        "/settings/snapshots",
       ),
     });
   });

@@ -1,0 +1,48 @@
+---
+title: "Oxlint"
+sidebar_position: 200
+description: "Use the Convex lint rules with Oxlint"
+---
+
+import oxlintConfig from "!!raw-loader!@site/../@convex-dev/eslint-plugin/oxlint-demo/oxlint.config.ts";
+
+[Oxlint](https://oxc.rs/docs/guide/usage/linter) can load ESLint plugins as
+[JS plugins](https://oxc.rs/docs/guide/usage/linter/js-plugins), so it runs the
+same `@convex-dev/eslint-plugin` package as ESLint.
+
+## Setup
+
+Install the plugin with:
+
+```sh
+npm i @convex-dev/eslint-plugin --save-dev
+```
+
+Then add this to your `oxlint.config.ts` file:
+
+<Snippet source={oxlintConfig} title="oxlint.config.ts" />
+
+To silence a rule on one line, use the same comments as in ESLint, for example
+`// eslint-disable-next-line @convex-dev/no-filter-in-query`.
+
+## Differences from ESLint
+
+Oxlint doesn’t give JS plugins TypeScript type information, so rules that use it
+fall back to matching code by name:
+
+- [`explicit-table-ids`](/linting/overview#explicit-table-ids) still reports
+  `ctx.db` calls that are missing a table name, but can’t fill in the table name
+  for you, and may miss calls made through a different variable.
+- [`no-collect-in-query`](/linting/overview#no-collect-in-query) and
+  [`no-filter-in-query`](/linting/overview#no-filter-in-query) are a little less
+  precise, and `no-collect-in-query` doesn’t suggest replacements.
+
+Every other rule and autofix works the same as in ESLint. Oxlint’s
+`--type-aware` flag doesn’t change this, since it only applies to Oxlint’s
+built-in rules.
+
+To add the missing table names in one go, run the codemod:
+
+```sh
+npx @convex-dev/codemod@latest explicit-ids
+```

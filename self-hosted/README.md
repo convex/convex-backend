@@ -38,7 +38,7 @@ database for a production-ready configuration as needed.
 ## Docker configuration
 
 First download the
-[`docker-compose.yml` file](https://github.com/get-convex/convex-backend/tree/main/self-hosted/docker/docker-compose.yml).
+[`docker-compose.yml` file](https://github.com/convex/convex-backend/tree/main/self-hosted/docker/docker-compose.yml).
 Then, to start the backend and dashboard:
 
 ```sh
@@ -84,9 +84,9 @@ that you'll need to set up persistent storage on whatever cloud hosting platform
 you choose to run the Docker container on (e.g. AWS EBS). By default the
 database is stored locally in SQLite but you may also point it to a SQL database
 either locally or on a cloud service of your choice following
-[these instructions](#running-the-database-on-postgres-or-mysql). You can also
-configure the backend to use S3 storage for exports, snapshots, modules, files,
-and search indexes following [these instructions](#using-s3-storage).
+[these instructions](./advanced/postgres_or_mysql.md). You can also configure
+the backend to use S3 storage for exports, snapshots, modules, files, and search
+indexes following [these instructions](./advanced/s3_storage.md).
 
 You should now be able to use the self-hosted backend. Read on for alternative
 hosting options for production workloads.
@@ -119,6 +119,7 @@ e.g., instead of setting `CONVEX_DEPLOY_KEY`, you'll need to set
 - [Hosting on your own servers](./advanced/hosting_on_own_infra.md)
 - [Running the database on Postgres or MySQL](./advanced/postgres_or_mysql.md)
 - [Storing files in S3 instead of local filesystem](./advanced/s3_storage.md)
+- [Clearing or resetting data](./advanced/clearing_data.md)
 - [Running the dashboard locally](./advanced/dashboard.md)
 - [Disabling logging features](./advanced/disabling_logging.md)
 - [Upgrading Convex self-hosted version](./advanced/upgrading.md)
@@ -137,9 +138,9 @@ product. The cloud-hosted product is optimized for scale.
   about self-hosting.
 
 - Report issues when building and using the open source Convex backend through
-  [GitHub Issues](https://github.com/get-convex/convex-backend/issues)
+  [GitHub Issues](https://github.com/convex/convex-backend/issues)
 
 - We
-  [welcome bug fixes](https://github.com/get-convex/convex-backend/blob/main/crates/convex/CONTRIBUTING.md)
+  [welcome bug fixes](https://github.com/convex/convex-backend/blob/main/crates/convex/CONTRIBUTING.md)
   and love receiving feedback. We keep this repository synced with any internal
   development work within a handful of days.

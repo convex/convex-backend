@@ -20,9 +20,10 @@ jobs:
 
     services:
       backend:
-        image: ghcr.io/get-convex/convex-backend@${{ inputs.image_digest_x64 }}
+        image: ghcr.io/convex/convex-backend@${{ inputs.image_digest_x64 }}
         env:
-          ACTIONS_USER_TIMEOUT_SECS: "20"
+          V8_ACTION_USER_TIMEOUT_SECS: "20"
+          NODE_ACTION_USER_TIMEOUT_SECS: "20"
           CONVEX_CLOUD_ORIGIN: "http://127.0.0.1:3210"
           CONVEX_SITE_ORIGIN: "http://127.0.0.1:3211"
           DISABLE_BEACON: "true"
@@ -35,49 +36,42 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Cache pnpm artifacts
-        uses: runs-on/cache@v4
+      # Restore-only: OSS can't write this cache (cache-write role is convex/convex-only).
+      - name: Restore pnpm artifacts
+        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
           RUNS_ON_S3_BUCKET_CACHE: ${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
         with:
           path: |
-            npm-packages/common/temp/build-cache
-            npm-packages/common/temp/pnpm-store
-          key:
-            pnpm-cache-${{
-            hashFiles('npm-packages/common/config/rush/pnpm-lock.yaml') }}-2
+            ~/.local/share/pnpm/store
+            npm-packages/.turbo/cache
+          key: pnpm-cache-${{ hashFiles('npm-packages/pnpm-lock.yaml') }}-3
           restore-keys: pnpm-cache-
 
-      - name: Node setup
-        uses: actions/setup-node@v4
+      - name: Install mise tools
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
-          node-version-file: ".nvmrc"
+          cache: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: NPM install globals
         run: npm ci --prefix scripts
 
-      - name: Install Just
-        uses: extractions/setup-just@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build NPM Packages
         run: |
-          just rush install
-          just rush build -t .
-        working-directory: npm-packages/js-integration-tests
+          just install-js
+          just turbo run build --filter=test-project...
 
-      - name: Run integration tests
-        working-directory: npm-packages/js-integration-tests
-        env:
-          SKIP_INSTANCE_SECRET_TESTS: 1
-          DEPLOYMENT_URL: http://127.0.0.1:3210
-          SITE_URL: http://127.0.0.1:3211
+      - name: Try pushing to the deployment
+        working-directory: npm-packages/private-demos/test-project
         run: |
           ADMIN_KEY=$(docker exec ${{ job.services.backend.id }} ./generate_admin_key.sh)
           echo "Pushing functions... "
           npx convex deploy --url http://127.0.0.1:3210 --admin-key $ADMIN_KEY
-          ADMIN_KEY=$ADMIN_KEY npm run test-integration
+
+      - name: Verify that the deployment has been pushed to
+        working-directory: npm-packages/private-demos/test-project
+        run: test "$(curl -fsS http://127.0.0.1:3211)" = "Hello world!"

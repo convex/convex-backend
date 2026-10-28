@@ -20,7 +20,6 @@ macro_rules! tuple_struct_u64 {
             derive_more::Into,
             utoipa::ToSchema,
         )]
-        #[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
         pub struct $name(pub u64);
 
         impl From<$name> for serde_json::Number {

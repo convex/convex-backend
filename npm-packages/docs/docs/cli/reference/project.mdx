@@ -1,0 +1,60 @@
+---
+sidebar_position: 12
+title: "npx convex project"
+sidebar_label: "npx convex project"
+description: "Manage projects"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex project`
+
+Manage projects in your team.
+
+## Syntax
+
+```sh
+npx convex project [options] [command]
+```
+
+## Subcommands
+
+- [`npx convex project create`](#create) — Create a new project
+
+## `npx convex project create` \{#create}
+
+Create a new project.
+
+Provisioning a deployment is a separate step — after creating the
+project, run `npx convex deployment create` to add one.
+
+- Create a project in your only team: <CodeWithCopyButton text={"npx convex project create my-app"} />
+- Pick the team: <CodeWithCopyButton text={"npx convex project create my-app --team my-team"} />
+
+### Syntax
+
+```sh
+npx convex project create [options] [name]
+```
+
+### Arguments
+
+<dl>
+<dt>`[name]`</dt>
+<dd>
+
+The name of the new project. Prompted for when omitted in an interactive terminal; required otherwise.
+
+</dd>
+</dl>
+
+### Options
+
+<dl>
+<dt>`--team <team_slug>`</dt>
+<dd>
+
+The team to create the project in. Defaults to your only team, or prompts when you belong to several.
+
+</dd>
+</dl>

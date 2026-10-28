@@ -7,7 +7,7 @@ import { clampForAuditLogRetention } from "./paginatedDeploymentEvents";
  * Get the deployment events on or after the provided timestamp from least recent
  * to most recent
  */
-export default queryPrivateSystem({
+export default queryPrivateSystem("ViewAuditLog")({
   args: { fromTimestamp: v.number() },
   handler: async function (
     { db },

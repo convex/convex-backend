@@ -28,12 +28,12 @@ or existing Next.js project.
 ## Calling Convex functions from client code
 
 To fetch and edit the data in your database from client code, use hooks of the
-[Convex React library](/client/react).
+[Convex React library](/client/react/overview).
 
 <CardLink
   className="convex-hero-card"
   item={{
-    href: "/client/react",
+    href: "/client/react/overview",
     label: "Convex React library documentation",
   }}
 />
@@ -63,16 +63,12 @@ React-based authentication guides for [Clerk](/auth/clerk.mdx) or
 [Auth0](/auth/auth0.mdx), inside your `app/ConvexClientProvider.tsx` file. For
 example this is what the file would look like for Auth0:
 
-<TSAndJSSnippet
-  title="app/ConvexClientProvider.tsx"
-  sourceTS={Config}
-  sourceJS={Config}
-/>
+<Snippet title="app/ConvexClientProvider.tsx" source={Config} />
 
 Custom loading and logged out views can be built with the helper
-`Authenticated`, `Unauthenticated` and `AuthLoading` components from
-`convex/react`, see the
-[Convex Next.js demo](https://github.com/get-convex/convex-demos/tree/main/nextjs-pages-router/pages/_app.tsx)
+`Authenticated`, `Unauthenticated`, `AuthLoading` and `AuthRefreshing`
+components from `convex/react`, see the
+[Convex Next.js demo](https://github.com/convex/convex-demos/tree/main/nextjs-pages-router/pages/_app.tsx)
 for an example.
 
 If only some routes of your app require login, the same helpers can be used
@@ -103,9 +99,9 @@ Otherwise, follow the
 [Clerk Next.js quickstart](https://clerk.com/docs/quickstarts/nextjs), a guide
 from Clerk that includes steps for adding `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
 and `CLERK_SECRET_KEY` to the .env.local file. In Next.js 15, the
-`<ClerkProvider>` component imported from the `@clerk/nextjs` v6 package
-functions as both a client and a server context provider so you probably won't
-need the `ClerkProvider` from `@clerk/clerk-react`.
+`<ClerkProvider>` component imported from the `@clerk/nextjs` package functions
+as both a client and a server context provider so you probably won't need the
+`ClerkProvider` from `@clerk/react`.
 
 #### Auth0
 

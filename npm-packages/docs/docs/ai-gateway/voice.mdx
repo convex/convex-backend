@@ -1,0 +1,138 @@
+---
+title: "Voice"
+sidebar_position: 6
+description: "Transcribe audio and generate speech from Convex actions"
+---
+
+Turn audio into text and text into audio from an
+[action](/functions/actions.mdx) with `convexGateway`. For installation and
+authentication, see [Getting started](/ai-gateway/setup.mdx#vercel-ai-sdk).
+
+Voice needs `@convex-dev/ai-sdk-provider` 0.3.0-alpha.0 or later:
+
+```sh
+npm install @convex-dev/ai-sdk-provider@alpha
+```
+
+<Admonition type="caution" title="Voice is in alpha">
+
+The request and response format may change during alpha.
+
+</Admonition>
+
+The gateway supports three voice modes:
+
+| Mode           | In → out                    | Use it to                                    |
+| -------------- | --------------------------- | -------------------------------------------- |
+| Speech-to-text | Audio → text                | Transcribe recordings, voice notes, meetings |
+| Text-to-speech | Text → audio                | Read text aloud in a chosen voice            |
+| Audio chat     | Audio or text → text, audio | Let a model hear a question and answer it    |
+
+To have a model answer by voice, chain transcription and speech with a chat
+model, or use an audio chat model.
+
+Send each recording in a separate request. The gateway can stream audio replies.
+It does not support two-way live audio sessions. Your app controls playback and
+handles interruptions.
+
+The examples below run inside an action handler.
+
+## Transcribe audio
+
+`storageId` is the ID of an audio file in
+[file storage](/file-storage/store-files.mdx).
+
+```ts
+import { experimental_transcribe as transcribe } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+const { text } = await transcribe({
+  model: convexGateway.transcriptionModel("openai/whisper-large-v3-turbo"),
+  audio: await (await ctx.storage.get(storageId))!.arrayBuffer(),
+});
+```
+
+Set the language with `providerOptions: { convexGateway: { language: "en" } }`.
+The model detects it when you leave it out.
+
+The request body limit is 16 MiB. Base64 encoding makes audio a third larger, so
+one request holds about 12 MiB of raw audio. Providers also time out after 60
+seconds of processing. Split longer recordings into shorter clips.
+
+## Generate speech
+
+```ts
+import { experimental_generateSpeech as generateSpeech } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+const { audio } = await generateSpeech({
+  model: convexGateway.speechModel("hexgrad/kokoro-82m"),
+  text: "Your order has shipped.",
+  voice: "af_heart",
+});
+
+const storageId = await ctx.storage.store(
+  new Blob([audio.uint8Array], { type: audio.mediaType }),
+);
+```
+
+Voices depend on the model. Always pass a `voice` the model supports. Without
+one, the SDK sends OpenAI's `alloy`, which most other models do not offer. The
+response is MP3. Set `outputFormat: "pcm"` for raw PCM. The SDK still labels PCM
+audio `audio/mp3`, so set the `Blob` type to `audio/pcm` yourself.
+
+## Answer by voice
+
+Chain the three steps to answer a spoken question with any chat model:
+
+```ts
+import {
+  experimental_generateSpeech as generateSpeech,
+  experimental_transcribe as transcribe,
+  generateText,
+} from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+const { text: question } = await transcribe({
+  model: convexGateway.transcriptionModel("openai/whisper-large-v3-turbo"),
+  audio: recording, // ArrayBuffer of the caller's audio
+});
+
+const { text: answer } = await generateText({
+  model: convexGateway("anthropic/claude-sonnet-4.5"),
+  prompt: question,
+});
+
+const { audio } = await generateSpeech({
+  model: convexGateway.speechModel("hexgrad/kokoro-82m"),
+  text: answer,
+  voice: "af_heart",
+});
+```
+
+An audio chat model such as `openai/gpt-audio` does all three in one call
+through `/v1/chat/completions`. Send audio as an `input_audio` content part. For
+spoken output, set `modalities: ["text", "audio"]` and an `audio` object with
+`voice` and `format`, and stream the response. The audio arrives in
+`delta.audio` chunks. Use the OpenAI SDK or `fetch` for spoken output, because
+the AI SDK returns only the text.
+
+## Models
+
+Start with these models. Call
+[`GET /v1/models`](/ai-gateway/api.mdx#get-v1models) for every model the gateway
+serves.
+
+| Mode           | Models                                                                         |
+| -------------- | ------------------------------------------------------------------------------ |
+| Speech-to-text | `openai/whisper-large-v3-turbo`, `openai/gpt-4o-transcribe`, `deepgram/nova-3` |
+| Text-to-speech | `hexgrad/kokoro-82m`, `google/gemini-3.8-flash-tts`, `deepgram/aura-2`         |
+| Audio chat     | `openai/gpt-audio`, `openai/gpt-audio-mini`                                    |
+
+## Cost
+
+Transcription results include their cost in
+`providerMetadata.convexGateway.cost`, in US dollars. Speech results have no
+cost field, because the cost is known only after the audio is sent. Convex still
+bills for speech. The charge appears on the
+[team usage page](https://dashboard.convex.dev/team/settings/usage).

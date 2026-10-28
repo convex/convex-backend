@@ -69,34 +69,6 @@ macro_rules! codegen_convex_serialization {
         }
 
         $crate::paste! {
-            #[cfg(test)]
-            mod [<roundtrip_test_ $struct:snake:lower>] {
-                use cmd_util::env::env_config;
-                use proptest::prelude::*;
-
-                use super::$struct as S;
-
-                // TODO: For some reason, `proptest!` isn't usable from within this macro.
-                #[test]
-                #[allow(non_snake_case)]
-                fn $struct() {
-                    let mut config = ProptestConfig {
-                        cases: $test_cases * env_config("CONVEX_PROPTEST_MULTIPLIER", 1),
-                        failure_persistence: None,
-                        ..ProptestConfig::default()
-                    };
-                    config.test_name = Some(concat!(module_path!(), "::test_roundtrips"));
-                    proptest::test_runner::TestRunner::new(config)
-                        .run(&any::<S>(), |left| {
-                            let right = S::try_from(
-                                value::ConvexObject::try_from(left.clone()).unwrap()
-                            ).unwrap();
-                            prop_assert_eq!(left, right);
-                            Ok(())
-                        })
-                        .unwrap();
-                }
-            }
         }
     };
 }

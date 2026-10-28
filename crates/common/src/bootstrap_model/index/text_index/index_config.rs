@@ -9,7 +9,6 @@ use value::codegen_convex_serialization;
 use crate::paths::FieldPath;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct TextIndexSpec {
     /// The field to index for full text search.
     pub search_field: FieldPath,
@@ -20,7 +19,6 @@ pub struct TextIndexSpec {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct SerializedTextIndexSpec {
     search_field: String,
     filter_fields: Vec<String>,

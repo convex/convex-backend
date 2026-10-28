@@ -9,12 +9,14 @@ use deno_core::{
     serde_v8,
     v8,
 };
+use derive_more::FromStr;
 use errors::ErrorMetadata;
 use serde::{
     Deserialize,
     Serialize,
 };
 use strum::IntoStaticStr;
+use value::heap_size::HeapSize;
 
 use crate::strings;
 
@@ -54,10 +56,10 @@ impl<T: Serialize> ToV8 for T {
     }
 }
 
-#[derive(Copy, Clone, Debug, IntoStaticStr)]
+#[derive(Copy, Clone, Debug, IntoStaticStr, FromStr)]
 #[allow(dead_code)]
 #[allow(clippy::enum_variant_names)]
-pub(crate) enum DOMExceptionName {
+pub enum DOMExceptionName {
     IndexSizeError,
     HierarchyRequestError,
     WrongDocumentError,
@@ -93,14 +95,23 @@ pub(crate) enum DOMExceptionName {
     OptOutError,
 }
 
-#[derive(Debug)]
-pub(crate) enum JsException {
+#[derive(Debug, Clone)]
+pub enum JsException {
     DOMException(DOMException),
     TypeError(TypeError),
 }
 
-#[derive(Debug)]
-pub(crate) struct DOMException {
+impl HeapSize for JsException {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::DOMException(DOMException { message, name: _ }) => message.heap_size(),
+            Self::TypeError(TypeError { message }) => message.heap_size(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DOMException {
     pub message: Cow<'static, str>,
     pub name: DOMExceptionName,
 }
@@ -141,8 +152,8 @@ impl ToV8 for DOMException {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct TypeError {
+#[derive(Debug, Clone)]
+pub struct TypeError {
     pub message: Cow<'static, str>,
 }
 
@@ -172,6 +183,18 @@ impl From<DOMException> for anyhow::Error {
 impl From<TypeError> for anyhow::Error {
     fn from(e: TypeError) -> Self {
         anyhow::Error::new(JsException::TypeError(e))
+    }
+}
+
+impl From<webcrypto::DOMExceptionName> for DOMExceptionName {
+    fn from(name: webcrypto::DOMExceptionName) -> Self {
+        match name {
+            webcrypto::DOMExceptionName::NotSupportedError => DOMExceptionName::NotSupportedError,
+            webcrypto::DOMExceptionName::SyntaxError => DOMExceptionName::SyntaxError,
+            webcrypto::DOMExceptionName::InvalidAccessError => DOMExceptionName::InvalidAccessError,
+            webcrypto::DOMExceptionName::DataError => DOMExceptionName::DataError,
+            webcrypto::DOMExceptionName::OperationError => DOMExceptionName::OperationError,
+        }
     }
 }
 

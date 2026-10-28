@@ -60,6 +60,13 @@ const meta = {
     layout: "fullscreen",
     a11y: { test: "todo" },
   },
+  decorators: [
+    (Story) => (
+      <div className="h-screen">
+        <Story />
+      </div>
+    ),
+  ],
   args: {} as any,
 } satisfies Meta<typeof LogDrilldown>;
 

@@ -15,8 +15,8 @@ import tasks from "!!raw-loader!@site/../private-demos/quickstarts/tanstack-star
 <Admonition type="caution" title="TanStack Start is in Release Candidate">
 
 [TanStack Start](https://tanstack.com/start/latest) is a new React framework
-currently in the Release Candidate stage. You can try it today but there might
-still be bug or issues.
+currently in the Release Candidate stage. You can use it today but there may be
+bugs or breaking changes before a stable release.
 
 </Admonition>
 
@@ -30,8 +30,9 @@ To get setup quickly with Convex and TanStack Start run
 
 or follow the guide below.
 
-To use Clerk with Convex and TanStack Start, see the
-[TanStack Start + Clerk guide](/client/tanstack/tanstack-start/clerk.mdx)
+To use an auth provider with Convex and TanStack Start, see the
+[TanStack Start + Clerk guide](/client/tanstack/tanstack-start/clerk.mdx) or the
+[TanStack Start + WorkOS AuthKit guide](/auth/authkit/add-to-app).
 
 ---
 
@@ -51,30 +52,30 @@ Create a TanStack Start app using the `create-start-app` command:
     To get started with Convex install the `convex` package and a few React Query-related packages.
 
     ```sh
-    npm install convex @convex-dev/react-query @tanstack/react-router-with-query @tanstack/react-query
+    npm install convex @convex-dev/react-query @tanstack/react-router-ssr-query @tanstack/react-query
     ```
 
   </Step>
 
-  <Step title="Update app/routes/__root.tsx">
+  <Step title="Update src/routes/__root.tsx">
     Add a `QueryClient` to the router context to make React Query usable anywhere in the TanStack Start site.
 
     <Snippet
       source={appRoutesRoot}
-      title="app/routes/__root.tsx"
+      title="src/routes/__root.tsx"
       highlightPatterns={[ "createRootRouteWithContext", "QueryClient", "\\}\\>\\(\\)\\(\\{"]}
     />
 
   </Step>
 
-  <Step title="Update app/router.tsx">
-    Replace the file `app/router.tsx` with these contents.
+  <Step title="Update src/router.tsx">
+    Replace the file `src/router.tsx` with these contents.
 
     This creates a `ConvexClient` and a `ConvexQueryClient` and wires in a `ConvexProvider`.
 
     <Snippet
       source={router}
-      title="app/router.tsx"
+      title="src/router.tsx"
     />
 
   </Step>
@@ -112,14 +113,14 @@ Create a TanStack Start app using the `create-start-app` command:
     with the sample data into your Convex database with
     the `import` command.
 
-    ```
+    ```sh
     npx convex import --table tasks sampleData.jsonl
     ```
 
   </Step>
 
   <Step title="Expose a database query">
-    Add a new file <JSDialectFileName name="tasks.ts" /> in the `convex/` folder
+    Add a new file `tasks.ts` in the `convex/` folder
     with a query function that loads the data.
 
     Exporting a query function from this file
@@ -134,14 +135,14 @@ Create a TanStack Start app using the `create-start-app` command:
   </Step>
 
   <Step title="Display the data in your app">
-    Replace the file `app/routes/index.tsx` with these contents.
+    Replace the file `src/routes/index.tsx` with these contents.
 
     The `useSuspenseQuery` hook renders the API function `api.tasks.get`
     query result on the server initially, then it updates live in the browser.
 
     <Snippet
       source={index}
-      title="app/routes/index.tsx"
+      title="src/routes/index.tsx"
       highlightPatterns={[ "useSuspenseQuery" ]}
     />
 

@@ -1,4 +1,5 @@
 import NextErrorComponent from "next/error";
+import type { NextPageContext } from "next";
 
 import * as Sentry from "@sentry/nextjs";
 
@@ -22,7 +23,7 @@ function MyError({
   return <NextErrorComponent statusCode={statusCode} />;
 }
 
-MyError.getInitialProps = async (context: any) => {
+MyError.getInitialProps = async (context: NextPageContext) => {
   const errorInitialProps = await NextErrorComponent.getInitialProps(context);
 
   const { res, err, asPath } = context;
@@ -30,8 +31,9 @@ MyError.getInitialProps = async (context: any) => {
   // @ts-expect-error -- Workaround for https://github.com/vercel/next.js/issues/8592, mark when getInitialProps has run
   errorInitialProps.hasGetInitialPropsRun = true;
 
-  // Returning early because we don't want to log 404 errors to Sentry.
-  if (res?.statusCode === 404) {
+  // Returning early because client errors (404s and the like) are not
+  // actionable, so we don't want to log them to Sentry.
+  if (res?.statusCode && res.statusCode < 500) {
     return errorInitialProps;
   }
 

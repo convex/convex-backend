@@ -15,7 +15,7 @@ import { QueryInitializerImpl } from "./query_impl.js";
 import { GenericDataModel, GenericDocument } from "../data_model.js";
 import { validateArg } from "./validate.js";
 import { version } from "../../index.js";
-import { patchValueToJson } from "../../values/value.js";
+import { commitTsPlaceholder, patchValueToJson } from "../../values/value.js";
 
 async function get(
   table: string | undefined,
@@ -163,6 +163,9 @@ export function setupWriter(): GenericDatabaseWriter<GenericDataModel> &
     },
     table: (tableName) => {
       return new TableWriter(tableName, false);
+    },
+    vars: {
+      commitTs: commitTsPlaceholder,
     },
   };
 }

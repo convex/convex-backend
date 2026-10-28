@@ -83,7 +83,6 @@ impl AuthInfo {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum SignatureAlgorithm {
     RS256,
     ES256,
@@ -252,66 +251,9 @@ fn ends_with_tld(host: &str) -> bool {
 }
 
 impl AuthInfo {
-    #[cfg(any(test, feature = "testing"))]
-    pub fn test_example() -> Self {
-        Self::Oidc {
-            application_id: "12345".to_string(),
-            domain: IssuerUrl::new("https://convex.dev".to_string()).unwrap(),
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for AuthInfo {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = AuthInfo>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        prop_oneof![
-            // Generate OIDC variant
-            (any::<String>(), any::<proptest_http::ArbitraryUri>()).prop_filter_map(
-                "String and URI weren't valid OIDC AuthInfo",
-                |(s, uri)| {
-                    IssuerUrl::new(format!("{}", uri.0))
-                        .map(|domain| Self::Oidc {
-                            application_id: s,
-                            domain,
-                        })
-                        .ok()
-                },
-            ),
-            // Generate JWT variant
-            (
-                any::<Option<String>>(),              // application_id
-                any::<proptest_http::ArbitraryUri>(), // issuer
-                any::<proptest_http::ArbitraryUri>(), // jwks
-                any::<SignatureAlgorithm>(),          // algorithm
-            )
-                .prop_filter_map(
-                    "String and URIs weren't valid JWT AuthInfo",
-                    |(app_id, issuer_uri, jwks_uri, algorithm)| {
-                        IssuerUrl::new(format!("{}", issuer_uri.0))
-                            .map(|issuer| Self::CustomJwt {
-                                application_id: app_id,
-                                issuer,
-                                jwks: jwks_uri.0.to_string(),
-                                algorithm,
-                            })
-                            .ok()
-                    }
-                )
-        ]
-    }
 }
 
 #[derive(Debug)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, Clone, PartialEq)
-)]
 pub struct AuthConfig {
     pub providers: Vec<AuthInfo>,
 }
@@ -347,79 +289,5 @@ impl TryFrom<SerializedAuthConfig> for AuthConfig {
                 .map(AuthInfo::try_from)
                 .collect::<Result<Vec<_>, _>>()?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::auth::{
-        AuthInfo,
-        SerializedAuthInfo,
-    };
-
-    #[test]
-    fn test_auth_info_https_prefix() -> anyhow::Result<()> {
-        let AuthInfo::Oidc { domain, .. } = serde_json::from_str::<SerializedAuthInfo>(
-            r#"{"applicationID": "123", "domain": "example.com"}"#,
-        )?
-        .try_into()?
-        else {
-            panic!("Expected Oidc AuthInfo");
-        };
-        assert_eq!(domain.to_string(), "https://example.com");
-        let AuthInfo::Oidc { domain, .. } = serde_json::from_str::<SerializedAuthInfo>(
-            r#"{"applicationID": "123", "domain": "localhost"}"#,
-        )?
-        .try_into()?
-        else {
-            panic!("Expected Oidc AuthInfo");
-        };
-        assert_eq!(domain.to_string(), "https://localhost");
-        Ok(())
-    }
-
-    #[test]
-    fn test_auth_info_file_fails() -> anyhow::Result<()> {
-        let serialized = serde_json::from_str::<SerializedAuthInfo>(
-            r#"{"applicationID": "123", "domain": "file://example.com"}"#,
-        )?;
-        AuthInfo::try_from(serialized).unwrap_err();
-        Ok(())
-    }
-
-    #[test]
-    fn test_auth_info_http_localhost() -> anyhow::Result<()> {
-        let AuthInfo::Oidc { domain, .. } = serde_json::from_str::<SerializedAuthInfo>(
-            r#"{"applicationID": "123", "domain": "http://localhost:3211"}"#,
-        )?
-        .try_into()?
-        else {
-            panic!("Expected Oidc AuthInfo");
-        };
-        assert_eq!(domain.to_string(), "http://localhost:3211");
-
-        let AuthInfo::Oidc { domain, .. } = serde_json::from_str::<SerializedAuthInfo>(
-            r#"{"applicationID": "123", "domain": "http://127.0.0.1:3211"}"#,
-        )?
-        .try_into()?
-        else {
-            panic!("Expected Oidc AuthInfo");
-        };
-        assert_eq!(domain.to_string(), "http://127.0.0.1:3211");
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_auth_info_rejects_bogus_domain() -> anyhow::Result<()> {
-        let serialized = serde_json::from_str::<SerializedAuthInfo>(
-            r#"{"applicationID": "123", "domain": "foobar123"}"#,
-        )?;
-        AuthInfo::try_from(serialized).unwrap_err();
-        let serialized = serde_json::from_str::<SerializedAuthInfo>(
-            r#"{"applicationID": "123", "domain": "idont.looklikeadomain"}"#,
-        )?;
-        AuthInfo::try_from(serialized).unwrap_err();
-        Ok(())
     }
 }

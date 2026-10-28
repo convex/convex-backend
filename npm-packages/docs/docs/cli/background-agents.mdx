@@ -3,8 +3,9 @@ title: "Agent Mode"
 slug: "agent-mode"
 sidebar_position: 20
 sidebar_label: "Agent Mode"
+sidebar_class_name: "convex-sidebar-beta-badge"
 description:
-  "Configure anonymous development mode for cloud-based coding agents"
+  "Configure agentic development for cloud-based and local deployments"
 ---
 
 When logged in on your own machine, agents like Cursor and Claude Code can run
@@ -19,17 +20,164 @@ Agents run Convex CLI commands, they can't log in. And if you do log in for
 them, the agent will use your default dev deployment to develop, conflicting
 with your own changes!
 
-Instead, set `CONVEX_AGENT_MODE=anonymous` in this environment, causing the
-agent to use [anonymous development](/cli/local-deployments-for-dev.mdx) to run
-a separate Convex backend on the VM where the agent is working.
+You have two options for giving an agent its own isolated Convex environment:
 
-<BetaAdmonition feature="Convex Agent Mode" verb="is" />
+1. **Local backend** — the agent runs Convex locally, storing its data in a
+   `.convex/` folder. Best for ephemeral agents that don't require webhooks or
+   default environment variables.
+2. **Cloud dev deployment per agent** — the agent gets its own real Convex cloud
+   deployment. Best when the agent needs default environment variables, inbound
+   public http traffic, such as webhooks, or integrations that don't run
+   locally.
 
-You can set this variable in .env.local or set it in the agent's environment.
+## Local backend
 
+The CLI will spin up a separate Convex backend on the VM where the agent is
+working ([anonymous development](/cli/local-deployments-for-dev.mdx)), with no
+need for a Convex login or deploy key.
+
+A typical setup script:
+
+```sh
+npm i
+npx convex dev --once
 ```
-CONVEX_AGENT_MODE=anonymous npx convex dev
+
+or with bun:
+
+```sh
+bun i
+bun x convex dev --once
 ```
 
-In the future `CONVEX_AGENT_MODE` may support other behaviors like allowing
-agents to provision their own short-lived cloud deployments.
+The setup script needs "full" internet access the first time so the CLI can
+download the local backend binary.
+
+In non-interactive shells (the typical case for an agent's setup script),
+`npx convex` will never prompt the agent to log in — when no deployment is
+already configured and `CONVEX_DEPLOY_KEY` isn't set, the CLI defaults to
+provisioning a local deployment automatically.
+
+## Cloud dev deployment per agent
+
+If the agent needs a real cloud deployment (e.g. for dashboard access, crons, or
+integrations that aren't available locally), provision a fresh dev deployment in
+your project and hand the agent a deploy key scoped only to it:
+
+```sh
+# Create a new dev deployment and select it.
+npx convex deployment create --type dev --select \
+  team-slug:project-slug:dev/$USER/$(basename "$PWD") \
+  --expiration "in 5 days"
+
+# Mint a deploy key scoped only to this deployment and save it as
+# CONVEX_DEPLOY_KEY in .env.local.
+npx convex deployment token create agent-token --save-env
+
+# Push code once.
+npx convex dev --once
+```
+
+Once `CONVEX_DEPLOY_KEY` is set in `.env.local`, the agent can only push to and
+develop against its own dev deployment — not prod or other developers'
+deployments.
+
+If the agent needs environment variables, the easiest path is to set them as
+[project environment variable defaults](/production/environment-variables.mdx#project-environment-variable-defaults)
+so they're applied automatically to every new cloud deployment. You can also
+seed values directly with `npx convex env set` (which accepts variables on stdin
+or via `--from-file`).
+
+`env set` needs a deployment to be configured first, so run it _after_
+`deployment create` (or after `npx convex init` for a local backend) and
+_before_ `npx convex dev --once` so the deployed code sees the new values.
+
+See
+[Creating and deleting deploy keys from the CLI](/cli/deploy-key-types.mdx#deployment-token)
+for the full options on `npx convex deployment token`.
+
+## Worktree setups
+
+If you use a tool that creates a separate worktree for each agent task (Codex,
+Conductor, Cursor local worktrees, T3 Code), you can wire the cloud
+deployment-per-agent recipe into the tool's setup script so each worktree gets
+its own dev deployment automatically.
+
+When including `--select`, the deployment created during setup will be the one
+used by `npx convex` commands run from that worktree afterward. Replace
+`my-team` and `my-project` with your team and project slugs in the snippets
+below.
+
+<Details summary="Using the Codex app">
+
+Open the Codex app settings and go to _Environments_. Select the environment for
+your project or create one if needed. Use the following setup script:
+
+```bash
+npm ci && npx convex deployment create --type=dev my-team:my-project:dev/$USER-codex/$(basename \"$(dirname \"$CODEX_WORKTREE_PATH\")\") --select
+```
+
+When starting a new worktree, select the environment that you just created.
+
+</Details>
+
+<Details summary="Using Conductor">
+
+Add the following setup command to the `conductor.json` file of your project:
+
+```json
+{
+  "scripts": {
+    "setup": "npm ci && npx convex deployment create --type=dev my-team:my-project:dev/$USER-conductor/$CONDUCTOR_WORKSPACE_NAME --select"
+  }
+}
+```
+
+</Details>
+
+<Details summary="Using Cursor local worktrees">
+
+Add the following setup command to the `.cursor/worktrees.json` file of your
+project:
+
+```json
+{
+  "setup-worktree": [
+    "npm ci",
+    "npx convex deployment create --type=dev my-team:my-project:dev/$USER-cursor/$(basename \"$PWD\") --select"
+  ]
+}
+```
+
+</Details>
+
+<Details summary="Using T3 Code">
+
+Click on **Add action** in the top bar. Enable _Run automatically on worktree
+creation_ and use the following command:
+
+```bash
+npm ci && npx convex deployment create --type=dev my-team:my-project:dev/$USER-t3code/$(basename "$PWD" | sed 's/^t3code-//') --select
+```
+
+</Details>
+
+To also mint a per-worktree deploy key, append the
+`npx convex deployment token create agent-token --save-env` step from the
+[cloud-deployment recipe](#cloud-dev-deployment-per-agent) after the
+`deployment create` line.
+
+## Switching between cloud and local
+
+You can flip a worktree between a cloud and local deployment at any time:
+
+```sh
+# Create and select a local deployment for this worktree.
+npx convex deployment create local --select
+
+# Or, if a local deployment already exists, just select it.
+npx convex deployment select local
+```
+
+`npx convex deployment select <ref>` switches back to a cloud deployment by its
+reference (or `dev`/`prod`).

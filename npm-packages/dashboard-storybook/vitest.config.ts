@@ -23,6 +23,10 @@ export default defineConfig({
         replacement: path.resolve(dirname, "../dashboard/src/api") + "/$1",
       },
       {
+        find: /^hooks\/(.*)/,
+        replacement: path.resolve(dirname, "../dashboard/src/hooks") + "/$1",
+      },
+      {
         find: /^react($|\/.*)/,
         replacement: path.resolve(dirname, "node_modules/react") + "$1",
       },
@@ -47,6 +51,7 @@ export default defineConfig({
           browser: {
             enabled: true,
             provider: playwright(),
+            headless: true,
             instances: [{ browser: "chromium" }],
           },
           setupFiles: ["./.storybook/vitest.setup.ts"],

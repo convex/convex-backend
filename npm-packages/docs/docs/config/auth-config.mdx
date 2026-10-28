@@ -1,0 +1,22 @@
+---
+title: "auth.config.ts"
+slug: "auth.config.ts"
+sidebar_label: "auth.config.ts"
+description: "Set up authentication providers in the auth.config.ts file."
+---
+
+import Example from "!!raw-loader!@site/../private-demos/snippets-config-files/convex/auth.config.ts";
+import { AuthProvidersList } from "@site/src/AuthProvidersList.tsx";
+
+`convex/auth.config.ts` allows you to set up
+[**authentication providers**](/auth/overview), which issue the JWTs your
+deployment accepts to identify users. Your functions can then
+[read the authenticated user from `ctx.auth`](/auth/functions-auth).
+
+<Snippet title="convex/auth.config.ts" source={Example} />
+
+## Learn More
+
+Follow the setup guide for your authentication provider:
+
+<AuthProvidersList />

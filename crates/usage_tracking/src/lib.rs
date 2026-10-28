@@ -3,7 +3,6 @@
 use std::{
     collections::BTreeMap,
     fmt::Debug,
-    ops::Add,
     sync::Arc,
     time::Duration,
 };
@@ -21,7 +20,6 @@ use common::{
     types::{
         IndexName,
         ModuleEnvironment,
-        StorageUuid,
         UdfIdentifier,
     },
     RequestId,
@@ -33,6 +31,7 @@ use derive_more::{
 use events::usage::{
     FunctionCallUsageFields,
     InsightReadLimitCall,
+    StorageCallSample,
     UsageEvent,
     UsageEventLogger,
 };
@@ -44,7 +43,10 @@ use pb::usage::{
     CounterWithUrl as CounterWithUrlProto,
     FunctionUsageStats as FunctionUsageStatsProto,
 };
-use value::sha256::Sha256Digest;
+use value::{
+    sha256::Sha256Digest,
+    TableName,
+};
 
 mod metrics;
 
@@ -54,13 +56,7 @@ pub struct UsageCounter {
     usage_logger: Arc<dyn UsageEventLogger>,
 }
 
-#[derive(Debug, Clone)]
-pub struct OccInfo {
-    pub table_name: Option<String>,
-    pub document_id: Option<String>,
-    pub write_source: Option<String>,
-    pub retry_count: u64,
-}
+pub use common::log_streaming::OccInfo;
 
 pub enum CallType {
     Action {
@@ -150,7 +146,7 @@ impl CallType {
 
     fn occ_retry_count(&self) -> Option<u64> {
         match self {
-            Self::Mutation { occ_info, .. } => occ_info.as_ref().map(|info| info.retry_count),
+            Self::Mutation { occ_info, .. } => occ_info.as_ref().and_then(|info| info.retry_count),
             _ => None,
         }
     }
@@ -288,32 +284,6 @@ impl UsageCounter {
         self.usage_logger.record_async(usage_metrics).await;
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn track_call_test(&self, stats: FunctionUsageStats) {
-        use common::components::ComponentFunctionPath;
-
-        let component = ComponentPath::root();
-        let path = ComponentFunctionPath {
-            component,
-            udf_path: "test.js:default".parse().unwrap(),
-        };
-        let udf = UdfIdentifier::Function(path.canonicalize());
-        self.track_call(
-            udf,
-            ExecutionId::new(),
-            RequestId::new(),
-            CallType::Action {
-                env: ModuleEnvironment::Isolate,
-                duration: Duration::from_secs(10),
-                user_execution_time: Some(Duration::from_secs(5)),
-                memory_in_mb: 10,
-            },
-            true,
-            stats,
-        )
-        .await;
-    }
-
     // TODO: The existence of this function is a hack due to shortcuts we have
     // done in Node.js usage tracking. It should only be used by Node.js action
     // callbacks. We should only be using track_call() and never calling this
@@ -377,75 +347,76 @@ impl UsageCounter {
                 egress,
             });
         }
-        // Merge "by table" bandwidth stats.
-        for ((component_path, table_name), ingress) in stats.database_ingress {
-            usage_metrics.push(UsageEvent::DatabaseBandwidth {
-                id: execution_id.to_string(),
-                request_id: request_id.to_string(),
-                component_path: component_path.serialize(),
-                udf_id: udf_id.clone(),
-                table_name,
-                ingress,
-                ingress_v2: 0,
-                egress: 0,
-                egress_rows: 0,
-                egress_v2: 0,
-            });
+        // Merge the "by table" bandwidth stats. They're tracked in separate
+        // maps but describe the same access.
+        #[derive(Default)]
+        struct DatabaseBandwidthCounters {
+            ingress_v2: u64,
+            egress: u64,
+            egress_rows: u64,
+            egress_v2: u64,
+            virtual_table_ingress: u64,
+            virtual_table_egress: u64,
         }
-        for ((component_path, table_name), ingress) in stats.database_ingress_v2 {
-            usage_metrics.push(UsageEvent::DatabaseBandwidth {
-                id: execution_id.to_string(),
-                request_id: request_id.to_string(),
-                component_path: component_path.serialize(),
-                udf_id: udf_id.clone(),
-                table_name,
-                ingress: 0,
-                ingress_v2: ingress,
-                egress: 0,
-                egress_rows: 0,
-                egress_v2: 0,
-            });
+        let mut database_bandwidth: BTreeMap<
+            (ComponentPath, TableNameString),
+            DatabaseBandwidthCounters,
+        > = BTreeMap::new();
+        for (key, ingress) in stats.database_ingress_v2 {
+            database_bandwidth.entry(key).or_default().ingress_v2 += ingress;
         }
-        for ((component_path, table_name), egress) in stats.database_egress.clone() {
-            let rows = stats
-                .database_egress_rows
-                .get(&(component_path.clone(), table_name.clone()))
-                .unwrap_or(&0);
-            usage_metrics.push(UsageEvent::DatabaseBandwidth {
-                id: execution_id.to_string(),
-                request_id: request_id.to_string(),
-                component_path: component_path.serialize(),
-                udf_id: udf_id.clone(),
-                table_name,
-                ingress: 0,
-                ingress_v2: 0,
-                egress,
-                egress_rows: *rows,
-                egress_v2: 0,
-            });
+        for (key, egress) in stats.database_egress {
+            database_bandwidth.entry(key).or_default().egress += egress;
         }
-        for ((component_path, table_name), egress) in stats.database_egress_v2.clone() {
-            let rows = stats
-                .database_egress_rows
-                .get(&(component_path.clone(), table_name.clone()))
-                .unwrap_or(&0);
+        for (key, egress) in stats.database_egress_v2 {
+            database_bandwidth.entry(key).or_default().egress_v2 += egress;
+        }
+        for (key, egress_rows) in stats.database_egress_rows {
+            database_bandwidth.entry(key).or_default().egress_rows += egress_rows;
+        }
+        for (key, ingress) in stats.virtual_table_ingress {
+            database_bandwidth
+                .entry(key)
+                .or_default()
+                .virtual_table_ingress += ingress;
+        }
+        for (key, egress) in stats.virtual_table_egress {
+            database_bandwidth
+                .entry(key)
+                .or_default()
+                .virtual_table_egress += egress;
+        }
+        let mut bandwidth_by_component: BTreeMap<ComponentPath, DatabaseBandwidthCounters> =
+            BTreeMap::new();
+        for ((component_path, _), bandwidth) in &database_bandwidth {
+            let component_bandwidth = bandwidth_by_component
+                .entry(component_path.clone())
+                .or_default();
+            component_bandwidth.ingress_v2 += bandwidth.ingress_v2;
+            component_bandwidth.egress += bandwidth.egress;
+            component_bandwidth.egress_rows += bandwidth.egress_rows;
+            component_bandwidth.egress_v2 += bandwidth.egress_v2;
+            component_bandwidth.virtual_table_ingress += bandwidth.virtual_table_ingress;
+            component_bandwidth.virtual_table_egress += bandwidth.virtual_table_egress;
+        }
+        for (component_path, bandwidth) in bandwidth_by_component {
             usage_metrics.push(UsageEvent::DatabaseBandwidth {
                 id: execution_id.to_string(),
-                request_id: request_id.to_string(),
+                request_id: Some(request_id.to_string()),
                 component_path: component_path.serialize(),
                 udf_id: udf_id.clone(),
-                table_name,
-                ingress: 0,
-                ingress_v2: 0,
-                egress: 0,
-                egress_rows: *rows,
-                egress_v2: egress,
+                table_name: (),
+                ingress_v2: bandwidth.ingress_v2,
+                egress_rows: bandwidth.egress_rows,
+                egress_v2: bandwidth.egress_v2,
+                virtual_table_ingress: bandwidth.virtual_table_ingress,
+                virtual_table_egress: bandwidth.virtual_table_egress,
             });
         }
 
         // Check read limits and add InsightReadLimit event if thresholds are exceeded
-        let total_rows: u64 = stats.database_egress_rows.values().sum();
-        let total_bytes: u64 = stats.database_egress.values().sum();
+        let total_rows: u64 = database_bandwidth.values().map(|b| b.egress_rows).sum();
+        let total_bytes: u64 = database_bandwidth.values().map(|b| b.egress).sum();
 
         let row_threshold =
             (*TRANSACTION_MAX_READ_SIZE_ROWS as f64 * *FUNCTION_LIMIT_WARNING_RATIO) as u64;
@@ -457,29 +428,23 @@ impl UsageCounter {
 
         if did_exceed_document_threshold || did_exceed_byte_threshold {
             let mut calls = Vec::new();
-            let component_path: Option<ComponentPath> =
-                match stats.database_egress_rows.first_key_value() {
-                    Some(((component_path, _), _)) => Some(component_path.clone()),
-                    None => {
-                        tracing::error!(
-                            "Failed to find component path despite thresholds being exceeded"
-                        );
-                        None
-                    },
-                };
+            let component_path = database_bandwidth
+                .iter()
+                .find(|(_, bandwidth)| bandwidth.egress_rows > 0)
+                .map(|((component_path, _), _)| component_path.clone());
+            if component_path.is_none() {
+                tracing::error!("Failed to find component path despite thresholds being exceeded");
+            }
 
             if let Some(component_path) = component_path {
-                for ((cp, table_name), egress_rows) in stats.database_egress_rows.into_iter() {
-                    let egress = stats
-                        .database_egress
-                        .get(&(cp, table_name.clone()))
-                        .copied()
-                        .unwrap_or(0);
-
+                for ((_, table_name), bandwidth) in &database_bandwidth {
+                    if bandwidth.egress_rows == 0 {
+                        continue;
+                    }
                     calls.push(InsightReadLimitCall {
-                        table_name,
-                        bytes_read: egress,
-                        documents_read: egress_rows,
+                        table_name: table_name.clone(),
+                        bytes_read: bandwidth.egress,
+                        documents_read: bandwidth.egress_rows,
                     });
                 }
 
@@ -537,10 +502,11 @@ impl UsageCounter {
             });
         }
         for (
-            (component_path, table_name, index_name),
+            (component_path, index_name),
             TextIndexQueryUsage {
                 num_searches,
                 bytes_searched,
+                filtered_bytes_searched,
             },
         ) in stats.text_query_usage
         {
@@ -548,18 +514,18 @@ impl UsageCounter {
                 id: execution_id.to_string(),
                 component_path: component_path.serialize(),
                 udf_id: udf_id.clone(),
-                table_name,
+                table_name: index_name.table().to_string(),
                 index_name: index_name.to_string(),
                 num_searches,
                 bytes_searched,
+                filtered_bytes_searched,
             })
         }
         for (
-            (component_path, table_name, index_name),
+            (component_path, index_name),
             VectorIndexQueryUsage {
                 num_searches,
                 bytes_searched,
-                dimensions,
             },
         ) in stats.vector_query_usage
         {
@@ -567,11 +533,10 @@ impl UsageCounter {
                 id: execution_id.to_string(),
                 component_path: component_path.serialize(),
                 udf_id: udf_id.clone(),
-                table_name,
+                table_name: index_name.table().to_string(),
                 index_name: index_name.to_string(),
                 num_searches,
                 bytes_searched,
-                dimensions,
             })
         }
 
@@ -583,6 +548,15 @@ impl UsageCounter {
                 udf_id: udf_id.clone(),
                 url,
                 egress,
+            });
+        }
+
+        if stats.audit_log_egress > 0 {
+            usage_metrics.push(UsageEvent::AuditLogBandwidth {
+                id: execution_id.to_string(),
+                component_path: global_component_path.clone(),
+                udf_id: udf_id.clone(),
+                egress: stats.audit_log_egress,
             });
         }
     }
@@ -597,9 +571,7 @@ pub trait StorageUsageTracker: Send + Sync {
         &self,
         component_path: ComponentPath,
         storage_api: &'static str,
-        storage_id: StorageUuid,
         content_type: Option<ContentType>,
-        sha256: Sha256Digest,
     ) -> Box<dyn StorageCallTracker>;
 }
 
@@ -663,9 +635,7 @@ impl StorageUsageTracker for UsageCounter {
         &self,
         component_path: ComponentPath,
         storage_api: &'static str,
-        storage_id: StorageUuid,
         content_type: Option<ContentType>,
-        sha256: Sha256Digest,
     ) -> Box<dyn StorageCallTracker> {
         let execution_id = ExecutionId::new();
         metrics::storage::log_storage_call();
@@ -673,12 +643,11 @@ impl StorageUsageTracker for UsageCounter {
             .record_async(vec![UsageEvent::StorageCall {
                 id: execution_id.to_string(),
                 component_path: component_path.serialize(),
-                // Ideally we would track the Id<_storage> instead of the StorageUuid
-                // but it's a bit annoying for now, so just going with this.
-                storage_id: storage_id.to_string(),
                 call: storage_api.to_string(),
-                content_type: content_type.map(|c| c.to_string()),
-                sha256: sha256.as_hex(),
+                sample: StorageCallSample {
+                    content_type: content_type.map(|c| c.to_string()),
+                },
+                count: 1,
             }])
             .await;
 
@@ -733,7 +702,7 @@ impl FunctionUsageTracker {
     pub fn track_database_ingress(
         &self,
         component_path: ComponentPath,
-        table_name: String,
+        table_name: &TableName,
         ingress: u64,
         skip_logging: bool,
     ) {
@@ -748,14 +717,14 @@ impl FunctionUsageTracker {
         }
         *state
             .database_ingress
-            .entry((component_path, table_name))
+            .entry((component_path, table_name.to_string()))
             .or_default() += ingress;
     }
 
     pub fn track_database_ingress_v2(
         &self,
         component_path: ComponentPath,
-        table_name: String,
+        table_name: &TableName,
         ingress: u64,
         skip_logging: bool,
     ) {
@@ -766,14 +735,14 @@ impl FunctionUsageTracker {
         let mut state = self.state.lock();
         *state
             .database_ingress_v2
-            .entry((component_path, table_name))
+            .entry((component_path, table_name.to_string()))
             .or_default() += ingress;
     }
 
     pub fn track_database_egress(
         &self,
         component_path: ComponentPath,
-        table_name: String,
+        table_name: &TableName,
         egress: u64,
         skip_logging: bool,
     ) {
@@ -784,14 +753,14 @@ impl FunctionUsageTracker {
         let mut state = self.state.lock();
         *state
             .database_egress
-            .entry((component_path, table_name))
+            .entry((component_path, table_name.to_string()))
             .or_default() += egress;
     }
 
     pub fn track_database_egress_v2(
         &self,
         component_path: ComponentPath,
-        table_name: String,
+        table_name: &TableName,
         egress: u64,
         skip_logging: bool,
     ) {
@@ -802,14 +771,40 @@ impl FunctionUsageTracker {
         let mut state = self.state.lock();
         *state
             .database_egress_v2
-            .entry((component_path, table_name))
+            .entry((component_path, table_name.to_string()))
+            .or_default() += egress;
+    }
+
+    pub fn track_virtual_table_ingress(
+        &self,
+        component_path: ComponentPath,
+        table_name: &TableName,
+        ingress: u64,
+    ) {
+        let mut state = self.state.lock();
+        *state
+            .virtual_table_ingress
+            .entry((component_path, table_name.to_string()))
+            .or_default() += ingress;
+    }
+
+    pub fn track_virtual_table_egress(
+        &self,
+        component_path: ComponentPath,
+        table_name: &TableName,
+        egress: u64,
+    ) {
+        let mut state = self.state.lock();
+        *state
+            .virtual_table_egress
+            .entry((component_path, table_name.to_string()))
             .or_default() += egress;
     }
 
     pub fn track_database_egress_rows(
         &self,
         component_path: ComponentPath,
-        table_name: String,
+        table_name: &TableName,
         egress_rows: u64,
         skip_logging: bool,
     ) {
@@ -820,8 +815,34 @@ impl FunctionUsageTracker {
         let mut state = self.state.lock();
         *state
             .database_egress_rows
-            .entry((component_path, table_name))
+            .entry((component_path, table_name.to_string()))
             .or_default() += egress_rows;
+    }
+
+    pub fn track_database_ingress_rows(
+        &self,
+        component_path: ComponentPath,
+        table_name: &TableName,
+        ingress_rows: u64,
+        skip_logging: bool,
+    ) {
+        if skip_logging {
+            return;
+        }
+
+        let mut state = self.state.lock();
+        *state
+            .database_ingress_rows
+            .entry((component_path, table_name.to_string()))
+            .or_default() += ingress_rows;
+    }
+
+    pub fn track_database_ingress_index_rows(&self, ingress_index_rows: u64, skip_logging: bool) {
+        if skip_logging {
+            return;
+        }
+
+        self.state.lock().database_ingress_index_rows += ingress_index_rows;
     }
 
     // Tracks the vector ingress surcharge for documents
@@ -835,7 +856,7 @@ impl FunctionUsageTracker {
     pub fn track_vector_ingress(
         &self,
         component_path: ComponentPath,
-        table_name: String,
+        table_name: &TableName,
         ingress: u64,
         ingress_v2: u64,
         skip_logging: bool,
@@ -845,7 +866,7 @@ impl FunctionUsageTracker {
         }
 
         let mut state = self.state.lock();
-        let key = (component_path, table_name);
+        let key = (component_path, table_name.to_string());
         *state.vector_ingress.entry(key.clone()).or_default() += ingress;
         *state.vector_ingress_v2.entry(key).or_default() += ingress_v2;
     }
@@ -868,13 +889,13 @@ impl FunctionUsageTracker {
     pub fn track_vector_egress(
         &self,
         component_path: ComponentPath,
-        table_name: String,
+        table_name: &TableName,
         egress: u64,
     ) {
         // Note that vector search counts as both database and vector bandwidth
         // per the comment above.
         let mut state = self.state.lock();
-        let key = (component_path, table_name);
+        let key = (component_path, table_name.to_string());
         *state.database_egress.entry(key.clone()).or_default() += egress;
         *state.vector_egress.entry(key).or_default() += egress;
     }
@@ -882,24 +903,21 @@ impl FunctionUsageTracker {
     pub fn track_vector_query(
         &self,
         component_path: ComponentPath,
-        table_name: String,
         index_name: IndexName,
         index_size: u64,
-        dimensions: u64,
     ) {
         let mut state = self.state.lock();
-        let key = (component_path, table_name, index_name);
+        let key = (component_path, index_name);
         *state.vector_query_usage.entry(key).or_default() += VectorIndexQueryUsage {
             num_searches: 1,
             bytes_searched: index_size,
-            dimensions,
         };
     }
 
     pub fn track_text_ingress(
         &self,
         component_path: ComponentPath,
-        table_name: String,
+        table_name: &TableName,
         ingress: u64,
         skip_logging: bool,
     ) {
@@ -910,22 +928,23 @@ impl FunctionUsageTracker {
         let mut state = self.state.lock();
         *state
             .text_ingress
-            .entry((component_path, table_name))
+            .entry((component_path, table_name.to_string()))
             .or_default() += ingress;
     }
 
     pub fn track_text_query(
         &self,
         component_path: ComponentPath,
-        table_name: TableName,
         index_name: IndexName,
         index_size: u64,
+        filtered_bytes_searched: u64,
     ) {
         let mut state = self.state.lock();
-        let key = (component_path, table_name, index_name);
+        let key = (component_path, index_name);
         *state.text_query_usage.entry(key).or_default() += TextIndexQueryUsage {
             num_searches: 1,
             bytes_searched: index_size,
+            filtered_bytes_searched,
         };
     }
 
@@ -933,6 +952,11 @@ impl FunctionUsageTracker {
     pub fn track_fetch_egress(&self, url: String, egress: u64) {
         let mut state = self.state.lock();
         *state.fetch_egress.entry(url).or_default() += egress;
+    }
+
+    pub fn track_audit_log_egress(&self, egress: u64) {
+        let mut state = self.state.lock();
+        state.audit_log_egress += egress;
     }
 
     /// Configure this tracker to skip v1 database ingress tracking.
@@ -979,9 +1003,7 @@ impl StorageUsageTracker for FunctionUsageTracker {
         &self,
         component_path: ComponentPath,
         storage_api: &'static str,
-        _storage_id: StorageUuid,
         _content_type: Option<ContentType>,
-        _sha256: Sha256Digest,
     ) -> Box<dyn StorageCallTracker> {
         let mut state = self.state.lock();
         metrics::storage::log_storage_call();
@@ -993,163 +1015,60 @@ impl StorageUsageTracker for FunctionUsageTracker {
     }
 }
 
-type TableName = String;
+type TableNameString = String;
 type StorageAPI = String;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Add, Default, AddAssign)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct TextIndexQueryUsage {
-    #[cfg_attr(any(test, feature = "testing"), proptest(strategy = "0..=1024u64"))]
     pub num_searches: u64,
-    #[cfg_attr(any(test, feature = "testing"), proptest(strategy = "0..=1024u64"))]
+    /// Total size of the index's disk segments, once per search.
     pub bytes_searched: u64,
+    /// Segment bytes scaled by the share of documents matching each search's
+    /// filter conditions. Reported alongside `bytes_searched` so the two can
+    /// be compared; billing reads `bytes_searched`.
+    pub filtered_bytes_searched: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, AddAssign)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
+#[derive(Debug, Clone, PartialEq, Eq, Add, Default, AddAssign)]
 pub struct VectorIndexQueryUsage {
-    #[cfg_attr(any(test, feature = "testing"), proptest(strategy = "0..=1024u64"))]
     pub num_searches: u64,
-    #[cfg_attr(any(test, feature = "testing"), proptest(strategy = "0..=1024u64"))]
     pub bytes_searched: u64,
-    #[cfg_attr(any(test, feature = "testing"), proptest(strategy = "0..=1024u64"))]
-    pub dimensions: u64,
-}
-
-impl Add for VectorIndexQueryUsage {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self {
-            num_searches: self.num_searches + other.num_searches,
-            // Take the max of the index_size
-            bytes_searched: self.bytes_searched + other.bytes_searched,
-            // Take the max of the num_dimensions. num_dimensions shouldn't usually change, but if
-            // there is some change to the index that commits in the middle of an action
-            // between two vector searches, just take the max dimensions.
-            dimensions: self.dimensions.max(other.dimensions),
-        }
-    }
 }
 
 /// User-facing UDF stats, built
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct FunctionUsageStats {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, StorageAPI)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
     pub storage_calls: BTreeMap<(ComponentPath, StorageAPI), u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<ComponentPath>(), 0..=1024u64, 0..=4,
-            )")
-    )]
     pub storage_ingress: BTreeMap<ComponentPath, u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<ComponentPath>(), 0..=1024u64, 0..=4,
-            )")
-    )]
     pub storage_egress: BTreeMap<ComponentPath, u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub database_ingress: BTreeMap<(ComponentPath, TableName), u64>,
+    pub database_ingress: BTreeMap<(ComponentPath, TableNameString), u64>,
     /// Includes ingress for tables that have virtual tables
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub database_ingress_v2: BTreeMap<(ComponentPath, TableName), u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub database_egress: BTreeMap<(ComponentPath, TableName), u64>,
+    pub database_ingress_v2: BTreeMap<(ComponentPath, TableNameString), u64>,
+    pub database_egress: BTreeMap<(ComponentPath, TableNameString), u64>,
     /// Includes egress for tables that have virtual tables
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub database_egress_v2: BTreeMap<(ComponentPath, TableName), u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub database_egress_rows: BTreeMap<(ComponentPath, TableName), u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub vector_ingress: BTreeMap<(ComponentPath, TableName), u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub vector_ingress_v2: BTreeMap<(ComponentPath, TableName), u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub vector_egress: BTreeMap<(ComponentPath, TableName), u64>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName)>(), 0..=1024u64, 0..=4,
-            )")
-    )]
-    pub text_ingress: BTreeMap<(ComponentPath, TableName), u64>,
+    pub database_egress_v2: BTreeMap<(ComponentPath, TableNameString), u64>,
+    /// Ingress for virtual tables, keyed by virtual table name
+    pub virtual_table_ingress: BTreeMap<(ComponentPath, TableNameString), u64>,
+    /// Egress for virtual tables, keyed by virtual table name
+    pub virtual_table_egress: BTreeMap<(ComponentPath, TableNameString), u64>,
+    pub database_egress_rows: BTreeMap<(ComponentPath, TableNameString), u64>,
+    pub database_ingress_rows: BTreeMap<(ComponentPath, TableNameString), u64>,
+    /// Entries written to user tables' database indexes. Counted per document
+    /// write, so it covers the same writes as `database_ingress_rows`, but not
+    /// broken down per table: nothing reads that breakdown for either counter.
+    pub database_ingress_index_rows: u64,
+    pub vector_ingress: BTreeMap<(ComponentPath, TableNameString), u64>,
+    pub vector_ingress_v2: BTreeMap<(ComponentPath, TableNameString), u64>,
+    pub vector_egress: BTreeMap<(ComponentPath, TableNameString), u64>,
+    pub text_ingress: BTreeMap<(ComponentPath, TableNameString), u64>,
 
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName, IndexName)>(), \
-                             proptest::arbitrary::any::<TextIndexQueryUsage>(), 0..=4,
-            )")
-    )]
-    pub text_query_usage: BTreeMap<(ComponentPath, TableName, IndexName), TextIndexQueryUsage>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<(ComponentPath, TableName, IndexName)>(), \
-                             proptest::arbitrary::any::<VectorIndexQueryUsage>(), 0..=4,
-            )")
-    )]
-    pub vector_query_usage: BTreeMap<(ComponentPath, TableName, IndexName), VectorIndexQueryUsage>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "proptest::collection::btree_map(
-              proptest::arbitrary::any::<String>(), 0..=1024u64, 0..=4,
-            )")
-    )]
+    pub text_query_usage: BTreeMap<(ComponentPath, IndexName), TextIndexQueryUsage>,
+    pub vector_query_usage: BTreeMap<(ComponentPath, IndexName), VectorIndexQueryUsage>,
     pub fetch_egress: BTreeMap<String, u64>,
+    pub audit_log_egress: u64,
 
     /// If true, skip tracking v1 database ingress.
     /// Used for streaming imports which should only track v2 ingress.
-    #[cfg_attr(any(test, feature = "testing"), proptest(value = "false"))]
     pub skip_v1_database_ingress: bool,
 }
 
@@ -1158,13 +1077,29 @@ impl FunctionUsageStats {
         AggregatedFunctionUsageStats {
             database_read_bytes: self.database_egress.values().sum(),
             database_write_bytes: self.database_ingress.values().sum(),
+            database_io_read_bytes: self.database_egress_v2.values().sum(),
+            database_io_write_bytes: self.database_ingress_v2.values().sum(),
             database_read_documents: self.database_egress_rows.values().sum(),
+            database_write_documents: self.database_ingress_rows.values().sum(),
+            database_write_index_rows: self.database_ingress_index_rows,
             storage_read_bytes: self.storage_egress.values().sum(),
             storage_write_bytes: self.storage_ingress.values().sum(),
             vector_index_read_bytes: self.vector_egress.values().sum(),
             vector_index_write_bytes: self.vector_ingress.values().sum(),
-            text_index_write_bytes: self.text_ingress.values().sum(),
-            vector_index_write_bytes_v2: self.vector_ingress_v2.values().sum(),
+            text_index_write_query_bytes: self.text_ingress.values().sum(),
+            text_index_query_bytes: self
+                .text_query_usage
+                .values()
+                .map(|u| u.bytes_searched)
+                .sum(),
+            vector_index_read_query_bytes: self
+                .vector_query_usage
+                .values()
+                .map(|u| u.bytes_searched)
+                .sum(),
+            network_egress_bytes: self.fetch_egress.values().sum(),
+            vector_index_write_query_bytes: self.vector_ingress_v2.values().sum(),
+            audit_log_egress_bytes: self.audit_log_egress,
         }
     }
 
@@ -1178,7 +1113,11 @@ impl FunctionUsageStats {
             database_ingress_v2,
             database_egress,
             database_egress_v2,
+            virtual_table_ingress,
+            virtual_table_egress,
             database_egress_rows,
+            database_ingress_rows,
+            database_ingress_index_rows,
             vector_ingress,
             vector_ingress_v2,
             vector_egress,
@@ -1187,6 +1126,7 @@ impl FunctionUsageStats {
             vector_query_usage,
             fetch_egress,
             skip_v1_database_ingress: _,
+            audit_log_egress,
         }: Self,
     ) {
         for (key, function_count) in storage_calls {
@@ -1210,8 +1150,17 @@ impl FunctionUsageStats {
         for (key, egress) in database_egress_v2 {
             *self.database_egress_v2.entry(key).or_default() += egress;
         }
+        for (key, ingress) in virtual_table_ingress {
+            *self.virtual_table_ingress.entry(key).or_default() += ingress;
+        }
+        for (key, egress) in virtual_table_egress {
+            *self.virtual_table_egress.entry(key).or_default() += egress;
+        }
         for (key, egress_rows) in database_egress_rows {
             *self.database_egress_rows.entry(key.clone()).or_default() += egress_rows;
+        }
+        for (key, ingress_rows) in database_ingress_rows {
+            *self.database_ingress_rows.entry(key.clone()).or_default() += ingress_rows;
         }
         for (key, ingress) in vector_ingress {
             *self.vector_ingress.entry(key.clone()).or_default() += ingress;
@@ -1234,6 +1183,8 @@ impl FunctionUsageStats {
         for (key, egress) in fetch_egress {
             *self.fetch_egress.entry(key.clone()).or_default() += egress;
         }
+        self.audit_log_egress += audit_log_egress;
+        self.database_ingress_index_rows += database_ingress_index_rows;
     }
 }
 
@@ -1315,33 +1266,35 @@ fn from_by_component_tag_count(
 }
 
 fn to_text_query_usage(
-    usage: impl Iterator<Item = ((ComponentPath, TableName, IndexName), TextIndexQueryUsage)>,
+    usage: impl Iterator<Item = ((ComponentPath, IndexName), TextIndexQueryUsage)>,
 ) -> Vec<pb::usage::TextQueryUsage> {
     usage
         .map(
-            |((component_path, table_name, index_name), usage)| pb::usage::TextQueryUsage {
+            |((component_path, index_name), usage)| pb::usage::TextQueryUsage {
                 component_path: component_path.serialize(),
-                table_name: Some(table_name),
+                table_name: Some(index_name.table().to_string()),
                 index_name: Some(index_name.to_string()),
                 num_searches: Some(usage.num_searches),
                 bytes_searched: Some(usage.bytes_searched),
+                filtered_bytes_searched: Some(usage.filtered_bytes_searched),
             },
         )
         .collect()
 }
 
 fn to_vector_query_usage(
-    usage: impl Iterator<Item = ((ComponentPath, TableName, IndexName), VectorIndexQueryUsage)>,
+    usage: impl Iterator<Item = ((ComponentPath, IndexName), VectorIndexQueryUsage)>,
 ) -> Vec<pb::usage::VectorQueryUsage> {
     usage
         .map(
-            |((component_path, table_name, index_name), usage)| pb::usage::VectorQueryUsage {
+            |((component_path, index_name), usage)| pb::usage::VectorQueryUsage {
                 component_path: component_path.serialize(),
-                table_name: Some(table_name),
+                table_name: Some(index_name.table().to_string()),
                 index_name: Some(index_name.to_string()),
                 num_searches: Some(usage.num_searches),
                 bytes_searched: Some(usage.bytes_searched),
-                dimensions: Some(usage.dimensions),
+                // Older readers require field 6 to be present during rolling upgrades.
+                dimensions: Some(0),
             },
         )
         .collect()
@@ -1349,14 +1302,11 @@ fn to_vector_query_usage(
 
 fn from_text_query_usage(
     usage: Vec<pb::usage::TextQueryUsage>,
-) -> anyhow::Result<
-    impl Iterator<Item = ((ComponentPath, TableName, IndexName), TextIndexQueryUsage)>,
-> {
+) -> anyhow::Result<impl Iterator<Item = ((ComponentPath, IndexName), TextIndexQueryUsage)>> {
     let usage: Vec<_> = usage
         .into_iter()
         .map(|u| -> anyhow::Result<_> {
             let component_path = ComponentPath::deserialize(u.component_path.as_deref())?;
-            let table_name = u.table_name.context("Missing `table_name` field")?;
             let index_name: IndexName = u
                 .index_name
                 .context("Missing `index_name` field")?
@@ -1365,11 +1315,14 @@ fn from_text_query_usage(
             let bytes_searched = u
                 .bytes_searched
                 .context("Missing `num_segment_searches` field")?;
+            // Absent from records written before the field existed.
+            let filtered_bytes_searched = u.filtered_bytes_searched.unwrap_or(0);
             Ok((
-                (component_path, table_name, index_name),
+                (component_path, index_name),
                 TextIndexQueryUsage {
                     num_searches,
                     bytes_searched,
+                    filtered_bytes_searched,
                 },
             ))
         })
@@ -1379,14 +1332,11 @@ fn from_text_query_usage(
 
 fn from_vector_query_usage(
     usage: Vec<pb::usage::VectorQueryUsage>,
-) -> anyhow::Result<
-    impl Iterator<Item = ((ComponentPath, TableName, IndexName), VectorIndexQueryUsage)>,
-> {
+) -> anyhow::Result<impl Iterator<Item = ((ComponentPath, IndexName), VectorIndexQueryUsage)>> {
     let usage: Vec<_> = usage
         .into_iter()
         .map(|u| -> anyhow::Result<_> {
             let component_path = ComponentPath::deserialize(u.component_path.as_deref())?;
-            let table_name = u.table_name.context("Missing `table_name` field")?;
             let index_name: IndexName = u
                 .index_name
                 .context("Missing `index_name` field")?
@@ -1395,13 +1345,11 @@ fn from_vector_query_usage(
             let bytes_searched = u
                 .bytes_searched
                 .context("Missing `num_segment_searches` field")?;
-            let dimensions = u.dimensions.context("Missing `num_dimensions` field")?;
             Ok((
-                (component_path, table_name, index_name),
+                (component_path, index_name),
                 VectorIndexQueryUsage {
                     num_searches,
                     bytes_searched,
-                    dimensions,
                 },
             ))
         })
@@ -1420,6 +1368,8 @@ impl From<FunctionUsageStats> for FunctionUsageStatsProto {
             database_egress: to_by_tag_count(stats.database_egress.into_iter()),
             database_egress_v2: to_by_tag_count(stats.database_egress_v2.into_iter()),
             database_egress_rows: to_by_tag_count(stats.database_egress_rows.into_iter()),
+            database_ingress_rows: to_by_tag_count(stats.database_ingress_rows.into_iter()),
+            database_ingress_index_rows: stats.database_ingress_index_rows,
             vector_ingress: to_by_tag_count(stats.vector_ingress.into_iter()),
             vector_egress: to_by_tag_count(stats.vector_egress.into_iter()),
             text_ingress: to_by_tag_count(stats.text_ingress.into_iter()),
@@ -1427,6 +1377,9 @@ impl From<FunctionUsageStats> for FunctionUsageStatsProto {
             vector_query_usage: to_vector_query_usage(stats.vector_query_usage.into_iter()),
             vector_ingress_v2: to_by_tag_count(stats.vector_ingress_v2.into_iter()),
             fetch_egress: to_by_url_count(stats.fetch_egress.into_iter()),
+            virtual_table_ingress: to_by_tag_count(stats.virtual_table_ingress.into_iter()),
+            virtual_table_egress: to_by_tag_count(stats.virtual_table_egress.into_iter()),
+            audit_log_egress: stats.audit_log_egress,
         }
     }
 }
@@ -1445,6 +1398,8 @@ impl TryFrom<FunctionUsageStatsProto> for FunctionUsageStats {
         let database_egress = from_by_tag_count(stats.database_egress)?.collect();
         let database_egress_v2 = from_by_tag_count(stats.database_egress_v2)?.collect();
         let database_egress_rows = from_by_tag_count(stats.database_egress_rows)?.collect();
+        let database_ingress_rows = from_by_tag_count(stats.database_ingress_rows)?.collect();
+        let database_ingress_index_rows = stats.database_ingress_index_rows;
         let vector_ingress = from_by_tag_count(stats.vector_ingress)?.collect();
         let vector_egress = from_by_tag_count(stats.vector_egress)?.collect();
         let text_ingress = from_by_tag_count(stats.text_ingress)?.collect();
@@ -1452,6 +1407,9 @@ impl TryFrom<FunctionUsageStatsProto> for FunctionUsageStats {
         let vector_query_usage = from_vector_query_usage(stats.vector_query_usage)?.collect();
         let vector_ingress_v2 = from_by_tag_count(stats.vector_ingress_v2)?.collect();
         let fetch_egress = from_by_url_count(stats.fetch_egress)?.collect();
+        let virtual_table_ingress = from_by_tag_count(stats.virtual_table_ingress)?.collect();
+        let virtual_table_egress = from_by_tag_count(stats.virtual_table_egress)?.collect();
+        let audit_log_egress = stats.audit_log_egress;
 
         Ok(FunctionUsageStats {
             storage_calls,
@@ -1460,8 +1418,12 @@ impl TryFrom<FunctionUsageStatsProto> for FunctionUsageStats {
             database_ingress,
             database_ingress_v2,
             database_egress_rows,
+            database_ingress_rows,
+            database_ingress_index_rows,
             database_egress,
             database_egress_v2,
+            virtual_table_ingress,
+            virtual_table_egress,
             vector_ingress,
             vector_egress,
             text_ingress,
@@ -1470,6 +1432,7 @@ impl TryFrom<FunctionUsageStatsProto> for FunctionUsageStats {
             vector_ingress_v2,
             fetch_egress,
             skip_v1_database_ingress: false,
+            audit_log_egress,
         })
     }
 }
@@ -1480,132 +1443,19 @@ impl TryFrom<FunctionUsageStatsProto> for FunctionUsageStats {
 pub struct AggregatedFunctionUsageStats {
     pub database_read_bytes: u64,
     pub database_write_bytes: u64,
+    pub database_io_read_bytes: u64,
+    pub database_io_write_bytes: u64,
     pub database_read_documents: u64,
+    pub database_write_documents: u64,
+    pub database_write_index_rows: u64,
     pub storage_read_bytes: u64,
     pub storage_write_bytes: u64,
     pub vector_index_read_bytes: u64,
     pub vector_index_write_bytes: u64,
-    pub text_index_write_bytes: u64,
-    pub vector_index_write_bytes_v2: u64,
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use common::components::ComponentPath;
-    use proptest::prelude::*;
-    use value::testing::assert_roundtrips;
-
-    use super::{
-        FunctionUsageStats,
-        FunctionUsageStatsProto,
-        FunctionUsageTracker,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_usage_stats_roundtrips(stats in any::<FunctionUsageStats>()) {
-            assert_roundtrips::<FunctionUsageStats, FunctionUsageStatsProto>(stats);
-        }
-    }
-
-    #[test]
-    fn test_without_v1_database_ingress() {
-        // Create a tracker with skip_v1_database_ingress enabled
-        let usage = FunctionUsageTracker::new().without_v1_database_ingress();
-
-        // Track both v1 and v2 ingress/egress
-        let component_path = ComponentPath::root();
-        let table_name = "test_table".to_string();
-        usage.track_database_ingress(component_path.clone(), table_name.clone(), 100, false);
-        usage.track_database_ingress_v2(component_path.clone(), table_name.clone(), 200, false);
-        usage.track_database_egress(component_path.clone(), table_name.clone(), 150, false);
-        usage.track_database_egress_v2(component_path.clone(), table_name.clone(), 250, false);
-
-        // Test vector ingress as well
-        usage.track_vector_ingress(
-            component_path.clone(),
-            "vector_table".to_string(),
-            50,
-            75,
-            false,
-        );
-
-        // Gather stats and verify
-        let stats = usage.gather_user_stats();
-
-        // ONLY v1 database_ingress should be skipped (NOT egress or vector)
-        let v1_ingress = stats
-            .database_ingress
-            .get(&(component_path.clone(), table_name.clone()))
-            .copied()
-            .unwrap_or(0);
-        assert_eq!(
-            v1_ingress, 0,
-            "Expected database_ingress (v1) to be 0 when skip_v1_database_ingress is set"
-        );
-
-        // v2 ingress should be tracked
-        let v2_ingress = stats
-            .database_ingress_v2
-            .get(&(component_path.clone(), table_name.clone()))
-            .copied()
-            .unwrap_or(0);
-        assert_eq!(
-            v2_ingress, 200,
-            "Expected database_ingress_v2 to be tracked normally"
-        );
-
-        let v1_egress = stats
-            .database_egress
-            .get(&(component_path.clone(), table_name.clone()))
-            .copied()
-            .unwrap_or(0);
-        assert_eq!(
-            v1_egress, 150,
-            "Expected database_egress (v1) to still be tracked (only ingress is skipped)"
-        );
-
-        // v2 egress should be tracked
-        let v2_egress = stats
-            .database_egress_v2
-            .get(&(component_path.clone(), table_name.clone()))
-            .copied()
-            .unwrap_or(0);
-        assert_eq!(
-            v2_egress, 250,
-            "Expected database_egress_v2 to be tracked normally"
-        );
-
-        let v1_vector_ingress = stats
-            .vector_ingress
-            .get(&(component_path.clone(), "vector_table".to_string()))
-            .copied()
-            .unwrap_or(0);
-        assert_eq!(
-            v1_vector_ingress, 50,
-            "Expected vector_ingress (v1) to still be tracked (only database_ingress is skipped)"
-        );
-
-        // v2 vector ingress should be tracked
-        let v2_vector_ingress = stats
-            .vector_ingress_v2
-            .get(&(component_path, "vector_table".to_string()))
-            .copied()
-            .unwrap_or(0);
-        assert_eq!(
-            v2_vector_ingress, 75,
-            "Expected vector_ingress_v2 to be tracked normally"
-        );
-
-        // Verify the flag is set
-        assert!(
-            stats.skip_v1_database_ingress,
-            "Expected skip_v1_database_ingress flag to be true"
-        );
-    }
+    pub text_index_write_query_bytes: u64,
+    pub text_index_query_bytes: u64,
+    pub vector_index_read_query_bytes: u64,
+    pub network_egress_bytes: u64,
+    pub vector_index_write_query_bytes: u64,
+    pub audit_log_egress_bytes: u64,
 }

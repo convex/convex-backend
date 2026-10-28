@@ -1,14 +1,13 @@
-import { ValidatorJSON } from "../../../../convex/dist/internal-cjs-types/values";
 import { UdfType, Visibility } from "../frontend/common";
 import { queryPrivateSystem } from "../secretSystemTables";
-import { v } from "convex/values";
+import { v, Value, jsonToConvex } from "convex/values";
 
 type FunctionSpec = {
   identifier: string;
   functionType: UdfType;
   visibility: Visibility;
-  args?: ValidatorJSON;
-  returns?: ValidatorJSON;
+  args?: Value;
+  returns?: Value;
 };
 
 type HttpFunctionSpec = {
@@ -22,7 +21,7 @@ type FunctionSpecs = (FunctionSpec | HttpFunctionSpec)[];
 export const DEFAULT_ARGS_VALIDATOR = '{ "type": "any" }';
 export const DEFAULT_RETURN_VALIDATOR = '{ "type": "any" }';
 
-export const apiSpec = queryPrivateSystem({
+export const apiSpec = queryPrivateSystem("ViewData")({
   args: {
     componentId: v.optional(v.union(v.string(), v.null())),
   },
@@ -34,16 +33,15 @@ export const apiSpec = queryPrivateSystem({
         // `Skipping ${module.path}`
         continue;
       }
-
       for (const fn of analyzeResult.functions || []) {
+        const argsValidator = fn.args ?? DEFAULT_ARGS_VALIDATOR;
+        const returnsValidator = fn.returns ?? DEFAULT_RETURN_VALIDATOR;
         result.push({
           identifier: module.path + ":" + fn.name,
           functionType: fn.udfType,
           visibility: fn.visibility ?? { kind: "public" },
-          args: JSON.parse(fn.args ?? DEFAULT_ARGS_VALIDATOR),
-          returns:
-            JSON.parse(fn.returns ?? DEFAULT_RETURN_VALIDATOR) ??
-            JSON.parse(DEFAULT_RETURN_VALIDATOR),
+          args: jsonToConvex(JSON.parse(argsValidator)),
+          returns: jsonToConvex(JSON.parse(returnsValidator)),
         });
       }
 

@@ -4,13 +4,14 @@ resolver = "2"
 exclude = [ "crates/py_client", "crates/python_client_tests" ]
 
 [workspace.dependencies]
-aes = { version = "0.8.4" }
+ada-url = "4.0.0"
 ahash = "0.8"
+ai_gateway_jwt = { path = "crates/ai_gateway_jwt" }
 anyhow = "1"
 application = { path = "crates/application" }
+arc-swap = "1.7.1"
 async-broadcast = "0.7.0"
 async-channel = "2.3.1"
-async-compression = { version = "0.4.11", features = [ "tokio", "zstd", "gzip" ] }
 async-recursion = "1.1.1"
 async-trait = "0.1"
 async_lru = { path = "crates/async_lru" }
@@ -20,9 +21,11 @@ atomic_refcell = "0.1.13"
 authentication = { path = "crates/authentication" }
 aws-config = { version = "1.6", default-features = false, features = [ "client-hyper", "default-https-client", "rustls", "rt-tokio", "sso" ] }
 aws-credential-types = "1"
-aws-lc-rs = { version = "1.13", default-features = false, features = [ "aws-lc-sys", "prebuilt-nasm" ] }
+aws-lc-rs = { version = "1.18.1", default-features = false, features = [ "aws-lc-sys", "prebuilt-nasm" ] }
+aws-sdk-firehose = { version = "1.72", default-features = false, features = [ "default-https-client", "rt-tokio" ] }
 aws-sdk-s3 = { version = "1.83", default-features = false, features = [ "default-https-client", "rt-tokio", "sigv4a" ] }
 aws-smithy-http = "0.62.0"
+aws-smithy-runtime = "1.14"
 aws-smithy-types-convert = { version = "0.60", features = [ "convert-streams" ] }
 aws-types = "1"
 aws_s3 = { path = "crates/aws_s3" }
@@ -36,21 +39,20 @@ base32 = "0.5.0"
 base64 = "0.13"
 big_brain_client = { path = "crates/big_brain_client" }
 big_brain_private_api_types = { path = "crates/big_brain_private_api_types" }
-biscuit = { rev = "05bdaab2f43d144aedc9ef2dfcdb87d304540afd", git = "https://github.com/get-convex/biscuit" }
+biscuit = { rev = "05bdaab2f43d144aedc9ef2dfcdb87d304540afd", git = "https://github.com/convex/biscuit" }
 bitvec = "1.0.1"
 byteorder = "1.5.0"
 bytes = "1.6.0"
 bytesize = "2.0.0"
-cbc = { version = "0.1.2" }
 cfg-if = "1.0"
 chrono = "0.4.38"
 clap = { version = "^4.1.8", features = [ "derive", "env" ] }
 clusters = { path = "crates/clusters" }
 cmd_util = { path = "crates/cmd_util" }
 colored = "3"
-command-fds = { version = "0.3.2", features = [ "tokio" ] }
 common = { path = "crates/common" }
-compact_str = "0.9.0"
+compact_str = { version = "0.10.0", features = [ "serde" ] }
+const-hex = "1"
 const-oid = "0.9.6"
 const_format = { version = "0.2.34", features = [ "fmt" ] }
 convex = { path = "crates/convex" }
@@ -61,12 +63,14 @@ crossbeam-channel = "0.5.15"
 csf = "0.1.11"
 cstr = "0.2.11"
 csv-async = "1.2"
+csv-core = "0.1.11"
 ctrlc = "3.4"
+dashmap = "6"
 data-url = "0.3.1"
 database = { path = "crates/database" }
 db_connection = { path = "crates/db_connection" }
-deno_core = "0.366.0"
-deno_core_icudata = "0.74.0"
+deno_core = "0.402.0"
+deno_core_icudata = "0.77.0"
 derive_more = { version = "2", features = [ "full" ] }
 divan = "0.1.14"
 dotenvy = "0.15.7"
@@ -78,15 +82,12 @@ errors = { path = "crates/errors" }
 event-listener = "5.3.1"
 events = { path = "crates/events" }
 exports = { path = "crates/exports" }
-fastrace = { git = "https://github.com/get-convex/fastrace", rev = "8ceac57a6371c96db3778827e31ec0b3ac760075", version = "0.7", features = [ "enable" ] }
+fastrace = { version = "0.7", features = [ "enable" ] }
 fastrand = "2.3.0"
 file_storage = { path = "crates/file_storage" }
 fivetran_common = { path = "crates/fivetran_common" }
-fivetran_destination = { path = "crates/fivetran_destination" }
-fivetran_source = { path = "crates/fivetran_source" }
 flate2 = { version = "1.1", features = [ "zlib-rs" ] }
 flexbuffers = "25"
-float_next_after = "1.0.0"
 fnv = "1.0.7"
 function_runner = { path = "crates/function_runner" }
 futures = "0.3"
@@ -94,40 +95,40 @@ futures-async-stream = "0.2.11"
 futures-util = "0.3.30"
 fxhash = "0.2.1"
 governor = "0.10.0"
-hashlink = "0.11"
+hashlink = "0.12"
 hdrhistogram = "7.5.4"
 headers = "0.4"
 health_check = { path = "crates/health_check" }
-hex = "0.4"
 home = "0.5"
 http = "1.0.0"
 http-body-util = "0.1.2"
-http-cache = { version = "0.20.1", default-features = false }
-http-cache-reqwest = { version = "0.15.1", features = [ "manager-moka" ] }
+http-cache = { version = "=1.0.0-alpha.8", default-features = false }
+http-cache-reqwest = { version = "=1.0.0-alpha.9", default-features = false, features = [ "manager-moka", "reqwest-middleware", "url-standard" ] }
 http_client = { path = "crates/http_client" }
 humansize = { version = "2.1.3", features = [ "impl_style" ] }
 hyper = "1.3.1"
 hyper-util = { version = "0.1.5", features = [ "server-graceful", "tokio" ] }
-imbl = "5.0.0"
+imbl = "7.0.0"
 imbl_slab = { path = "crates/imbl_slab" }
 indexing = { path = "crates/indexing" }
 indexmap = "2"
 interval_map = { path = "crates/interval_map" }
 isolate = { path = "crates/isolate" }
 itertools = "0.14"
-jemalloc_pprof = "0.8"
+jemalloc_pprof = "0.9"
+js_build = { path = "crates/js_build" }
 json_trait = { path = "crates/json_trait" }
-jsonschema = "0.33"
+jsonschema = { version = "0.33", default-features = false }
 keybroker = { path = "crates/keybroker" }
-levenshtein_automata = "0.2.1"
 libc = "0.2"
 libsodium-sys-stable = { version = "1.22.2", features = [ "minimal" ] }
 log_interleaver = { path = "crates/log_interleaver" }
 log_streaming = { path = "crates/log_streaming" }
-lru = "0.16.0"
-lz4_flex = "0.12"
+lru = "0.18.0"
+lz4_flex = "0.14"
 maplit = "1"
 memchr = "2.7"
+memory-stats = "1"
 metrics = { path = "crates/metrics" }
 migrations_model = { path = "crates/migrations_model" }
 mime = "0.3"
@@ -137,69 +138,70 @@ moka = { version = "0.12", features = [ "future", "sync" ] }
 multer = "3.1.0"
 must-let = { git = "https://github.com/sujayakar/must-let", rev = "5b487d78db235e396e61dd03ce261ced0eafff9d" }
 mysql = { path = "crates/mysql" }
-mysql_async = { git = "https://github.com/goffrie/mysql_async", rev = "90ff86d613d8c466baa4da7b0c49c148bc14a019", default-features = false, features = [ "default-rustls" ] }
-native-tls = { version = "0.2", features = [ "alpn", "vendored" ] }
+mysql_async = { version = "0.37.1", default-features = false, features = [ "default-rustls" ] }
 node_executor = { path = "crates/node_executor" }
-num_cpus = "1.16.0"
-oauth2 = { version = "5", default-features = false, features = [ "reqwest" ] }
+oauth2 = { version = "5", default-features = false }
 once_cell = "1.19"
-openidconnect = { git = "https://github.com/get-convex/openidconnect-rs", rev = "15a9c551eafcf3b60d307feb94332352ac56c099", default-features = false, features = [ "accept-rfc3339-timestamps", "timing-resistant-secret-traits", "reqwest" ] }
-openssl = { version = "0.10.75", features = [ "aws-lc" ] }
+openidconnect = { git = "https://github.com/convex/openidconnect-rs", rev = "15a9c551eafcf3b60d307feb94332352ac56c099", default-features = false, features = [ "accept-rfc3339-timestamps", "timing-resistant-secret-traits" ] }
+openssl-aws-lc = { package = "openssl", git = "https://github.com/convex/rust-openssl", rev = "03caf5bc9775242f4b02daa978f86fafbd0e7659" }
 packed_value = { path = "crates/packed_value" }
 parking_lot = { version = "0.12", features = [ "hardware-lock-elision" ] }
-paste = { version = "1.0.12" }
+paste = "1.0.12"
 pb = { path = "crates/pb" }
 pb_build = { path = "crates/pb_build" }
+pb_data_sync = { path = "crates/pb_data_sync" }
 pb_extras = { path = "crates/pb_extras" }
 performance_stats = { path = "crates/performance_stats" }
-phf = { version = "0.11.2", features = [ "macros" ] }
+phf = { version = "0.13.0", features = [ "macros" ] }
 pin-project = "1"
 pkcs8 = "0.10.2"
-portpicker = "0.1"
 postgres = { path = "crates/postgres" }
-postgres-protocol = { version = "0.6" }
+postgres-protocol = "0.6"
 pretty_assertions = "1"
-proc-macro2 = { version = "1.0" }
-prometheus = { git = "https://github.com/get-convex/rust-prometheus", rev = "8794d2bbf2a5a9adc501067ee4440dde6b5e6e25" }
+prometheus = { git = "https://github.com/convex/rust-prometheus", rev = "367f80d0d3678ed7989814fd5864598746a3b946" }
 proptest = "1"
 proptest-derive = "0.5.0"
 proptest-http = { git = "https://github.com/nipunn1313/proptest-http", rev = "0e658bd4f6dbb73bdd3be66f0d2c34c00cc3a446" }
-prost = { version = "0.13", features = [ "no-recursion-limit" ] }
-prost-reflect = { version = "0.15.0", features = [ "text-format", "miette" ] }
-prost-types = "0.13"
-pyo3 = "0.27"
-pyo3-async-runtimes = { version = "0.27", features = [ "tokio-runtime" ] }
-pyo3-build-config = { version = "0.27", features = [ "resolve-config" ] }
-qdrant_common = { git = "https://github.com/get-convex/qdrant", rev = "a5d1b7bc9fd04861316b6455204c8a946d43117e", package = "qdrant_common" }
-qdrant_segment = { git = "https://github.com/get-convex/qdrant", rev = "a5d1b7bc9fd04861316b6455204c8a946d43117e", package = "segment" }
+prost = { version = "0.14", features = [ "no-recursion-limit" ] }
+prost-reflect = { version = "0.16", features = [ "text-format", "miette" ] }
+prost-types = "0.14"
+pyo3 = "0.29"
+pyo3-async-runtimes = { version = "0.29", features = [ "tokio-runtime" ] }
+pyo3-build-config = { version = "0.29", features = [ "resolve-config" ] }
+qdrant_common = { git = "https://github.com/convex/qdrant", rev = "a5d1b7bc9fd04861316b6455204c8a946d43117e", package = "qdrant_common" }
+qdrant_segment = { git = "https://github.com/convex/qdrant", rev = "a5d1b7bc9fd04861316b6455204c8a946d43117e", package = "segment" }
 quote = "1.0"
 rand = "0.9"
 rand_chacha = "0.9.0"
-rand_distr = "0.5"
-rc-zip = { version = "5", features = [ "deflate", "deflate64", "zstd" ] }
+rc-zip = { version = "5", features = [ "deflate", "deflate64" ] }
 ref-cast = "1.0.20"
 regex = "1"
-reqwest = { version = "0.12.7", features = [ "json", "stream", "gzip", "native-tls-alpn", "native-tls-vendored" ] }
-reqwest-middleware = "0.4.1"
+reqwest = { version = "0.13", features = [ "json", "query", "stream", "gzip", "rustls" ] }
+reqwest-middleware = "0.5.1"
+roles = { path = "crates/roles" }
 rsa = "0.9.6"
 runtime = { path = "crates/runtime" }
-rusqlite = { version = "0.32", features = [ "bundled" ] }
+rusqlite = { version = "0.39", features = [ "bundled" ] }
 rustls = { version = "0.23", default-features = false }
-rustls-native-certs = { version = "0.8" }
-rustls-pki-types = { version = "1" }
-saffron = { git = "https://github.com/get-convex/saffron", rev = "1d842379919fb5c1988ac127cebd6167b1eb9bec", features = [ "std" ] }
+rustls-native-certs = "0.8"
+rustls-pki-types = "1"
+rustls-platform-verifier = "0.7.0"
+saffron = { git = "https://github.com/convex/saffron", rev = "1d842379919fb5c1988ac127cebd6167b1eb9bec", features = [ "std" ] }
+scoped-tls = "1.0.1"
+scopeguard = "1.1"
 search = { path = "crates/search" }
+search_index_workers = { path = "crates/search_index_workers" }
 semver = { version = "1", features = [ "serde" ] }
-sentry = { version = "0.46", features = [ "anyhow", "tower", "tower-http" ] }
-sentry-tracing = "0.46"
+sentry = { version = "0.47", default-features = false, features = [ "anyhow", "reqwest", "rustls", "tower", "tower-http", "backtrace", "contexts", "debug-images", "panic", "release-health" ] }
+sentry-tracing = "0.47"
 serde = { version = "1", features = [ "derive" ] }
 serde_bytes = "0.11.14"
 serde_json = { version = "1", features = [ "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth" ] }
-serde_with = "3.16.1"
+serde_with = { version = "3.16.1", features = [ "base64" ] }
 sha1 = { version = "0.10.5", features = [ "oid" ] }
-sha2 = { version = "0.10.8" }
+sha2 = "0.10.8"
 shape_inference = { path = "crates/shape_inference" }
-short_future = { version = "0.1.1" }
+short_future = "0.1.1"
 slab = "0.4.9"
 slugify = "0.1.0"
 smallvec = "1"
@@ -209,55 +211,61 @@ spki = { version = "0.7.3", features = [ "std" ] }
 sqlite = { path = "crates/sqlite" }
 storage = { path = "crates/storage" }
 storage_zip_reader = { path = "crates/storage_zip_reader" }
-strum = { version = "0.27", features = [ "derive" ] }
+streaming_export = { path = "crates/streaming_export" }
+strum = { version = "0.28", features = [ "derive" ] }
 sucds = { version = "0.8.1", features = [ "intrinsics" ] }
-syn = { version = "2.0", features = [ "full" ] }
+syn = { version = "3.0", features = [ "full" ] }
 sync = { path = "crates/sync" }
 sync_types = { package = "convex_sync_types", path = "crates/convex/sync_types" }
-tantivy = { git = "https://github.com/get-convex/tantivy", rev = "2bb95afa29cc2ac94e303ea68ca4e16222d8e777" }
-tantivy-common = { git = "https://github.com/get-convex/tantivy", rev = "2bb95afa29cc2ac94e303ea68ca4e16222d8e777" }
+table_iteration = { path = "crates/table_iteration" }
+tantivy = { git = "https://github.com/convex/tantivy", rev = "2bb95afa29cc2ac94e303ea68ca4e16222d8e777" }
+tantivy-common = { git = "https://github.com/convex/tantivy", rev = "2bb95afa29cc2ac94e303ea68ca4e16222d8e777" }
 tempfile = "3"
 text_search = { path = "crates/text_search" }
 textplots = "0.8"
 thiserror = "2"
 thousands = "0.2.0"
-tikv-jemalloc-sys = { version = "0.6", features = [ "profiling", "stats", "unprefixed_malloc_on_supported_platforms" ] }
-tikv-jemallocator = { version = "0.6", features = [ "profiling", "stats", "unprefixed_malloc_on_supported_platforms" ] }
+tikv-jemalloc-sys = { version = "0.7", features = [ "profiling", "stats", "unprefixed_malloc_on_supported_platforms" ] }
+tikv-jemallocator = { version = "0.7", features = [ "profiling", "stats", "unprefixed_malloc_on_supported_platforms" ] }
 tld = "2.36.0"
-tokio = { version = "1.47.1", features = [ "full" ] }
-tokio-metrics = { version = "0.4.0" }
-tokio-metrics-collector = { version = "0.3.1" }
+tokio = { version = "1.53.1", features = [ "full" ] }
+tokio-metrics = "0.4.0"
+tokio-metrics-collector = "0.3.1"
 tokio-postgres = { version = "0.7.13", features = [ "with-serde_json-1" ] }
-tokio-postgres-rustls = { version = "0.13" }
+tokio-postgres-rustls = "0.14"
 tokio-stream = { version = "0.1", features = [ "io-util", "sync", "signal" ] }
-tokio-tungstenite = { version = "0.28.0", features = [ "native-tls-vendored" ] }
-tokio-util = { version = "0.7.13", features = [ "io", "rt", "io-util" ] }
-tonic = { package = "tonic", version = "0.13", features = [ "gzip", "tls-aws-lc", "tls-native-roots" ] }
-tonic-build = "0.13"
-tonic-health = "0.13"
-tonic-middleware = "0.3"
+tokio-tungstenite = "0.28.0"
+tokio-util = { version = "0.7.13", features = [ "io", "rt", "io-util", "join-map" ] }
+tonic = { package = "tonic", version = "0.14", features = [ "gzip", "tls-aws-lc", "tls-native-roots" ] }
+tonic-build = "0.14"
+tonic-health = "0.14"
+tonic-middleware = "0.4"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
 tower = { version = "0.5.2", features = [ "limit", "timeout", "util" ] }
 tower-cookies = "0.11"
 tower-http = { version = "0.6", features = [ "trace", "cors", "decompression-br", "limit" ] }
 tracing = "0.1"
-tracing-appender = { version = "0.2" }
+tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3.17", features = [ "env-filter", "json" ] }
 tracy-client = { version = "0.18.0", default-features = false, features = [ "fibers" ] }
-tungstenite = { version = "0.28.0", features = [ "url", "native-tls-vendored", "deflate" ], git = "https://github.com/danielsufrindisler/tungstenite-rs", rev = "eda0a0c5c15334feca45aec64af90fded2917cb7" }
+tungstenite = { version = "0.28.0", features = [ "url", "deflate" ], git = "https://github.com/danielsufrindisler/tungstenite-rs", rev = "eda0a0c5c15334feca45aec64af90fded2917cb7" }
 tuple_struct = { path = "crates/tuple_struct" }
 udf = { path = "crates/udf" }
 udf_metrics = { path = "crates/udf_metrics" }
 url = "2.5.4"
 urlencoding = "2.1.3"
 usage_gauges_tracking_worker = { path = "crates/usage_gauges_tracking_worker" }
+usage_limits = { path = "crates/usage_limits" }
 usage_tracking = { path = "crates/usage_tracking" }
-utoipa = { version = "5.3", features = [ "axum_extras", "preserve_path_order", "openapi_extensions" ] }
-utoipa-axum = { version = "0.2" }
+utoipa = { version = "5.5", features = [ "axum_extras", "preserve_order", "preserve_path_order", "openapi_extensions" ] }
+utoipa-axum = "0.2"
 uuid = { version = "1.6", features = [ "fast-rng", "serde", "v4" ] }
 value = { path = "crates/value" }
 vector = { path = "crates/vector" }
-vergen = { version = "8.1.0" }
+vergen = "8.1.0"
 walkdir = "2"
+webcrypto = { path = "crates/webcrypto" }
 xorf = { git = "https://github.com/sujayakar/xorf.git", rev = "62a32de47bb3ad8b34d6d4feac034a24be2c881a" }
 
 [profile.release]
@@ -270,13 +278,19 @@ inherits = "release"
 strip = "debuginfo"
 
 [patch.crates-io]
-prometheus = { git = "https://github.com/get-convex/rust-prometheus", rev = "8794d2bbf2a5a9adc501067ee4440dde6b5e6e25" }
-tokio-postgres = { git = "https://github.com/get-convex/rust-postgres", rev = "5751201b0fe9f8b1f0a1812fb04e21c5469ad0c6" }
-postgres-protocol = { git = "https://github.com/get-convex/rust-postgres", rev = "5751201b0fe9f8b1f0a1812fb04e21c5469ad0c6" }
+v8 = { git = "https://github.com/convex/rusty_v8", rev = "105b32c50433c4cf6eb77fe6a79e93b8637b20e2" }
+prometheus = { git = "https://github.com/convex/rust-prometheus", rev = "367f80d0d3678ed7989814fd5864598746a3b946" }
 tungstenite = { git = "https://github.com/danielsufrindisler/tungstenite-rs", rev = "eda0a0c5c15334feca45aec64af90fded2917cb7" }
+moka = { git = "https://github.com/convex/moka", rev = "ef75713ad43a39fae18c3c01fa414eefa9439af0" }
+validator_derive = { git = "https://github.com/Keats/validator", rev = "598ad83024529a2ff57da44d398533e3d4528490" }
+tikv-jemalloc-sys = { git = "https://github.com/convex/jemallocator", rev = "d6f82852479c9962239a634688e60a3d1e873ffb" }
+shuttle = { git = "https://github.com/awslabs/shuttle", rev = "91e3cae8f73c2be3934960c46f8494a7ca981867" }
+shuttle-parking_lot = { git = "https://github.com/awslabs/shuttle", rev = "91e3cae8f73c2be3934960c46f8494a7ca981867" }
 
 [workspace.lints.rust]
 unused_extern_crates = "warn"
+unused_features = "allow"
+unexpected_cfgs = { level = "warn", check-cfg = [ "cfg(rust_analyzer)" ] }
 
 [workspace.lints.clippy]
 await_holding_lock = "warn"
@@ -292,14 +306,14 @@ single_match = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 upper_case_acronyms = "allow"
-useless_format = "allow"
 useless_vec = "allow"
+collapsible_match = "allow"
+chunks_exact_to_as_chunks = "allow"
+
+[profile.release.build-override]
+opt-level = 3
 
 [profile.dev.package.proptest]
-opt-level = 3
-codegen-units = 16
-
-[profile.dev.package.levenshtein_automata]
 opt-level = 3
 codegen-units = 16
 
@@ -340,6 +354,14 @@ opt-level = 3
 codegen-units = 16
 
 [profile.dev.package.crc32fast]
+opt-level = 3
+codegen-units = 16
+
+[profile.dev.package.sourcemap]
+opt-level = 3
+codegen-units = 16
+
+[profile.dev.package.serde_json]
 opt-level = 3
 codegen-units = 16
 

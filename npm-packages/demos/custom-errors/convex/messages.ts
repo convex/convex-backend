@@ -42,7 +42,7 @@ export const clearMessages = mutation({
     return Promise.all(
       messages.map(async (message) => {
         const id = message._id;
-        await ctx.db.delete(id);
+        await ctx.db.delete("messages", id);
         return id;
       }),
     );

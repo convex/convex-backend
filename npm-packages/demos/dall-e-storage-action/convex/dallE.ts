@@ -1,7 +1,7 @@
 "use node";
 
 import OpenAI from "openai";
-import { action } from "./_generated/server";
+import { action, env } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
@@ -11,14 +11,7 @@ export const send = action({
     author: v.string(),
   },
   handler: async (ctx, { prompt, author }) => {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "Add your OPENAI_API_KEY as an env variable in the " +
-          "[dashboard](https://dasboard.convex.dev)",
-      );
-    }
-    const openai = new OpenAI({ apiKey });
+    const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
 
     // Check if the prompt is offensive.
     const modResponse = await openai.moderations.create({

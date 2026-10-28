@@ -4,6 +4,28 @@
  */
 
 export interface paths {
+    "/check_admin_key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check admin key validity
+         * @description This endpoint checks if the admin key included in the header is valid for
+         *     this instance. Returns the allowed operations and read-only status for the
+         *     key so the dashboard can show appropriate disabled states.
+         */
+        get: operations["check_admin_key"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/shapes2": {
         parameters: {
             query?: never;
@@ -84,26 +106,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/get_source_code": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get source code
-         * @description Returns the source code for the specified module path.
-         */
-        get: operations["get_source_code"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/delete_scheduled_functions_table": {
         parameters: {
             query?: never;
@@ -114,27 +116,6 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["delete_scheduled_functions_table"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/check_admin_key": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Check admin key validity
-         * @description This endpoint checks if the admin key included in the header is valid for
-         *     this instance and validates that the provided admin key has write access.
-         */
-        get: operations["check_admin_key"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -152,8 +133,8 @@ export interface components {
             componentId?: string | null;
         };
         DeleteTableArgs: {
-            componentId?: string | null;
             tableNames: string[];
+            componentId?: string | null;
         };
         GetIndexesResponse: {
             indexes: Record<string, never>[];
@@ -171,6 +152,25 @@ export type DeleteTableArgs = components['schemas']['DeleteTableArgs'];
 export type GetIndexesResponse = components['schemas']['GetIndexesResponse'];
 export type $defs = Record<string, never>;
 export interface operations {
+    check_admin_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     shapes2: {
         parameters: {
             query?: {
@@ -257,30 +257,6 @@ export interface operations {
             };
         };
     };
-    get_source_code: {
-        parameters: {
-            query: {
-                /** @description Module path to get source code for */
-                path: string;
-                /** @description Component ID */
-                component?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
-            };
-        };
-    };
     delete_scheduled_functions_table: {
         parameters: {
             query?: never;
@@ -299,25 +275,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-        };
-    };
-    check_admin_key: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
             };
         };
     };

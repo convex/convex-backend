@@ -7,6 +7,7 @@ import { mockConvexReactClient } from "@common/lib/mockConvexReactClient";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { mockDeploymentInfo } from "@common/lib/mockDeploymentInfo";
 import { EventsForInsight } from "./EventsForInsight";
+import { Sheet } from "@ui/Sheet";
 
 const now = new Date();
 
@@ -109,6 +110,7 @@ const mockClient = mockConvexReactClient().registerQueryFake(
       path: "myComponent",
       args: {},
       state: "active" as const,
+      httpPrefix: null,
     },
   ],
 );
@@ -121,7 +123,9 @@ const meta = {
   render: (args) => (
     <ConvexProvider client={mockClient}>
       <DeploymentInfoContext.Provider value={mockDeploymentInfo}>
-        <EventsForInsight {...args} />
+        <Sheet>
+          <EventsForInsight {...args} />
+        </Sheet>
       </DeploymentInfoContext.Provider>
     </ConvexProvider>
   ),

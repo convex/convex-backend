@@ -1,5 +1,8 @@
 use std::{
+    fmt,
     io,
+    mem,
+    ops::Deref,
     path::{
         Path,
         PathBuf,
@@ -55,13 +58,11 @@ use super::{
 };
 use crate::SearchFileType;
 
+/// Owns the directory a fetch extracts into, from the moment the fetch starts
+/// until the cache entry built from it is dropped. Dropping it deletes the
+/// directory. `size` is 0 until extraction finishes, so a fetch that fails or
+/// times out has no bytes to subtract from the accounting.
 struct IndexTempDir {
-    dir: PathBuf,
-    cleaner: CacheCleaner,
-    search_file_type: SearchFileType,
-}
-
-struct IndexTempDirWithSize {
     dir: PathBuf,
     cleaner: CacheCleaner,
     search_file_type: SearchFileType,
@@ -69,11 +70,13 @@ struct IndexTempDirWithSize {
     size: u64,
 }
 
-impl Drop for IndexTempDirWithSize {
+impl Drop for IndexTempDir {
     fn drop(&mut self) {
-        let _ = self
-            .cleaner
-            .attempt_cleanup(self.dir.clone(), self.search_file_type, self.size);
+        let _ = self.cleaner.attempt_cleanup(
+            mem::take(&mut self.dir),
+            self.search_file_type,
+            self.size,
+        );
         metrics::adjust_archive_bytes_for_index(
             -(self.size as i64),
             self.search_file_type,
@@ -82,32 +85,53 @@ impl Drop for IndexTempDirWithSize {
     }
 }
 
-impl IndexTempDirWithSize {
-    pub fn new(
-        index_temp_dir: IndexTempDir,
-        metric_labels: SearchIndexMetricLabels<'static>,
-        size: u64,
-    ) -> Self {
-        Self {
-            dir: index_temp_dir.dir,
-            cleaner: index_temp_dir.cleaner,
-            search_file_type: index_temp_dir.search_file_type,
-            metric_labels,
-            size,
-        }
-    }
-}
-
 struct IndexMeta {
-    size: u64,
     /// A path under `tempdir.dir`; may not be the directory itself
     path: PathBuf,
-    _tempdir: IndexTempDirWithSize,
+    tempdir: IndexTempDir,
 }
 
 impl SizedValue for IndexMeta {
     fn size(&self) -> u64 {
-        self.size
+        self.tempdir.size
+    }
+}
+
+/// A handle to an archive extracted by an [`ArchiveCacheManager`].
+///
+/// The extracted files stay on disk for as long as any handle to them exists:
+/// evicting the entry from the manager only drops the manager's own reference.
+/// Anything that opens files under `path` (a tantivy reader, a qdrant segment,
+/// an mmap) must therefore keep the handle alive for as long as it uses them.
+#[derive(Clone)]
+pub struct CachedArchive {
+    path: PathBuf,
+    _meta: Arc<IndexMeta>,
+}
+
+impl CachedArchive {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Deref for CachedArchive {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for CachedArchive {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl fmt::Debug for CachedArchive {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.path.fmt(f)
     }
 }
 
@@ -124,6 +148,12 @@ impl SizedValue for IndexMeta {
 /// The manager asynchronously prunes old entries when the cache is "over
 /// quota". As this pruning is performed after archives are added to the cache,
 /// the manager will transiently exceed the configured `max_size`.
+///
+/// `get()` returns a [`CachedArchive`] handle, and an extracted directory is
+/// only deleted once the manager has evicted it *and* every handle to it has
+/// been dropped. `max_size` therefore bounds the bytes the manager itself
+/// retains; directories pinned by outstanding handles (in practice, the entries
+/// of the in-memory segment caches) can add to that.
 ///
 /// In the interest of hot-path performance, any deletion or pruning operations
 /// are best-effort and are spawned to the thread pool rather than occurring in
@@ -177,8 +207,7 @@ impl<RT: Runtime> ArchiveFetcher<RT> {
         search_storage: Arc<dyn Storage>,
         key: ObjectKey,
         search_file_type: SearchFileType,
-        destination: IndexTempDir,
-        metric_labels: SearchIndexMetricLabels<'static>,
+        mut destination: IndexTempDir,
     ) -> anyhow::Result<IndexMeta> {
         let timer = metrics::archive_fetch_timer();
         let archive = search_storage
@@ -201,11 +230,11 @@ impl<RT: Runtime> ArchiveFetcher<RT> {
         metrics::adjust_archive_bytes_for_index(
             bytes_used as i64,
             search_file_type,
-            metric_labels.clone(),
+            destination.metric_labels.clone(),
         );
+        destination.size = bytes_used;
         Ok(IndexMeta {
-            _tempdir: IndexTempDirWithSize::new(destination, metric_labels, bytes_used),
-            size: bytes_used,
+            tempdir: destination,
             path,
         })
     }
@@ -275,6 +304,8 @@ impl<RT: Runtime> ArchiveFetcher<RT> {
             cleaner: self.cleaner.clone(),
             dir: destination.clone(),
             search_file_type,
+            metric_labels,
+            size: 0,
         };
         let new_self = self.clone();
         let new_key = key.clone();
@@ -283,13 +314,7 @@ impl<RT: Runtime> ArchiveFetcher<RT> {
         let fetch_fut = self
             .blocking_thread_pool
             .execute_async(move || {
-                new_self.fetch(
-                    search_storage,
-                    new_key,
-                    search_file_type,
-                    tempdir,
-                    metric_labels,
-                )
+                new_self.fetch(search_storage, new_key, search_file_type, tempdir)
             })
             .fuse();
         pin_mut!(fetch_fut);
@@ -329,7 +354,7 @@ impl<RT: Runtime> ArchiveCacheManager<RT> {
         rt: RT,
     ) -> anyhow::Result<Self> {
         let cleaner = CacheCleaner::new(rt.clone());
-        let cache = AsyncLru::new(rt.clone(), max_size, max_concurrent_fetches, "cache");
+        let cache = AsyncLru::new(rt.clone(), max_size, max_concurrent_fetches, 200, "cache");
         let this = Self {
             path: local_storage_path.as_ref().to_owned(),
             max_size,
@@ -347,15 +372,8 @@ impl<RT: Runtime> ArchiveCacheManager<RT> {
         self.max_size
     }
 
-    /// Returns the current number of bytes used on disk for all directories
-    /// tracked by this manager.
-    #[cfg(test)]
-    pub fn usage(&self) -> u64 {
-        self.cache.size()
-    }
-
-    /// Get the absolute path for the directory referenced by a given key.
-    /// Fetches the archive from storage if it doesn't already exist on disk.
+    /// Get a handle to the extracted directory for a given key. Fetches the
+    /// archive from storage if it doesn't already exist on disk.
     #[fastrace::trace]
     pub async fn get(
         &self,
@@ -363,7 +381,7 @@ impl<RT: Runtime> ArchiveCacheManager<RT> {
         key: &ObjectKey,
         search_file_type: SearchFileType,
         metric_labels: SearchIndexMetricLabels<'_>,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> anyhow::Result<CachedArchive> {
         let timer = metrics::archive_get_timer(search_file_type);
         let result = self
             .get_logged(search_storage, key, search_file_type, metric_labels)
@@ -379,13 +397,13 @@ impl<RT: Runtime> ArchiveCacheManager<RT> {
         storage_path: &ObjectKey,
         file_type: SearchFileType,
         metric_labels: SearchIndexMetricLabels<'_>,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> anyhow::Result<CachedArchive> {
         // The archive cache always dumps things into directories, but we want a
         // specific file path.
-        let parent_dir: PathBuf = self
+        let parent_dir = self
             .get(search_storage, storage_path, file_type, metric_labels)
             .await?;
-        let mut read_dir = fs::read_dir(parent_dir).await?;
+        let mut read_dir = fs::read_dir(parent_dir.path()).await?;
         let mut paths = Vec::with_capacity(1);
         while let Some(entry) = read_dir.next_entry().await? {
             paths.push(entry.path());
@@ -395,7 +413,10 @@ impl<RT: Runtime> ArchiveCacheManager<RT> {
             "Expected one file but found multiple paths: {:?}",
             paths,
         );
-        Ok(paths[0].to_owned())
+        Ok(CachedArchive {
+            path: paths.pop().expect("checked above"),
+            _meta: parent_dir._meta,
+        })
     }
 
     async fn get_logged(
@@ -404,7 +425,7 @@ impl<RT: Runtime> ArchiveCacheManager<RT> {
         key: &ObjectKey,
         search_file_type: SearchFileType,
         metric_labels: SearchIndexMetricLabels<'_>,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> anyhow::Result<CachedArchive> {
         let archive_fetcher = ArchiveFetcher {
             cache_path: self.path.clone(),
             rt: self.rt.clone(),
@@ -417,17 +438,14 @@ impl<RT: Runtime> ArchiveCacheManager<RT> {
         };
         let result = self
             .cache
-            .get(
-                cache_key.clone(),
-                archive_fetcher
-                    .generate_value(
-                        search_storage.clone(),
-                        key.clone(),
-                        search_file_type,
-                        metric_labels.to_owned(),
-                    )
-                    .boxed(),
-            )
+            .get(&cache_key, || {
+                archive_fetcher.generate_value(
+                    search_storage.clone(),
+                    key.clone(),
+                    search_file_type,
+                    metric_labels.to_owned(),
+                )
+            })
             .await
             .with_context(|| {
                 format!("Failed to get cache_key {cache_key:?} in {search_storage:?}")
@@ -443,7 +461,10 @@ impl<RT: Runtime> ArchiveCacheManager<RT> {
         );
         metrics::log_bytes_used(current_size, self.max_size);
 
-        Ok(result.path.clone())
+        Ok(CachedArchive {
+            path,
+            _meta: result,
+        })
     }
 }
 
@@ -463,12 +484,55 @@ fn is_immutable(search_file_type: SearchFileType) -> bool {
     }
 }
 
-async fn set_readonly(path: &PathBuf, readonly: bool) -> io::Result<()> {
+async fn set_readonly(path: &Path, readonly: bool) -> io::Result<()> {
     let metadata = fs::metadata(path).await?;
     let mut permissions = metadata.permissions();
     permissions.set_readonly(readonly);
     fs::set_permissions(path, permissions).await?;
     Ok(())
+}
+
+/// Clears the readonly bit on `path` and everything beneath it.
+///
+/// `fetch` marks the directory an immutable archive was extracted into as
+/// readonly, and for a `FragmentedVectorSegment` that directory is the nested
+/// `<entry>/segment`, not the entry itself. A non-root process cannot unlink
+/// files inside a directory without the write bit, so `remove_dir_all` on the
+/// entry needs the bit cleared throughout the tree. Symlinks are skipped so the
+/// walk never leaves the cache directory; paths that disappear mid-walk are
+/// tolerated.
+async fn clear_readonly_recursive(path: &Path) -> io::Result<()> {
+    let mut stack = vec![path.to_owned()];
+    while let Some(current) = stack.pop() {
+        let Some(metadata) = ignore_not_found(fs::symlink_metadata(&current).await)? else {
+            continue;
+        };
+        if metadata.is_symlink() {
+            continue;
+        }
+        if metadata.permissions().readonly() {
+            ignore_not_found(set_readonly(&current, false).await)?;
+        }
+        if metadata.is_dir() {
+            let Some(mut entries) = ignore_not_found(fs::read_dir(&current).await)? else {
+                continue;
+            };
+            while let Some(entry) = ignore_not_found(entries.next_entry().await)?.flatten() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Maps a `NotFound` error to `Ok(None)`, for filesystem steps that are moot
+/// once the path they target has disappeared.
+fn ignore_not_found<T>(result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 #[derive(Clone)]
@@ -511,8 +575,8 @@ async fn cleanup_thread(mut rx: mpsc::UnboundedReceiver<(PathBuf, SearchFileType
         // to disallow inconsistent filesystem state.
         tracing::debug!("Removing path {} from disk", path.display());
         let result: io::Result<()> = try {
-            set_readonly(&path, false).await?;
-            fs::remove_dir_all(path).await?;
+            clear_readonly_recursive(&path).await?;
+            fs::remove_dir_all(&path).await?;
         };
         match result {
             Ok(()) => {
@@ -522,124 +586,5 @@ async fn cleanup_thread(mut rx: mpsc::UnboundedReceiver<(PathBuf, SearchFileType
             Err(e) if e.kind() == io::ErrorKind::NotFound => (),
             Err(e) => panic!("ArchiveCacheManager failed to clean up archive directory: {e:?}"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use async_zip_0_0_9::{
-        Compression,
-        ZipEntryBuilder,
-    };
-    use common::{
-        bounded_thread_pool::BoundedThreadPool,
-        types::SearchIndexMetricLabels,
-    };
-    use rand::{
-        distr,
-        rng,
-        Rng,
-        RngCore,
-    };
-    use runtime::testing::TestRuntime;
-    use storage::{
-        LocalDirStorage,
-        Storage,
-        Upload,
-    };
-    use tempfile::TempDir;
-
-    use super::ArchiveCacheManager;
-    use crate::SearchFileType;
-
-    // Creates a random ZIP archive and outputs it as a buffer, along with the size
-    // of all contained files.
-    async fn random_archive() -> (Vec<u8>, u64) {
-        let mut buf = vec![];
-        let mut writer = async_zip_0_0_9::write::ZipFileWriter::new(&mut buf);
-        let mut size = 0u64;
-        for _ in 0..rng().random_range(1..10) {
-            let filename = rng()
-                .sample_iter(distr::Alphanumeric)
-                .take(8)
-                .map(|i| i as char)
-                .collect::<String>();
-            let len = rng().random_range(100..1000);
-            let mut content = vec![0; len];
-            size += len as u64;
-            rng().fill_bytes(&mut content);
-            let entry = ZipEntryBuilder::new(filename, Compression::Stored).build();
-            writer.write_entry_whole(entry, &content).await.unwrap();
-        }
-        writer.close().await.unwrap();
-        (buf, size)
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_cache(rt: TestRuntime) -> anyhow::Result<()> {
-        let root_dir = TempDir::new().unwrap();
-        let storage_dir = TempDir::new().unwrap();
-        let storage_dir_path = storage_dir.path().to_owned();
-        let storage =
-            Arc::new(LocalDirStorage::new_at_path(rt.clone(), storage_dir_path.clone()).unwrap());
-
-        let (first_archive, first_size) = random_archive().await;
-        let (second_archive, second_size) = loop {
-            let (archive, size) = random_archive().await;
-            if size < first_size {
-                break (archive, size);
-            }
-        };
-
-        let mut uploader = storage.start_upload().await?;
-        uploader.write(first_archive.clone().into()).await?;
-        let key = uploader.complete().await?;
-        // Create the manager such that it is _just_ big enough to hold the first
-        // archive.
-        let manager = ArchiveCacheManager::new(
-            root_dir.path(),
-            first_size + 1,
-            BoundedThreadPool::new(rt.clone(), 100, 10, "test"),
-            1,
-            rt,
-        )?;
-        assert_eq!(manager.usage(), 0);
-        let path = manager
-            .get(
-                storage.clone(),
-                &key,
-                SearchFileType::Text,
-                SearchIndexMetricLabels::unknown(),
-            )
-            .await?;
-        assert_eq!(
-            manager
-                .get(
-                    storage.clone(),
-                    &key,
-                    SearchFileType::Text,
-                    SearchIndexMetricLabels::unknown(),
-                )
-                .await?,
-            path
-        );
-        assert_eq!(manager.usage(), first_size);
-
-        let mut uploader = storage.start_upload().await?;
-        uploader.write(second_archive.clone().into()).await?;
-        let second_key = uploader.complete().await?;
-        let second_path = manager
-            .get(
-                storage,
-                &second_key,
-                SearchFileType::Text,
-                SearchIndexMetricLabels::unknown(),
-            )
-            .await?;
-        assert_ne!(path, second_path);
-        assert_eq!(manager.usage(), second_size);
-        Ok(())
     }
 }

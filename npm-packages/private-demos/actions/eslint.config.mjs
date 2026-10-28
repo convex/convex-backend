@@ -1,6 +1,11 @@
 import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 import convexPlugin from "@convex-dev/eslint-plugin";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 export default tseslint.config(
   {
@@ -21,8 +26,8 @@ export default tseslint.config(
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
-        project: ["convex/tsconfig.json"],
-        tsconfigRootDir: ".",
+        project: [path.join(__dirname, "convex", "tsconfig.json")],
+        tsconfigRootDir: __dirname,
       },
     },
     rules: {

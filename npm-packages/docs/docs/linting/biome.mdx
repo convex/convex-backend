@@ -1,0 +1,83 @@
+---
+title: "Biome"
+sidebar_position: 300
+description: "Use the Convex lint rules alongside Biome"
+---
+
+[Biome](https://biomejs.dev) can’t load ESLint plugins (its own plugins are
+written in [GritQL](https://biomejs.dev/linter/plugins/)), so it can’t run the
+Convex rules by itself. Instead, keep using Biome for formatting and general
+linting, and run the Convex rules on your `convex` directory with Oxlint or
+ESLint.
+
+## With Oxlint
+
+[Oxlint](/linting/oxlint) is fast like Biome, and supports every Convex rule.
+
+```sh
+npm i oxlint @convex-dev/eslint-plugin --save-dev
+```
+
+Turn off Oxlint’s default rules so it doesn’t repeat what Biome already checks:
+
+```ts
+// oxlint.config.ts
+import { defineConfig } from "oxlint";
+import convexPlugin from "@convex-dev/eslint-plugin";
+
+export default defineConfig({
+  // Only run the Convex rules, Biome takes care of the rest
+  categories: { correctness: "off" },
+  jsPlugins: ["@convex-dev/eslint-plugin"],
+  ignorePatterns: ["convex/_generated"],
+  overrides: [
+    {
+      files: ["**/convex/**/*.ts"],
+      rules: convexPlugin.configs.recommended[0].rules,
+    },
+  ],
+});
+```
+
+This turns on the [recommended rules](/linting/overview#rules). To turn on
+another rule as well, spread them into `rules` and add it:
+
+```ts
+rules: {
+  ...convexPlugin.configs.recommended[0].rules,
+  "@convex-dev/no-collect-in-query": "error",
+},
+```
+
+Then run both in your lint script:
+
+```json
+// package.json
+"scripts": {
+  "lint": "biome check . && oxlint convex"
+}
+```
+
+A few rules work a bit differently without type information, see
+[Differences from ESLint](/linting/oxlint#differences-from-eslint).
+
+## With ESLint
+
+If you want every autofix, run ESLint with only the Convex plugin, and only on
+your `convex` directory, so it stays quick. Install ESLint, typescript-eslint
+and the plugin:
+
+```sh
+npm i eslint typescript-eslint @convex-dev/eslint-plugin --save-dev
+```
+
+Use the `eslint.config.js` from
+[Type-aware linting](/linting/eslint#type-aware-linting), then add ESLint to
+your lint script:
+
+```json
+// package.json
+"scripts": {
+  "lint": "biome check . && eslint convex"
+}
+```

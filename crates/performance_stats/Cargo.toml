@@ -12,6 +12,8 @@ common = { workspace = true }
 errors = { workspace = true }
 futures = { workspace = true }
 humansize = { workspace = true }
+memory-stats = { workspace = true }
+metrics = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -20,6 +22,9 @@ tikv-jemalloc-sys = { workspace = true }
 tikv-jemallocator = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
+tikv-jemalloc-sys = { workspace = true, features = ["profiling_frameptr"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 jemalloc_pprof = { workspace = true }

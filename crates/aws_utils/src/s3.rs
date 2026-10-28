@@ -1,7 +1,14 @@
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    sync::LazyLock,
+    time::Duration,
+};
 
 use anyhow::Context;
-use aws_config::retry::RetryConfig;
+use aws_config::{
+    retry::RetryConfig,
+    timeout::TimeoutConfig,
+};
 use aws_sdk_s3::{
     types::{
         Delete,
@@ -12,6 +19,7 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_types_convert::stream::PaginationStreamExt;
+use cmd_util::env::env_config;
 use futures::{
     stream::TryStreamExt,
     Stream,
@@ -25,6 +33,9 @@ pub struct S3Client(pub Client);
 
 static S3_TRASH_FOLDER: &str = ".trash/";
 
+static S3_OPERATION_ATTEMPT_TIMEOUT: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("S3_OPERATION_ATTEMPT_TIMEOUT_SECONDS", 30)));
+
 impl S3Client {
     pub async fn new(enable_retries: bool) -> anyhow::Result<Self> {
         let retry_config = match enable_retries {
@@ -36,6 +47,11 @@ impl S3Client {
             .context(
                 "Failed to create S3 configuration. Check AWS env variables or IAM permissions.",
             )?
+            .timeout_config(
+                TimeoutConfig::builder()
+                    .operation_attempt_timeout(*S3_OPERATION_ATTEMPT_TIMEOUT)
+                    .build(),
+            )
             .retry_config(retry_config)
             .build();
 
@@ -148,7 +164,7 @@ impl S3Client {
     pub async fn recover_s3_files_from_bucket(
         &self,
         bucket: String,
-        instance_name: String,
+        deployment_name: String,
         for_real: bool,
     ) -> anyhow::Result<()> {
         let mut all_delete_markers: Vec<DeleteMarkerEntry> = vec![];
@@ -160,7 +176,7 @@ impl S3Client {
                 .0
                 .list_object_versions()
                 .bucket(bucket.clone())
-                .prefix(instance_name.clone());
+                .prefix(deployment_name.clone());
 
             if let Some(ref marker) = key_marker {
                 req_builder = req_builder.key_marker(marker.clone());
@@ -211,7 +227,7 @@ impl S3Client {
             }
             tracing::info!(
                 "DRY RUN: Would have recovered {num_markers_found} deleted files for instance \
-                 {instance_name}"
+                 {deployment_name}"
             );
         } else {
             // Convert markers to ObjectIdentifiers for batch deletion.
@@ -230,7 +246,7 @@ impl S3Client {
             let stream = futures::stream::iter(identifiers_iter);
             self.delete_s3_files(bucket.clone(), stream).await?;
             tracing::info!(
-                "Recovered {num_markers_found} deleted files for instance {instance_name}"
+                "Recovered {num_markers_found} deleted files for instance {deployment_name}"
             );
         }
 

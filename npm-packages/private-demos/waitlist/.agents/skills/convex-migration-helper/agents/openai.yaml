@@ -1,0 +1,13 @@
+interface:
+  display_name: "Convex Migration Helper"
+  short_description: "Plan and run safe Convex schema and data migrations."
+  icon_small: "./assets/icon.svg"
+  icon_large: "./assets/icon.svg"
+  brand_color: "#8B5CF6"
+  default_prompt:
+    "Help me plan and execute this Convex migration safely. Start by identifying
+    the schema change, the existing data shape, and the widen-migrate-narrow
+    path before making edits."
+
+policy:
+  allow_implicit_invocation: true

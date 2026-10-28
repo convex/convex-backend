@@ -27,7 +27,6 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 async_lru = { workspace = true }
 async_zip_0_0_9 = { workspace = true }
-bitvec = { workspace = true }
 bytes = { workspace = true }
 bytesize = { workspace = true }
 cmd_util = { workspace = true }
@@ -40,7 +39,6 @@ imbl = { workspace = true }
 imbl_slab = { workspace = true }
 indexing = { workspace = true }
 itertools = { workspace = true }
-levenshtein_automata = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
 once_cell = { workspace = true }
@@ -72,7 +70,7 @@ xorf = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 divan = { workspace = true }
 errors = { workspace = true, features = ["testing"] }
 indexing = { workspace = true, features = ["testing"] }

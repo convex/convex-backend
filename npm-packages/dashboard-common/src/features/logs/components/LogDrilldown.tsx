@@ -27,7 +27,7 @@ import { LogOutput, messagesToString } from "@common/elements/LogOutput";
 import { CopyButton } from "@common/elements/CopyButton";
 import { DeploymentEventContent } from "@common/elements/DeploymentEventContent";
 import { Tab } from "@ui/Tab";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useHotkeys } from "react-hotkeys-hook";
 import { KeyboardShortcut } from "@ui/KeyboardShortcut";
 import { Callout } from "@ui/Callout";
@@ -57,7 +57,7 @@ export function LogDrilldown({
   onFilterByRequestId?: (requestId: string) => void;
   onSelectLog: (log: InterleavedLog) => void;
   onHitBoundary: (boundary: "top" | "bottom" | null) => void;
-  logListContainerRef?: React.RefObject<HTMLDivElement>;
+  logListContainerRef?: React.RefObject<HTMLDivElement | null>;
 }) {
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
   const tabGroupRef = useRef<HTMLDivElement>(null);
@@ -80,13 +80,13 @@ export function LogDrilldown({
   }
 
   if (selectedLog.kind === "ClearedLogs") {
-    return <div className="h-full w-full border-l bg-background-primary/70" />;
+    return <div className="size-full border-l bg-background-primary/70" />;
   }
 
   return (
     <div className="flex h-full max-h-full flex-col overflow-hidden border-l bg-background-primary/70">
       {/* Header */}
-      <div className="border-b bg-background-secondary px-2 pt-4 pb-4">
+      <div className="border-b bg-background-secondary px-2 py-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <h4 className="flex flex-wrap items-center gap-2">
             <div className="flex flex-wrap items-center gap-2">
@@ -180,7 +180,6 @@ export function LogDrilldown({
                 number of logs. If you need log persistence, try out{" "}
                 <Link
                   href="https://docs.convex.dev/production/integrations/log-streams/"
-                  className="text-content-link hover:underline"
                   target="_blank"
                 >
                   Log Streams
@@ -375,8 +374,8 @@ export function useNavigateLogs(
   onSelectLog: (log: InterleavedLog) => void,
   onClose: () => void,
   onHitBoundary: (boundary: "top" | "bottom" | null) => void,
-  rightPanelRef: React.RefObject<HTMLDivElement>,
-  logListContainerRef?: React.RefObject<HTMLDivElement>,
+  rightPanelRef: React.RefObject<HTMLDivElement | null>,
+  logListContainerRef?: React.RefObject<HTMLDivElement | null>,
 ) {
   // Calculate the number of items that fit in one page based on container height
   const calculatePageSize = useCallback(() => {
@@ -654,7 +653,7 @@ function LogContentLayout({
   allUdfLogs: UdfLog[];
   selectedTabIndex: number;
   setSelectedTabIndex: (index: number) => void;
-  tabGroupRef: React.RefObject<HTMLDivElement>;
+  tabGroupRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const hasLogOutput =
     selectedLog.kind === "DeploymentEvent" ||
@@ -681,7 +680,7 @@ function LogContentLayout({
           </HeadlessTabList>
         </div>
 
-        <div className="mx-2 h-full min-h-0 overflow-hidden rounded rounded-t-none border border-t-0 bg-background-secondary">
+        <div className="mx-2 h-full min-h-0 overflow-hidden rounded-sm rounded-t-none border border-t-0 bg-background-secondary">
           <div className="scrollbar flex h-full flex-col gap-2 overflow-y-auto">
             <HeadlessTabPanels>
               <HeadlessTabPanel>
@@ -714,7 +713,7 @@ function LogContentLayout({
       {/* Deployment Event Content */}
       {selectedLog.kind === "DeploymentEvent" && (
         <div className="m-2 mt-0 animate-fadeInFromLoading rounded-md border bg-background-secondary">
-          <div className="px-2 pt-2 pb-2">
+          <div className="p-2">
             <p className="mb-1 text-xs font-semibold">Deployment Event</p>
             <DeploymentEventContent
               event={selectedLog.deploymentEvent}

@@ -1,4 +1,4 @@
-import { ArrowLeftIcon, ArrowRightIcon, CodeIcon } from "@radix-ui/react-icons";
+import { ArrowLeftIcon, ArrowRightIcon } from "@radix-ui/react-icons";
 import { UserIdentityAttributes } from "convex/browser";
 import { Value } from "convex/values";
 import isEqual from "lodash/isEqual";
@@ -11,6 +11,7 @@ import { ComponentId } from "@common/lib/useNents";
 import { Button } from "@ui/Button";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
+import { FunctionIcon } from "@common/elements/icons";
 
 // Keep track of a single user across instances of FunctionTester
 export const useImpersonatedUser = createGlobalState<UserIdentityAttributes>({
@@ -41,12 +42,14 @@ export function RunHistory({
   return (
     <div className="flex gap-2">
       <Button
-        icon={<CodeIcon />}
+        icon={<FunctionIcon className="w-4 text-content-tertiary" />}
         size="xs"
         variant="neutral"
-        tip="Jump to Code"
-        href={`${url}#code`}
-        onClickOfAnchorLink={() => log("jump to code from function runner")}
+        tip="Jump to Function"
+        href={url}
+        onClickOfAnchorLink={() =>
+          log("jump to function page from function runner")
+        }
       />
       <Button
         onClick={() => {

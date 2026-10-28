@@ -9,10 +9,7 @@ use common::{
         TableState,
         TABLES_TABLE,
     },
-    types::{
-        PersistenceVersion,
-        TableName,
-    },
+    types::TableName,
     value::{
         ConvexObject,
         ResolvedDocumentId,
@@ -42,7 +39,6 @@ use crate::{
 pub struct TableRegistry {
     tablet_states: OrdMap<TabletId, TableState>,
     table_mapping: TableMapping,
-    persistence_version: PersistenceVersion,
 }
 
 impl TableRegistry {
@@ -53,13 +49,11 @@ impl TableRegistry {
     pub fn bootstrap(
         table_mapping: TableMapping,
         table_states: OrdMap<TabletId, TableState>,
-        persistence_version: PersistenceVersion,
     ) -> anyhow::Result<Self> {
         let _timer = bootstrap_table_registry_timer();
         Ok(Self {
             table_mapping,
             tablet_states: table_states,
-            persistence_version,
         })
     }
 
@@ -155,7 +149,7 @@ impl TableRegistry {
                             matches!(new_metadata.namespace, TableNamespace::ByComponent(_))
                                 || bootstrap_system_tables()
                                     .iter()
-                                    .all(|t| t.table_name() != &new_metadata.name),
+                                    .all(|t| t.table_name() != new_metadata.name),
                             "cannot delete bootstrap system table"
                         );
                         anyhow::ensure!(index_registry.has_no_indexes(tablet_id));
@@ -250,10 +244,6 @@ impl TableRegistry {
 
     pub(crate) fn tablet_states(&self) -> &OrdMap<TabletId, TableState> {
         &self.tablet_states
-    }
-
-    pub fn persistence_version(&self) -> PersistenceVersion {
-        self.persistence_version
     }
 }
 

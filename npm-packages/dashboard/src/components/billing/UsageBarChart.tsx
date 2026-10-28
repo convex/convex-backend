@@ -1,17 +1,14 @@
 import * as Sentry from "@sentry/nextjs";
 import { DailyMetric, DailyPerTagMetrics } from "hooks/usageMetrics";
-import { Bar, Legend, Rectangle } from "recharts";
-import { useMemo } from "react";
+import { Bar, Rectangle, ReferenceArea } from "recharts";
+import { ReactNode, useMemo } from "react";
 import groupBy from "lodash/groupBy";
 import sumBy from "lodash/sumBy";
 import { toNumericUTC } from "@common/lib/format";
-import { QuantityType, formatQuantity } from "./lib/formatQuantity";
+import { QuantityType } from "./lib/formatQuantity";
 import { UsageNoDataError } from "./TeamUsageError";
 import { DailyChart } from "./DailyChart";
-import {
-  DailyChartDetailView,
-  DailyChartDetailItem,
-} from "./DailyChartDetailView";
+import { InlineDetailList, InlineDetailItem } from "./InlineDetailList";
 
 // When there is only a data point, we have to set the bar width manually to make it appear (https://github.com/recharts/recharts/issues/3640).
 // This value has been measured manually on a desktop screen size, but it should also look good in other contexts where there is only one bar.
@@ -24,23 +21,33 @@ export function UsageStackedBarChart({
   categories,
   categoryRenames = {},
   quantityType = "unit",
-  showCategoryTotals = true,
+  isGauge = false,
+  showEmptyCategories = false,
   selectedDate,
   setSelectedDate,
+  note,
 }: {
   rows: DailyPerTagMetrics[];
   categories: {
     [tag: string]: {
       name: string;
       color: string;
+      tip?: string;
     };
   };
   // Merge multiple categories together (e.g. to count cached and uncached queries together)
   categoryRenames?: { [sourceDataName: string]: string };
   quantityType?: QuantityType;
-  showCategoryTotals?: boolean;
+  /** If true, total shows the most recent day's value instead of summing all days */
+  isGauge?: boolean;
+  /**
+   * List every category in the legend, including ones with a zero value. Use
+   * for fixed category sets where the full breakdown should always be visible.
+   */
+  showEmptyCategories?: boolean;
   selectedDate: number | null;
   setSelectedDate: (date: number | null) => void;
+  note?: ReactNode;
 }) {
   const chartData = useMemo(() => {
     const filledData = [];
@@ -80,36 +87,70 @@ export function UsageStackedBarChart({
     return filledData;
   }, [rows, categoryRenames, categories]);
 
-  const totalByTag = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(
-          groupBy(
-            rows.flatMap((row) => row.metrics),
-            (metric) => categoryRenames[metric.tag] ?? metric.tag,
-          ),
-        ).map(([tag, entries]) => [
-          tag,
-          sumBy(entries, (entry) => entry.value),
-        ]),
-      ),
-    [rows, categoryRenames],
-  );
+  const totalByTag = useMemo(() => {
+    if (isGauge) {
+      // For gauge metrics (like storage), show the most recent day's value
+      const lastDay = chartData[chartData.length - 1];
+      if (lastDay) {
+        return Object.fromEntries(
+          Object.keys(categories).map((tag) => [
+            tag,
+            ((lastDay as any)[tag] as number) || 0,
+          ]),
+        );
+      }
+    }
+    return Object.fromEntries(
+      Object.entries(
+        groupBy(
+          rows.flatMap((row) => row.metrics),
+          (metric) => categoryRenames[metric.tag] ?? metric.tag,
+        ),
+      ).map(([tag, entries]) => [tag, sumBy(entries, (entry) => entry.value)]),
+    );
+  }, [rows, categoryRenames, isGauge, chartData, categories]);
 
-  // Get detail items for selected date
-  const detailItems = useMemo((): DailyChartDetailItem[] => {
-    if (selectedDate === null) return [];
+  // Items for the inline list: show per-category breakdown if multiple categories, single total otherwise
+  const detailItems = useMemo((): InlineDetailItem[] => {
+    const categoryEntries = Object.entries(categories);
+    const hasMultipleCategories = categoryEntries.length > 1;
 
-    const dataPoint = chartData.find((d) => d.dateNumeric === selectedDate);
-    if (!dataPoint) return [];
+    if (hasMultipleCategories) {
+      if (selectedDate !== null) {
+        const dataPoint = chartData.find((d) => d.dateNumeric === selectedDate);
+        if (dataPoint) {
+          return categoryEntries.map(([tag, { name, color, tip }]) => ({
+            name,
+            value: ((dataPoint as any)[tag] as number) || 0,
+            sortValue: totalByTag[tag] || 0,
+            color,
+            tip,
+          }));
+        }
+      }
+      return categoryEntries.map(([tag, { name, color, tip }]) => ({
+        name,
+        value: totalByTag[tag] || 0,
+        color,
+        tip,
+      }));
+    }
 
-    return Object.entries(categories).map(([tag, { name, color }]) => ({
-      name,
-      value: ((dataPoint as any)[tag] as number) || 0,
-      color,
-      project: undefined, // Category-based items don't have projects
-    }));
-  }, [selectedDate, chartData, categories]);
+    // Single category: show a total
+    if (selectedDate !== null) {
+      const dataPoint = chartData.find((d) => d.dateNumeric === selectedDate);
+      if (dataPoint) {
+        const total = Object.keys(categories).reduce(
+          (sum, tag) => sum + (((dataPoint as any)[tag] as number) || 0),
+          0,
+        );
+        return [{ name: "Total", value: total, color: "fill-chart-line-1" }];
+      }
+    }
+
+    const total = Object.values(totalByTag).reduce((sum, val) => sum + val, 0);
+    return [{ name: "Total", value: total, color: "fill-chart-line-1" }];
+  }, [selectedDate, chartData, categories, totalByTag]);
 
   const colorMap = useMemo(
     () =>
@@ -124,19 +165,8 @@ export function UsageStackedBarChart({
   }
 
   return (
-    <div
-      className={`relative overflow-hidden transition-all duration-300 ${
-        selectedDate !== null ? "h-[32rem]" : "h-56"
-      }`}
-    >
-      {/* Background chart (slides out to left when detail view is shown) */}
-      <div
-        className="absolute inset-0 transition-transform duration-300 ease-in-out"
-        style={{
-          transform:
-            selectedDate !== null ? "translateX(-100%)" : "translateX(0)",
-        }}
-      >
+    <div className="flex flex-col gap-4">
+      <div className="h-56">
         <DailyChart
           data={chartData}
           quantityType={quantityType}
@@ -157,11 +187,12 @@ export function UsageStackedBarChart({
               style={{ cursor: "pointer" }}
               onClick={(data: any) => {
                 if (data?.dateNumeric) {
-                  setSelectedDate(data.dateNumeric);
+                  setSelectedDate(
+                    data.dateNumeric === selectedDate ? null : data.dateNumeric,
+                  );
                 }
               }}
               shape={(props: any) => {
-                // eslint-disable-next-line react/prop-types
                 const { dateNumeric, name: categoryName } = props;
                 if (
                   typeof dateNumeric !== "number" ||
@@ -174,55 +205,32 @@ export function UsageStackedBarChart({
                   return <Rectangle {...props} />;
                 }
 
-                return <Rectangle {...props} />;
+                const isDimmed =
+                  selectedDate !== null && selectedDate !== dateNumeric;
+
+                return <Rectangle {...props} opacity={isDimmed ? 0.3 : 1} />;
               }}
             />
           ))}
-          {selectedDate === null && (
-            <Legend
-              content={() => (
-                <div className="flex flex-wrap gap-3 pl-[72px]">
-                  {Object.entries(categories).map(([tag, { name, color }]) =>
-                    Object.hasOwn(totalByTag, tag) ? (
-                      <span key={tag} className="mr-3 flex items-center gap-2">
-                        <svg className="w-3" viewBox="0 0 50 50" aria-hidden>
-                          <circle cx="25" cy="25" r="25" className={color} />
-                        </svg>
-                        <span>
-                          <span>{name}</span>
-                          {showCategoryTotals && (
-                            <>
-                              : {formatQuantity(totalByTag[tag], quantityType)}
-                            </>
-                          )}
-                        </span>
-                      </span>
-                    ) : null,
-                  )}
-                </div>
-              )}
+          {selectedDate !== null && (
+            <ReferenceArea
+              x1={selectedDate - MS_IN_DAY / 2}
+              x2={selectedDate + MS_IN_DAY / 2}
+              fill="currentColor"
+              fillOpacity={0.06}
+              ifOverflow="hidden"
             />
           )}
         </DailyChart>
       </div>
 
-      {/* Detail view (slides in from right) */}
-      <div
-        className="absolute inset-0 transition-transform duration-300 ease-in-out"
-        style={{
-          transform:
-            selectedDate !== null ? "translateX(0)" : "translateX(100%)",
-        }}
-      >
-        {selectedDate !== null && (
-          <DailyChartDetailView
-            date={selectedDate}
-            items={detailItems}
-            quantityType={quantityType}
-            onBack={() => setSelectedDate(null)}
-          />
-        )}
-      </div>
+      {note}
+
+      <InlineDetailList
+        items={detailItems}
+        quantityType={quantityType}
+        showZeroValues={showEmptyCategories}
+      />
     </div>
   );
 }

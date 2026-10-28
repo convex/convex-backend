@@ -97,7 +97,6 @@ export function CronJobsProviderWithCronHistory({
 
   return (
     <CronJobsContext.Provider
-      // eslint-disable-next-line react/jsx-no-constructed-context-values
       value={{
         cronsModule,
         cronJobs: orderedCronJobs,

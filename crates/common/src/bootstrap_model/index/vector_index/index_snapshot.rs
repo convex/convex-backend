@@ -14,7 +14,6 @@ use super::segment::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct VectorIndexSnapshot {
     pub data: VectorIndexSnapshotData,
     pub ts: Timestamp,
@@ -52,45 +51,6 @@ impl TryFrom<SerializedVectorIndexSnapshot> for VectorIndexSnapshot {
 pub enum VectorIndexSnapshotData {
     MultiSegment(Vec<FragmentedVectorSegment>),
     Unknown(ConvexObject),
-}
-
-#[cfg(any(test, feature = "testing"))]
-mod proptest {
-    use proptest::{
-        prelude::*,
-        sample::size_range,
-    };
-    use value::{
-        proptest::{
-            RestrictNaNs,
-            ValueBranching,
-        },
-        ConvexObject,
-        FieldType,
-    };
-
-    use super::VectorIndexSnapshotData;
-    use crate::bootstrap_model::index::vector_index::FragmentedVectorSegment;
-
-    impl Arbitrary for VectorIndexSnapshotData {
-        type Parameters = ();
-        type Strategy = BoxedStrategy<Self>;
-
-        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            prop_oneof![
-                any::<Vec<FragmentedVectorSegment>>()
-                    .prop_map(VectorIndexSnapshotData::MultiSegment),
-                any_with::<ConvexObject>((
-                    size_range(0..=4),
-                    FieldType::User,
-                    ValueBranching::default(),
-                    RestrictNaNs(false),
-                ))
-                .prop_map(VectorIndexSnapshotData::Unknown),
-            ]
-            .boxed()
-        }
-    }
 }
 
 impl VectorIndexSnapshotData {

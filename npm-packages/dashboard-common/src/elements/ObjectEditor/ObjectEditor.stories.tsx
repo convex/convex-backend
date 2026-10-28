@@ -6,6 +6,7 @@ import { mockConvexReactClient } from "@common/lib/mockConvexReactClient";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { mockDeploymentInfo } from "@common/lib/mockDeploymentInfo";
 import { fn } from "storybook/test";
+import { Sheet } from "@ui/Sheet";
 
 const mockClient = mockConvexReactClient()
   .registerQueryFake(udfs.listById.default, ({ ids }) => ids.map(() => null))
@@ -18,7 +19,9 @@ const meta = {
     <ConvexProvider client={mockClient}>
       <DeploymentInfoContext.Provider value={mockDeploymentInfo}>
         <div className="h-64">
-          <ObjectEditor {...args} />
+          <Sheet>
+            <ObjectEditor {...args} />
+          </Sheet>
         </div>
       </DeploymentInfoContext.Provider>
     </ConvexProvider>

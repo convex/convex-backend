@@ -1,17 +1,9 @@
-import { useBBMutation, useBBQuery } from "./api";
-
-export type AccessTokenListKind = "deployment" | "project" | "team";
-
-export function useTeamAccessTokens(teamId?: number) {
-  const { data: accessTokens } = useBBQuery({
-    path: "/teams/{team_id}/access_tokens",
-    pathParams: {
-      team_id: teamId?.toString() || "",
-    },
-  });
-
-  return accessTokens;
-}
+import {
+  useBBMutation,
+  useBBQuery,
+  useManagementApiMutation,
+  useManagementApiQuery,
+} from "./api";
 
 export function useTeamAppAccessTokens(teamId?: number) {
   const { data: accessTokens } = useBBQuery({
@@ -24,15 +16,84 @@ export function useTeamAppAccessTokens(teamId?: number) {
   return accessTokens;
 }
 
-export function useInstanceAccessTokens(deploymentName?: string) {
-  const { data: accessTokens } = useBBQuery({
-    path: "/instances/{deployment_name}/access_tokens",
+export function useDeployKeys(deploymentName?: string) {
+  const { data: deployKeys } = useManagementApiQuery({
+    path: "/deployments/{deployment_name}/list_deploy_keys",
     pathParams: {
       deployment_name: deploymentName || "",
     },
   });
 
-  return accessTokens;
+  return deployKeys;
+}
+
+export function useCreateDeployKey(deploymentName: string) {
+  return useManagementApiMutation({
+    path: "/deployments/{deployment_name}/create_deploy_key",
+    pathParams: {
+      deployment_name: deploymentName,
+    },
+    mutateKey: "/deployments/{deployment_name}/list_deploy_keys",
+    mutatePathParams: {
+      deployment_name: deploymentName,
+    },
+    successToast: "Deploy key created.",
+    toastOnError: false,
+  });
+}
+
+export function useDeleteDeployKey(deploymentName: string) {
+  return useManagementApiMutation({
+    path: "/deployments/{deployment_name}/delete_deploy_key",
+    pathParams: {
+      deployment_name: deploymentName,
+    },
+    mutateKey: "/deployments/{deployment_name}/list_deploy_keys",
+    mutatePathParams: {
+      deployment_name: deploymentName,
+    },
+    successToast: "Deploy key deleted.",
+  });
+}
+
+export function usePreviewDeployKeys(projectId?: number) {
+  const { data } = useManagementApiQuery({
+    path: "/projects/{project_id}/list_preview_deploy_keys",
+    pathParams: {
+      project_id: projectId ?? 0,
+    },
+  });
+
+  return data?.items;
+}
+
+export function useCreatePreviewDeployKey(projectId: number) {
+  return useManagementApiMutation({
+    path: "/projects/{project_id}/create_preview_deploy_key",
+    pathParams: {
+      project_id: projectId,
+    },
+    mutateKey: "/projects/{project_id}/list_preview_deploy_keys",
+    mutatePathParams: {
+      project_id: projectId,
+    },
+    successToast: "Preview deploy key created.",
+    toastOnError: false,
+  });
+}
+
+export function useDeletePreviewDeployKey(projectId: number) {
+  return useManagementApiMutation({
+    path: "/projects/{project_id}/delete_preview_deploy_key",
+    pathParams: {
+      project_id: projectId,
+    },
+    mutateKey: "/projects/{project_id}/list_preview_deploy_keys",
+    mutatePathParams: {
+      project_id: projectId,
+    },
+    successToast: "Preview deploy key deleted.",
+  });
 }
 
 export function useProjectAppAccessTokens(projectId?: number) {
@@ -44,40 +105,6 @@ export function useProjectAppAccessTokens(projectId?: number) {
   });
 
   return accessTokens;
-}
-
-export function useProjectAccessTokens(projectId?: number) {
-  const { data: accessTokens } = useBBQuery({
-    path: "/projects/{project_id}/access_tokens",
-    pathParams: {
-      project_id: projectId?.toString() || "",
-    },
-  });
-
-  return accessTokens;
-}
-
-export function useDeleteAccessToken(
-  identifier: string,
-  kind: AccessTokenListKind,
-) {
-  return useBBMutation({
-    path: "/teams/delete_access_token",
-    pathParams: undefined,
-    mutateKey:
-      kind === "deployment"
-        ? "/instances/{deployment_name}/access_tokens"
-        : kind === "project"
-          ? "/projects/{project_id}/access_tokens"
-          : "/teams/{team_id}/access_tokens",
-    mutatePathParams:
-      kind === "deployment"
-        ? { deployment_name: identifier }
-        : kind === "project"
-          ? { project_id: identifier }
-          : { team_id: identifier },
-    successToast: "Access token deleted.",
-  });
 }
 
 export function useDeleteAppAccessTokenByName(
@@ -95,43 +122,6 @@ export function useDeleteAppAccessTokenByName(
         ? { project_id: args.projectId?.toString() ?? "" }
         : { team_id: args.teamId.toString() },
     successToast: "Application access revoked.",
-  });
-}
-
-export function useCreateTeamAccessToken(
-  params:
-    | { kind: "deployment"; deploymentName: string }
-    | { kind: "project"; projectId: number }
-    | { kind: "team"; teamId: number }
-    | { kind: "doNotMutate" },
-) {
-  return useBBMutation({
-    path: "/authorize",
-    pathParams: undefined,
-    mutateKey:
-      params.kind === "doNotMutate"
-        ? undefined
-        : params.kind === "deployment"
-          ? "/instances/{deployment_name}/access_tokens"
-          : params.kind === "project"
-            ? "/projects/{project_id}/access_tokens"
-            : "/teams/{team_id}/access_tokens",
-    mutatePathParams:
-      params.kind === "doNotMutate"
-        ? undefined
-        : params.kind === "deployment"
-          ? {
-              deployment_name: params.deploymentName,
-            }
-          : params.kind === "project"
-            ? {
-                project_id: params.projectId.toString(),
-              }
-            : {
-                team_id: params.teamId.toString(),
-              },
-    successToast:
-      params.kind === "doNotMutate" ? undefined : "Access token created.",
   });
 }
 

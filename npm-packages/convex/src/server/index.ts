@@ -55,7 +55,12 @@ export type {
   Auth,
   AuthConfig,
   AuthProvider,
+  MutationAuth,
   UserIdentity,
+  ReservedJwtClaim,
+  ReservedJwtClaimPrefix,
+  SignJwtClaims,
+  SignJwtOptions,
   UserIdentityAttributes,
 } from "./authentication.js";
 export * from "./database.js";
@@ -103,10 +108,27 @@ export {
   internalMutationGeneric,
   internalQueryGeneric,
 } from "./impl/registration_impl.js";
+export {
+  getServiceToken,
+  getServiceUrl,
+  type ServiceName,
+} from "./impl/actions_impl.js";
+export type {
+  TransactionMetric,
+  TransactionMetrics,
+  TransactionLimits,
+  FunctionMetadata,
+  DeploymentMetadata,
+  RequestMetadata,
+  QueryMeta,
+  MutationMeta,
+  ActionMeta,
+} from "./meta.js";
 export type { IndexRange, IndexRangeBuilder } from "./index_range_builder.js";
 export * from "./pagination.js";
 export type { OrderedQuery, Query, QueryInitializer } from "./query.js";
 export type {
+  AdvancedRunQueryOptions,
   ArgsArray,
   DefaultFunctionArgs,
   FunctionVisibility,
@@ -161,6 +183,7 @@ export {
 export type {
   ApiFromModules,
   AnyApi,
+  FunctionReference_future,
   FilterApi,
   FunctionType,
   FunctionReference,
@@ -169,6 +192,7 @@ export type {
   PartialApi,
   ArgsAndOptions,
   FunctionReturnType,
+  ValidatorTypeToReturnType,
 } from "./api.js";
 export {
   defineApp,
@@ -176,6 +200,10 @@ export {
   componentsGeneric,
   createFunctionHandle,
   type AnyChildComponents,
+  type EnvDefinition,
+  type EnvFromDefinition,
+  type EnvFromAppDefinition,
+  type AppDefinition,
 } from "./components/index.js";
 /**
  * @internal
@@ -186,12 +214,16 @@ export type {
   ComponentDefinition,
   AnyComponents,
   FunctionHandle,
+  FunctionHandle_future,
 } from "./components/index.js";
 
 /**
  * @internal
  */
 export type { Index, SearchIndex, VectorIndex } from "./schema.js";
+
+export { log } from "./log.js";
+export type { AuditLogBody, AuditLogValue } from "./audit_logging.js";
 
 export type {
   SearchIndexConfig,
@@ -203,8 +235,10 @@ export type {
   DataModelFromSchemaDefinition,
   SystemDataModel,
   SystemTableNames,
+  DocValidator,
+  SystemFieldValidators,
 } from "./schema.js";
-export { defineTable, defineSchema } from "./schema.js";
+export { defineTable, defineSchema, docValidator } from "./schema.js";
 
 export type {
   VectorSearch,

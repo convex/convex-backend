@@ -19,7 +19,7 @@ export function fr<T = HTMLElement, P = React.HTMLAttributes<T>>(
 export function se<
   T = HTMLElement,
   P extends React.HTMLAttributes<T> = React.HTMLAttributes<T>,
->(Tag: keyof React.ReactHTML, ...classNames: ClassValue[]) {
+>(Tag: keyof React.JSX.IntrinsicElements, ...classNames: ClassValue[]) {
   const component = fr<T, P>(({ className, ...props }, ref) => (
     // @ts-expect-error Too complicated for TypeScript
     <Tag ref={ref} className={cn(...classNames, className)} {...props} />

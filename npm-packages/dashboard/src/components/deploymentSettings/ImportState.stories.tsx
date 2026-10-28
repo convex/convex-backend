@@ -1,6 +1,7 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { Doc, Id } from "system-udfs/convex/_generated/dataModel";
 import { ImportState } from "./SnapshotImport";
+import { Sheet } from "@ui/Sheet";
 
 const now = new Date();
 
@@ -46,6 +47,13 @@ const meta = {
   args: {
     snapshotImport: baseSnapshotImport,
   },
+  decorators: [
+    (Story) => (
+      <Sheet>
+        <Story />
+      </Sheet>
+    ),
+  ],
   parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof ImportState>;
 

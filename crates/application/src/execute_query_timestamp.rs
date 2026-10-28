@@ -27,25 +27,3 @@ impl TryFrom<ExecuteQueryTimestampProto> for ExecuteQueryTimestamp {
         Ok(ts)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use value::testing::assert_roundtrips;
-
-    use super::*;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_execute_query_timestamp_roundtrips(
-            left in any::<ExecuteQueryTimestamp>()
-        ) {
-            assert_roundtrips::<ExecuteQueryTimestamp, ExecuteQueryTimestampProto>(left);
-        }
-    }
-}

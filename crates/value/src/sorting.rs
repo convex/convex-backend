@@ -108,10 +108,10 @@ fn write_tagged_int(n: i64, writer: &mut impl BufMut) {
 }
 
 /// Generate the sort key for a sequence of `Value`s.
-pub fn values_to_bytes<const FIXED: bool>(values: &[Option<ConvexValue>]) -> Vec<u8> {
+pub fn values_to_bytes(values: &[Option<ConvexValue>]) -> Vec<u8> {
     let mut out = vec![];
     for value in values {
-        let Ok(()) = write_sort_key_or_undefined::<_, FIXED>(value.as_ref(), &mut out);
+        let Ok(()) = write_sort_key_or_undefined(value.as_ref(), &mut out);
     }
     out
 }
@@ -254,7 +254,7 @@ pub mod sorting_decode {
                     ConvexValue::Array(elements.try_into()?)
                 },
                 OBJECT_TAG => {
-                    let mut elements = BTreeMap::new();
+                    let mut elements = vec![];
                     loop {
                         let field = if let Some(&TERMINATOR_BYTE) = reader.chunk().first() {
                             reader.get_u8();
@@ -268,9 +268,12 @@ pub mod sorting_decode {
                             read_escaped_string(reader)?.try_into()?
                         };
                         let value = Self::read_sort_key(reader)?;
-                        if elements.insert(field, value).is_some() {
-                            anyhow::bail!("Duplicate element in encoded object");
-                        }
+                        elements.push((field, value));
+                    }
+                    let len = elements.len();
+                    let elements = BTreeMap::from_iter(elements);
+                    if elements.len() != len {
+                        anyhow::bail!("Duplicate element in encoded object");
                     }
                     ConvexValue::Object(ConvexObject::try_from(elements)?)
                 },
@@ -285,19 +288,19 @@ pub mod sorting_decode {
 
 impl ConvexValue {
     /// Generate the sort key for a given `Value`.
-    pub fn sort_key<const FIXED: bool>(&self) -> Vec<u8> {
+    pub fn sort_key(&self) -> Vec<u8> {
         let mut out = vec![];
-        self.write_sort_key::<FIXED>(&mut out);
+        self.write_sort_key(&mut out);
         out
     }
 
-    pub fn write_sort_key<const FIXED: bool>(&self, writer: &mut impl BufMut) {
-        let Ok(()) = write_sort_key::<_, FIXED>(self, writer);
+    pub fn write_sort_key(&self, writer: &mut impl BufMut) {
+        let Ok(()) = write_sort_key(self, writer);
     }
 }
 
 /// Write a `Value`'s sort key out to a writer.
-pub fn write_sort_key<V: ConvexValueWalker, const FIXED: bool>(
+pub fn write_sort_key<V: ConvexValueWalker>(
     value: V,
     writer: &mut impl BufMut,
 ) -> Result<(), V::Error> {
@@ -341,7 +344,7 @@ pub fn write_sort_key<V: ConvexValueWalker, const FIXED: bool>(
         ConvexValueType::Array(array) => {
             writer.put_u8(ARRAY_TAG);
             for element in array.walk() {
-                write_sort_key::<_, FIXED>(element?, writer)?;
+                write_sort_key(element?, writer)?;
             }
             writer.put_u8(TERMINATOR_BYTE);
         },
@@ -355,13 +358,10 @@ pub fn write_sort_key<V: ConvexValueWalker, const FIXED: bool>(
                 // object. Note that this encoding looks like an escaped `\0`
                 // byte, but valid FieldNames only contain non-control ASCII
                 // characters so this is not ambiguous.
-                // TODO: already-written index keys may contain the invalid
-                // encoding; find them if necessary and migrate them. For now,
-                // indexes use FIXED=false.
-                if FIXED && field.is_empty() {
+                if field.is_empty() {
                     writer.put_u8(ESCAPE_BYTE);
                 }
-                write_sort_key::<_, FIXED>(value, writer)?;
+                write_sort_key(value, writer)?;
             }
             writer.put_u8(TERMINATOR_BYTE);
         },
@@ -371,12 +371,12 @@ pub fn write_sort_key<V: ConvexValueWalker, const FIXED: bool>(
 
 /// Writes `value`'s sort key, interpreting `None` as `undefined` (which is,
 /// notably, a different value than `null`)
-pub fn write_sort_key_or_undefined<V: ConvexValueWalker, const FIXED: bool>(
+pub fn write_sort_key_or_undefined<V: ConvexValueWalker>(
     value: Option<V>,
     writer: &mut impl BufMut,
 ) -> Result<(), V::Error> {
     match value {
-        Some(value) => write_sort_key::<_, FIXED>(value, writer),
+        Some(value) => write_sort_key(value, writer),
         None => {
             writer.put_u8(UNDEFINED_TAG);
             Ok(())
@@ -474,7 +474,6 @@ impl PartialEq for ConvexValue {
 impl Eq for ConvexValue {}
 
 #[derive(Clone, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct TotalOrdF64(f64);
 
 impl Ord for TotalOrdF64 {
@@ -507,171 +506,5 @@ impl From<f64> for TotalOrdF64 {
 impl From<TotalOrdF64> for f64 {
     fn from(f: TotalOrdF64) -> f64 {
         f.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::BTreeMap,
-        fmt::Debug,
-    };
-
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use crate::{
-        id_v6::DeveloperDocumentId,
-        sorting::{
-            sorting_decode::bytes_to_values,
-            TotalOrdF64,
-        },
-        values_to_bytes,
-        ConvexArray,
-        ConvexBytes,
-        ConvexObject,
-        ConvexString,
-        ConvexValue,
-        InternalId,
-        ResolvedDocumentId,
-        TableNumber,
-        TabletId,
-    };
-
-    #[test]
-    fn test_roundtrip_trophies() -> anyhow::Result<()> {
-        // The random portion of this ID starts with the 0xFF byte which
-        // used to break our sorting serialization.
-        let id_str = "074wwt1x3qmwz35bvscy44eq2yngrt8";
-        let id = DeveloperDocumentId::decode(id_str)?;
-        let trophies = vec![ConvexValue::from(-1), ConvexValue::from(id)];
-        for v in trophies {
-            assert_eq!(
-                ConvexValue::read_sort_key(&mut &v.sort_key::<true>()[..]).unwrap(),
-                v
-            );
-        }
-        Ok(())
-    }
-
-    fn test_compatible_with_ord<F: Ord + TryInto<ConvexValue>>(l: F, r: F)
-    where
-        <F as TryInto<ConvexValue>>::Error: Debug,
-    {
-        let ord1 = l.cmp(&r);
-
-        let lv: ConvexValue = l.try_into().unwrap();
-        let rv: ConvexValue = r.try_into().unwrap();
-
-        let ord2 = lv.sort_key::<true>().cmp(&rv.sort_key::<true>());
-        assert_eq!(ord1, ord2);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-
-        #[test]
-        fn test_roundtrips(v in any::<ConvexValue>(),) {
-            assert_eq!(ConvexValue::read_sort_key(&mut &v.sort_key::<true>()[..], ).unwrap(), v);
-        }
-
-        #[test]
-        fn test_vector_roundtrips(v in any::<Vec<Option<ConvexValue>>>()) {
-            let bytes = values_to_bytes::<true>(&v);
-            assert_eq!(
-                bytes_to_values(&mut &bytes[..]).unwrap(),
-                v,
-            );
-        }
-
-        #[test]
-        fn test_integer_roundtrips(v in any::<i64>()) {
-            let v = ConvexValue::from(v);
-            assert_eq!(ConvexValue::read_sort_key(&mut &v.sort_key::<true>()[..]).unwrap(), v);
-        }
-
-        #[test]
-        fn test_id_roundtrips(v in any::<DeveloperDocumentId>()) {
-            let v: ConvexValue = v.into();
-            assert_eq!(ConvexValue::read_sort_key(&mut &v.sort_key::<true>()[..]).unwrap(), v);
-        }
-
-
-        #[test]
-        fn test_compatible_with_manual_impl(
-            l in any::<ConvexValue>(),
-            r in any::<ConvexValue>(),
-        ) {
-            let ord1 = l.cmp(&r);
-            let ord2 = l.sort_key::<true>().cmp(&r.sort_key::<true>());
-            assert_eq!(ord1, ord2);
-        }
-
-        #[test]
-        fn test_compatible_with_float(l in any::<f64>(), r in any::<f64>()) {
-            test_compatible_with_ord(TotalOrdF64(l), TotalOrdF64(r));
-        }
-
-        #[test]
-        fn test_compatible_with_bool(l in any::<bool>(), r in any::<bool>())  {
-            test_compatible_with_ord(l, r)
-        }
-
-        #[test]
-        fn test_compatible_with_str(l in any::<ConvexString>(), r in any::<ConvexString>())  {
-            test_compatible_with_ord(String::from(l), String::from(r))
-        }
-
-        #[test]
-        fn test_compatible_with_bytes(l in any::<ConvexBytes>(), r in any::<ConvexBytes>())  {
-            test_compatible_with_ord(Vec::from(l), Vec::from(r))
-        }
-
-        #[test]
-        fn test_compatible_with_id_string(
-            l in any::<DeveloperDocumentId>(),
-            r in any::<DeveloperDocumentId>(),
-        )  {
-            test_compatible_with_ord(l.encode(), r.encode())
-        }
-
-        #[test]
-        fn test_compatible_with_internal_id(l in any::<InternalId>(), r in any::<InternalId>())  {
-            let tablet_id = TabletId::MIN;
-            let table_number = TableNumber::MIN;
-            let l = ResolvedDocumentId {
-                tablet_id,
-                developer_id: DeveloperDocumentId::new(table_number, l),
-            };
-            let r = ResolvedDocumentId {
-                tablet_id,
-                developer_id: DeveloperDocumentId::new(table_number, r),
-            };
-            test_compatible_with_ord(ConvexValue::from(l), ConvexValue::from(r))
-        }
-
-    }
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig {
-                cases: 16 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1),
-                failure_persistence: None,
-                .. ProptestConfig::default()
-            }
-        )]
-
-        #[test]
-        fn test_compatible_with_arr(l in any::<ConvexArray>(), r in any::<ConvexArray>())  {
-            test_compatible_with_ord(Vec::from(l), Vec::from(r))
-        }
-
-        #[test]
-        fn test_compatible_with_object(
-            l in any::<ConvexObject>(),
-            r in any::<ConvexObject>(),
-        )  {
-            test_compatible_with_ord(BTreeMap::from(l), BTreeMap::from(r))
-        }
     }
 }

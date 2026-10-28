@@ -15,7 +15,7 @@ functions minutes, days, and even months in the future. Scheduling is resilient
 against unexpected downtime or system restarts.
 
 **Example:**
-[Scheduling](https://github.com/get-convex/convex-demos/tree/main/scheduling)
+[Scheduling](https://github.com/convex/convex-demos/tree/main/scheduling)
 
 ## Scheduling functions
 
@@ -33,10 +33,9 @@ The rest of the arguments are the path to the function and its arguments,
 similar to invoking a function from the client. For example, here is how to send
 a message that self-destructs in five seconds.
 
-<TSAndJSSnippet
+<Snippet
   title="convex/messages.ts"
-  sourceTS={Example}
-  sourceJS={Example}
+  source={Example}
   snippet="scheduling-runAfter"
   highlightPatterns={["scheduler", "runAfter"]}
 />
@@ -82,10 +81,9 @@ of scheduled function. You can read data from system tables using the
 `db.system.get` and `db.system.query` methods, which work the same as the
 standard `db.get` and `db.query` methods.
 
-<TSAndJSSnippet
+<Snippet
   title="convex/messages.ts"
-  sourceTS={Example}
-  sourceJS={Example}
+  source={Example}
   snippet="scheduling-status"
   highlightPatterns={["system"]}
 />
@@ -133,10 +131,9 @@ You can cancel a previously scheduled function with
 [scheduler](/api/interfaces/server.Scheduler) provided in the respective
 function context.
 
-<TSAndJSSnippet
+<Snippet
   title="convex/messages.ts"
-  sourceTS={Example}
-  sourceJS={Example}
+  source={Example}
   snippet="scheduling-cancel"
   highlightPatterns={["scheduler.cancel"]}
 />
@@ -150,9 +147,9 @@ What `cancel` does depends on the state of the scheduled function:
 ## Debugging
 
 You can view logs from previously executed scheduled functions in the Convex
-dashboard [Logs view](/dashboard/deployments/logs.md). You can view and cancel
+dashboard [Logs view](/dashboard/deployments/logs.mdx). You can view and cancel
 yet to be executed functions in the
-[Functions view](/dashboard/deployments/functions.md).
+[Functions view](/dashboard/deployments/functions.mdx).
 
 ## Error handling
 

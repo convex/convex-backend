@@ -1,7 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    sync::LazyLock,
-};
+use std::collections::BTreeSet;
 
 use common::{
     runtime::Runtime,
@@ -13,8 +10,8 @@ use database::{
 };
 use value::TableName;
 
-pub static AIRBYTE_PRIMARY_KEY_INDEX_DESCRIPTOR: LazyLock<IndexDescriptor> =
-    LazyLock::new(|| IndexDescriptor::new("_by_airbyte_primary_key").unwrap());
+pub static AIRBYTE_PRIMARY_KEY_INDEX_DESCRIPTOR: IndexDescriptor =
+    IndexDescriptor::const_new("_by_airbyte_primary_key");
 
 pub struct AirbyteImportModel<'a, RT: Runtime> {
     tx: &'a mut Transaction<RT>,

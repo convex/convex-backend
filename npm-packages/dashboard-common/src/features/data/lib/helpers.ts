@@ -1,13 +1,15 @@
 import { useQuery } from "convex/react";
-import { Value } from "convex/values";
 import { useMemo } from "react";
-import { Shape } from "shapes";
 import udfs from "@common/udfs";
 import { useNents } from "@common/lib/useNents";
 import { SchemaJson } from "@common/lib/format";
 
-export function sortColumns(fieldNames: string[]): string[] {
+export function sortColumns(
+  fieldNames: string[],
+  { maintainOrder = false }: { maintainOrder?: boolean } = {},
+): string[] {
   // Always sort the "_id" field first and the "_creationTime" field last.
+  // When maintainOrder is true, preserve the original order for all other fields.
   return fieldNames.sort((a, b) => {
     if (a === b) {
       return 0;
@@ -17,6 +19,9 @@ export function sortColumns(fieldNames: string[]): string[] {
     }
     if (b === "_id" || a === "_creationTime") {
       return 1;
+    }
+    if (maintainOrder) {
+      return 0;
     }
     if (a < b) {
       return -1;
@@ -40,46 +45,6 @@ export const identifierNeedsEscape = (identifier: string) =>
   identifier !== "_id" &&
   identifier !== "_creationTime" &&
   validateConvexIdentifier(identifier, "Field name") !== undefined;
-
-export const defaultValueForShape = (shape: Shape): Value | undefined => {
-  switch (shape.type) {
-    case "Id":
-      return "";
-    case "String":
-      return "";
-    case "Boolean":
-      return false;
-    case "Float64":
-      return 0;
-    case "Int64":
-      return BigInt(0);
-    case "Array":
-      return [];
-    case "Object":
-      return Object.fromEntries(
-        shape.fields
-          .map(({ fieldName, shape: fieldShape }) => [
-            fieldName,
-            defaultValueForShape(fieldShape),
-          ])
-          .filter((d) => d !== undefined),
-      );
-    case "Union":
-      return defaultValueForShape(shape.shapes[0]);
-    case "Record":
-      return {};
-    case "Null":
-      return null;
-    case "Bytes":
-    case "Never":
-    case "Unknown":
-      return undefined;
-    default: {
-      shape satisfies never;
-      return undefined;
-    }
-  }
-};
 
 const COMMON_UTC_TIMESTAMP_RANGE = [1e12, 4.1e12]; // ~2001 to ~2100
 export const isInCommonUTCTimestampRange = (value: number) =>

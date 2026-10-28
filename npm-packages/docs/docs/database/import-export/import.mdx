@@ -54,6 +54,16 @@ Imports where tables have existing data will fail by default, but you can
 specify `--replace` to replace existing data in tables mentioned in the ZIP
 file.
 
+## Limits
+
+CSV and JSONLines imports have a 16 MiB line limit, including line endings and
+CSV headers. Quoted multiline CSV values count as a single logical line. For ZIP
+imports, the limit applies to decompressed lines in `documents.jsonl` and
+`generated_schema.jsonl` files.
+
+Imported documents must also meet the
+[1 MiB document size limit](/database/types#limits).
+
 ## Use cases
 
 1. Seed dev deployments with sample data.
@@ -109,16 +119,17 @@ npx convex import --replace --table <tableNameToClear> empty_file.jsonl
 - While JSON and JSONLines can import arbitrary JSON values, ZIP imports can
   additionally import other Convex values: Int64, Bytes, etc. Types are
   preserved in the ZIP file through the `generated_schema.jsonl` file.
-- Data import of ZIP files that include [file storage](/file-storage) import the
-  files and preserve [`_storage`](/database/advanced/system-tables.mdx)
-  documents, including their `_id`, `_creationTime`, and `contentType` fields.
+- Data import of ZIP files that include [file storage](/file-storage/overview)
+  import the files and preserve
+  [`_storage`](/database/advanced/system-tables.mdx) documents, including their
+  `_id`, `_creationTime`, and `contentType` fields.
 
 ## Warnings
 
-- [Streaming Export](/production/integrations/streaming-import-export.md)
-  (Fivetran or Airbyte) does not handle data imports or backup restorations,
-  similar to table deletion and creation and some schema changes. We recommend
-  resetting streaming export sync after a restore or a data import.
+- [Streaming Export](/production/integrations/streaming-import-export.mdx)
+  (Fivetran) does not handle data imports or backup restorations, similar to
+  table deletion and creation and some schema changes. We recommend resetting
+  streaming export sync after a restore or a data import.
 - Avoid changing the ZIP file between downloading it from Data Export and
   importing it with `npx convex import`. Some manual changes of the ZIP file may
   be possible, but remain undocumented. Please share your use case and check

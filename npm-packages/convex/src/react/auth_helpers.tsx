@@ -41,3 +41,22 @@ export function AuthLoading({ children }: { children: ReactNode }) {
   }
   return <>{children}</>;
 }
+
+/**
+ * Renders children while the client is refreshing the auth token for an
+ * already-authenticated session (the server rejected the current token and
+ * the socket is paused while a new one is fetched). Routine background
+ * token rotation does not trigger this state.
+ *
+ * Whether used inside of `<Authenticated>` or not, children will only be
+ * rendered if the user is authenticated.
+ *
+ * @public
+ */
+export function AuthRefreshing({ children }: { children: ReactNode }) {
+  const { isAuthenticated, isRefreshing } = useConvexAuth();
+  if (!isAuthenticated || !isRefreshing) {
+    return null;
+  }
+  return <>{children}</>;
+}

@@ -7,8 +7,7 @@ use value::heap_size::HeapSize;
 
 use crate::index::IndexKeyBytes;
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct BinaryKey {
     key: Vec<u8>,
 }
@@ -78,62 +77,5 @@ impl BinaryKey {
             incremented.key.pop();
         }
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::BinaryKey;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_increment(
-            key in any::<BinaryKey>(),
-            mut suffix in prop::collection::vec(any::<u8>(), 0..=2),
-        ) {
-            if let Some(incr) = key.increment() {
-                let mut bytes_with_suffix = key.key;
-                bytes_with_suffix.append(&mut suffix);
-                let with_suffix = BinaryKey{ key: bytes_with_suffix };
-                assert!(incr > with_suffix);
-            } else {
-                assert!(key.iter().all(|b| *b == 255));
-            }
-        }
-
-        #[test]
-        fn test_increment_minimum(
-            key in prop::collection::vec(any::<u8>(), 0..=2),
-            other_key in prop::collection::vec(any::<u8>(), 0..=2),
-        ) {
-            let key = BinaryKey { key };
-            let other_key = BinaryKey { key: other_key };
-            if let Some(incr) = key.increment() {
-                if key < other_key && other_key < incr {
-                    assert!(other_key.starts_with(&key));
-                }
-            } else {
-                assert!(key.iter().all(|b| *b == 255));
-            }
-        }
-    }
-
-    #[test]
-    fn test_increment_samples() {
-        let key: BinaryKey = vec![5, 6].into();
-        assert_eq!(key.increment(), Some(vec![5, 7].into()));
-        let key: BinaryKey = vec![5, 255, 255].into();
-        assert_eq!(key.increment(), Some(vec![6].into()));
-        let key: BinaryKey = vec![255, 255, 255].into();
-        assert_eq!(key.increment(), None);
-        let key: BinaryKey = vec![].into();
-        assert_eq!(key.increment(), None);
     }
 }

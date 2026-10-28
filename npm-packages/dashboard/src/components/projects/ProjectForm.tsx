@@ -28,10 +28,12 @@ export function ProjectForm({
   project,
   team,
   hasAdminPermissions,
+  permissionDeniedTip,
 }: {
   team: TeamResponse;
   project: ProjectDetails;
   hasAdminPermissions: boolean;
+  permissionDeniedTip?: React.ReactNode;
 }) {
   const updateProject = useUpdateProject(project.id);
   const formState = useFormik({
@@ -61,11 +63,7 @@ export function ProjectForm({
         <div className="flex flex-col gap-6">
           <div className="flex max-w-xs flex-col gap-4">
             <Tooltip
-              tip={
-                !hasAdminPermissions
-                  ? "You do not have permission to update the project name."
-                  : undefined
-              }
+              tip={!hasAdminPermissions ? permissionDeniedTip : undefined}
             >
               <TextInput
                 label="Project Name"
@@ -80,11 +78,7 @@ export function ProjectForm({
             </Tooltip>
 
             <Tooltip
-              tip={
-                !hasAdminPermissions
-                  ? "You do not have permission to update the project slug."
-                  : undefined
-              }
+              tip={!hasAdminPermissions ? permissionDeniedTip : undefined}
             >
               <TextInput
                 label="Project Slug"

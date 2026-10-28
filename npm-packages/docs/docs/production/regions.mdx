@@ -13,8 +13,21 @@ region.
 
 ## Available regions
 
-The current available regions are in US East (N. Virginia) and EU West
-(Ireland). More regions will be added in the future.
+| Region               | Location              | Pricing                |
+| -------------------- | --------------------- | ---------------------- |
+| `aws-us-east-1`      | US East (N. Virginia) | Standard               |
+| `aws-eu-west-1`      | Europe (Ireland)      | 30% regional surcharge |
+| `aws-ap-southeast-2` | Asia Pacific (Sydney) | 30% regional surcharge |
+| `aws-ca-central-1`   | Canada (Central)      | 30% regional surcharge |
+
+More regions will be added in the future.
+
+## Pricing
+
+Usage in regions outside the US is billed at 1.3x the standard rate (a 30%
+regional surcharge). See the [pricing page](https://www.convex.dev/pricing) for
+standard rates and [Limits](/production/state/limits) for per-plan resource
+limits.
 
 ## Selecting a region
 
@@ -25,7 +38,15 @@ team's deployments at this time.
 [Visit the team settings page](https://dashboard.convex.dev/team/settings) to
 change your team's default region.
 
-CLI support for selecting a region for new deployments is coming soon.
+You can also select a region from the CLI when creating a deployment:
+
+```sh
+npx convex deployment create my-deployment --type prod --region aws-ap-southeast-2
+```
+
+Omit `--region` to be prompted, or to use your team's default region if one is
+set. `us` and `eu` are accepted as shorthand for `aws-us-east-1` and
+`aws-eu-west-1`.
 
 ## Migrating between regions
 

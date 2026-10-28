@@ -4,12 +4,12 @@ import udfs from "@common/udfs";
 import {
   DeploymentInfo,
   DeploymentInfoContext,
+  PermissionsContext,
 } from "@common/lib/deploymentContext";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { Loading } from "@ui/Loading";
-import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import {
-  QuestionMarkCircledIcon,
   CheckIcon,
   ExclamationTriangleIcon,
   Cross2Icon,
@@ -17,6 +17,7 @@ import {
 } from "@radix-ui/react-icons";
 import { CopyTextButton } from "@common/elements/CopyTextButton";
 import { EnvironmentVariable } from "system-udfs/convex/_system/frontend/common";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
 import { Callout } from "@ui/Callout";
 import { Button } from "@ui/Button";
 import { Combobox } from "@ui/Combobox";
@@ -89,11 +90,17 @@ function getWorkOSNotSupportedReason(
   return undefined;
 }
 
-function useRelevantEnvVars() {
+function useRelevantEnvVars(): {
+  canViewEnv: boolean;
+  workosEnvVars: WorkOSEnvVars | null;
+} {
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canViewEnv = useIsOperationAllowed("ViewEnvironmentVariables");
+
   // Fetch deployment-level environment variables
   const environmentVariables: undefined | Array<EnvironmentVariable> = useQuery(
     udfs.listEnvironmentVariables.default,
-    {},
+    canViewEnv ? {} : "skip",
   );
 
   // Extract WorkOS environment variables
@@ -117,7 +124,7 @@ function useRelevantEnvVars() {
     };
   }, [environmentVariables]);
 
-  return workosEnvVars;
+  return { canViewEnv, workosEnvVars };
 }
 
 function InviteTeamMemberSection({
@@ -317,11 +324,7 @@ function ProvisionWorkOSTeamSection({
       <div className="flex flex-col gap-2">
         <p className="text-sm text-content-secondary">
           Create a WorkOS team for this team to let Convex to create new{" "}
-          <Link
-            href="https://workos.com/docs/authkit/authkit"
-            className="text-content-link hover:underline"
-            target="_blank"
-          >
+          <Link href="https://workos.com/docs/authkit/authkit" target="_blank">
             AuthKit
           </Link>{" "}
           environments in that WorkOS workspace.
@@ -331,7 +334,6 @@ function ProvisionWorkOSTeamSection({
             You can also use AuthKit without creating a new WorkOS team by{" "}
             <Link
               href="https://workos.com/docs/authkit/authkit"
-              className="text-content-link hover:underline"
               target="_blank"
             >
               configuring it manually
@@ -434,11 +436,7 @@ function ProvisionWorkOSTeamSection({
 
       <p className="text-xs text-content-tertiary">
         Need to use a different email?{" "}
-        <Link
-          href="/profile"
-          className="text-content-link hover:underline"
-          target="_blank"
-        >
+        <Link href="/profile" target="_blank">
           Add and verify an email in your profile
         </Link>
       </p>
@@ -549,10 +547,9 @@ function WorkOSTeamSection({
                 </li>
                 <li>Create an AuthKit environment for your deployment above</li>
                 <li>
-                  Add an <code>authKit</code> section to your project's
+                  Add an <code>authKit</code> section to your project's{" "}
                   <Link
                     href="https://docs.convex.dev/auth/authkit/auto-provision"
-                    className="text-content-link hover:underline"
                     target="_blank"
                   >
                     convex.json
@@ -566,13 +563,15 @@ function WorkOSTeamSection({
                 </li>
               </ol>
             </div>
-            <Button
-              size="xs"
-              variant="neutral"
-              onClick={() => setShowSuccessMessage(false)}
-            >
-              Dismiss
-            </Button>
+            <div>
+              <Button
+                size="xs"
+                variant="neutral"
+                onClick={() => setShowSuccessMessage(false)}
+              >
+                Dismiss
+              </Button>
+            </div>
           </div>
         </Callout>
       )}
@@ -581,27 +580,23 @@ function WorkOSTeamSection({
         <p className="text-sm text-content-primary">
           <span className="inline-flex items-center gap-1">
             <span className="font-mono">{workosTeam.workosTeamName}</span>
-            <Tooltip
-              tip={
-                <div className="flex flex-col gap-2">
-                  <div>
-                    <div className="text-xs font-semibold">WorkOS Team ID</div>
-                    <CopyTextButton
-                      text={workosTeam.workosTeamId}
-                      className="font-mono text-xs"
-                    />
-                  </div>
-                  <div>
-                    <div className="text-xs font-semibold">Admin Email</div>
-                    <div className="font-mono text-xs">
-                      {workosTeam.workosAdminEmail}
-                    </div>
+            <HelpTooltip>
+              <div className="flex flex-col gap-2">
+                <div>
+                  <div className="text-xs font-semibold">WorkOS Team ID</div>
+                  <CopyTextButton
+                    text={workosTeam.workosTeamId}
+                    className="font-mono text-xs"
+                  />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold">Admin Email</div>
+                  <div className="font-mono text-xs">
+                    {workosTeam.workosAdminEmail}
                   </div>
                 </div>
-              }
-            >
-              <QuestionMarkCircledIcon className="inline text-content-tertiary" />
-            </Tooltip>
+              </div>
+            </HelpTooltip>
           </span>
         </p>
 
@@ -610,12 +605,24 @@ function WorkOSTeamSection({
             <>
               {teamInfo ? (
                 <span className="inline-flex items-center gap-1 text-content-secondary">
-                  <CheckIcon className="h-4 w-4" /> Convex has access to this
+                  <CheckIcon className="size-4" /> Convex has access to this
                   WorkOS workspace{" "}
+                </span>
+              ) : teamHealthData.error?.code === "WorkOSTeamNotFound" ? (
+                <span className="inline-flex items-center gap-1 text-content-warning">
+                  <ExclamationTriangleIcon className="size-4" />
+                  This WorkOS team could not be found. Did you delete it? You
+                  may want to click on “Disconnect Workspace”.
+                </span>
+              ) : teamHealthData.error?.code === "WorkOSTeamDeleted" ? (
+                <span className="inline-flex items-center gap-1 text-content-warning">
+                  <ExclamationTriangleIcon className="size-4" />
+                  This WorkOS team has been deleted. If you want to use WorkOS,
+                  click on “Disconnect Workspace”.
                 </span>
               ) : teamHealthData.error?.code === "WorkOSAPIUnavailable" ? (
                 <span className="inline-flex items-center gap-1 text-content-warning">
-                  <ExclamationTriangleIcon className="h-4 w-4" /> WorkOS API
+                  <ExclamationTriangleIcon className="size-4" /> WorkOS API
                   currently unavailable
                 </span>
               ) : !teamHealthData.error && !teamHealthData.data ? (
@@ -624,7 +631,7 @@ function WorkOSTeamSection({
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 text-content-warning">
-                  <ExclamationTriangleIcon className="h-4 w-4" /> Unable to
+                  <ExclamationTriangleIcon className="size-4" /> Unable to
                   verify workspace
                 </span>
               )}
@@ -637,20 +644,19 @@ function WorkOSTeamSection({
           ) : teamInfo ? (
             canProvisionProduction ? (
               <span className="inline-flex items-center gap-1 text-content-secondary">
-                <CheckIcon className="h-4 w-4" /> Payment method configured
+                <CheckIcon className="size-4" /> Payment method configured
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-content-secondary">
-                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 text-content-warning" />
+                <ExclamationTriangleIcon className="size-4 shrink-0 text-content-warning" />
                 <span>
-                  <a
+                  <Link
                     href="https://dashboard.workos.com/settings/billing"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-content-link hover:underline"
                   >
                     Add payment method in WorkOS
-                  </a>{" "}
+                  </Link>{" "}
                   to provision production AuthKit environments.
                 </span>
               </span>
@@ -730,6 +736,7 @@ function ConsolidatedEnvironmentSection({
   notSupportedReason,
   envVarsLink,
   workosEnvVars,
+  canViewEnv,
   deploymentName,
   deployment,
   canProvisionProduction,
@@ -748,6 +755,7 @@ function ConsolidatedEnvironmentSection({
   notSupportedReason: string | undefined;
   envVarsLink?: string;
   workosEnvVars: WorkOSEnvVars;
+  canViewEnv: boolean;
   deploymentName?: string;
   deployment: ReturnType<DeploymentInfo["useCurrentDeployment"]>;
   canProvisionProduction: boolean;
@@ -996,14 +1004,13 @@ function ConsolidatedEnvironmentSection({
                 <span>{environment.workosEnvironmentName}</span>
                 <WorkOSEnvironmentInfo environment={environment} />
               </span>{" "}
-              <a
+              <Link
                 href={`https://dashboard.workos.com/${environment.workosEnvironmentId}/authentication`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-content-link hover:underline"
               >
                 View in WorkOS
-              </a>
+              </Link>
             </p>
           </div>
 
@@ -1012,18 +1019,18 @@ function ConsolidatedEnvironmentSection({
               <>
                 {envHealthData.data ? (
                   <span className="inline-flex items-center gap-1 text-content-secondary">
-                    <CheckIcon className="h-4 w-4" /> Convex has access to this
+                    <CheckIcon className="size-4" /> Convex has access to this
                     environment
                   </span>
                 ) : envHealthData.error?.code ===
                   "WorkOSEnvironmentNotFound" ? (
                   <span className="inline-flex items-center gap-1 text-content-error">
-                    <Cross2Icon className="h-4 w-4" /> Environment not found in
+                    <Cross2Icon className="size-4" /> Environment not found in
                     WorkOS (may have been deleted)
                   </span>
                 ) : envHealthData.error?.code === "WorkOSAPIUnavailable" ? (
                   <span className="inline-flex items-center gap-1 text-content-warning">
-                    <ExclamationTriangleIcon className="h-4 w-4" /> WorkOS API
+                    <ExclamationTriangleIcon className="size-4" /> WorkOS API
                     currently unavailable
                   </span>
                 ) : !envHealthData.error ? (
@@ -1032,7 +1039,7 @@ function ConsolidatedEnvironmentSection({
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-content-warning">
-                    <ExclamationTriangleIcon className="h-4 w-4" /> Unable to
+                    <ExclamationTriangleIcon className="size-4" /> Unable to
                     verify environment
                   </span>
                 )}
@@ -1040,18 +1047,32 @@ function ConsolidatedEnvironmentSection({
             )}
             {teamMismatch ? (
               <span className="inline-flex items-center gap-1 text-content-warning">
-                <ExclamationTriangleIcon className="h-4 w-4" /> Created for a
+                <ExclamationTriangleIcon className="size-4" /> Created for a
                 different workspace than{" "}
                 <span className="font-mono">{workosTeam?.workosTeamName}</span>
               </span>
             ) : workosTeam ? (
               <span className="inline-flex items-center gap-1 text-content-secondary">
-                <CheckIcon className="h-4 w-4" /> Created by WorkOS workspace
+                <CheckIcon className="size-4" /> Created by WorkOS workspace
                 linked to this Convex team,{" "}
                 <span className="font-mono">{workosTeam.workosTeamName}</span>
               </span>
             ) : null}
             {(() => {
+              if (!canViewEnv) {
+                return (
+                  <div className="flex gap-1 text-xs text-content-secondary">
+                    Environment variable status unknown{" "}
+                    <HelpTooltip>
+                      <PermissionDeniedTip
+                        message="You must be able to view environment variables to check environment variable configuration"
+                        action="deployment:env:view"
+                      />
+                    </HelpTooltip>
+                  </div>
+                );
+              }
+
               const changes: EnvVarChange[] = [];
 
               if (clientIdMissing || clientIdMismatch) {
@@ -1084,7 +1105,7 @@ function ConsolidatedEnvironmentSection({
               if (changes.length === 0) {
                 return (
                   <span className="inline-flex items-center gap-1 text-content-secondary">
-                    <CheckIcon className="h-4 w-4" />
+                    <CheckIcon className="size-4" />
                     <code>WORKOS_*</code> environment variables match the values
                     for the provisioned environment
                   </span>
@@ -1095,7 +1116,7 @@ function ConsolidatedEnvironmentSection({
               return (
                 <div className="flex flex-col gap-2">
                   <span className="inline-flex items-center gap-1 text-content-warning">
-                    <ExclamationTriangleIcon className="h-4 w-4" />
+                    <ExclamationTriangleIcon className="size-4" />
                     Environment variables need to be configured
                   </span>
 
@@ -1136,7 +1157,7 @@ function ConsolidatedEnvironmentSection({
                             target="_blank"
                           >
                             Configure Manually
-                            <ExternalLinkIcon className="ml-1 h-3 w-3" />
+                            <ExternalLinkIcon className="ml-1 size-3" />
                           </Button>
                         )}
                       </div>
@@ -1262,19 +1283,19 @@ function ConsolidatedEnvironmentSection({
           </p>
           <div className="flex flex-col gap-1 text-xs">
             <span className="inline-flex items-center gap-1 text-content-secondary">
-              <CheckIcon className="h-4 w-4" />
+              <CheckIcon className="size-4" />
               <code>WORKOS_CLIENT_ID</code> is set to a shared AuthKit
               environment for this project
             </span>
             {workosEnvVars.apiKey ? (
               <span className="inline-flex items-center gap-1 text-content-secondary">
-                <CheckIcon className="h-4 w-4" />
+                <CheckIcon className="size-4" />
                 <code>WORKOS_API_KEY</code> is set so <code>authKit</code>{" "}
                 properties in convex.json will be configured by the Convex CLI
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-content-warning">
-                <ExclamationTriangleIcon className="h-4 w-4" />
+                <ExclamationTriangleIcon className="size-4" />
                 <code>WORKOS_API_KEY</code> is not set - automatic configuration
                 via convex.json will not work
               </span>
@@ -1294,7 +1315,6 @@ function ConsolidatedEnvironmentSection({
               <code>redirectUris</code> in{" "}
               <Link
                 href="https://docs.convex.dev/auth/authkit/auto-provision"
-                className="text-content-link hover:underline"
                 target="_blank"
               >
                 convex.json
@@ -1316,17 +1336,12 @@ function ConsolidatedEnvironmentSection({
             <p className="text-sm">{notSupportedReason}</p>
             <p className="text-sm">
               You can{" "}
-              <Link
-                href="https://docs.convex.dev/auth/authkit"
-                className="text-content-link hover:underline"
-                target="_blank"
-              >
+              <Link href="https://docs.convex.dev/auth/authkit" target="_blank">
                 configure WorkOS AuthKit manually
               </Link>{" "}
               by setting{" "}
               <Link
                 href={`${envVarsLink}?var=WORKOS_CLIENT_ID&var=WORKOS_API_KEY`}
-                className="text-content-link hover:underline"
               >
                 environment variables
               </Link>
@@ -1422,7 +1437,6 @@ function ModalFooter() {
     <p className="text-sm text-content-primary">
       <Link
         href="https://docs.convex.dev/auth/authkit/auto-provision"
-        className="text-content-link hover:underline"
         target="_blank"
       >
         Learn more about automatic creation of WorkOS environments
@@ -1449,9 +1463,8 @@ export function WorkOSConfigurationForm() {
   const deployment = useCurrentDeployment();
   const team = useCurrentTeam();
   const project = useCurrentProject();
-  const workosData = workOSOperations.useDeploymentWorkOSEnvironment(
-    deployment?.name,
-  );
+  const { data: workosData, error: workosError } =
+    workOSOperations.useDeploymentWorkOSEnvironment(deployment?.name);
   const teamHealthData = workOSOperations.useWorkOSTeamHealth(
     team?.id?.toString(),
   );
@@ -1461,14 +1474,29 @@ export function WorkOSConfigurationForm() {
   ) as ProjectEnvironment[] | undefined;
   const notSupportedReason = getWorkOSNotSupportedReason(deployment);
 
-  const workosEnvVars = useRelevantEnvVars();
+  const { canViewEnv, workosEnvVars } = useRelevantEnvVars();
 
   const envVarsLink =
     team && project && deployment
       ? `${deploymentsURI}/settings/environment-variables`
       : undefined;
 
-  if (!workosData || !workosEnvVars) {
+  if (workosError) {
+    const { message } = getErrorInfo(workosError);
+    return (
+      <div className="flex flex-col gap-4">
+        <Callout variant="error">
+          <p className="text-xs">
+            {message ||
+              "Failed to load WorkOS configuration. Please try again."}
+          </p>
+        </Callout>
+        <ModalFooter />
+      </div>
+    );
+  }
+
+  if (!workosData || (canViewEnv && !workosEnvVars)) {
     return (
       <div className="flex h-32 items-center justify-center">
         <Loading />
@@ -1477,6 +1505,11 @@ export function WorkOSConfigurationForm() {
   }
 
   const { workosTeam, environment } = workosData;
+  const resolvedEnvVars: WorkOSEnvVars = workosEnvVars ?? {
+    clientId: null,
+    environmentId: null,
+    apiKey: null,
+  };
   const hasTeam = workosTeam !== null && workosTeam !== undefined;
   const teamInfo = teamHealthData?.data?.teamProvisioned
     ? teamHealthData.data.teamInfo
@@ -1485,7 +1518,7 @@ export function WorkOSConfigurationForm() {
 
   // Hide everything if there's no team, no environment, and no config
   const showAnySections =
-    hasTeam || environment !== null || workosEnvVars.clientId !== null;
+    hasTeam || environment !== null || resolvedEnvVars.clientId !== null;
 
   if (!showAnySections) {
     // Only show workspace section
@@ -1501,7 +1534,7 @@ export function WorkOSConfigurationForm() {
             teamId={team?.id}
             showCongratulations={showTeamCreatedSuccess}
             onTeamCreated={handleTeamCreated}
-            hasClientIdConfigured={!!workosEnvVars.clientId}
+            hasClientIdConfigured={!!resolvedEnvVars.clientId}
           />
         </div>
         <ModalFooter />
@@ -1523,7 +1556,8 @@ export function WorkOSConfigurationForm() {
           hasTeam={hasTeam}
           notSupportedReason={notSupportedReason}
           envVarsLink={envVarsLink}
-          workosEnvVars={workosEnvVars}
+          workosEnvVars={resolvedEnvVars}
+          canViewEnv={canViewEnv}
           deploymentName={deployment?.name}
           deployment={deployment}
           canProvisionProduction={canProvisionProduction}
@@ -1536,7 +1570,7 @@ export function WorkOSConfigurationForm() {
         <WorkOSProjectEnvironments
           projectId={deployment.projectId}
           deploymentType={deployment?.deploymentType}
-          workosClientId={workosEnvVars.clientId}
+          workosClientId={resolvedEnvVars.clientId}
           hasLinkedWorkspace={!!workosTeam}
         />
       )}
@@ -1553,7 +1587,7 @@ export function WorkOSConfigurationForm() {
           teamId={team?.id}
           showCongratulations={showTeamCreatedSuccess}
           onTeamCreated={handleTeamCreated}
-          hasClientIdConfigured={!!workosEnvVars.clientId}
+          hasClientIdConfigured={!!resolvedEnvVars.clientId}
         />
       </div>
 

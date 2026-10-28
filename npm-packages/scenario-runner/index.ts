@@ -10,11 +10,12 @@ import { Config, ProvisionerInfo, Scenario } from "./scenario.js";
 import { Search } from "./scenarios/search.js";
 import { VectorSearch } from "./scenarios/vector_search.js";
 import { ConvexClient } from "convex/browser";
-import { ScenarioMessage } from "./types.js";
+import { CLOSE_TIMEOUT, ScenarioMessage, ScenarioSpec } from "./types.js";
 import { RunHttpAction } from "./scenarios/run_http_action.js";
 import dns from "node:dns";
 import { ManyIntersections } from "./scenarios/many_intersections.js";
 import { HoldSubscriptions } from "./scenarios/hold_subscriptions.js";
+import { runAtRate, runScenarioOnce, validateRate } from "./runner.js";
 
 Sentry.init({
   tracesSampleRate: 0.1,
@@ -34,6 +35,12 @@ async function main(
   accessToken: string | undefined,
   scenarios: ScenarioMessage[],
 ) {
+  for (const { rate } of scenarios) {
+    if (rate !== null) {
+      validateRate(rate);
+    }
+  }
+
   console.log(`ScenarioRunner is running! ${deploymentUrl}.`);
   const ws = new WebSocket(`ws://127.0.0.1:${lgPort}/sync`);
 
@@ -98,124 +105,116 @@ async function getProvisionerInfo(
   };
 }
 
-async function runScenario(
+/**
+ * `client.close()` resolves only when the WebSocket `onclose` event fires. On a
+ * half-open / wedged connection (e.g. after the backend closes with 1011
+ * InternalServerError, or the WS upgrade fails with a non-101 status) that event
+ * may never arrive, so an un-bounded `await client.close()` can hang the scenario
+ * loop forever -- silently halting all throughput for the scenario until the
+ * process restarts. Bound it so a stuck close just moves on.
+ */
+async function closeWithTimeout(client: ConvexClient) {
+  await Promise.race([
+    client.close(),
+    new Promise<void>((resolve) => setTimeout(resolve, CLOSE_TIMEOUT)),
+  ]);
+}
+
+function createScenario(
   config: Config,
-  scenarioMessage: ScenarioMessage,
+  scenarioSpec: ScenarioSpec,
   adminKey: string,
-) {
-  let scenario: Scenario | undefined;
-  const scenarioSpec = scenarioMessage.scenario;
-  console.log(`Running scenario: ${scenarioSpec.name}`);
+): Scenario {
   switch (scenarioSpec.name) {
     case "RunFunction":
-      scenario = new RunFunction(
-        config,
-        scenarioSpec.path,
-        scenarioSpec.fn_type,
-      );
-      break;
+      return new RunFunction(config, scenarioSpec.path, scenarioSpec.fn_type);
     case "ObserveInsert":
-      scenario = new ObserveInsert(config, scenarioSpec.search_indexes);
-      break;
+      return new ObserveInsert(config, scenarioSpec.search_indexes);
     case "ManyIntersections":
-      scenario = new ManyIntersections(config, scenarioSpec.num_subscriptions);
-      break;
+      return new ManyIntersections(config, scenarioSpec.num_subscriptions);
     case "HoldSubscriptions":
-      scenario = new HoldSubscriptions(
+      return new HoldSubscriptions(
         config,
         scenarioSpec.num_subscriptions,
         scenarioSpec.hold_duration_secs,
         scenarioSpec.invalidation_interval_secs,
         scenarioSpec.num_invalidations,
       );
-      break;
     case "SnapshotExport":
-      scenario = new SnapshotExport(config, adminKey);
-      break;
+      return new SnapshotExport(config, adminKey);
     case "CloudBackup":
-      scenario = new CloudBackup(config);
-      break;
+      return new CloudBackup(config);
     case "Search":
-      scenario = new Search(config);
-      break;
+      return new Search(config);
     case "VectorSearch":
-      scenario = new VectorSearch(config);
-      break;
+      return new VectorSearch(config);
     case "RunHttpAction":
-      scenario = new RunHttpAction(
-        config,
-        scenarioSpec.path,
-        scenarioSpec.method,
-      );
-      break;
+      return new RunHttpAction(config, scenarioSpec.path, scenarioSpec.method);
     default: {
       scenarioSpec satisfies never;
-      throw new Error(`Invalid scenario: ${scenarioMessage}`);
+      throw new Error(`Invalid scenario: ${scenarioSpec}`);
     }
   }
-  if (scenario) {
-    const client = new ConvexClient(config.deploymentUrl);
-    const runScenario = async () => {
-      const client = new ConvexClient(config.deploymentUrl);
-      await scenario!.run(client);
-      await client.close();
-    };
-    const rate = scenarioMessage.rate;
-    const handleError = (err: Error) => {
-      scenario!.sendDefaultError(err);
-      Sentry.captureException(err);
-      console.error(
-        `Failed to run scenario ${scenario!.name} with error: ${err}`,
-      );
-    };
-    try {
-      if (rate === null) {
-        // Benchmark mode
-        const numThreads = scenarioMessage.threads || 1; // Default to 1 thread if not specified
+}
 
-        // Create the specified number of threads
-        const threads = Array.from({ length: numThreads }, () => {
-          const client = new ConvexClient(config.deploymentUrl);
-          return (async () => {
-            // Each thread runs scenarios in a loop
-            for (;;) {
-              await scenario!.run(client).catch((err) => handleError(err));
-              scenario!.cleanUp();
-            }
-          })();
-        });
-
-        // Wait for all threads (they'll run until the process is terminated)
-        await Promise.all(threads);
-      } else {
-        if (rate === 0) {
-          return;
-        }
-        for (;;) {
-          const averageDelay = 1000 / rate;
-          const delayMax = 2 * averageDelay;
-          const actualDelay = Math.random() * delayMax;
-          await Promise.all([
-            new Promise((resolve) => setTimeout(resolve, actualDelay)),
-            runScenario(),
-          ]).catch((err) => handleError(err));
-          scenario.cleanUp();
-        }
-      }
-    } catch (err) {
-      Sentry.captureException(err);
-      console.error(
-        `Failed to run scenario ${scenario} in a loop with error: ${err}`,
-      );
-    } finally {
-      scenario.cleanUp();
-      await client.close();
-    }
-  } else {
+async function runScenario(
+  config: Config,
+  scenarioMessage: ScenarioMessage,
+  adminKey: string,
+) {
+  const scenarioSpec = scenarioMessage.scenario;
+  console.log(`Running scenario: ${scenarioSpec.name}`);
+  const createScenarioInstance = () =>
+    createScenario(config, scenarioSpec, adminKey);
+  const scenarioName = createScenarioInstance().name;
+  const handleError = (scenario: Scenario, error: unknown) => {
+    scenario.sendDefaultError(error);
+    Sentry.captureException(error);
     console.error(
-      `Received invalid message: ${scenarioSpec.name}. Messages must be a Scenario.`,
+      `Failed to run scenario ${scenario.name} with error: ${error}`,
     );
+  };
+
+  if (scenarioMessage.rate === null) {
+    const numThreads = scenarioMessage.threads || 1;
+    const threads = Array.from({ length: numThreads }, async () => {
+      const client = new ConvexClient(config.deploymentUrl);
+      try {
+        for (;;) {
+          await runScenarioOnce(createScenarioInstance, client, handleError);
+        }
+      } finally {
+        await closeWithTimeout(client);
+      }
+    });
+    await Promise.all(threads);
+    return;
   }
+
+  const rate = scenarioMessage.rate;
+  await runAtRate({
+    rate,
+    run: async () => {
+      const client = new ConvexClient(config.deploymentUrl);
+      try {
+        await runScenarioOnce(createScenarioInstance, client, handleError);
+      } finally {
+        await closeWithTimeout(client);
+      }
+    },
+    onError: (error) => {
+      Sentry.captureException(error);
+      console.error(
+        `Failed to run scenario ${scenarioName} with error: ${error}`,
+      );
+    },
+    onReport: ({ issued, missed, inFlight }) => {
+      console.log(
+        `rate scenario ${scenarioName}: issued=${issued} missed=${missed} ` +
+          `inFlight=${inFlight} target=${rate}/s`,
+      );
+    },
+  });
 }
 
 const program = new Command();

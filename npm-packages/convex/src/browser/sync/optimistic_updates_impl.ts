@@ -1,9 +1,10 @@
 import {
   FunctionArgs,
-  FunctionReference,
   FunctionReturnType,
   OptionalRestArgs,
   getFunctionName,
+  FunctionReference,
+  FunctionReference_future,
 } from "../../server/api.js";
 import { parseArgs } from "../../common/index.js";
 import { Value } from "../../values/index.js";
@@ -40,7 +41,11 @@ class OptimisticLocalStoreImpl implements OptimisticLocalStore {
     this.modifiedQueries = [];
   }
 
-  getQuery<Query extends FunctionReference<"query">>(
+  getQuery<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
     ...args: OptionalRestArgs<Query>
   ): undefined | FunctionReturnType<Query> {
@@ -55,7 +60,11 @@ class OptimisticLocalStoreImpl implements OptimisticLocalStore {
     return OptimisticLocalStoreImpl.queryValue(queryResult.result);
   }
 
-  getAllQueries<Query extends FunctionReference<"query">>(
+  getAllQueries<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
   ): {
     args: FunctionArgs<Query>;
@@ -77,7 +86,11 @@ class OptimisticLocalStoreImpl implements OptimisticLocalStore {
     return queriesWithName;
   }
 
-  setQuery<QueryReference extends FunctionReference<"query">>(
+  setQuery<
+    QueryReference extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     queryReference: QueryReference,
     args: FunctionArgs<QueryReference>,
     value: undefined | FunctionReturnType<QueryReference>,

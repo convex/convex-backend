@@ -8,7 +8,11 @@ import {
   showSpinner,
 } from "../../bundler/log.js";
 import { spawnSync } from "child_process";
-import { deploymentFetch, logAndHandleFetchError } from "./utils/utils.js";
+import {
+  deploymentFetch,
+  logAndHandleFetchError,
+  typedDeploymentClient,
+} from "./utils/utils.js";
 import {
   EvaluatePushResponse,
   evaluatePushResponse,
@@ -18,6 +22,10 @@ import {
   startPushResponse,
   StartPushResponse,
 } from "./deployApi/startPush.js";
+import {
+  EvaluateSchemaResponse,
+  evaluateSchemaResponse,
+} from "./deployApi/evaluateSchema.js";
 import {
   AppDefinitionConfig,
   ComponentDefinitionConfig,
@@ -31,7 +39,6 @@ import { PushOptions } from "./components.js";
 import { DeploymentType } from "./api.js";
 import { runPush } from "./components.js";
 import { suggestedEnvVarNames } from "./envvars.js";
-import { runSystemQuery } from "./run.js";
 import {
   handlePushConfigError,
   readProjectConfig,
@@ -40,7 +47,6 @@ import {
 import { deploymentDashboardUrlPage } from "./dashboard.js";
 import { addProgressLinkIfSlow } from "./indexes.js";
 import { ensureAuthKitProvisionedBeforeBuild } from "./workos/workos.js";
-import { fetchDeploymentCanonicalSiteUrl } from "./env.js";
 
 const brotli = promisify(zlib.brotliCompress);
 
@@ -101,6 +107,35 @@ export async function evaluatePush(
   return evaluatePushResponse.parse(response);
 }
 
+export async function evaluateSchema(
+  ctx: Context,
+  span: Span,
+  request: StartPushRequest,
+  options: {
+    url: string;
+    deploymentName: string | null;
+    deploymentType?: DeploymentType;
+  },
+  // When set, a failed evaluation throws the raw error instead of crashing
+  // the process, so best-effort callers (e.g. advisory checks) can recover.
+  bestEffort?: boolean,
+): Promise<EvaluateSchemaResponse> {
+  const response = await pushCode(
+    ctx,
+    span,
+    request,
+    options,
+    "/api/deploy2/evaluate_schema",
+    bestEffort,
+  );
+  return evaluateSchemaResponse.parse(response);
+}
+
+// Retries for best-effort requests, where a transient failure should be
+// ridden out if possible but the command proceeds without the result
+// otherwise.
+const BEST_EFFORT_RETRIES = 5;
+
 async function pushCode(
   ctx: Context,
   span: Span,
@@ -110,7 +145,11 @@ async function pushCode(
     deploymentName: string | null;
     deploymentType?: DeploymentType;
   },
-  endpoint: "/api/deploy2/start_push" | "/api/deploy2/evaluate_push",
+  endpoint:
+    | "/api/deploy2/start_push"
+    | "/api/deploy2/evaluate_push"
+    | "/api/deploy2/evaluate_schema",
+  bestEffort?: boolean,
 ): Promise<unknown> {
   // Log a summary of the push request instead of the full object
   const unchangedModuleCount =
@@ -134,6 +173,18 @@ async function pushCode(
     deploymentUrl: options.url,
     adminKey: request.adminKey,
     onError,
+    // Best-effort callers tolerate failure, so retry only plausibly
+    // transient conditions — network errors and 5xx responses (e.g. table
+    // summaries still bootstrapping) — and fail fast on everything else,
+    // like a 404 from a deployment whose backend doesn't yet expose the
+    // endpoint.
+    ...(bestEffort
+      ? {
+          maxRetries: BEST_EFFORT_RETRIES,
+          shouldRetry: (error: Error | null, response: Response | null) =>
+            error !== null || (response !== null && response.status >= 500),
+        }
+      : {}),
   });
   try {
     const response = await fetch(endpoint, {
@@ -147,6 +198,11 @@ async function pushCode(
     });
     return await response.json();
   } catch (error: unknown) {
+    if (bestEffort) {
+      // The caller handles this itself instead of crashing the process.
+      // eslint-disable-next-line no-restricted-syntax
+      throw error;
+    }
     return await handlePushConfigError(
       ctx,
       error,
@@ -301,6 +357,7 @@ export async function finishPush(
     verbose?: boolean;
     deploymentName: string | null;
     deploymentType?: DeploymentType;
+    message: string | null;
   },
 ): Promise<FinishPushDiff> {
   changeSpinner("Finalizing push...");
@@ -312,6 +369,7 @@ export async function finishPush(
     adminKey: options.adminKey,
     startPush,
     dryRun: options.dryRun,
+    message: options.message,
   };
   try {
     const response = await fetch("/api/deploy2/finish_push", {
@@ -399,7 +457,10 @@ export async function deployToDeployment(
     writePushRequest?: string | undefined;
     liveComponentSources?: boolean | undefined;
     skipWorkosCheck?: boolean | undefined;
+    skipLargeIndexesCheck: boolean;
     allowDeletingLargeIndexes: boolean;
+    allowUnstagingSchema: boolean;
+    message: string | null;
   },
 ) {
   const { url, adminKey } = credentials;
@@ -445,9 +506,18 @@ export async function deployToDeployment(
     writePushRequest: options.writePushRequest,
     liveComponentSources: !!options.liveComponentSources,
     pushAllModules: !!options.pushAllModules,
-    largeIndexDeletionCheck: options.allowDeletingLargeIndexes
+    largeIndexDeletionCheck:
+      options.skipLargeIndexesCheck || options.allowDeletingLargeIndexes
+        ? "has confirmation"
+        : "ask for confirmation",
+    largeIndexBackfillCheck: options.skipLargeIndexesCheck
       ? "has confirmation"
       : "ask for confirmation",
+    stagedValidatorDeletionCheck: options.allowUnstagingSchema
+      ? "has confirmation"
+      : "ask for confirmation",
+    warnOnSlowSchemaValidation: true,
+    message: options.message,
   };
   showSpinner(`Deploying to ${url}...${options.dryRun ? " [dry run]" : ""}`);
   await runPush(ctx, pushOptions);
@@ -485,14 +555,10 @@ export async function runCommand(
       deploymentUrl: options.url,
       adminKey: options.adminKey,
     };
-    const canonicalCloudUrl = await fetchDeploymentCanonicalCloudUrl(
-      ctx,
-      deployment,
-    );
-    const canonicalSiteUrl = await fetchDeploymentCanonicalSiteUrl(
-      ctx,
-      deployment,
-    );
+    const {
+      convexCloudUrl: canonicalCloudUrl,
+      convexSiteUrl: canonicalSiteUrl,
+    } = await fetchDeploymentCanonicalUrls(ctx, deployment);
 
     const env = { ...process.env };
     env[urlVar] = canonicalCloudUrl;
@@ -517,22 +583,11 @@ export async function runCommand(
   );
 }
 
-export async function fetchDeploymentCanonicalCloudUrl(
+export async function fetchDeploymentCanonicalUrls(
   ctx: Context,
   options: { deploymentUrl: string; adminKey: string },
-): Promise<string> {
-  const result = await runSystemQuery(ctx, {
-    ...options,
-    functionName: "_system/cli/convexUrl:cloudUrl",
-    componentPath: undefined,
-    args: {},
-  });
-  if (typeof result !== "string") {
-    return await ctx.crash({
-      exitCode: 1,
-      errorType: "invalid filesystem or env vars",
-      printedMessage: "Invalid process.env.CONVEX_CLOUD_URL",
-    });
-  }
-  return result;
+): Promise<{ convexCloudUrl: string; convexSiteUrl: string }> {
+  const client = typedDeploymentClient(ctx, options);
+  const result = await client.GET("/get_canonical_urls");
+  return result.data!;
 }

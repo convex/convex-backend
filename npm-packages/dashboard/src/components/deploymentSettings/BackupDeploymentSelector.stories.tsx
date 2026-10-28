@@ -1,11 +1,21 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { mocked, fn } from "storybook/test";
-import { TeamResponse, ProjectDetails, TeamMember } from "generatedApi";
+import React from "react";
+import { TeamResponse } from "generatedApi";
 import { useProfile } from "api/profile";
-import { useInfiniteProjects, useProjectById } from "api/projects";
+import {
+  useCurrentProject,
+  useInfiniteProjects,
+  useProjectById,
+} from "api/projects";
 import { useDeployments } from "api/deployments";
-import { useTeamMembers } from "api/teams";
-import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
+import { useCurrentTeam, useTeamMembers } from "api/teams";
+import { CommandPalette } from "elements/CommandPalette";
+import {
+  PlatformDeploymentResponse,
+  ProjectResponse,
+  TeamMember,
+} from "@convex-dev/platform/managementApi";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { BackupDeploymentSelector } from "./BackupDeploymentSelector";
 
@@ -19,22 +29,22 @@ const team: TeamResponse = {
   referredBy: null,
 };
 
-const mockProjects: ProjectDetails[] = [
+const mockProjects: ProjectResponse[] = [
   {
     id: 1,
     name: "Project Alpha",
     slug: "project-alpha",
     teamId: 1,
+    teamSlug: "test-team",
     createTime: Date.now() - 30 * 24 * 60 * 60 * 1000,
-    isDemo: false,
   },
   {
     id: 2,
     name: "Project Beta",
     slug: "project-beta",
     teamId: 1,
+    teamSlug: "test-team",
     createTime: Date.now() - 60 * 24 * 60 * 60 * 1000,
-    isDemo: false,
   },
 ];
 
@@ -44,18 +54,21 @@ const mockTeamMembers: TeamMember[] = [
     email: "test@example.com",
     name: "Test User",
     role: "admin",
+    customRoles: [],
   },
   {
     id: 2,
     email: "jane@example.com",
     name: "Jane Doe",
     role: "developer",
+    customRoles: [],
   },
   {
     id: 3,
     email: "bob@example.com",
     name: "Bob Smith",
     role: "developer",
+    customRoles: [],
   },
 ];
 
@@ -127,17 +140,68 @@ const mockDeployments: PlatformDeploymentResponse[] = [
   }),
 ];
 
+// The selector opens the palette anchored beneath its trigger, so a story
+// needs the palette mounted alongside it. It's also controlled, so the story
+// holds the choice the way the backup list does and the trigger updates when
+// you pick something.
+function BackupDeploymentSelectorHarness({
+  selectedDeployment,
+  onChange,
+  ...props
+}: React.ComponentProps<typeof BackupDeploymentSelector>) {
+  const [selected, setSelected] = useState(selectedDeployment);
+  useEffect(() => setSelected(selectedDeployment), [selectedDeployment]);
+  return (
+    <div className="border-b">
+      <BackupDeploymentSelector
+        {...props}
+        selectedDeployment={selected}
+        onChange={(deployment) => {
+          setSelected(deployment);
+          onChange(deployment);
+        }}
+      />
+      <CommandPalette />
+    </div>
+  );
+}
+
+const mockProfile = {
+  id: 1,
+  name: "Test User",
+  email: "test@example.com",
+};
+
 const meta = {
   component: BackupDeploymentSelector,
+  parameters: {
+    layout: "fullscreen",
+    // The anchored menu is a focus-trapping Radix dialog over an otherwise
+    // empty canvas, which trips the automated a11y checks meant for full pages.
+    a11y: { test: "todo" },
+    nextjs: {
+      router: {
+        pathname: "/t/[team]/[project]/[deploymentName]/settings/backups",
+        route: "/t/[team]/[project]/[deploymentName]/settings/backups",
+        asPath:
+          "/t/test-team/project-alpha/joyful-capybara-123/settings/backups",
+        query: {
+          team: "test-team",
+          project: "project-alpha",
+          deploymentName: "joyful-capybara-123",
+        },
+      },
+    },
+  },
+  render: (args) => <BackupDeploymentSelectorHarness {...args} />,
   beforeEach: () => {
-    mocked(useProfile).mockReturnValue({
-      id: 1,
-      name: "Test User",
-      email: "test@example.com",
-    });
+    mocked(useProfile).mockReturnValue(mockProfile);
+    mocked(useCurrentTeam).mockReturnValue(team);
+    mocked(useCurrentProject).mockReturnValue(mockProjects[0]);
     mocked(useInfiniteProjects).mockReturnValue({
       projects: mockProjects,
       isLoading: false,
+      isLoadingMore: false,
       hasMore: false,
       loadMore: fn(),
       debouncedQuery: "",
@@ -163,7 +227,6 @@ export const Default: Story = {
   args: {
     selectedDeployment: mockDeployments[0],
     targetDeployment: mockDeployments[0],
-    team,
     onChange: fn(),
   },
 };
@@ -172,7 +235,24 @@ export const DifferentDeploymentSelected: Story = {
   args: {
     selectedDeployment: mockDeployments[4], // Jane's dev deployment
     targetDeployment: mockDeployments[0],
-    team,
+    onChange: fn(),
+  },
+};
+
+// Deployments outside the target's region can't be restored from in the
+// dashboard, so the menu lists them disabled with an explanation.
+export const OtherRegionDeployments: Story = {
+  beforeEach: () => {
+    mocked(useDeployments).mockReturnValue({
+      deployments: mockDeployments.map((deployment, i) =>
+        i === 0 ? deployment : { ...deployment, region: "aws-eu-west-1" },
+      ),
+      isLoading: false,
+    });
+  },
+  args: {
+    selectedDeployment: mockDeployments[0],
+    targetDeployment: mockDeployments[0],
     onChange: fn(),
   },
 };
@@ -182,7 +262,7 @@ let lastId = 0;
 const generateManyProjects = (
   count: number,
   startOffset: number = 0,
-): ProjectDetails[] => {
+): ProjectResponse[] => {
   const projectNames = [
     "Analytics Dashboard",
     "User Authentication",
@@ -208,19 +288,17 @@ const generateManyProjects = (
       name: `${projectNames[index % projectNames.length]} ${Math.floor(index / projectNames.length) + 1}`,
       slug: `project-${lastId}`,
       teamId: 1,
+      teamSlug: "test-team",
       createTime: Date.now() - index * 24 * 60 * 60 * 1000,
-      isDemo: index % 10 === 0, // Every 10th project is a demo
     };
   });
 };
 
 export const ManyProjects: Story = {
   beforeEach: () => {
-    mocked(useProfile).mockReturnValue({
-      id: 1,
-      name: "Test User",
-      email: "test@example.com",
-    });
+    mocked(useProfile).mockReturnValue(mockProfile);
+    mocked(useCurrentTeam).mockReturnValue(team);
+    mocked(useCurrentProject).mockReturnValue(mockProjects[0]);
     mocked(useDeployments).mockReturnValue({
       deployments: mockDeployments,
       isLoading: false,
@@ -238,7 +316,7 @@ export const ManyProjects: Story = {
       const TOTAL_AVAILABLE = 200;
       const LOAD_DELAY_MS = 500;
 
-      const [data, setData] = useState<ProjectDetails[][]>(() => [
+      const [data, setData] = useState<ProjectResponse[][]>(() => [
         [
           // Include the project with the default deployment as the first item.
           mockProjects[0],
@@ -270,6 +348,7 @@ export const ManyProjects: Story = {
         mocked(useInfiniteProjects).mockReturnValue({
           projects: loadedProjects,
           isLoading: false,
+          isLoadingMore: isLoadingMore.current,
           hasMore,
           loadMore,
           debouncedQuery: "",
@@ -283,7 +362,6 @@ export const ManyProjects: Story = {
   args: {
     selectedDeployment: mockDeployments[0],
     targetDeployment: mockDeployments[0],
-    team,
     onChange: fn(),
   },
 };

@@ -4,15 +4,14 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from typing import Optional
 
 CLA_TEXT = "By submitting this pull request, I confirm that you can use, modify, copy, and redistribute this contribution, under the terms of your choice."
-ORGANIZATION = "get-convex"
+ORGANIZATION = "convex"
 
 
-def is_org_member(username: str, github_token: Optional[str]) -> Optional[bool]:
+def is_org_member(username: str, github_token: str | None) -> bool | None:
     """
-    Check if a user is a member of the get-convex GitHub organization.
+    Check if a user is a member of the convex GitHub organization.
     Returns True if the user is a confirmed member.
     Returns False if the user is not a member (404 response).
     Returns None if the check fails (network error, API error, etc.).
@@ -68,7 +67,7 @@ def main() -> None:
         print("❌ Error: PR_AUTHOR environment variable not set")
         sys.exit(1)
 
-    # Check if the author is a member of get-convex organization
+    # Check if the author is a member of convex organization
     member_status = is_org_member(PR_AUTHOR, GITHUB_TOKEN)
 
     if member_status is True:

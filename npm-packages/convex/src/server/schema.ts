@@ -42,13 +42,20 @@ import {
   SystemIndexes,
 } from "../server/system_fields.js";
 import { Expand } from "../type_utils.js";
+import { GenericId } from "../values/index.js";
 import {
   GenericValidator,
   ObjectType,
   isValidator,
   v,
 } from "../values/validator.js";
-import { VObject, Validator } from "../values/validators.js";
+import {
+  VFloat64,
+  VId,
+  VObject,
+  VUnion,
+  Validator,
+} from "../values/validators.js";
 
 /**
  * Extract all of the index field paths within a {@link Validator}.
@@ -197,6 +204,9 @@ export class TableDefinition<
   private stagedVectorIndexes: VectorIndex[];
   // The type of documents stored in this table.
   validator: DocumentType;
+  // The proposed next validator for this table, validated against existing
+  // documents in the background while `validator` remains enforced.
+  private stagedValidator: Validator<any, any, any> | undefined;
 
   /**
    * @internal
@@ -216,8 +226,6 @@ export class TableDefinition<
    *
    * Returns indexes defined on this table.
    * Intended for the advanced use cases of dynamically deciding which index to use for a query.
-   * If you think you need this, please chime in on ths issue in the Convex JS GitHub repo.
-   * https://github.com/get-convex/convex-js/issues/49
    */
   " indexes"(): { indexDescriptor: string; fields: string[] }[] {
     return this.indexes;
@@ -551,6 +559,67 @@ export class TableDefinition<
   }
 
   /**
+   * Stage changes to this table's document validator.
+   *
+   * Convex validates the staged validator against the table's existing
+   * documents in the background, while the validator passed to
+   * {@link defineTable} remains the one enforced on writes. Once
+   * the background validation succeeds, apply the staged changes
+   * and remove `.staged()`.
+   *
+   * For an object validator, pass only the fields to add or replace. Fields
+   * omitted from the changes keep their enforced validators.
+   * Set a field to `undefined` to remove it from the staged validator.
+   * For nested objects, you must specify the full object validator.
+   *
+   * ```ts
+   * defineTable({
+   *   apple: v.string(),
+   *   banana: v.number(),
+   *   legacy: v.optional(v.string()),
+   * }).staged({
+   *   banana: v.union(v.string(), v.number()),
+   *   legacy: undefined,
+   * })
+   * ```
+   *
+   * See [Staged validators](https://docs.convex.dev/database/schemas#staged-validators).
+   *
+   * @param documentSchema - Field changes for a table defined as an object or
+   * `v.any()`, or a full schema validator specifying the proposed next document
+   * type. Use a full schema validator for a table defined as a union.
+   * @returns A {@link TableDefinition} with the staged validator attached.
+   */
+  staged(
+    documentSchema:
+      | Validator<Record<string, any>, "required", any>
+      | Record<string, GenericValidator | undefined>,
+  ): TableDefinition<DocumentType, Indexes, SearchIndexes, VectorIndexes> {
+    if (this.stagedValidator !== undefined) {
+      throw new Error("Table cannot have more than one staged validator.");
+    }
+    if (isValidator(documentSchema)) {
+      this.stagedValidator = documentSchema;
+    } else {
+      if (this.validator.kind !== "object" && this.validator.kind !== "any") {
+        throw new Error(
+          "Specifying top-level field changes is only supported for simple table definitions. For a table defined with a union or record validator, you must stage a fully defined object or union validator.",
+        );
+      }
+      const enforcedFields =
+        this.validator.kind === "object" ? this.validator.fields : {};
+      const fields: Record<string, GenericValidator> = Object.fromEntries(
+        Object.entries({ ...enforcedFields, ...documentSchema }).filter(
+          (entry): entry is [string, GenericValidator] =>
+            entry[1] !== undefined,
+        ),
+      );
+      this.stagedValidator = v.object(fields);
+    }
+    return this.self();
+  }
+
+  /**
    * Work around for https://github.com/microsoft/TypeScript/issues/57035
    */
   protected self(): TableDefinition<
@@ -575,6 +644,16 @@ export class TableDefinition<
       );
     }
 
+    let stagedDocumentType = undefined;
+    if (this.stagedValidator !== undefined) {
+      stagedDocumentType = this.stagedValidator.json;
+      if (typeof stagedDocumentType !== "object") {
+        throw new Error(
+          "Invalid staged validator: please make sure that the parameter of `.staged()` is valid (see https://docs.convex.dev/database/schemas)",
+        );
+      }
+    }
+
     return {
       indexes: this.indexes,
       stagedDbIndexes: this.stagedDbIndexes,
@@ -583,6 +662,7 @@ export class TableDefinition<
       vectorIndexes: this.vectorIndexes,
       stagedVectorIndexes: this.stagedVectorIndexes,
       documentType,
+      stagedDocumentType,
     };
   }
 }
@@ -658,6 +738,121 @@ export function defineTable<
 }
 
 /**
+ * The validators for the system fields Convex adds to every document.
+ *
+ * @public
+ */
+export type SystemFieldValidators<TableName extends string> = {
+  _id: VId<GenericId<TableName>>;
+  _creationTime: VFloat64<number>;
+};
+
+/**
+ * Add the system field validators to an object validator, leaving any other
+ * validator untouched.
+ */
+type WithSystemFieldValidators<
+  TableName extends string,
+  DocumentType extends Validator<any, any, any>,
+> =
+  DocumentType extends VObject<infer Type, infer Fields, any, any>
+    ? VObject<
+        Expand<IdField<TableName> & SystemFields & Type>,
+        Expand<SystemFieldValidators<TableName> & Fields>
+      >
+    : DocumentType;
+
+/**
+ * The validator for whole documents of a table: the table's own validator with
+ * the `_id` and `_creationTime` system fields added.
+ *
+ * For a table defined with a union, the system fields are added to each member
+ * of the union.
+ *
+ * @public
+ */
+export type DocValidator<
+  TableName extends string,
+  DocumentType extends Validator<any, any, any>,
+> =
+  DocumentType extends VUnion<any, infer Members, any, any>
+    ? {
+        [Index in keyof Members]: WithSystemFieldValidators<
+          TableName,
+          Members[Index]
+        >;
+      } extends infer NewMembers extends Validator<any, "required", any>[]
+      ? VUnion<
+          WithSystemFieldValidators<TableName, Members[number]>["type"],
+          NewMembers
+        >
+      : never
+    : WithSystemFieldValidators<TableName, DocumentType>;
+
+function addSystemFields(
+  tableName: string,
+  validator: GenericValidator,
+): GenericValidator {
+  switch (validator.kind) {
+    case "object":
+      return validator.extend({
+        _id: v.id(tableName),
+        _creationTime: v.number(),
+      });
+    case "union":
+      return v.union(
+        ...validator.members.map((member) =>
+          addSystemFields(tableName, member),
+        ),
+      );
+    // `v.any()` already permits the system fields.
+    case "any":
+      return validator;
+    default:
+      throw new Error(
+        `Invalid validator for table "${tableName}": a table's documents must be objects, or a union of objects (see https://docs.convex.dev/database/schemas)`,
+      );
+  }
+}
+
+/**
+ * Build the validator for whole documents of a table, by adding the `_id` and
+ * `_creationTime` system fields to the table's own validator.
+ *
+ * Prefer {@link SchemaDefinition.doc} when you have the schema in hand: it
+ * checks the table name against the schema.
+ *
+ * @example
+ * ```ts
+ * const messageDoc = docValidator("messages", schema.tables.messages);
+ *
+ * export const get = query({
+ *   args: { id: v.id("messages") },
+ *   returns: v.union(messageDoc, v.null()),
+ *   handler: (ctx, args) => ctx.db.get(args.id),
+ * });
+ * ```
+ *
+ * @param tableName - The name of the table, used for the `_id` validator.
+ * @param table - The {@link TableDefinition} for that table.
+ * @returns A validator matching documents of the table.
+ *
+ * @public
+ */
+export function docValidator<
+  TableName extends string,
+  Table extends TableDefinition<any, any, any, any>,
+>(
+  tableName: TableName,
+  table: Table,
+): DocValidator<TableName, Table["validator"]> {
+  return addSystemFields(tableName, table.validator) as DocValidator<
+    TableName,
+    Table["validator"]
+  >;
+}
+
+/**
  * A type describing the schema of a Convex project.
  *
  * This should be constructed using {@link defineSchema}, {@link defineTable},
@@ -665,6 +860,24 @@ export function defineTable<
  * @public
  */
 export type GenericSchema = Record<string, TableDefinition>;
+
+function tableInSchema<
+  Schema extends GenericSchema,
+  TableName extends keyof Schema & string,
+>(
+  schema: SchemaDefinition<Schema, boolean>,
+  tableName: TableName,
+): Schema[TableName] {
+  const table = schema.tables[tableName];
+  if (table === undefined) {
+    throw new Error(
+      `Table "${tableName}" is not in this schema. Tables in this schema: ${Object.keys(
+        schema.tables,
+      ).join(", ")}`,
+    );
+  }
+  return table;
+}
 
 /**
  *
@@ -691,6 +904,43 @@ export class SchemaDefinition<
   }
 
   /**
+   * The validator for whole documents of a table in this schema: the table's
+   * own validator with the `_id` and `_creationTime` system fields added.
+   *
+   * @example
+   * ```ts
+   * export const get = query({
+   *   args: { id: schema.id("messages") },
+   *   returns: v.union(schema.doc("messages"), v.null()),
+   *   handler: (ctx, args) => ctx.db.get(args.id),
+   * });
+   * ```
+   *
+   * @param tableName - The name of a table in this schema.
+   * @returns A validator matching documents of that table.
+   */
+  doc<TableName extends keyof Schema & string>(
+    tableName: TableName,
+  ): DocValidator<TableName, Schema[TableName]["validator"]> {
+    return docValidator(tableName, tableInSchema(this, tableName));
+  }
+
+  /**
+   * The validator for IDs of a table in this schema.
+   *
+   * Same as `v.id(tableName)`, but only accepts tables in this schema.
+   *
+   * @param tableName - The name of a table in this schema.
+   * @returns A validator matching IDs of that table.
+   */
+  id<TableName extends keyof Schema & string>(
+    tableName: TableName,
+  ): VId<GenericId<TableName>> {
+    tableInSchema(this, tableName);
+    return v.id(tableName);
+  }
+
+  /**
    * Export the contents of this definition.
    *
    * This is called internally by the Convex framework.
@@ -707,6 +957,7 @@ export class SchemaDefinition<
           vectorIndexes,
           stagedVectorIndexes,
           documentType,
+          stagedDocumentType,
         } = definition.export();
         return {
           tableName,
@@ -717,6 +968,7 @@ export class SchemaDefinition<
           vectorIndexes,
           stagedVectorIndexes,
           documentType,
+          stagedDocumentType,
         };
       }),
       schemaValidation: this.schemaValidation,
@@ -899,7 +1151,8 @@ const _systemSchema = defineSchema({
   }),
 });
 
-export interface SystemDataModel
-  extends DataModelFromSchemaDefinition<typeof _systemSchema> {}
+export interface SystemDataModel extends DataModelFromSchemaDefinition<
+  typeof _systemSchema
+> {}
 
 export type SystemTableNames = TableNamesInDataModel<SystemDataModel>;

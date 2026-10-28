@@ -1,7 +1,7 @@
 use common::components::ComponentPath;
-use isolate::UdfArgsJson;
 use keybroker::Identity;
 use serde::Deserialize;
+use udf::helpers::UdfArgsJson;
 use utoipa::ToSchema;
 
 use crate::admin::must_be_admin;

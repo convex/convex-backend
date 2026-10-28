@@ -1,41 +1,44 @@
-import { useMemo } from "react";
-import { Fieldset, Legend, RadioGroup } from "@headlessui/react";
-import { Region, sortRegions } from "elements/Region";
-import { DeploymentRegionMetadata } from "@convex-dev/platform/managementApi";
+import { Fieldset, RadioGroup } from "@headlessui/react";
+import { Region } from "elements/Region";
+import {
+  DeploymentRegionMetadata,
+  RegionName,
+} from "@convex-dev/platform/managementApi";
+import { RegionPricingWarning } from "elements/RegionPricingWarning";
 
 export function DefaultRegionSelector({
   value,
   onChange,
   regions,
+  expectedRegionCount,
   teamSlug,
   disabledDueToPermissions = false,
 }: {
-  value: string | null;
-  onChange: (region: string | null) => void;
+  value: RegionName | null;
+  onChange: (region: RegionName | null) => void;
   regions: DeploymentRegionMetadata[] | undefined;
+  /** How many region tiles to render while `regions` loads. */
+  expectedRegionCount: number;
   teamSlug: string | undefined;
   disabledDueToPermissions?: boolean;
 }) {
-  const sortedRegions = useMemo(
-    () => (regions ? sortRegions(regions) : undefined),
-    [regions],
-  );
-
   return (
     <Fieldset>
-      <Legend className="mb-1 text-sm text-content-primary">
-        Region for New Deployments
-      </Legend>
-      <RadioGroup name="defaultRegion" value={value} onChange={onChange}>
-        <div className="grid max-w-xl auto-rows-fr gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {sortedRegions ? (
+      <RadioGroup
+        name="defaultRegion"
+        aria-label="Default region"
+        value={value}
+        onChange={onChange}
+      >
+        <div className="grid auto-rows-fr grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-3">
+          {regions ? (
             <>
               <Region
                 region={null}
                 teamSlug={teamSlug}
                 disabledDueToPermissions={disabledDueToPermissions}
               />
-              {sortedRegions.map((region) => (
+              {regions.map((region) => (
                 <Region
                   key={region.name}
                   region={region}
@@ -45,7 +48,8 @@ export function DefaultRegionSelector({
               ))}
             </>
           ) : (
-            [1, 2, 3].map((i) => (
+            // One extra tile for the "Ask every time" option.
+            Array.from({ length: expectedRegionCount + 1 }, (_, i) => (
               <Region
                 key={i}
                 region={undefined}
@@ -56,11 +60,7 @@ export function DefaultRegionSelector({
           )}
         </div>
       </RadioGroup>
-      <p className="mt-2 max-w-prose text-xs text-content-secondary">
-        Usage on EU-hosted deployments is subject to a 30% pass-through
-        surcharge. On paid subscriptions, built-in resources are only applicable
-        to the US region.
-      </p>
+      <RegionPricingWarning region={value} />
     </Fieldset>
   );
 }

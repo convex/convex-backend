@@ -8,6 +8,7 @@ export const get = query({
   handler: async ({ db }, { counterName }): Promise<number> => {
     const counterDoc = await db
       .query("counter_table")
+      // eslint-disable-next-line @convex-dev/no-filter-in-query -- demo uses `.filter()` for simplicity
       .filter((q) => q.eq(q.field("name"), counterName))
       .first();
     console.log("Got stuff");
@@ -30,6 +31,7 @@ export const increment = mutation({
     }
     const counterDoc = await db
       .query("counter_table")
+      // eslint-disable-next-line @convex-dev/no-filter-in-query -- demo uses `.filter()` for simplicity
       .filter((q) => q.eq(q.field("name"), counterName))
       .first();
     if (counterDoc === null) {

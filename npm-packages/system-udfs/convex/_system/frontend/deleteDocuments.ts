@@ -1,9 +1,9 @@
 import { GenericId, v } from "convex/values";
-import { mutationGeneric } from "../server";
+import { mutationGeneric, writeAuditLog } from "../server";
 
 const MAX_DOCUMENT_DELETIONS = 4096;
 
-export default mutationGeneric({
+export default mutationGeneric("WriteData")({
   args: {
     componentId: v.optional(v.union(v.string(), v.null())),
     toDelete: v.array(v.object({ id: v.string(), tableName: v.string() })),
@@ -20,6 +20,19 @@ export default mutationGeneric({
     }
     for (const d of toDelete) {
       await db.delete(d.id as GenericId<string>);
+    }
+    // Group by table and emit one audit log per table
+    const byTable = new Map<string, string[]>();
+    for (const d of toDelete) {
+      const ids = byTable.get(d.tableName) ?? [];
+      ids.push(d.id);
+      byTable.set(d.tableName, ids);
+    }
+    for (const [table, document_ids] of byTable) {
+      await writeAuditLog("delete_documents", {
+        table,
+        document_ids,
+      });
     }
     return { success: true };
   },

@@ -2,7 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { queryPrivateSystem } from "../secretSystemTables";
 import { performOp } from "udf-syscall-ffi";
 
-export default queryPrivateSystem({
+export default queryPrivateSystem("ViewData")({
   args: {
     paginationOpts: paginationOptsValidator,
   },

@@ -1,4 +1,5 @@
 import groupBy from "lodash/groupBy";
+import { Link } from "@ui/Link";
 import {
   MagnifyingGlassIcon,
   QuestionMarkCircledIcon,
@@ -14,6 +15,7 @@ import { api } from "system-udfs/convex/_generated/api";
 import { Fragment } from "react";
 import { ProgressBarWithPercent } from "@ui/ProgressBar";
 import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { cn } from "@ui/cn";
 import { Callout } from "@ui/Callout";
 
@@ -56,14 +58,13 @@ export function IndexesList({
           <p>
             <strong className="font-semibold">Hint</strong>: When adding an
             index to a large table, consider using a{" "}
-            <a
+            <Link
               href="https://docs.convex.dev/database/reading-data/indexes/#staged-indexes"
               target="_blank"
               rel="noreferrer"
-              className="underline"
             >
               staged index
-            </a>{" "}
+            </Link>{" "}
             to avoid blocking deploy.
           </p>
         </Callout>
@@ -116,27 +117,18 @@ function IndexListSection({
   const indexesByName = groupBy(indexes, "name");
 
   return (
-    <div className="flex flex-col gap-3">
+    <section aria-label={title} className="flex flex-col gap-3">
       <header className="flex items-center gap-1.5 text-content-primary">
         <Icon className="size-5 text-content-secondary" />
         <h5 className="text-base font-medium">{title}</h5>
-        <Tooltip
-          tip={
-            <p>
-              {description}{" "}
-              <a
-                href={learnMoreUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-content-link hover:underline"
-              >
-                Learn more
-              </a>
-            </p>
-          }
-        >
-          <QuestionMarkCircledIcon className="text-content-tertiary" />
-        </Tooltip>
+        <HelpTooltip>
+          <p>
+            {description}{" "}
+            <Link href={learnMoreUrl} target="_blank" rel="noopener noreferrer">
+              Learn more
+            </Link>
+          </p>
+        </HelpTooltip>
       </header>
       {indexes.length === 0 ? (
         <div className="text-sm text-content-tertiary">
@@ -152,7 +144,7 @@ function IndexListSection({
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 

@@ -18,7 +18,6 @@ use value::{
 /// Persisted version of AuthInfo that impls try_from to ConvexObject
 /// Ideally this remains local to this crate (has to be pub for db-info)
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AuthInfoPersisted(pub AuthInfo);
 
 impl TryFrom<ConvexObject> for AuthInfoPersisted {
@@ -106,10 +105,6 @@ impl TryFrom<AuthInfoPersisted> for ConvexObject {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct AuthDiff {
     pub added: Vec<String>,
     pub removed: Vec<String>,

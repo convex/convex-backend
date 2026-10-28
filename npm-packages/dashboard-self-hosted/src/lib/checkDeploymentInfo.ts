@@ -9,10 +9,15 @@ async function sleep(ms: number) {
 const MAX_RETRIES = 3;
 const MAX_RETRIES_DELAY_MS = 500;
 
+export type CheckDeploymentResult = {
+  allowedOps: string[];
+  isReadOnly: boolean;
+} | null;
+
 export async function checkDeploymentInfo(
   adminKey: string,
   deploymentUrl: string,
-): Promise<boolean | null> {
+): Promise<CheckDeploymentResult> {
   let retries = 0;
   while (retries < MAX_RETRIES) {
     try {
@@ -28,10 +33,20 @@ export async function checkDeploymentInfo(
         },
       );
       if (resp.ok) {
-        return true;
+        try {
+          const body = await resp.json();
+          return {
+            allowedOps: body.allowedOps ?? [],
+            isReadOnly: body.isReadOnly ?? false,
+          };
+        } catch {
+          // Old backend that doesn't return JSON with allowedOps
+          return { allowedOps: [], isReadOnly: false };
+        }
       }
       if (resp.status === 404) {
-        return null;
+        // Endpoint doesn't exist on this backend — allow all operations
+        return { allowedOps: [], isReadOnly: false };
       }
     } catch {
       // Do nothing
@@ -39,5 +54,5 @@ export async function checkDeploymentInfo(
     await sleep(MAX_RETRIES_DELAY_MS);
     retries++;
   }
-  return false;
+  return null;
 }

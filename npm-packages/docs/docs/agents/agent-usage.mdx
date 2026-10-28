@@ -18,14 +18,17 @@ structured LLM outputs, or a myriad of other techniques via custom code.
 
 ## Basic Agent definition
 
+These examples use the [Convex AI Gateway](https://docs.convex.dev/ai-gateway).
+See [Getting Started](./getting-started.mdx) for installation and requirements.
+
 ```ts
 import { components } from "./_generated/api";
 import { Agent } from "@convex-dev/agent";
-import { openai } from "@ai-sdk/openai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
 
 const agent = new Agent(components.agent, {
   name: "Basic Agent",
-  languageModel: openai.chat("gpt-4o-mini"),
+  languageModel: convexGateway("openai/gpt-5-mini"),
 });
 ```
 
@@ -43,7 +46,7 @@ requiring the LLM to always pass through full context to each tool call. It also
 allows dynamically choosing a model or other options for the Agent.
 
 ```ts
-import { Agent } from "@convex-dev/agent";
+import { Agent, stepCountIs } from "@convex-dev/agent";
 import { type LanguageModel } from "ai";
 import type { ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
@@ -63,7 +66,7 @@ function createAuthorAgent(
       researchCharacter: researchCharacterTool(ctx, bookId),
       writeChapter: writeChapterTool(ctx, bookId),
     },
-    maxSteps: 10, // Alternative to stopWhen: stepCountIs(10)
+    stopWhen: stepCountIs(10),
   });
 }
 ```
@@ -88,12 +91,12 @@ configuring the context provided.
 Note: `authorizeThreadAccess` referenced below is a function you would write to
 authenticate and authorize the user to access the thread. You can see an example
 implementation in
-[threads.ts](https://github.com/get-convex/agent/blob/main/example/convex/threads.ts).
+[threads.ts](https://github.com/convex/agent/blob/main/example/convex/threads.ts).
 
 See
-[chat/basic.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/basic.ts)
+[chat/basic.ts](https://github.com/convex/agent/blob/main/example/convex/chat/basic.ts)
 or
-[chat/streaming.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/streaming.ts)
+[chat/streaming.ts](https://github.com/convex/agent/blob/main/example/convex/chat/streaming.ts)
 for live code examples.
 
 ### Streaming text
@@ -199,23 +202,23 @@ returning a text response.
 
 ## Customizing the agent
 
-The agent by default only needs a `chat` model to be configured. However, for
-vector search, you'll need a `textEmbeddingModel` model. A `name` is helpful to
-attribute each message to a specific agent. Other options are defaults that can
-be over-ridden at each LLM call-site.
+The agent by default only needs a `languageModel` to be configured. However, for
+vector search, you'll need an `embeddingModel`. A `name` is helpful to attribute
+each message to a specific agent. Other options are defaults that can be
+over-ridden at each LLM call-site.
 
 ```ts
 import { tool, stepCountIs } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
 import { z } from "zod/v3";
 import { Agent, createTool, type Config } from "@convex-dev/agent";
 import { components } from "./_generated/api";
 
 const sharedDefaults = {
   // The language model to use for the agent.
-  languageModel: openai.chat("gpt-4o-mini"),
+  languageModel: convexGateway("openai/gpt-5-mini"),
   // Embedding model to power vector search of message history (RAG).
-  textEmbeddingModel: openai.embedding("text-embedding-3-small"),
+  embeddingModel: convexGateway.embeddingModel("openai/text-embedding-3-small"),
   // Used for fetching context messages. See https://docs.convex.dev/agents/context
   contextOptions,
   // Used for storing messages. See https://docs.convex.dev/agents/messages
@@ -246,14 +249,14 @@ const supportAgent = new Agent(components.agent, {
     // Convex tool. See https://docs.convex.dev/agents/tools
     myConvexTool: createTool({
       description: "My Convex tool",
-      args: z.object({...}),
-      // Note: annotate the return type of the handler to avoid type cycles.
-      handler: async (ctx, args): Promise<string> => {
+      inputSchema: z.object({...}),
+      // Note: annotate the return type of the execute to avoid type cycles.
+      execute: async (ctx, input): Promise<string> => {
         return "Hello, world!";
       },
     }),
     // Standard AI SDK tool
-    myTool: tool({ description, parameters, execute: () => {}}),
+    myTool: tool({ description: "My tool", inputSchema: z.object({...}), execute: async () => {}}),
   },
   // Used for limiting the number of steps when tool calls are involved.
   // NOTE: if you want tool calls to happen automatically with a single call,

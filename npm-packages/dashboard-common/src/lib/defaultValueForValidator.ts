@@ -13,6 +13,7 @@ export const defaultValueForValidator = (
     case "number":
       return 0;
     case "bigint":
+    case "commitTs":
       return BigInt(0);
     case "bytes":
       return new Uint8Array().buffer;

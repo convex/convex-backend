@@ -144,7 +144,7 @@ discovered that keep their projects falling into this wonderful pit.
 
 <ZenHeader title="Performance" />
 
-<ZenTip type="do" title={<span>Double down on the <a href="/tutorial#how-convex-works">sync engine</a></span>} >
+<ZenTip type="do" title={<span>Double down on the <a href="/tutorial/overview#how-convex-works">sync engine</a></span>} >
 
     There's a reason why a deterministic, reactive database is the beating heart
     of Convex: the more you center your apps around its properties, the better
@@ -202,19 +202,18 @@ things will Just Work and be plenty fast.
 <ZenHeader title="Architecture" />
 
 <ZenTip type="do" title='Create server-side frameworks using "just code"'>
-  <p>
-    Convex's built-in primitives are pretty low level! They're just functions.
-    What about authentication frameworks? What about object-relational mappings?
-    Do you need to wait until Convex ships some in-built feature to get those?
-    Nope. In general, you should solve composition and encapsulation problems in
-    your server-side Convex code using the same methods you use for the rest of
-    your TypeScript code bases. After all, this is why Convex is "just code!"
-    [Stack](https://stack.convex.dev) always has
-    [great](https://stack.convex.dev/functional-relationships-helpers)
-    [examples](https://stack.convex.dev/wrappers-as-middleware-authentication)
-    of ways to tackle [these
-    needs](https://stack.convex.dev/row-level-security).
-  </p>
+
+Convex's built-in primitives are pretty low level! They're just functions. What
+about authentication frameworks? What about object-relational mappings? Do you
+need to wait until Convex ships some in-built feature to get those? Nope. In
+general, you should solve composition and encapsulation problems in your
+server-side Convex code using the same methods you use for the rest of your
+TypeScript code bases. After all, this is why Convex is "just code!"
+[Stack](https://stack.convex.dev) always has
+[great](https://stack.convex.dev/functional-relationships-helpers)
+[examples](https://stack.convex.dev/wrappers-as-middleware-authentication) of
+ways to tackle [these needs](https://stack.convex.dev/row-level-security).
+
 </ZenTip>
 
 <ZenTip type="do-not" title="Don't misuse actions" >
@@ -253,24 +252,24 @@ Then apps or other jobs can follow along with queries.
 <ZenHeader title="Development workflow" />
 
 <ZenTip type="do" title="Keep the dashboard by your side">
-  <p>
-    Working on your Convex project without using the dashboard is like driving a
-    car with your eyes closed. The dashboard lets you view logs, give
-    mutations/queries/actions a test run, make sure your configuration and
-    codebase are as you expect, inspect your tables, generate schemas, etc. It's
-    an invaluable part of your rapid development cycle.
-  </p>
+
+Working on your Convex project without using the dashboard is like driving a car
+with your eyes closed. The dashboard lets you view logs, give
+mutations/queries/actions a test run, make sure your configuration and codebase
+are as you expect, inspect your tables, generate schemas, etc. It's an
+invaluable part of your rapid development cycle.
+
 </ZenTip>
 
 <ZenTip type="do-not" title="Don't go it alone" >
 
-  <p>
-    Between these [docs](https://docs.convex.dev),
-    [Stack](https://stack.convex.dev), and [our
-    community](https://convex.dev/community), someone has _probably_ encountered
-    the design or architectural issue you're facing. So why try to figure things out the hard way, when you can take advantage of a whole community's experience?
-   </p>
-  
+Between these [docs](https://docs.convex.dev),
+[Stack](https://stack.convex.dev), and
+[our community](https://convex.dev/community), someone has _probably_
+encountered the design or architectural issue you're facing. So why try to
+figure things out the hard way, when you can take advantage of a whole
+community's experience?
+
   <Details summary="Leverage Convex developer search">
   With so many great resources from the Convex team & community, it can be hard to know where to look first. If you want a quick way to
     search across all of these, [we have a portal for

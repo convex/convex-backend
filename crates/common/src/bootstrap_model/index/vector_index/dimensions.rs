@@ -6,12 +6,7 @@ pub const MIN_VECTOR_DIMENSIONS: u32 = 2;
 pub const MAX_VECTOR_DIMENSIONS: u32 = 4096;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct VectorDimensions(
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "MIN_VECTOR_DIMENSIONS..=MAX_VECTOR_DIMENSIONS")
-    )]
     u32,
 );
 

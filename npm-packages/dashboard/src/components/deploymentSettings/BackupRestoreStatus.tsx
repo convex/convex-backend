@@ -8,20 +8,17 @@ import { useConfirmImport } from "hooks/deploymentApi";
 import { useEffect, useState } from "react";
 import { Doc } from "system-udfs/convex/_generated/dataModel";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import { TeamResponse } from "generatedApi";
 import udfs from "@common/udfs";
 import { CheckCircledIcon, CrossCircledIcon } from "@radix-ui/react-icons";
 import { ProgressBar } from "@ui/ProgressBar";
-import { useListCloudBackups, BackupResponse } from "api/backups";
+import { useGetCloudBackup, BackupResponse } from "api/backups";
 import { TransferSummary } from "./BackupListItem";
 import { ImportSummary } from "./SnapshotImport";
 
 export function BackupRestoreStatus({
   deployment,
-  team,
 }: {
   deployment: PlatformDeploymentResponse;
-  team: TeamResponse;
 }) {
   const currentRestore = useLatestRestore();
   const requestor = currentRestore?.requestor;
@@ -30,10 +27,9 @@ export function BackupRestoreStatus({
   }
   const sourceCloudBackupId = requestor?.sourceCloudBackupId;
 
-  const backups = useListCloudBackups(team.id);
-  const backup =
-    currentRestore &&
-    (backups?.find((b) => BigInt(b.id) === sourceCloudBackupId) ?? null);
+  const backup = useGetCloudBackup(
+    sourceCloudBackupId !== undefined ? Number(sourceCloudBackupId) : undefined,
+  );
 
   // Automatically call confirmImport when the current backup is waiting for confirmation.
   // This is necessary because the snapshot import flow has a confirmation step, but for backups
@@ -61,7 +57,6 @@ export function BackupRestoreStatus({
           completedTime={new Date(Number(state.timestamp / BigInt(1000000)))}
           restoredRowsCount={state.num_rows_written}
           deployment={deployment}
-          team={team}
           backup={backup}
           snapshotImportCheckpoints={currentRestore.checkpoints}
         />
@@ -72,7 +67,6 @@ export function BackupRestoreStatus({
           errorMessage={state.error_message}
           restoreStartTime={new Date(currentRestore._creationTime)}
           deployment={deployment}
-          team={team}
           backup={backup}
         />
       );
@@ -95,13 +89,11 @@ export function BackupRestoreFail({
   errorMessage,
   restoreStartTime,
   deployment,
-  team,
   backup,
 }: {
   errorMessage: string;
   restoreStartTime: Date;
   deployment: PlatformDeploymentResponse;
-  team: TeamResponse;
   backup: BackupResponse | null;
 }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -111,7 +103,7 @@ export function BackupRestoreFail({
       <div className="flex min-h-16 flex-wrap items-center gap-2 rounded-lg border bg-background-secondary px-4 py-2">
         <div className="flex grow gap-2">
           <CrossCircledIcon className="size-5 shrink-0 text-content-errorSecondary" />
-          <p className="grow text-sm leading-tight text-balance text-content-secondary">
+          <p className="grow text-sm/tight text-balance text-content-primary">
             The restore started{" "}
             <TimestampDistance
               date={restoreStartTime}
@@ -143,7 +135,6 @@ export function BackupRestoreFail({
             backup={backup}
             targetDeployment={deployment}
             latestBackupInTargetDeployment={undefined}
-            team={team}
           />
 
           <p className="my-2">Encountered an error while restoring:</p>
@@ -158,7 +149,6 @@ export function BackupRestoreSuccess({
   completedTime,
   restoredRowsCount,
   deployment,
-  team,
   backup,
   snapshotImportCheckpoints,
 }: {
@@ -168,7 +158,6 @@ export function BackupRestoreSuccess({
   restoredRowsCount: bigint | number;
 
   deployment: PlatformDeploymentResponse;
-  team: TeamResponse;
   backup: BackupResponse | null;
   snapshotImportCheckpoints: Doc<"_snapshot_imports">["checkpoints"] | null;
 }) {
@@ -179,7 +168,7 @@ export function BackupRestoreSuccess({
       <div className="flex min-h-16 flex-wrap items-center gap-2 rounded-lg border bg-background-secondary px-4 py-2">
         <div className="flex grow items-center gap-2">
           <CheckCircledIcon className="shrink-0 text-content-success" />
-          <p className="grow text-sm leading-tight text-balance text-content-secondary">
+          <p className="grow text-sm/tight text-balance text-content-primary">
             <strong>{`${formatNumberCompact(restoredRowsCount)} ${restoredRowsCount === BigInt(1) ? "document" : "documents"}`}</strong>{" "}
             {restoredRowsCount === BigInt(1) ? "was" : "were"} restored from a
             backup{" "}
@@ -214,7 +203,6 @@ export function BackupRestoreSuccess({
             backup={backup}
             targetDeployment={deployment}
             latestBackupInTargetDeployment={undefined}
-            team={team}
           />
 
           <ImportSummary

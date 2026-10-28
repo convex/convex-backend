@@ -11,16 +11,14 @@ use serde_json::{
 };
 use value::identifier::Identifier;
 
-use super::ActionEnvironment;
+use super::ActionSyscallProvider;
 use crate::environment::helpers::with_argument_error;
 
-impl<RT: Runtime> ActionEnvironment<RT> {
+impl<RT: Runtime> ActionSyscallProvider<RT> {
     pub fn syscall_impl(&mut self, name: &str, args: JsonValue) -> anyhow::Result<JsonValue> {
         match name {
             "1.0/componentArgument" => syscall_component_argument(self, args),
 
-            #[cfg(any(test, feature = "testing"))]
-            "throwSystemError" => anyhow::bail!("I can't go for that."),
             _ => {
                 anyhow::bail!(ErrorMetadata::bad_request(
                     "UnknownOperation",
@@ -32,7 +30,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
 }
 
 fn syscall_component_argument<RT: Runtime>(
-    environment: &mut ActionEnvironment<RT>,
+    provider: &mut ActionSyscallProvider<RT>,
     args: JsonValue,
 ) -> anyhow::Result<JsonValue> {
     #[derive(Deserialize)]
@@ -44,7 +42,7 @@ fn syscall_component_argument<RT: Runtime>(
         let ComponentArgumentArgs { name } = serde_json::from_value(args)?;
         Ok(name)
     })?;
-    let component_arguments = environment.phase.component_arguments()?;
+    let component_arguments = provider.phase.component_arguments()?;
     let value = match Identifier::from_str(&arg_name) {
         Ok(identifier) => component_arguments.get(&identifier).cloned(),
         Err(_) => None,

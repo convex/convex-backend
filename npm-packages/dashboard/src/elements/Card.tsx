@@ -16,10 +16,14 @@ export type CardProps = {
     action: () => void;
     destructive?: boolean;
     disabled?: boolean;
-    tip?: string;
+    tip?: ReactNode;
   }[];
   // Will be rendered as sibling to Card content
   overlayed?: ReactNode;
+  // Accessible label for the card's overlay link (used as sr-only text)
+  linkLabel?: string;
+  // When true, renders without individual border/rounding for use inside a list sheet
+  listItem?: boolean;
 };
 
 export function Card({
@@ -29,58 +33,64 @@ export function Card({
   children,
   dropdownItems,
   overlayed,
+  linkLabel,
+  listItem,
 }: CardProps) {
   return (
     <div
       className={classNames(
-        "relative border rounded-xl bg-background-secondary",
-        "flex items-center gap-4 px-4",
-        "hover:border-border-selected",
+        "group relative flex items-center gap-4 px-4",
+        listItem
+          ? "rounded-[inherit] bg-background-secondary hover:bg-background-tertiary"
+          : "border rounded-xl bg-background-secondary hover:border-border-selected",
         cardClassName,
       )}
     >
-      {!href ? (
-        <div className={classNames("grow py-4", contentClassName)}>
-          {children}
-        </div>
-      ) : (
+      {href && (
         <Link
           href={href}
-          passHref
-          className={classNames(
-            "grow cursor-pointer min-w-0 py-4",
-            contentClassName,
-          )}
+          className="absolute inset-0 z-0 rounded-[inherit] outline-none focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-border-selected focus-visible:ring-inset"
         >
-          {children}
+          <span className="sr-only">{linkLabel ?? "Open"}</span>
         </Link>
       )}
+      <div
+        className={classNames(
+          "grow min-w-0 py-4",
+          href && "cursor-pointer",
+          contentClassName,
+        )}
+      >
+        {children}
+      </div>
 
       {overlayed}
       {dropdownItems && (
-        <Menu
-          placement="bottom-start"
-          buttonProps={{
-            "aria-label": "Open project settings",
-            variant: "neutral",
-            inline: true,
-            icon: <DotsVerticalIcon className="text-content-secondary" />,
-          }}
-        >
-          {dropdownItems?.map((item) => (
-            <MenuItem
-              key={item.text}
-              variant={item.destructive ? "danger" : "default"}
-              action={item.action}
-              disabled={item.disabled}
-              tip={item.tip}
-              tipSide="right"
-            >
-              <item.Icon className="h-4 w-4" />
-              {item.text}
-            </MenuItem>
-          ))}
-        </Menu>
+        <div className="relative z-10">
+          <Menu
+            placement="bottom-start"
+            buttonProps={{
+              "aria-label": "Open project settings",
+              variant: "neutral",
+              inline: true,
+              icon: <DotsVerticalIcon className="text-content-secondary" />,
+            }}
+          >
+            {dropdownItems?.map((item) => (
+              <MenuItem
+                key={item.text}
+                variant={item.destructive ? "danger" : "default"}
+                action={item.action}
+                disabled={item.disabled}
+                tip={item.tip}
+                tipSide="right"
+              >
+                <item.Icon className="size-4" />
+                {item.text}
+              </MenuItem>
+            ))}
+          </Menu>
+        </div>
       )}
     </div>
   );

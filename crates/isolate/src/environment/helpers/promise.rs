@@ -7,7 +7,13 @@ use deno_core::v8;
 use errors::ErrorMetadataAnyhowExt;
 
 use super::json_to_v8;
-use crate::strings;
+use crate::{
+    convert_v8::{
+        JsException,
+        ToV8,
+    },
+    strings,
+};
 
 pub fn resolve_promise(
     scope: &mut v8::PinScope<'_, '_>,
@@ -38,7 +44,20 @@ fn resolve_promise_inner(
         Ok(value_v8) => {
             resolver.resolve(scope, value_v8);
         },
-        Err(mut e) => {
+        Err(e) => {
+            // A `JsException` is an error an op deliberately built to be thrown
+            // into JS (e.g. a `DOMException`), so reject with it verbatim rather
+            // than flattening it into a plain `Error`.
+            let mut e = match e.downcast::<JsException>() {
+                Ok(js_exception) => match js_exception.to_v8(scope) {
+                    Ok(exception) => {
+                        resolver.reject(scope, exception);
+                        return Ok(());
+                    },
+                    Err(e) => e,
+                },
+                Err(e) => e,
+            };
             // This error might have been caused by the user,
             // or by the system. We either:
             // - return it, which will result in a system error (which is logged higher in

@@ -1,0 +1,37 @@
+[package]
+name = "usage_limits"
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+common = { workspace = true }
+database = { workspace = true }
+events = { workspace = true }
+futures = { workspace = true }
+keybroker = { workspace = true }
+model = { workspace = true }
+parking_lot = { workspace = true }
+strum = { workspace = true }
+tracing = { workspace = true }
+udf_metrics = { workspace = true }
+value = { workspace = true }
+
+[dev-dependencies]
+common = { workspace = true, features = ["testing"] }
+convex_macro = { workspace = true }
+database = { workspace = true, features = ["testing"] }
+events = { workspace = true, features = ["testing"] }
+keybroker = { workspace = true, features = ["testing"] }
+model = { workspace = true, features = ["testing"] }
+runtime = { workspace = true, features = ["testing"] }
+value = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

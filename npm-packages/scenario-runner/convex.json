@@ -1,4 +1,5 @@
 {
+  "$schema": "node_modules/convex/schemas/convex.schema.json",
   "prodUrl": "http://127.0.0.1:8000",
   "project": "carnitas",
   "team": "carnitas",

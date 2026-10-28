@@ -1,4 +1,5 @@
 pub mod module_loader;
+mod performance;
 mod promise;
 pub mod syscall_error;
 mod version;
@@ -6,6 +7,13 @@ mod version;
 use std::ops::Deref;
 
 use anyhow::Context;
+use common::{
+    log_lines::{
+        LogLevel,
+        LogLine,
+    },
+    runtime::UnixTimestamp,
+};
 use deno_core::{
     serde_v8,
     v8,
@@ -18,6 +26,10 @@ use serde_json::Value as JsonValue;
 use value::TableName;
 
 pub use self::{
+    performance::{
+        performance_unsupported,
+        PerformanceApi,
+    },
     promise::{
         resolve_promise,
         resolve_promise_allow_all_errors,
@@ -26,7 +38,19 @@ pub use self::{
 };
 
 pub const MAX_LOG_LINE_LENGTH: usize = 32768;
-pub const MAX_LOG_LINES: usize = 256;
+
+/// The `[ERROR]` line a function's logs end with once it logs past
+/// `max_log_lines`. It occupies the last of those slots, so callers stop
+/// accepting user lines at `max_log_lines - 1`.
+pub fn log_overflow_log_line(max_log_lines: usize, timestamp: UnixTimestamp) -> LogLine {
+    LogLine::new_developer_log_line(
+        LogLevel::Error,
+        vec![format!(
+            "Log overflow (maximum {max_log_lines}). Remaining log lines omitted."
+        )],
+        timestamp,
+    )
+}
 
 #[derive(Debug, derive_more::Display)]
 pub struct ArgName(pub &'static str);
@@ -51,7 +75,8 @@ pub fn with_argument_error<T>(
     })
 }
 
-#[derive(Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum Phase {
     Importing,
     Executing,
@@ -99,30 +124,4 @@ pub fn check_table_name(
         .context(ArgName("id"));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_check_table_name_accepts_the_correct_name() {
-        let requested_table_name = Some("documents".to_string());
-        let actual_table_name: TableName = "documents".parse().unwrap();
-        assert!(check_table_name(&requested_table_name, &actual_table_name).is_ok());
-    }
-
-    #[test]
-    fn test_check_table_name_rejects_oher_names() {
-        let requested_table_name = Some("documents".to_string());
-        let actual_table_name: TableName = "users".parse().unwrap();
-        assert!(check_table_name(&requested_table_name, &actual_table_name).is_err());
-    }
-
-    #[test]
-    fn test_check_table_name_does_nothing_if_the_requested_table_name_is_none() {
-        let requested_table_name = None;
-        let actual_table_name: TableName = "documents".parse().unwrap();
-        assert!(check_table_name(&requested_table_name, &actual_table_name).is_ok());
-    }
 }

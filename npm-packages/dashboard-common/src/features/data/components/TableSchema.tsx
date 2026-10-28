@@ -176,12 +176,14 @@ function TableSchema({
   activeSchema,
   inProgressSchema,
   hadShapeError,
+  highlightField,
 }: {
   tables: Map<string, Shape>;
   tableName: string;
   activeSchema?: SchemaJson;
   inProgressSchema?: SchemaJson;
   hadShapeError: boolean;
+  highlightField?: string;
 }) {
   const tableShape = tables.get(tableName);
   if ((!tableShape || tableShape.type === "Never") && !activeSchema) {
@@ -198,6 +200,35 @@ function TableSchema({
     const splitLines = code.split("\n");
     const tableStartIndex =
       splitLines.findIndex((value) => value.trim().startsWith(tableName)) + 1;
+
+    if (highlightField) {
+      // Highlight only the selected field. Find its line within the table
+      // body, then extend through any lines more indented than it so
+      // multi-line validators (objects, unions) are highlighted in full.
+      const fieldStart = splitLines.findIndex(
+        (value, index) =>
+          index >= tableStartIndex &&
+          value.trim().startsWith(`${highlightField}:`),
+      );
+      if (fieldStart !== -1) {
+        const fieldIndent = splitLines[fieldStart].search(/\S/);
+        let fieldEnd = fieldStart;
+        for (let i = fieldStart + 1; i < splitLines.length; i++) {
+          if (splitLines[i].trim() === "") {
+            continue;
+          }
+          if (splitLines[i].search(/\S/) <= fieldIndent) {
+            break;
+          }
+          fieldEnd = i;
+        }
+        return {
+          startLineNumber: fieldStart + 1,
+          endLineNumber: fieldEnd + 1,
+        };
+      }
+    }
+
     return {
       startLineNumber: tableStartIndex,
       endLineNumber: splitLines.length - 1,
@@ -219,7 +250,13 @@ function TableSchema({
   );
 }
 
-export function TableSchemaContainer({ tableName }: { tableName: string }) {
+export function TableSchemaContainer({
+  tableName,
+  highlightField,
+}: {
+  tableName: string;
+  highlightField?: string;
+}) {
   const schemas = useQuery(udfs.getSchemas.default, {
     componentId: useNents().selectedNent?.id ?? null,
   });
@@ -244,6 +281,7 @@ export function TableSchemaContainer({ tableName }: { tableName: string }) {
           activeSchema={activeSchema}
           inProgressSchema={inProgressSchema}
           hadShapeError={hadShapeError}
+          highlightField={highlightField}
         />
       )}
     </LoadingTransition>

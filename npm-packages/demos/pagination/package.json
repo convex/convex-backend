@@ -2,17 +2,13 @@
   "name": "pagination",
   "version": "0.0.0",
   "scripts": {
-    "dev": "npm-run-all --parallel dev:backend dev:frontend",
-    "build": "tsc --noEmit && vite build",
-    "dev:backend": "convex dev",
-    "dev:frontend": "vite --open",
-    "predev": "convex dev --until-success"
+    "dev": "convex dev --start 'vite --open'",
+    "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
     "convex": "workspace:*",
     "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "prettier": "^3.8.0"
+    "react-dom": "^18.0.0"
   },
   "devDependencies": {
     "@types/babel__core": "^7.20.0",
@@ -21,8 +17,7 @@
     "@types/react-dom": "^18.0.0",
     "@vitejs/plugin-react": "^4.2.1",
     "dotenv": "^16.4.7",
-    "npm-run-all2": "^8.0.0",
     "typescript": "~5.0.3",
-    "vite": "^6.4.1"
+    "vite": "^6.4.4"
   }
 }

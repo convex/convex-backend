@@ -1,4 +1,8 @@
-use std::str::FromStr;
+use std::{
+    mem,
+    pin::Pin,
+    str::FromStr,
+};
 
 use common::{
     http::{
@@ -8,9 +12,11 @@ use common::{
     },
     sync::spsc,
 };
+use errors::ErrorMetadata;
 use futures::{
     stream::BoxStream,
     FutureExt,
+    Stream,
     StreamExt,
 };
 use headers::{
@@ -28,9 +34,10 @@ use serde::{
 };
 use udf::HttpActionRequestHead;
 use url::Url;
+use value::heap_size::HeapSize;
 
 use crate::{
-    ops::OpProvider,
+    ops::V8OpProvider,
     request_scope::StreamListener,
 };
 
@@ -45,20 +52,30 @@ pub struct HttpRequestV8 {
 }
 
 impl HttpRequestV8 {
-    pub fn into_stream<'b, P: OpProvider<'b>>(
+    pub fn into_stream<'b, P: V8OpProvider<'b>>(
         self,
         provider: &mut P,
     ) -> anyhow::Result<HttpRequestStream> {
         let mut header_map = HeaderMap::new();
         for (name, value) in &self.header_pairs {
-            header_map.append(HeaderName::from_str(name)?, byte_string_to_header(value)?);
+            header_map.append(
+                HeaderName::from_str(name)?,
+                byte_string_to_header(name, value)?,
+            );
         }
-        let (body_sender, body_receiver) = spsc::unbounded_channel();
-        match self.stream_id {
+        // A `None` stream id means the request has no body (e.g. a plain GET).
+        // Keep that as `None` so the request is sent without a body and framed
+        // correctly over HTTP/2 -- do not substitute an empty stream.
+        let body = match self.stream_id {
             Some(stream_id) => {
+                let (body_sender, body_receiver) = spsc::unbounded_channel();
                 provider.new_stream_listener(stream_id, StreamListener::RustStream(body_sender))?;
+                Some(Box::pin(body_receiver.into_stream())
+                    as Pin<
+                        Box<dyn Stream<Item = anyhow::Result<bytes::Bytes>> + Sync + Send>,
+                    >)
             },
-            None => drop(body_sender),
+            None => None,
         };
         let signal = {
             let (signal_sender, signal_receiver) = spsc::unbounded_channel();
@@ -68,7 +85,7 @@ impl HttpRequestV8 {
         };
 
         Ok(HttpRequestStream {
-            body: Box::pin(body_receiver.into_stream()),
+            body,
             headers: header_map,
             url: Url::parse(&self.url)?,
             method: Method::from_str(&self.method)?,
@@ -102,7 +119,7 @@ impl HttpRequestV8 {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpResponseV8 {
     stream_id: Option<uuid::Uuid>,
@@ -110,6 +127,19 @@ pub struct HttpResponseV8 {
     status_text: Option<String>,
     header_pairs: Vec<(String, String)>,
     url: Option<String>,
+}
+
+impl HeapSize for HttpResponseV8 {
+    fn heap_size(&self) -> usize {
+        self.status_text.heap_size()
+            + self.header_pairs.capacity() * mem::size_of::<(String, String)>()
+            + self
+                .header_pairs
+                .iter()
+                .map(|(name, value)| name.heap_size() + value.heap_size())
+                .sum::<usize>()
+            + self.url.heap_size()
+    }
 }
 
 impl HttpResponseV8 {
@@ -120,7 +150,7 @@ impl HttpResponseV8 {
         for (name, value) in &self.header_pairs {
             header_map.append(
                 HeaderName::from_str(name.as_str())?,
-                byte_string_to_header(value)?,
+                byte_string_to_header(name, value)?,
             );
         }
 
@@ -178,11 +208,25 @@ fn header_to_byte_string(header: &HeaderValue) -> String {
     header.as_bytes().iter().map(|&b| char::from(b)).collect()
 }
 
-fn byte_string_to_header(header: &str) -> anyhow::Result<HeaderValue> {
-    // TODO: turn these into TypeErrors
+fn byte_string_to_header(name: &str, header: &str) -> anyhow::Result<HeaderValue> {
     let bytes = header
         .chars()
-        .map(|c| u8::try_from(c).map_err(|_| anyhow::anyhow!("invalid char for header: `{c}`")))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(HeaderValue::from_bytes(&bytes)?)
+        .map(|c| {
+            u8::try_from(c).map_err(|_| {
+                anyhow::anyhow!(ErrorMetadata::bad_request(
+                    "InvalidHeaderValue",
+                    format!(
+                        "Header `{name}` has an invalid value: character `{c}` must be \
+                         percent-encoded."
+                    ),
+                ))
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    HeaderValue::from_bytes(&bytes).map_err(|e| {
+        anyhow::Error::from(e).context(ErrorMetadata::bad_request(
+            "InvalidHeaderValue",
+            format!("Header `{name}` has an invalid value"),
+        ))
+    })
 }

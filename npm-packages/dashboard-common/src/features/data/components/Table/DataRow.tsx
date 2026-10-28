@@ -9,7 +9,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { Row } from "react-table";
+import { Row } from "@tanstack/react-table";
 import classNames from "classnames";
 import { useFirstMountState, usePrevious } from "react-use";
 import { areEqual } from "react-window";
@@ -35,8 +35,8 @@ type DataRowProps = {
     resizingColumn: string | undefined;
     authorizeEdits?(): void;
     patchDocument: ReturnType<typeof usePatchDocumentField>;
-    prepareRow: (row: Row) => void;
-    rows: Row[];
+    rows: Row<GenericDocument>[];
+    columnResizeHandlers: Record<string, (event: unknown) => void>;
     tableName: string;
     toggleIsRowSelected(key: string): void;
     onOpenContextMenu: DataCellProps["onOpenContextMenu"];
@@ -57,23 +57,26 @@ function DataRowImpl(props: DataRowProps) {
   const { data, index, style } = props;
 
   const firstRow = data.rows.length ? data.rows[0] : undefined;
-  if (firstRow) data.prepareRow(firstRow);
+  const firstRowCells = firstRow?.getVisibleCells();
   const { densityValues } = useTableDensity();
   return index >= data.rows.length ? (
     <div
       className="DataRow flex"
       style={{ ...style, height: densityValues.height }}
     >
-      {firstRow ? (
-        firstRow.cells.map((cell, idx) => (
-          // eslint-disable-next-line react/jsx-key -- `key` from `cell.getCellProps()`
+      {firstRowCells ? (
+        firstRowCells.map((cell, idx) => (
           <div
-            {...cell.getCellProps()}
-            className={classNames("h-full flex items-center justify-center", {
-              "border-r": cell !== firstRow.cells[firstRow.cells.length - 1],
-            })}
+            key={cell.id}
+            role="cell"
+            className={classNames(
+              "h-full flex shrink-0 items-center justify-center",
+              {
+                "border-r": cell !== firstRowCells[firstRowCells.length - 1],
+              },
+            )}
             style={{
-              width: cell.getCellProps().style?.width,
+              width: cell.column.getSize(),
               paddingTop: densityValues.paddingY,
               paddingBottom: densityValues.paddingY,
               paddingLeft: densityValues.paddingX,
@@ -97,14 +100,6 @@ function DataRowImpl(props: DataRowProps) {
   );
 }
 
-export type EditingColumn =
-  | {
-      document: GenericDocument;
-      column: string;
-      editedValue: Value;
-    }
-  | undefined;
-
 function DataRowLoaded({ index, style, data }: DataRowProps) {
   const {
     areEditsAuthorized,
@@ -112,8 +107,8 @@ function DataRowLoaded({ index, style, data }: DataRowProps) {
     isSelectionAllNonExhaustive,
     authorizeEdits,
     patchDocument,
-    prepareRow,
     rows,
+    columnResizeHandlers,
     tableName,
     toggleIsRowSelected,
     onOpenContextMenu,
@@ -153,7 +148,6 @@ function DataRowLoaded({ index, style, data }: DataRowProps) {
 
   const mounting = useFirstMountState();
   const checked = isRowSelected(_id);
-  prepareRow(row);
 
   // Context menu trigger for the checkbox cell
   const checkboxRef = useRef<HTMLLabelElement | null>(null);
@@ -172,25 +166,24 @@ function DataRowLoaded({ index, style, data }: DataRowProps) {
 
   return (
     <div
+      role="row"
       className={classNames(
         "animate-fadeInFromLoading",
         // Make sure the focus ring is visible on first and last cell
         "focus:ring-none focus:border",
         didJustCreate && "animate-highlight",
-        "DataRow",
+        "DataRow flex",
       )}
-      {...row.getRowProps({
-        style,
-      })}
-      key={row.getRowProps().key}
+      style={style}
     >
-      {row.cells.map((cell, columnIndex) => {
-        const width = columnWidthToString(cell.getCellProps().style?.width);
+      {row.getVisibleCells().map((cell, columnIndex) => {
+        const width = columnWidthToString(cell.column.getSize());
         return (
           <div
-            {...cell.getCellProps({ style: { width } })}
-            key={cell.getCellProps().key}
-            className="border-r transition-colors duration-300"
+            key={cell.id}
+            role="cell"
+            style={{ width }}
+            className="shrink-0 border-r transition-colors duration-300"
           >
             {columnIndex === 0 ? (
               <TableCheckbox
@@ -201,7 +194,7 @@ function DataRowLoaded({ index, style, data }: DataRowProps) {
                 onToggle={() => toggleIsRowSelected(_id)}
                 onToggleAdjacent={() =>
                   toggleAdjacent(
-                    rows.map((r) => r.values._id),
+                    rows.map((r) => r.original._id as string),
                     index,
                     isRowSelected,
                     toggleIsRowSelected,
@@ -223,19 +216,17 @@ function DataRowLoaded({ index, style, data }: DataRowProps) {
                 areEditsAuthorized={areEditsAuthorized}
                 authorizeEdits={authorizeEdits}
                 editDocument={editDocument}
-                value={cell.value}
+                value={cell.getValue() as Value}
                 column={cell.column}
+                resizeHandler={columnResizeHandlers[cell.column.id]}
                 width={width}
-                inferIsDate={
-                  (cell.column as unknown as { isDate: boolean }).isDate
-                }
+                inferIsDate={cell.column.columnDef.meta?.isDate ?? false}
                 patchDocument={patchDocument}
                 tableName={tableName}
                 onOpenContextMenu={onOpenContextMenu}
                 onCloseContextMenu={onCloseContextMenu}
                 isContextMenuOpen={
-                  contextMenuColumn === (cell.column.Header as string) &&
-                  contextMenuRow === _id
+                  contextMenuColumn === cell.column.id && contextMenuRow === _id
                 }
                 canManageTable={canManageTable}
               />

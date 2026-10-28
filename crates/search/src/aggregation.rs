@@ -56,11 +56,11 @@ impl PostingListMatchAggregator {
     }
 }
 
-// Aggregate the top token matches, sorted by distance, prefix, term, and token
-// ordinal in *ascending* order. We allow a variable number of matches with the
-// invariant of maintaining at most `max_unique_terms` across all of the
-// candidate tuples. This uses a max-heap so we can efficiently pop the
-// candidate with the *largest* distance.
+// Aggregate the top token matches, sorted by prefix (exact matches first),
+// term, and token ordinal in *ascending* order. We allow a variable number of
+// matches with the invariant of maintaining at most `max_unique_terms` across
+// all of the candidate tuples. This uses a max-heap so we can efficiently pop
+// the worst candidate.
 pub struct TokenMatchAggregator {
     matches: BinaryHeap<TokenMatch>,
 

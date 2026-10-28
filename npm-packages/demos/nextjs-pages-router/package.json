@@ -3,21 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "npm-run-all --parallel dev:backend dev:frontend",
+    "dev": "convex dev --start 'next dev'",
     "build": "tsc && next build",
-    "dev:backend": "convex dev",
-    "dev:frontend": "next dev",
-    "predev": "convex dev --until-success",
     "start": "next start",
     "lint": "eslint ."
   },
   "dependencies": {
-    "next": "^15.5.10",
+    "next": "^15.5.28",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
     "convex": "workspace:*",
-    "@auth0/auth0-react": "2.11.0",
-    "prettier": "^3.8.0"
+    "@auth0/auth0-react": "2.15.1"
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "workspace:*",
@@ -29,9 +25,8 @@
     "@types/react-dom": "^18.0.0",
     "@vitejs/plugin-react": "^4.2.1",
     "eslint": "^9.37.0",
-    "eslint-config-next": "~13.4.16",
-    "npm-run-all2": "^8.0.0",
+    "eslint-config-next": "^15.5.4",
     "typescript": "~5.0.3",
-    "vite": "^6.4.1"
+    "vite": "^6.4.4"
   }
 }

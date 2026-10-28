@@ -16,7 +16,7 @@ import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { Doc, Id } from "system-udfs/convex/_generated/dataModel";
 import { formatDistanceStrict } from "date-fns";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { useCurrentTeam, useTeamMembers } from "api/teams";
 import { snapshotImportFormat } from "system-udfs/convex/tableDefs/snapshotImport";
 import { Infer } from "convex/values";
@@ -137,7 +137,7 @@ function ImportStateBody({
         <div>
           <Tooltip tip={completedDate.toLocaleString()}>
             <div className="flex items-center gap-1 border p-1 text-sm text-content-primary">
-              <CheckCircledIcon className="min-w-[1rem] text-util-success" />
+              <CheckCircledIcon className="min-w-4 text-util-success" />
               {`Completed ${formatDistanceStrict(completedDate, new Date(), {
                 addSuffix: true,
               })}`}
@@ -149,7 +149,7 @@ function ImportStateBody({
     case "failed":
       return (
         <div className="flex w-fit items-center gap-1 rounded-sm border p-1 text-sm">
-          <CrossCircledIcon className="min-w-[1rem] text-content-errorSecondary" />
+          <CrossCircledIcon className="min-w-4 text-content-errorSecondary" />
           {snapshotImport.state.error_message}
         </div>
       );
@@ -170,13 +170,13 @@ function ImportStatePill({
     case "uploaded":
     case "waiting_for_confirmation":
       return (
-        <span className="h-fit w-fit rounded-sm bg-blue-100 p-1 text-center text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100">
+        <span className="size-fit rounded-sm bg-blue-100 p-1 text-center text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100">
           pending confirmation
         </span>
       );
     case "in_progress":
       return (
-        <span className="h-fit w-fit rounded-sm bg-blue-100 p-1 text-center text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100">
+        <span className="size-fit rounded-sm bg-blue-100 p-1 text-center text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100">
           in progress
         </span>
       );
@@ -213,7 +213,6 @@ function snapshotImportFormatToText(
     case "zip":
       return "ZIP";
     default: {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       format satisfies never;
       return "";
     }
@@ -343,6 +342,7 @@ export function ImportState({
                   inline
                   variant="neutral"
                   size="xs"
+                  aria-label={open ? "Hide details" : "Show details"}
                 >
                   {open ? <ChevronUpIcon /> : <ChevronDownIcon />}
                 </DisclosureButton>
@@ -394,7 +394,6 @@ export function SnapshotImport() {
               <Link
                 target="_blank"
                 href="https://docs.convex.dev/database/import-export/import"
-                className="text-content-link hover:underline"
               >
                 Learn more
               </Link>

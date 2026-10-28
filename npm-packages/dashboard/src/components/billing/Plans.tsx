@@ -29,11 +29,9 @@ const placeholderPlans: PlanResponse[] = [
 
 export function Plans({
   team,
-  hasAdminPermissions,
   subscription,
 }: {
   team: TeamResponse;
-  hasAdminPermissions: boolean;
   subscription?: OrbSubscriptionResponse;
 }) {
   const orbPlans = useListPlans(team.id);
@@ -42,12 +40,7 @@ export function Plans({
 
   return (
     <div className="scrollbar flex gap-3 overflow-x-auto pb-2">
-      <FreePlan
-        hasAdminPermissions={hasAdminPermissions}
-        subscription={subscription}
-        team={team}
-        isLoading={isLoading}
-      />
+      <FreePlan subscription={subscription} team={team} isLoading={isLoading} />
       {plans.map((plan, idx) => (
         <OrbSelfServePlan
           key={idx}

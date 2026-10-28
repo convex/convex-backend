@@ -5,9 +5,9 @@ description: "How Convex bundles and optimizes your function code"
 ---
 
 Bundling is the process of gathering, optimizing and transpiling the JS/TS
-source code of [functions](/functions.mdx) and their dependencies. During
-development and when deploying, the code is transformed to a format that Convex
-[runtimes](/functions/runtimes.mdx) can directly and efficiently execute.
+source code of [functions](/functions/overview.mdx) and their dependencies.
+During development and when deploying, the code is transformed to a format that
+Convex [runtimes](/functions/runtimes.mdx) can directly and efficiently execute.
 
 Convex currently bundles all dependencies automatically, but for the Node.js
 runtime you can disable bundling certain packages via the
@@ -38,15 +38,22 @@ Thanks to bundling you can write your code using both modern ECMAScript Modules
 
 </Details>
 
+The bundler can also compile `.wasm` files that you `import` directly, exposing
+them as `WebAssembly.Module` default exports. See
+[Running WebAssembly](/functions/runtimes.mdx#running-webassembly) in the
+runtimes docs for how to run WebAssembly in the default Convex runtime.
+
 ## Bundling limitations
 
 The nature of bundling comes with a few limitations.
 
 ### Code size limits
 
-The total size of your bundled function code in your `convex/` folder is
-**limited to 32MiB (~33.55MB)**. Other platform limits can be found
-[here](/production/state/limits.mdx).
+The total size of your source code and
+[external packages](/functions/bundling.mdx#external-packages) cannot exceed
+230MB.
+
+Other platform limits can be found [here](/production/state/limits.mdx).
 
 While this limit in itself is quite high for just source code, certain
 dependencies can quickly make your bundle size cross over this limit,
@@ -86,8 +93,19 @@ You can follow these steps to debug bundle size:
 Code bundled for the Convex runtime will be in the `isolate` directory while
 code bundled for node actions will be in the `node` directory.
 
-Large node dependencies can be eliminated from the bundle by marking them as
-[external packages](/functions/bundling.mdx#external-packages).
+[External packages](/functions/bundling.mdx#external-packages) count towards the
+size limit, but will not be uploaded when pushing code to your deployment.
+Marking large node dependencies as external can make pushing code faster.
+However, external packages are installed in full rather than tree-shaken, so
+marking a dependency as external can increase your total code size.
+
+<Admonition type="tip" title="Upgrade to optimize your bundle">
+
+Starting from version 1.31.5, the `convex` NPM package includes optimizations to
+the sourcemaps in your bundle, which can substantially reduce bundle size.
+Upgrade to the latest version of the `convex` package for these improvements.
+
+</Admonition>
 
 ### Dynamic dependencies
 
@@ -144,10 +162,10 @@ pushes!
 
 ### Specifying external packages
 
-Create a [`convex.json`](/production/project-configuration.mdx#convexjson) file
-in the same directory as your `package.json` if it does not exist already. Set
-the `node.externalPackages` field to `["*"]` to mark all dependencies used
-within your Node actions as external:
+Create a [`convex.json`](/config/convex-json.mdx) file in the same directory as
+your `package.json` if it does not exist already. Set the
+`node.externalPackages` field to `["*"]` to mark all dependencies used within
+your Node actions as external:
 
 ```json title="convex.json"
 {
@@ -201,12 +219,6 @@ const { Foo } = SomeModule;
 ```
 
 ### Limitations
-
-The total size of your source code bundle and external packages cannot exceed
-the following:
-
-- 45MB zipped
-- 240MB unzipped
 
 Packages that are known not to work at this time:
 

@@ -17,7 +17,7 @@ This can be used to build components with "Load More" buttons or "infinite
 scroll" UIs where more results are loaded as the user scrolls.
 
 **Example:**
-[Paginated Messaging App](https://github.com/get-convex/convex-demos/tree/main/pagination)
+[Paginated Messaging App](https://github.com/convex/convex-demos/tree/main/pagination)
 
 Using pagination in Convex is as simple as:
 
@@ -39,7 +39,6 @@ To build this in Convex, define a query function that:
 
 1. Takes in a single arguments object with a `paginationOpts` property of type
    [`PaginationOptions`](/api/interfaces/server.PaginationOptions).
-
    - Use `paginationOptsValidator` exported from `"convex/server"` to
      [validate](/functions/validation.mdx) this argument. It includes fields
      used by the client to manage the gap-less pagination.
@@ -60,9 +59,8 @@ To build this in Convex, define a query function that:
      [`filter`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/filter)
      it before returning it.
 
-<TSAndJSSnippet
-  sourceTS={Messages}
-  sourceJS={Messages}
+<Snippet
+  source={Messages}
   title="convex/messages.ts"
   highlightPatterns={["paginationOpts"]}
   snippet="list"
@@ -73,9 +71,8 @@ To build this in Convex, define a query function that:
 You can define paginated query functions that take arguments in addition to
 `paginationOpts`:
 
-<TSAndJSSnippet
-  sourceTS={Messages}
-  sourceJS={Messages}
+<Snippet
+  source={Messages}
   snippet="listWithExtraArg"
   title="convex/messages.ts"
 />
@@ -87,9 +84,8 @@ You can apply arbitrary
 to the `page` property of the object returned by `paginate`, which contains the
 array of documents:
 
-<TSAndJSSnippet
-  sourceTS={Messages}
-  sourceJS={Messages}
+<Snippet
+  source={Messages}
   snippet="listWithTransformation"
   title="convex/messages.ts"
 />
@@ -121,9 +117,8 @@ The hook returns an object with:
 - `loadMore(n)`: A callback to fetch more results. This will only fetch more
   results if the status is `"CanLoadMore"`.
 
-<TSAndJSSnippet
-  sourceTS={SimpleCall}
-  sourceJS={SimpleCall}
+<Snippet
+  source={SimpleCall}
   snippet="example"
   title="src/App.tsx"
   highlightPatterns={["usePaginatedQuery\\(", "api.", "{}", "initialNumItems"]}
@@ -132,9 +127,8 @@ The hook returns an object with:
 You can also pass additional arguments in the arguments object if your function
 expects them:
 
-<TSAndJSSnippet
-  sourceTS={CallWithArgs}
-  sourceJS={CallWithArgs}
+<Snippet
+  source={CallWithArgs}
   snippet="example"
   title="src/App.tsx"
   highlightPatterns={["author:"]}
@@ -151,9 +145,75 @@ request a page of 10 items and then one item is removed, this page may "shrink"
 to only have 9 items. Similarly if new items are added, a page may "grow" beyond
 its initial size.
 
+### Experimental: paginated query result object
+
+[`usePaginatedQuery_experimental`](/api/modules/react#usepaginatedquery_experimental)
+introduces a couple of changes that may become standard in the future. First,
+much of the pagination logic has been pushed down into the client layer so the
+hook has fewer responsibilities. Second, there's an overload that accepts an
+object argument and returns a result object with `status`
+(`"pending" | "success" | "error"`), `data`, `error`, and a `canLoadMore`
+boolean. See the
+[API reference](/api/modules/react#usepaginatedquery_experimental) for details.
+
+## Cursors are bound to the query
+
+A cursor is only valid for the exact database query that produced it: the same
+table or index, the same index range, the same order, and the same `.filter()`
+expressions. If any of these differ when the cursor is passed back in, the query
+throws an `InvalidCursor` error. `usePaginatedQuery` catches this error, logs a
+warning, and restarts from the first page, discarding every page it had loaded.
+
+This matters when the database query is built from data the function reads:
+
+```ts
+export const listEmails = query({
+  args: { userId: v.id("users"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    return await ctx.db
+      .query("emails")
+      .withIndex("by_address", (q) => q.eq("address", user!.emailAddress))
+      .paginate(args.paginationOpts);
+  },
+});
+```
+
+If the user changes their email address, cursors from earlier pages point into
+the old address's index range and are rejected. The reset is intentional:
+continuing from those cursors would return pages from the wrong range.
+
+### Queries that depend on changing data
+
+- **Pass the dependency as an argument.** `usePaginatedQuery` restarts from the
+  first page whenever its arguments change, so passing `address` as an argument
+  gives the same reset without the warning, and the component can show a loading
+  state while it happens.
+- **Avoid data-dependent `.filter()` calls on paginated queries.** The filter
+  determines how many documents a page spans. A page of ten matches from a
+  sparse filter can cover thousands of index entries, and any write to those
+  documents re-runs the whole page. Index the dependency instead, or paginate
+  the relationship and load each referenced document:
+
+  ```ts
+  const favorites = await ctx.db
+    .query("favorites")
+    .withIndex("by_user", (q) => q.eq("userId", args.userId))
+    .paginate(args.paginationOpts);
+  const items = await Promise.all(
+    favorites.page.map((favorite) => ctx.db.get(favorite.itemId)),
+  );
+  return { ...favorites, page: items.filter((item) => item !== null) };
+  ```
+
+- **Filter the `page` array in JavaScript to keep loaded pages.** Filtering
+  after `paginate` doesn't change the database query, so cursors stay valid.
+  Some pages may come back empty while there are still more to load, so keep
+  calling `loadMore` until the hook's `status` is `"Exhausted"`.
+
 ## Paginating manually
 
 If you're paginating outside of React, you can manually call your paginated
 function multiple times to collect the items:
 
-<TSAndJSSnippet title="download.ts" sourceTS={Download} sourceJS={Download} />
+<Snippet title="download.ts" source={Download} />

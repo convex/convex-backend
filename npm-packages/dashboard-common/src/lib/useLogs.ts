@@ -12,7 +12,11 @@ import {
   useDeploymentAuthHeader,
   useDeploymentUrl,
 } from "@common/lib/deploymentApi";
-import { RequestFilter, streamFunctionLogs } from "@common/lib/appMetrics";
+import {
+  PermissionDeniedError,
+  RequestFilter,
+  streamFunctionLogs,
+} from "@common/lib/appMetrics";
 import { backoffWithJitter } from "@common/lib/utils";
 import { formatDateTime } from "@common/lib/format";
 import { functionIdentifierValue } from "@common/lib/functions/generateFileTree";
@@ -237,6 +241,10 @@ function queryFunctionLogs(
         if (e instanceof DOMException && e.code === DOMException.ABORT_ERR) {
           return;
         }
+        if (e instanceof PermissionDeniedError) {
+          callbacks.onPermissionDenied(e.message);
+          return;
+        }
         numFailures += 1;
         // Give it some time before we show an error to avoid looking extra broken due to transient
         // connectivity or backend errors (e.g. a backend restart during a push).
@@ -269,6 +277,7 @@ function queryFunctionLogs(
 type LogsConnectivityCallbacks = {
   onReconnected: () => void;
   onDisconnected: () => void;
+  onPermissionDenied: (message: string) => void;
 };
 
 export function useLogs(

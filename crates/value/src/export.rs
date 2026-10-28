@@ -17,7 +17,6 @@ use crate::{
 
 /// There are multiple ways a client may want their return Values represented.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ValueFormat {
     /// The default, representing values with invertible encoding.
     /// The websocket protocol uses this encoding.
@@ -220,110 +219,5 @@ impl ConvexValue {
                 }
             },
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::*;
-    use crate::proptest::{
-        RestrictNaNs,
-        ValueBranching,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn clean_export_of_server_and_client_values_are_identical(
-            server_value in any_with::<ConvexValue>(
-                (
-                    Default::default(),
-                    ValueBranching::default(),
-                    RestrictNaNs(false),
-                )
-            )
-        ) {
-            let json_value: JsonValue = server_value.to_internal_json();
-            let client_value: convex::Value = json_value.try_into().unwrap();
-            prop_assert_eq!(server_value.export_clean(), client_value.export());
-        }
-
-        #[test]
-        fn lossless_roundtrips(
-            value in any::<ConvexValue>()
-        ) {
-            let exported = value.clone().export_clean_lossless();
-            let imported = ConvexValue::from_clean_lossless(exported);
-            prop_assert_eq!(imported.map_err(|e| TestCaseError::fail(format!("{e:?}")))?, value);
-        }
-    }
-
-    #[test]
-    fn export_of_a_simple_string() {
-        let value = ConvexValue::String("Hello world".try_into().unwrap());
-        assert_eq!(
-            value.export_clean(),
-            JsonValue::String("Hello world".to_string())
-        );
-    }
-
-    #[test]
-    fn export_of_a_simple_int64() {
-        let value = ConvexValue::Int64(42);
-        assert_eq!(value.export_clean(), JsonValue::String("42".to_string()));
-    }
-
-    #[test]
-    fn export_lossless_integer() {
-        assert_eq!(
-            ConvexValue::Int64(42).export_clean_lossless().to_string(),
-            "42"
-        );
-        assert_eq!(
-            ConvexValue::Int64(i64::MAX)
-                .export_clean_lossless()
-                .to_string(),
-            "9223372036854775807"
-        );
-    }
-
-    #[test]
-    fn export_lossless_float() {
-        assert_eq!(
-            ConvexValue::Float64(0f64)
-                .export_clean_lossless()
-                .to_string(),
-            "0.0"
-        );
-        assert_eq!(
-            ConvexValue::Float64(-0f64)
-                .export_clean_lossless()
-                .to_string(),
-            "-0.0"
-        );
-        assert_eq!(
-            ConvexValue::Float64(f64::MIN)
-                .export_clean_lossless()
-                .to_string(),
-            "-1.7976931348623157e308"
-        );
-        assert_eq!(
-            ConvexValue::Float64(f64::MIN_POSITIVE)
-                .export_clean_lossless()
-                .to_string(),
-            "2.2250738585072014e-308"
-        );
-        assert_eq!(
-            ConvexValue::Float64(f64::INFINITY)
-                .export_clean_lossless()
-                .to_string(),
-            r#"{"$float":"AAAAAAAA8H8="}"#
-        );
     }
 }

@@ -16,6 +16,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use authentication::token_to_authorization_header;
 use common::{
+    audit_log_lines::AuditLogVars,
     auth::AuthConfig,
     backoff::Backoff,
     bootstrap_model::components::{
@@ -24,7 +25,6 @@ use common::{
     },
     components::{
         CanonicalizedComponentFunctionPath,
-        CanonicalizedComponentModulePath,
         ComponentDefinitionPath,
         ComponentId,
         ComponentName,
@@ -33,9 +33,14 @@ use common::{
         Resource,
     },
     errors::JsError,
-    execution_context::ExecutionContext,
+    execution_context::{
+        ExecutionContext,
+        RequestContext,
+        RequestId,
+    },
     fastrace_helpers::EncodedSpan,
     knobs::{
+        APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT,
         APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT,
         APPLICATION_MAX_CONCURRENT_MUTATIONS,
         APPLICATION_MAX_CONCURRENT_NODE_ACTIONS,
@@ -46,6 +51,9 @@ use common::{
         UDF_EXECUTOR_OCC_INITIAL_BACKOFF,
         UDF_EXECUTOR_OCC_MAX_BACKOFF,
         UDF_EXECUTOR_OCC_MAX_RETRIES,
+        UDF_FILE_STORAGE_INITIAL_BACKOFF,
+        UDF_FILE_STORAGE_MAX_BACKOFF,
+        UDF_FILE_STORAGE_MAX_RETRIES,
     },
     log_lines::{
         run_function_and_collect_log_lines,
@@ -64,24 +72,33 @@ use common::{
     },
     types::{
         AllowedVisibility,
+        AttributedCaller,
+        AttributionClaims,
+        DeploymentMetadata,
         FunctionCaller,
         ModuleEnvironment,
         NodeDependency,
+        QueryInvocation,
         Timestamp,
         UdfType,
     },
-    RequestId,
 };
 use database::{
     unauthorized_error,
     Database,
     Transaction,
+    WriteSource,
+    MAX_OCC_FAILURES,
 };
 use errors::{
     ErrorMetadata,
     ErrorMetadataAnyhowExt,
 };
-use file_storage::TransactionalFileStorage;
+use file_storage::{
+    TransactionalFileStorage,
+    FILE_DOWNLOAD_FAILED_SHORT_MSG,
+    FILE_UPLOAD_FAILED_SHORT_MSG,
+};
 use function_runner::{
     server::{
         FunctionMetadata,
@@ -95,18 +112,16 @@ use futures::{
     future,
     FutureExt,
 };
-use isolate::ActionCallbacks;
 use keybroker::{
+    DeploymentOp,
     Identity,
     KeyBroker,
 };
 use model::{
+    backend_info::BackendInfoModel,
     backend_state::BackendStateModel,
     components::handles::FunctionHandlesModel,
-    config::{
-        module_loader::ModuleLoader,
-        types::ModuleConfig,
-    },
+    config::types::ModuleConfig,
     environment_variables::{
         types::{
             EnvVarName,
@@ -146,11 +161,12 @@ use model::{
     udf_config::types::UdfConfig,
 };
 use node_executor::{
-    Actions,
     AnalyzeRequest,
     BuildDepsRequest,
     ExecuteRequest,
+    NodeActions,
 };
+use roles::RequireDeploymentOp;
 use serde_json::Value as JsonValue;
 use storage::Storage;
 use sync_types::{
@@ -165,11 +181,13 @@ use udf::{
     environment::system_env_vars,
     validation::{
         validate_schedule_args,
+        PendingArgsPolicy,
         ValidatedActionOutcome,
         ValidatedPathAndArgs,
         ValidatedUdfOutcome,
     },
     warnings::scheduled_arg_size_warning,
+    ActionCallbacks,
     ActionOutcome,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
@@ -180,7 +198,6 @@ use udf::{
 use usage_tracking::{
     FunctionUsageStats,
     FunctionUsageTracker,
-    OccInfo,
 };
 use value::{
     id_v6::DeveloperDocumentId,
@@ -204,12 +221,14 @@ use self::metrics::{
     UdfExecutorResult,
 };
 use crate::{
+    ai_gateway_jwt::AiGatewayJwtMinter,
     application_function_runner::metrics::{
         function_run_timer,
         function_total_timer,
         log_function_wait_timeout,
         log_mutation_already_committed,
     },
+    audit_logging::AuditLogClient,
     cache::{
         CacheManager,
         QueryCache,
@@ -219,6 +238,7 @@ use crate::{
         FunctionExecutionLog,
         OutstandingFunctionState,
     },
+    source_map_cache::SourceMapCache,
     ActionError,
     ActionReturn,
     MutationError,
@@ -229,7 +249,7 @@ use crate::{
 mod http_routing;
 mod metrics;
 
-static BUILD_DEPS_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| Duration::from_secs(1200));
+static BUILD_DEPS_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| Duration::from_secs(600));
 
 /// Wrapper for [IsolateClient]s and [FunctionRunner]s that determines where to
 /// route requests.
@@ -257,18 +277,21 @@ impl<RT: Runtime> FunctionRouter<RT> {
             ModuleEnvironment::Isolate,
             UdfType::Query,
             *APPLICATION_MAX_CONCURRENT_QUERIES,
+            *APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT,
             function_log.clone(),
         ));
         let mutation_limiter = Arc::new(Limiter::new(
             ModuleEnvironment::Isolate,
             UdfType::Mutation,
             *APPLICATION_MAX_CONCURRENT_MUTATIONS,
+            *APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT,
             function_log.clone(),
         ));
         let action_limiter = Arc::new(Limiter::new(
             ModuleEnvironment::Isolate,
             UdfType::Action,
             *APPLICATION_MAX_CONCURRENT_V8_ACTIONS,
+            *APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT,
             function_log,
         ));
         Self {
@@ -284,21 +307,45 @@ impl<RT: Runtime> FunctionRouter<RT> {
 }
 
 impl<RT: Runtime> FunctionRouter<RT> {
+    pub(crate) async fn acquire_permit(
+        &self,
+        udf_type: UdfType,
+    ) -> anyhow::Result<RequestGuard<'_, RT>> {
+        self.limiter(udf_type)
+            .acquire_permit(&self.rt, PermitTimeout::Enforce)
+            .await
+    }
+
+    fn limiter(&self, udf_type: UdfType) -> &Limiter<RT> {
+        match udf_type {
+            UdfType::Query => &self.query_limiter,
+            UdfType::Mutation => &self.mutation_limiter,
+            UdfType::Action | UdfType::HttpAction => &self.action_limiter,
+        }
+    }
+
     #[fastrace::trace]
     pub(crate) async fn execute_query_or_mutation(
         &self,
         tx: Transaction<RT>,
+        permit: RequestGuard<'_, RT>,
         path_and_args: ValidatedPathAndArgs,
         udf_type: UdfType,
         journal: QueryJournal,
         context: ExecutionContext,
     ) -> anyhow::Result<(Transaction<RT>, FunctionOutcome)> {
         anyhow::ensure!(udf_type == UdfType::Query || udf_type == UdfType::Mutation);
+        anyhow::ensure!(
+            permit.limiter.udf_type == udf_type,
+            "Running a {udf_type} with a {} permit",
+            permit.limiter.udf_type
+        );
         // All queries and mutations are run in the isolate environment.
         let timer = function_total_timer(ModuleEnvironment::Isolate, udf_type);
         let (tx, outcome) = self
             .function_runner_execute(
                 tx,
+                permit,
                 udf_type,
                 context,
                 None,
@@ -321,10 +368,16 @@ impl<RT: Runtime> FunctionRouter<RT> {
         path_and_args: ValidatedPathAndArgs,
         log_line_sender: mpsc::UnboundedSender<LogLine>,
         context: ExecutionContext,
+        permit_timeout: PermitTimeout,
     ) -> anyhow::Result<ActionOutcome> {
+        let permit = self
+            .action_limiter
+            .acquire_permit(&self.rt, permit_timeout)
+            .await?;
         let (_, outcome) = self
             .function_runner_execute(
                 tx,
+                permit,
                 UdfType::Action,
                 context,
                 Some(log_line_sender),
@@ -352,9 +405,11 @@ impl<RT: Runtime> FunctionRouter<RT> {
     ) -> anyhow::Result<HttpActionOutcome> {
         // All http actions are run in the isolate environment.
         let timer = function_total_timer(ModuleEnvironment::Isolate, UdfType::HttpAction);
+        let permit = self.acquire_permit(UdfType::HttpAction).await?;
         let (_, outcome) = self
             .function_runner_execute(
                 tx,
+                permit,
                 UdfType::HttpAction,
                 context,
                 Some(log_line_sender),
@@ -370,37 +425,36 @@ impl<RT: Runtime> FunctionRouter<RT> {
         Ok(outcome)
     }
 
-    // Execute using the function runner. Can be used for v8 udfs other than http
-    // actions.
+    // Drain the concurrency permits for `udf_type` to deterministically
+    // exercise the concurrency limit in tests.
     #[fastrace::trace]
     async fn function_runner_execute(
         &self,
         mut tx: Transaction<RT>,
+        permit: RequestGuard<'_, RT>,
         udf_type: UdfType,
         context: ExecutionContext,
         log_line_sender: Option<mpsc::UnboundedSender<LogLine>>,
         function_metadata: Option<FunctionMetadata>,
         http_action_metadata: Option<HttpActionMetadata>,
     ) -> anyhow::Result<(Option<Transaction<RT>>, FunctionOutcome)> {
+        // Read in this transaction so preference changes invalidate cached queries.
+        let udf_runtime = BackendInfoModel::new(&mut tx)
+            .get()
+            .await?
+            .and_then(|info| info.default_udf_runtime);
         let in_memory_index_last_modified = self
             .database
             .snapshot(tx.begin_timestamp())?
             .in_memory_indexes
             .in_memory_indexes_last_modified();
 
-        let limiter = match udf_type {
-            UdfType::Query => &self.query_limiter,
-            UdfType::Mutation => &self.mutation_limiter,
-            UdfType::Action | UdfType::HttpAction => &self.action_limiter,
-        };
-
-        let request_guard = limiter.acquire_permit_with_timeout(&self.rt).await?;
-
         let timer = function_run_timer(udf_type);
         let (function_tx, outcome, usage_stats) = self
             .function_runner
             .run_function(
                 udf_type,
+                udf_runtime,
                 tx.identity().clone(),
                 tx.begin_timestamp(),
                 FunctionWrites {
@@ -415,7 +469,7 @@ impl<RT: Runtime> FunctionRouter<RT> {
             )
             .await?;
         timer.finish();
-        drop(request_guard);
+        drop(permit);
 
         // Add the usage stats to the current transaction tracker.
         tx.usage_tracker.add(usage_stats);
@@ -437,6 +491,7 @@ impl<RT: Runtime> FunctionRouter<RT> {
                 system_tx_size,
                 updates,
                 function_tx.rows_read_by_tablet,
+                function_tx.uploaded_files,
             )?;
             Some(tx)
         } else {
@@ -445,6 +500,12 @@ impl<RT: Runtime> FunctionRouter<RT> {
 
         Ok((tx, outcome))
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum PermitTimeout {
+    Enforce,
+    WaitIndefinitely,
 }
 
 // Used to limit upstream concurrency for a given function type. It also tracks
@@ -456,6 +517,9 @@ struct Limiter<RT: Runtime> {
     // Used to limit running functions.
     semaphore: Semaphore,
     total_permits: usize,
+
+    // How long to wait for a permit before rejecting the request.
+    semaphore_timeout: Duration,
 
     // Total function requests, including ones still waiting on the semaphore.
     total_outstanding: AtomicUsize,
@@ -469,6 +533,7 @@ impl<RT: Runtime> Limiter<RT> {
         env: ModuleEnvironment,
         udf_type: UdfType,
         total_permits: usize,
+        semaphore_timeout: Duration,
         function_log: FunctionExecutionLog<RT>,
     ) -> Self {
         let limiter = Self {
@@ -476,6 +541,7 @@ impl<RT: Runtime> Limiter<RT> {
             env,
             semaphore: Semaphore::new(total_permits),
             total_permits,
+            semaphore_timeout,
             total_outstanding: AtomicUsize::new(0),
             function_log,
         };
@@ -485,28 +551,39 @@ impl<RT: Runtime> Limiter<RT> {
     }
 
     #[fastrace::trace]
-    async fn acquire_permit_with_timeout<'a>(
+    async fn acquire_permit<'a>(
         &'a self,
         rt: &'a RT,
+        timeout: PermitTimeout,
     ) -> anyhow::Result<RequestGuard<'a, RT>> {
         let mut request_guard = self.start();
         select! {
             biased;
-            _ = request_guard.acquire_permit() => {},
+            result = request_guard.acquire_permit() => result?,
             x = async {
                 // Report metrics while waiting for a permit. This captures the
                 // queued state only when the semaphore is actually full.
                 self.report_metrics();
                 future::pending::<!>().await
             } => match x {},
-            _ = rt.wait(*APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT) => {
+            _ = async {
+                match timeout {
+                    PermitTimeout::Enforce => rt.wait(self.semaphore_timeout).await,
+                    PermitTimeout::WaitIndefinitely => future::pending().await,
+                }
+            } => {
                 log_function_wait_timeout(self.env, self.udf_type);
+                let functions = match self.udf_type {
+                    UdfType::Query => "queries",
+                    UdfType::Mutation => "mutations",
+                    UdfType::Action => "actions",
+                    UdfType::HttpAction => "HTTP actions",
+                };
                 anyhow::bail!(ErrorMetadata::rate_limited(
                     "TooManyConcurrentRequests",
                     format!(
-                        "Too many concurrent requests. Your backend is limited to {} concurrent {}s. {}",
+                        "Too many concurrent requests. Your backend is limited to {} concurrent {functions}. {}",
                         self.total_permits,
-                        self.udf_type.to_lowercase_string(),
                         if self.total_permits > DEFAULT_APPLICATION_MAX_FUNCTION_CONCURRENCY {
                             "If you need more resources, please contact support."
                         } else {
@@ -527,6 +604,9 @@ impl<RT: Runtime> Limiter<RT> {
         }
     }
 
+    // Permanently remove all permits so the next acquisition hits the concurrency
+    // limit, simulating a saturated backend. Use `add_permits` to make capacity
+    // available again. Test-only.
     // Reports metrics for the current waiting and running function gauges.
     fn report_metrics(&self) {
         let num_running_functions = self.total_permits - self.semaphore.available_permits();
@@ -571,7 +651,7 @@ impl<RT: Runtime> Limiter<RT> {
 
 // Wraps a request to guarantee we correctly update the waiting and running
 // gauges even if dropped.
-struct RequestGuard<'a, RT: Runtime> {
+pub struct RequestGuard<'a, RT: Runtime> {
     limiter: &'a Limiter<RT>,
     permit: Option<SemaphorePermit<'a>>,
 }
@@ -617,17 +697,20 @@ pub struct ApplicationFunctionRunner<RT: Runtime> {
 
     isolate_functions: FunctionRouter<RT>,
     // Used for analyze, schema, etc.
-    node_actions: Actions<RT>,
+    node_actions: NodeActions<RT>,
 
-    pub(crate) module_cache: Arc<dyn ModuleLoader<RT>>,
-    modules_storage: Arc<dyn Storage>,
+    source_map_cache: SourceMapCache<RT>,
+    pub(crate) modules_storage: Arc<dyn Storage>,
     file_storage: TransactionalFileStorage<RT>,
 
     function_log: FunctionExecutionLog<RT>,
+    audit_log_client: AuditLogClient,
 
     cache_manager: CacheManager<RT>,
     default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
     node_action_limiter: Limiter<RT>,
+    ai_gateway_jwt_minter: Option<Arc<dyn AiGatewayJwtMinter>>,
+    deployment: DeploymentMetadata,
 }
 
 impl<RT: Runtime> ApplicationFunctionRunner<RT> {
@@ -636,13 +719,16 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         database: Database<RT>,
         key_broker: KeyBroker,
         function_runner: Arc<dyn FunctionRunner<RT>>,
-        node_actions: Actions<RT>,
+        node_actions: NodeActions<RT>,
         file_storage: TransactionalFileStorage<RT>,
         modules_storage: Arc<dyn Storage>,
-        module_cache: Arc<dyn ModuleLoader<RT>>,
+        source_map_cache: SourceMapCache<RT>,
         function_log: FunctionExecutionLog<RT>,
+        audit_log_client: AuditLogClient,
         default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         cache: QueryCache,
+        ai_gateway_jwt_minter: Option<Arc<dyn AiGatewayJwtMinter>>,
+        deployment: DeploymentMetadata,
     ) -> Self {
         let isolate_functions = FunctionRouter::new(
             function_runner,
@@ -656,6 +742,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             database.clone(),
             isolate_functions.clone(),
             function_log.clone(),
+            audit_log_client.clone(),
             cache,
         );
 
@@ -663,6 +750,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             ModuleEnvironment::Node,
             UdfType::Action,
             *APPLICATION_MAX_CONCURRENT_NODE_ACTIONS,
+            *APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT,
             function_log.clone(),
         );
 
@@ -672,14 +760,64 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             key_broker,
             isolate_functions,
             node_actions,
-            module_cache,
+            source_map_cache,
             modules_storage,
             file_storage,
             function_log,
+            audit_log_client,
             cache_manager,
             default_system_env_vars,
             node_action_limiter,
+            ai_gateway_jwt_minter,
+            deployment,
         }
+    }
+
+    /// Called with a typed caller via [`ActionCallbacks`], or with flat
+    /// claims from Conductor's gRPC handler.
+    pub async fn mint_ai_gateway_jwt(
+        &self,
+        identity: &Identity,
+        attribution: AttributionClaims,
+        request_id: &RequestId,
+    ) -> anyhow::Result<String> {
+        match identity {
+            // Deploy keys and dashboard members carry an op set, from the key's
+            // `allowed_operations` or the member's custom roles, so hold them to
+            // it.
+            Identity::DeploymentAdmin(_) | Identity::ActingUser(..) => {
+                identity.require_operation(DeploymentOp::UseAiGateway)?
+            },
+            // End users authenticate against the app's own auth config and have
+            // no op set. Gating them would reject the ordinary case of an app
+            // user triggering an action that calls the gateway.
+            Identity::System(_) | Identity::User(_) | Identity::Unknown(_) => {},
+        }
+        let mut tx = self.database.begin_system().await?;
+        self.bail_if_backend_not_running(&mut tx).await?;
+        let ai_gateway_disabled = BackendInfoModel::new(&mut tx)
+            .get()
+            .await?
+            .and_then(|backend_info| backend_info.ai_gateway_disabled)
+            .unwrap_or(false);
+        if ai_gateway_disabled {
+            anyhow::bail!(ErrorMetadata::forbidden(
+                "AiGatewayDisabled",
+                "The Convex AI gateway is not enabled for your team. Upgrade to a paid plan to \
+                 enable it, or contact support@convex.dev if you believe this is an error."
+            ));
+        }
+        let Some(minter) = self.ai_gateway_jwt_minter.as_ref() else {
+            // `bad_request` shows this message to the developer; a bare
+            // anyhow error would show a generic internal error instead.
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "AiGatewayUnavailable",
+                "`getServiceToken(\"ai-gateway\")` isn't available on this deployment because the \
+                 AI gateway is a Convex Cloud service. Deploy to Convex Cloud, or call your model \
+                 provider directly with your own API key."
+            ));
+        };
+        minter.mint(&self.deployment, attribution, request_id).await
     }
 
     pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
@@ -690,7 +828,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     // Only used for running queries from REPLs.
     pub async fn run_query_without_caching(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         mut tx: Transaction<RT>,
         path: CanonicalizedComponentFunctionPath,
         arguments: SerializedArgs,
@@ -710,12 +848,18 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             UdfType::Query,
         )
         .await?;
-        let context = ExecutionContext::new(request_id, &caller);
+        let context = ExecutionContext::new(request_context, &caller);
         let (mut tx, outcome) = match validate_result {
             Ok(path_and_args) => {
+                // Preserve the caller's uncommitted module writes in this transaction.
+                let permit = self
+                    .isolate_functions
+                    .acquire_permit(UdfType::Query)
+                    .await?;
                 self.isolate_functions
                     .execute_query_or_mutation(
                         tx,
+                        permit,
                         path_and_args,
                         UdfType::Query,
                         QueryJournal::new(),
@@ -739,9 +883,27 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             FunctionOutcome::Query(o) => o,
             _ => anyhow::bail!("Received non-query outcome for query"),
         };
+
+        let vars = AuditLogVars::from_context(
+            context.clone(),
+            tx.identity().convex_actor_var(),
+            &self.runtime,
+        )?;
+        self.audit_log_client
+            .send_logs(
+                outcome.audit_log_lines.resolve_bodies(&vars)?,
+                &tx.usage_tracker,
+            )
+            .await?;
+
         let stats = tx.take_stats();
 
-        let result = outcome.result.clone();
+        // A top-level query's result never contains unresolved commit
+        // timestamps.
+        let result = match outcome.result.clone() {
+            Ok(value) => Ok(value.try_into()?),
+            Err(e) => Err(e),
+        };
         let log_lines = outcome.log_lines.clone();
         self.function_log
             .log_query(
@@ -751,10 +913,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 start.elapsed(),
                 caller,
                 tx.usage_tracker,
-                context,
+                context.clone(),
+                QueryInvocation::Fresh,
             )
             .await;
-
         Ok((result, log_lines))
     }
 
@@ -762,7 +924,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     pub async fn retry_mutation(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         identity: Identity,
@@ -773,7 +935,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         let timer = mutation_timer();
         let result = self
             ._retry_mutation(
-                request_id,
+                request_context,
                 path,
                 arguments,
                 identity,
@@ -793,7 +955,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     async fn _retry_mutation(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         identity: Identity,
@@ -804,47 +966,37 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         if path.is_system() && !(identity.is_admin() || identity.is_system()) {
             anyhow::bail!(unauthorized_error("mutation"));
         }
-        let udf_path_string = (!path.is_system()).then_some(path.udf_path().to_string());
+        let write_source = WriteSource::mutation(path.clone().debug_into_component_path());
 
         let mut backoff = Backoff::new(
             *UDF_EXECUTOR_OCC_INITIAL_BACKOFF,
             *UDF_EXECUTOR_OCC_MAX_BACKOFF,
         );
+        let mut file_storage_backoff = Backoff::new(
+            *UDF_FILE_STORAGE_INITIAL_BACKOFF,
+            *UDF_FILE_STORAGE_MAX_BACKOFF,
+        );
 
         loop {
-            let mutation_retry_count = backoff.failures() as usize;
+            let occ_retry_count = backoff.failures() as usize;
+            let mutation_retry_count = occ_retry_count + file_storage_backoff.failures() as usize;
             let usage_tracker = FunctionUsageTracker::new();
 
             // Note that we use different context for every mutation attempt.
             // This so every JS function run gets a different executionId.
-            let context = ExecutionContext::new(request_id.clone(), &caller);
+            let context = ExecutionContext::new(request_context.clone(), &caller);
 
             let start = self.runtime.monotonic_now();
+            let permit = self.acquire_mutation_permit().await;
             let mut tx = self
                 .database
                 .begin_with_usage(identity.clone(), usage_tracker.clone())
                 .await?;
-            match self.database.check_write_throughput_limit() {
-                Ok(()) => {},
-                Err(e)
-                    if e.is_rate_limited()
-                        && (backoff.failures() as usize) < *UDF_EXECUTOR_OCC_MAX_RETRIES =>
-                {
-                    let sleep = backoff.fail(&mut self.runtime.rng());
-                    tracing::warn!(
-                        "Write throughput limit exceeded, retrying {udf_path_string:?} after \
-                         {sleep:?}",
-                    );
-                    self.runtime.wait(sleep).await;
-                    continue;
-                },
-                Err(e) => return Err(e),
-            }
             let pause_client = self.runtime.pause_client();
             pause_client.wait("retry_mutation_loop_start").await;
             let identity = tx.inert_identity();
 
-            // Return the previous execution's result if the mutation was committed already.
+            // Committed mutations can be replayed even if permit acquisition failed.
             if let Some(result) = self
                 .check_mutation_status(&mut tx, &mutation_identifier)
                 .await?
@@ -855,6 +1007,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             let result: Result<(Transaction<RT>, ValidatedUdfOutcome), anyhow::Error> = self
                 .run_mutation_no_udf_log(
                     tx,
+                    permit,
                     path.clone(),
                     arguments.clone(),
                     caller.allowed_visibility(),
@@ -865,6 +1018,31 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             let (mut tx, mut outcome) = match result {
                 Ok(r) => r,
                 Err(e) => {
+                    if e.short_msg() == "TooManyWrites"
+                        && (backoff.failures() as usize) < *UDF_EXECUTOR_OCC_MAX_RETRIES
+                    {
+                        let sleep = backoff.fail(&mut self.runtime.rng());
+                        tracing::warn!(
+                            "Write throughput limit exceeded, retrying {write_source:?} after \
+                             {sleep:?}",
+                        );
+                        self.runtime.wait(sleep).await;
+                        continue;
+                    }
+                    if matches!(
+                        e.short_msg(),
+                        FILE_UPLOAD_FAILED_SHORT_MSG | FILE_DOWNLOAD_FAILED_SHORT_MSG
+                    ) && (file_storage_backoff.failures() as usize)
+                        < *UDF_FILE_STORAGE_MAX_RETRIES
+                    {
+                        let sleep = file_storage_backoff.fail(&mut self.runtime.rng());
+                        tracing::warn!(
+                            "File storage failed ({e:#}), retrying {write_source:?} after \
+                             {sleep:?}",
+                        );
+                        self.runtime.wait(sleep).await;
+                        continue;
+                    }
                     self.function_log
                         .log_mutation_system_error(
                             &e,
@@ -920,11 +1098,14 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             // errors from the log.
             let result = match self
                 .database
-                .commit_with_write_source(tx, udf_path_string.clone())
+                .commit_with_write_source(tx, write_source.clone())
                 .await
             {
                 Ok(ts) => Ok(MutationReturn {
-                    value,
+                    // The commit timestamp is known now, so unresolved commit
+                    // timestamps in the return value resolve to it, matching
+                    // the committer's resolution of the transaction's writes.
+                    value: value.resolve_commit_ts(i64::from(ts))?,
                     log_lines,
                     ts,
                 }),
@@ -937,13 +1118,13 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                             log_lines,
                         })
                     } else {
-                        if e.is_occ()
+                        if let Some(occ_info) = e.occ_info()
                             && (backoff.failures() as usize) < *UDF_EXECUTOR_OCC_MAX_RETRIES
                         {
                             let sleep = backoff.fail(&mut self.runtime.rng());
                             tracing::warn!(
                                 "Optimistic concurrency control failed ({e}), retrying \
-                                 {udf_path_string:?} after {sleep:?}",
+                                 {write_source:?} after {sleep:?}",
                             );
                             self.runtime.wait(sleep).await;
                             if let Some(write_ts_raw) = e.occ_write_ts()
@@ -951,8 +1132,6 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                             {
                                 self.database.wait_for_write_ts(write_ts).await;
                             }
-                            let (table_name, document_id, write_source) =
-                                e.occ_info().unwrap_or((None, None, None));
                             self.function_log
                                 .log_mutation_occ_error(
                                     outcome,
@@ -961,23 +1140,18 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                                     caller.clone(),
                                     usage_tracker,
                                     context.clone(),
-                                    OccInfo {
-                                        table_name,
-                                        document_id,
-                                        write_source,
-                                        retry_count: mutation_retry_count as u64,
-                                    },
+                                    occ_info,
                                     mutation_queue_length,
                                     mutation_retry_count,
+                                    occ_retry_count,
+                                    true,
                                 )
                                 .await;
                             continue;
                         }
                         outcome.result = Err(JsError::from_error_ref(&e));
 
-                        if e.is_occ() {
-                            let (table_name, document_id, write_source) =
-                                e.occ_info().unwrap_or((None, None, None));
+                        if let Some(occ_info) = e.occ_info() {
                             self.function_log
                                 .log_mutation_occ_error(
                                     outcome,
@@ -986,14 +1160,11 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                                     caller,
                                     usage_tracker,
                                     context.clone(),
-                                    OccInfo {
-                                        table_name,
-                                        document_id,
-                                        write_source,
-                                        retry_count: mutation_retry_count as u64,
-                                    },
+                                    occ_info,
                                     mutation_queue_length,
                                     mutation_retry_count,
+                                    occ_retry_count,
+                                    false,
                                 )
                                 .await;
                         } else {
@@ -1034,12 +1205,28 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         }
     }
 
+    /// Ordinary mutations acquire before beginning their transaction to keep
+    /// the snapshot fresh. Background jobs begin their transactions before
+    /// waiting and rely on OCC retries for freshness.
+    ///
+    /// Fails with `TooManyWrites` instead of waiting while the write throughput
+    /// limit is exceeded. The mutation checks the limit again after the wait.
+    pub async fn acquire_mutation_permit(&self) -> anyhow::Result<RequestGuard<'_, RT>> {
+        self.database.check_write_throughput_limit()?;
+        self.isolate_functions
+            .acquire_permit(UdfType::Mutation)
+            .await
+    }
+
     /// Attempts to run a mutation once using the given transaction.
-    /// The method is not idempotent. It is the caller responsibility to
-    /// drive retries as we as log in the UDF log.
+    /// The caller handles retries and UDF logging.
+    ///
+    /// Accepts a permit acquisition error so it can be logged with other system
+    /// errors.
     pub async fn run_mutation_no_udf_log(
         &self,
         tx: Transaction<RT>,
+        permit: anyhow::Result<RequestGuard<'_, RT>>,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         allowed_visibility: AllowedVisibility,
@@ -1049,6 +1236,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         let result = self
             .run_mutation_inner(
                 tx,
+                permit,
                 path,
                 arguments,
                 allowed_visibility,
@@ -1080,12 +1268,15 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     async fn run_mutation_inner(
         &self,
         mut tx: Transaction<RT>,
+        permit: anyhow::Result<RequestGuard<'_, RT>>,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         allowed_visibility: AllowedVisibility,
         context: ExecutionContext,
         mutation_queue_length: Option<usize>,
     ) -> anyhow::Result<(Transaction<RT>, ValidatedUdfOutcome)> {
+        let permit = permit?;
+        self.database.check_write_throughput_limit()?;
         if path.is_system() && !(tx.identity().is_admin() || tx.identity().is_system()) {
             anyhow::bail!(unauthorized_error("mutation"));
         }
@@ -1096,10 +1287,11 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             path.clone(),
             arguments.clone(),
             UdfType::Mutation,
+            PendingArgsPolicy::Reject,
         )
         .await?;
 
-        let (path_and_args, returns_validator) = match validate_result {
+        let (path_and_args, returns_validator, _) = match validate_result {
             Ok(tuple) => tuple,
             Err(js_err) => {
                 let mutation_outcome = ValidatedUdfOutcome::from_error(
@@ -1119,16 +1311,27 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             .isolate_functions
             .execute_query_or_mutation(
                 tx,
+                permit,
                 path_and_args,
                 UdfType::Mutation,
                 QueryJournal::new(),
-                context,
+                context.clone(),
             )
             .await?;
         let mutation_outcome = match outcome {
             FunctionOutcome::Mutation(o) => o,
             _ => anyhow::bail!("Received non-mutation outcome for mutation"),
         };
+
+        let vars =
+            AuditLogVars::from_context(context, tx.identity().convex_actor_var(), &self.runtime)?;
+        self.audit_log_client
+            .send_logs(
+                mutation_outcome.audit_log_lines.resolve_bodies(&vars)?,
+                &tx.usage_tracker,
+            )
+            .await?;
+
         let component = path.component;
 
         let table_mapping = tx.table_mapping().namespace(component.into());
@@ -1146,7 +1349,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     pub async fn run_action(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         identity: Identity,
@@ -1155,7 +1358,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         if path.is_system() && !(identity.is_admin() || identity.is_system()) {
             anyhow::bail!(unauthorized_error("action"));
         }
-        let context = ExecutionContext::new(request_id.clone(), &caller);
+        let context = ExecutionContext::new(request_context, &caller);
         let usage_tracking = FunctionUsageTracker::new();
         let start = self.runtime.monotonic_now();
         let completion_result = self
@@ -1166,6 +1369,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 caller.clone(),
                 usage_tracking.clone(),
                 context.clone(),
+                PermitTimeout::Enforce,
             )
             .await;
         let completion = match completion_result {
@@ -1213,9 +1417,18 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         caller: FunctionCaller,
         usage_tracking: FunctionUsageTracker,
         context: ExecutionContext,
+        permit_timeout: PermitTimeout,
     ) -> anyhow::Result<ActionCompletion> {
         let result = self
-            .run_action_inner(path, arguments, identity, caller, usage_tracking, context)
+            .run_action_inner(
+                path,
+                arguments,
+                identity,
+                caller,
+                usage_tracking,
+                context,
+                permit_timeout,
+            )
             .await;
         match result.as_ref() {
             Ok(completion) => {
@@ -1246,6 +1459,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         caller: FunctionCaller,
         usage_tracking: FunctionUsageTracker,
         context: ExecutionContext,
+        permit_timeout: PermitTimeout,
     ) -> anyhow::Result<ActionCompletion> {
         if path.is_system() && !(identity.is_admin() || identity.is_system()) {
             anyhow::bail!(unauthorized_error("action"));
@@ -1262,12 +1476,16 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             path.clone(),
             arguments.clone(),
             UdfType::Action,
+            PendingArgsPolicy::Reject,
         )
         .await?;
 
         // Fetch the returns_validator now to be used at a later ts.
         let (path_and_args, returns_validator) = match validate_result {
-            Ok((path_and_args, returns_validator)) => (path_and_args, returns_validator),
+            // We don't need to store visibility_info for non-queries.
+            Ok((path_and_args, returns_validator, _visibility_info)) => {
+                (path_and_args, returns_validator)
+            },
             Err(js_error) => {
                 return Ok(ActionCompletion {
                     outcome: ValidatedActionOutcome::from_error(
@@ -1309,11 +1527,15 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         let timer = function_total_timer(module.environment, UdfType::Action);
         let completion_result = match module.environment {
             ModuleEnvironment::Isolate => {
-                // TODO: This is the only use case of clone. We should get rid of clone,
-                // when we deprecate that codepath.
                 let outcome_future = self
                     .isolate_functions
-                    .execute_action(tx, path_and_args, log_line_sender, context.clone())
+                    .execute_action(
+                        tx,
+                        path_and_args,
+                        log_line_sender,
+                        context.clone(),
+                        permit_timeout,
+                    )
                     .boxed();
                 let (outcome_result, log_lines) = run_function_and_collect_log_lines(
                     outcome_future,
@@ -1351,44 +1573,31 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 })
             },
             ModuleEnvironment::Node => {
-                // We should not be missing the module given we validated the path above
-                // which requires the module to exist.
-                let module_path = CanonicalizedComponentModulePath {
-                    component: path.component,
-                    module_path: path.udf_path.module().clone(),
-                };
-                let component = path.component;
-                let module_metadata = match ModuleModel::new(&mut tx)
-                    .get_metadata(module_path.clone())
+                let source_package = SourcePackageModel::new(&mut tx, path.component.into())
+                    .get_latest()
                     .await?
-                {
-                    Some(r) => r,
-                    None => anyhow::bail!("Missing a valid module_version"),
-                };
-                let source_package = SourcePackageModel::new(&mut tx, component.into())
-                    .get(module_metadata.source_package_id)
-                    .await?;
+                    .context("no source package?")?;
                 let source_maps_callback = async {
-                    let module_version = self
-                        .module_cache
-                        .get_module_with_metadata(module_metadata, source_package)
-                        .await?;
                     let mut source_maps = BTreeMap::new();
-                    if let Some(source_map) = module_version.source_map.clone() {
-                        source_maps.insert(module_path.module_path.clone(), source_map);
+                    if let Some(source_map) = self
+                        .source_map_cache
+                        .get_source_map(
+                            &self.deployment.name,
+                            &self.modules_storage,
+                            &module,
+                            &source_package,
+                        )
+                        .await?
+                    {
+                        source_maps.insert(path.udf_path.module().clone(), source_map);
                     }
                     Ok(source_maps)
                 };
-                let _request_guard = self
+                let _permit = self
                     .node_action_limiter
-                    .acquire_permit_with_timeout(&self.runtime)
+                    .acquire_permit(&self.runtime, permit_timeout)
                     .await?;
 
-                let source_package_id = module.source_package_id;
-                let source_package = SourcePackageModel::new(&mut tx, component.into())
-                    .get(source_package_id)
-                    .await?
-                    .into_value();
                 let mut environment_variables =
                     system_env_vars(&mut tx, self.default_system_env_vars.clone()).await?;
                 let user_environment_variables =
@@ -1400,10 +1609,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     .modules_storage
                     .signed_url(source_package.storage_key.clone(), Duration::from_secs(60));
                 let (source_uri, external_deps_package) = if let Some(external_deps_package_id) =
-                    source_package.external_deps_package_id
+                    &source_package.external_deps_package_id
                 {
                     let pkg = ExternalPackagesModel::new(&mut tx)
-                        .get(external_deps_package_id)
+                        .get(external_deps_package_id.clone())
                         .await?
                         .into_value();
                     let external_uri_future = self
@@ -1430,12 +1639,12 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     source_package: node_executor::SourcePackage {
                         bundled_source: node_executor::Package {
                             uri: source_uri,
-                            key: source_package.storage_key,
-                            sha256: source_package.sha256,
+                            key: source_package.storage_key.clone(),
+                            sha256: source_package.sha256.clone(),
                         },
                         external_deps: external_deps_package,
                     },
-                    source_package_id,
+                    source_package_id: source_package.developer_id().into(),
                     user_identity: tx.user_identity(),
                     auth_header: token_to_authorization_header(tx.authentication_token())?,
                     environment_variables,
@@ -1544,6 +1753,8 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         }
     }
 
+    // Drain the isolate concurrency permits for `udf_type` so tests can
+    // deterministically force `TooManyConcurrentRequests` and then recover.
     #[fastrace::trace]
     pub async fn build_deps(
         &self,
@@ -1713,6 +1924,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         }
 
         self.validate_cron_jobs(&result)??;
+
         Ok(Ok(result))
     }
 
@@ -1809,16 +2021,26 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     pub async fn run_query_at_ts(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
         ts: Timestamp,
         journal: Option<QueryJournal>,
         caller: FunctionCaller,
+        invocation: QueryInvocation,
     ) -> anyhow::Result<QueryReturn> {
         let result = self
-            .run_query_at_ts_inner(request_id, path, args, identity, ts, journal, caller)
+            .run_query_at_ts_inner(
+                request_context,
+                path,
+                args,
+                identity,
+                ts,
+                journal,
+                caller,
+                invocation,
+            )
             .await;
         match result.as_ref() {
             Ok(udf_outcome) => {
@@ -1842,24 +2064,25 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
     async fn run_query_at_ts_inner(
         &self,
-        request_id: RequestId,
+        request_context: RequestContext,
         path: PublicFunctionPath,
         args: SerializedArgs,
         identity: Identity,
         ts: Timestamp,
         journal: Option<QueryJournal>,
         caller: FunctionCaller,
+        invocation: QueryInvocation,
     ) -> anyhow::Result<QueryReturn> {
         if path.is_system() && !(identity.is_admin() || identity.is_system()) {
             anyhow::bail!(unauthorized_error("query"));
         }
         let start = self.runtime.monotonic_now();
-        let context = ExecutionContext::new(request_id.clone(), &caller);
+        let context = ExecutionContext::new(request_context.clone(), &caller);
         let usage_tracker = FunctionUsageTracker::new();
         let result = self
             .cache_manager
             .get(
-                request_id,
+                request_context,
                 path.clone(),
                 args.clone(),
                 identity.clone(),
@@ -1867,6 +2090,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 journal,
                 caller.clone(),
                 usage_tracker.clone(),
+                invocation,
             )
             .await;
 
@@ -1885,6 +2109,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         start,
                         caller,
                         context,
+                        invocation,
                     )
                     .await?;
                 Err(e)
@@ -1912,8 +2137,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     identifier
                 );
                 log_mutation_already_committed(age);
+                // Sessions are recorded transactionally in mutations so can use the same commit
+                // ts.
                 Ok(MutationReturn {
-                    value: result,
+                    value: result.resolve_commit_ts(i64::from(ts))?,
                     log_lines,
                     ts,
                 })
@@ -1965,6 +2192,17 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
 #[async_trait]
 impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
+    async fn create_ai_gateway_token(
+        &self,
+        identity: Identity,
+        caller: AttributedCaller,
+        request_id: RequestId,
+    ) -> anyhow::Result<String> {
+        self.mint_ai_gateway_jwt(&identity, AttributionClaims::from(caller), &request_id)
+            .await
+    }
+
+    #[fastrace::trace]
     async fn execute_query(
         &self,
         identity: Identity,
@@ -1975,7 +2213,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
         let ts = self.database.now_ts_for_reads();
         let result = self
             .run_query_at_ts(
-                context.request_id,
+                RequestContext::new(context.request_id, context.request_metadata),
                 PublicFunctionPath::Component(path),
                 args,
                 identity,
@@ -1985,6 +2223,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
                     parent_scheduled_job: context.parent_scheduled_job,
                     parent_execution_id: Some(context.execution_id),
                 },
+                QueryInvocation::Fresh,
             )
             .await?
             .result;
@@ -2001,7 +2240,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
     ) -> anyhow::Result<FunctionResult> {
         let result = self
             .retry_mutation(
-                context.request_id,
+                RequestContext::new(context.request_id, context.request_metadata),
                 PublicFunctionPath::Component(path),
                 args,
                 identity,
@@ -2031,7 +2270,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
         let _tx = self.database.begin(identity.clone()).await?;
         let result = self
             .run_action(
-                context.request_id,
+                RequestContext::new(context.request_id, context.request_metadata),
                 PublicFunctionPath::Component(path),
                 args,
                 identity,
@@ -2092,13 +2331,14 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
             .execute_with_occ_retries(
                 identity,
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "app_funrun_storage_store_file_entry",
                 |tx| {
                     async {
                         let component_path = tx
                             .get_component_path(component)
                             .context(format!("Component {component:?} not found"))?;
-                        let id = self
+                        let (_, id) = self
                             .file_storage
                             .store_file_entry(tx, component.into(), entry.clone())
                             .await?;
@@ -2123,6 +2363,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
             .execute_with_occ_retries(
                 identity,
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "app_funrun_storage_delete",
                 |tx| {
                     async {
@@ -2153,6 +2394,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
             .execute_with_occ_retries(
                 identity,
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "app_funrun_schedule_job",
                 |tx| {
                     let path = scheduled_path.clone();
@@ -2206,6 +2448,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
             .execute_with_occ_retries(
                 identity,
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "app_funrun_cancel_job",
                 |tx| {
                     async {

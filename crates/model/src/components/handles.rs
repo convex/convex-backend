@@ -32,6 +32,7 @@ use database::{
     BootstrapComponentsModel,
     ResolvedQuery,
     SystemMetadataModel,
+    TableModel,
     Transaction,
 };
 use errors::ErrorMetadata;
@@ -49,11 +50,7 @@ use value::{
 
 use crate::modules::module_versions::AnalyzedModule;
 
-pub static FUNCTION_HANDLES_TABLE: LazyLock<TableName> = LazyLock::new(|| {
-    "_function_handles"
-        .parse()
-        .expect("_function_handles is not a valid built-in table name")
-});
+pub const FUNCTION_HANDLES_TABLE: TableName = TableName::const_new("_function_handles");
 
 pub static BY_COMPONENT_PATH_INDEX: LazyLock<SystemIndex<FunctionHandlesTable>> =
     LazyLock::new(|| {
@@ -71,9 +68,7 @@ pub struct FunctionHandlesTable;
 impl SystemTable for FunctionHandlesTable {
     type Metadata = FunctionHandleMetadata;
 
-    fn table_name() -> &'static TableName {
-        &FUNCTION_HANDLES_TABLE
-    }
+    const TABLE_NAME: TableName = FUNCTION_HANDLES_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![BY_COMPONENT_PATH_INDEX.clone()]
@@ -99,11 +94,13 @@ impl<'a, RT: Runtime> FunctionHandlesModel<'a, RT> {
         handle: FunctionHandle,
     ) -> anyhow::Result<CanonicalizedComponentFunctionPath> {
         let id = DeveloperDocumentId::from(handle);
-        let resolved_id = self.tx.resolve_developer_id(&id, TableNamespace::Global)?;
-        let Some(document) = self.tx.get(resolved_id).await? else {
+        let Some(metadata) = self
+            .tx
+            .get_system::<FunctionHandlesTable>(TableNamespace::Global, id)
+            .await?
+        else {
             anyhow::bail!(function_handle_not_found());
         };
-        let metadata = ParseDocument::<FunctionHandleMetadata>::parse(document)?.into_value();
         if metadata.deleted_ts.is_some() {
             anyhow::bail!(function_handle_not_found());
         }
@@ -111,7 +108,7 @@ impl<'a, RT: Runtime> FunctionHandlesModel<'a, RT> {
             BootstrapComponentsModel::new(self.tx).must_component_path(metadata.component)?;
         Ok(CanonicalizedComponentFunctionPath {
             component: component_path,
-            udf_path: metadata.path,
+            udf_path: metadata.path.clone(),
         })
     }
 
@@ -139,27 +136,20 @@ impl<'a, RT: Runtime> FunctionHandlesModel<'a, RT> {
             Some(s) => ConvexValue::String(s.try_into()?),
             None => ConvexValue::Null,
         };
-        let index_range = IndexRange {
-            index_name: BY_COMPONENT_PATH_INDEX.name(),
-            range: vec![
-                IndexRangeExpression::Eq(COMPONENT_FIELD.clone(), serialized_component.into()),
-                IndexRangeExpression::Eq(
-                    PATH_FIELD.clone(),
-                    ConvexValue::String(String::from(path.clone()).try_into()?).into(),
-                ),
-            ],
-            order: Order::Asc,
-        };
-        let query = Query::index_range(index_range);
-        let mut query_stream = ResolvedQuery::new(self.tx, TableNamespace::Global, query)?;
-        let Some(document) = query_stream.expect_at_most_one(self.tx).await? else {
+        let Some(document) = self
+            .tx
+            .query_system(TableNamespace::Global, &BY_COMPONENT_PATH_INDEX)?
+            .eq(&[&serialized_component])?
+            .eq(&[path.to_string().as_str()])?
+            .unique()
+            .await?
+        else {
             anyhow::bail!(function_handle_not_found())
         };
-        let document: ParsedDocument<FunctionHandleMetadata> = document.parse()?;
         if document.deleted_ts.is_some() {
             anyhow::bail!(function_handle_not_found())
         }
-        Ok(FunctionHandle::new(document.developer_id()))
+        Ok(FunctionHandle::new(document.developer_id(), Some(path)))
     }
 
     #[fastrace::trace]
@@ -192,6 +182,23 @@ impl<'a, RT: Runtime> FunctionHandlesModel<'a, RT> {
                 .is_none());
         }
 
+        let mut modified_handles = 0;
+        let mut maybe_consolidate_dependency = |tx: &mut Transaction<RT>| {
+            modified_handles += 1;
+            if modified_handles == 32 {
+                // HACK: avoid TooManyReads error by
+                // consolidating the read dependency on
+                // `_function_handles.by_id`.
+                let tablet = tx
+                    .table_mapping()
+                    .namespace(TableNamespace::Global)
+                    .name_to_tablet()(FUNCTION_HANDLES_TABLE.clone())?;
+                TableModel::new(tx).add_dependency_on_tablet(tablet)
+            } else {
+                Ok(())
+            }
+        };
+
         if let Some(new_analyze_results) = new_analyze_results {
             for (module_path, analyzed_module) in new_analyze_results {
                 for function in &analyzed_module.functions {
@@ -200,6 +207,7 @@ impl<'a, RT: Runtime> FunctionHandlesModel<'a, RT> {
                     match existing_handles.remove(&udf_path) {
                         Some(existing_handle) => {
                             if existing_handle.deleted_ts.is_some() {
+                                maybe_consolidate_dependency(self.tx)?;
                                 let (id, mut metadata) = existing_handle.into_id_and_value();
                                 metadata.deleted_ts = None;
                                 SystemMetadataModel::new_global(self.tx)
@@ -225,6 +233,7 @@ impl<'a, RT: Runtime> FunctionHandlesModel<'a, RT> {
         for (_, remaining_handle) in existing_handles {
             let (id, mut metadata) = remaining_handle.into_id_and_value();
             if metadata.deleted_ts.is_none() {
+                maybe_consolidate_dependency(self.tx)?;
                 metadata.deleted_ts = Some(*self.tx.begin_timestamp());
                 SystemMetadataModel::new_global(self.tx)
                     .replace(id, metadata.try_into()?)

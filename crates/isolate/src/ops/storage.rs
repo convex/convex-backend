@@ -6,13 +6,13 @@ use deno_core::{
     },
 };
 
-use super::OpProvider;
+use super::V8OpProvider;
 use crate::{
     environment::AsyncOpRequest,
     request_scope::StreamListener,
 };
 
-pub fn async_op_storage_store<'b, P: OpProvider<'b>>(
+pub fn async_op_storage_store<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     args: v8::FunctionCallbackArguments,
     resolver: v8::Global<v8::PromiseResolver>,
@@ -41,7 +41,7 @@ pub fn async_op_storage_store<'b, P: OpProvider<'b>>(
     )
 }
 
-pub fn async_op_storage_get<'b, P: OpProvider<'b>>(
+pub fn async_op_storage_get<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     args: v8::FunctionCallbackArguments,
     resolver: v8::Global<v8::PromiseResolver>,

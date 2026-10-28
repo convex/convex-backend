@@ -33,7 +33,7 @@ use common::{
     query::Order,
     runtime::Runtime,
     types::{
-        IndexId,
+        IndexRef,
         RepeatableReason,
         RepeatableTimestamp,
         Timestamp,
@@ -41,8 +41,10 @@ use common::{
     value::{
         ConvexObject,
         JsonInteger,
+        NamespacedTableMapping,
         Size,
         TableMapping,
+        TableName,
         TabletId,
     },
 };
@@ -51,15 +53,8 @@ use futures::{
     Stream,
     TryStreamExt,
 };
-#[cfg(any(test, feature = "testing"))]
-use keybroker::Identity;
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use serde::Deserialize;
-use serde_json::{
-    json,
-    Value as JsonValue,
-};
+use serde_json::Value as JsonValue;
 use shape_inference::{
     CountedShape,
     ProdConfig,
@@ -67,8 +62,6 @@ use shape_inference::{
     ShapeEnum,
 };
 
-#[cfg(any(test, feature = "testing"))]
-use crate::IndexModel;
 use crate::{
     bootstrap_model::defaults::BootstrapTableIds,
     metrics,
@@ -78,10 +71,99 @@ use crate::{
     TableIterator,
 };
 
+/// Document count and byte size of the documents in a table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableCount {
+    num_values: u64,
+    total_size: u64,
+}
+
+impl TableCount {
+    pub fn empty() -> Self {
+        Self {
+            num_values: 0,
+            total_size: 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.num_values == 0 && self.total_size == 0
+    }
+
+    pub fn num_values(&self) -> u64 {
+        self.num_values
+    }
+
+    pub fn total_size(&self) -> u64 {
+        self.total_size
+    }
+
+    pub fn insert(&mut self, object: &ConvexObject) {
+        self.num_values += 1;
+        self.total_size += object.size() as u64;
+    }
+
+    pub fn remove(&mut self, object: &ConvexObject) -> anyhow::Result<()> {
+        self.num_values = self
+            .num_values
+            .checked_sub(1)
+            .context("num_values went negative?")?;
+        self.total_size = self
+            .total_size
+            .checked_sub(object.size() as u64)
+            .context("total_size went negative?")?;
+        Ok(())
+    }
+}
+
+/// Inferred shape of the documents in a table.
+/// TODO: Add `ts` that the shape is valid at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableShape {
+    inferred_type: CountedShape<ProdConfig>,
+}
+
+impl fmt::Display for TableShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.inferred_type)
+    }
+}
+
+impl TableShape {
+    pub fn empty() -> Self {
+        Self {
+            inferred_type: Shape::empty(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inferred_type.is_empty()
+    }
+
+    pub fn inferred_type(&self) -> &CountedShape<ProdConfig> {
+        &self.inferred_type
+    }
+
+    pub fn insert(&mut self, object: &ConvexObject) {
+        self.inferred_type = self.inferred_type.insert(object);
+    }
+
+    pub fn remove(&mut self, object: &ConvexObject) -> anyhow::Result<()> {
+        self.inferred_type = self.inferred_type.remove(object)?;
+        Ok(())
+    }
+
+    /// Drop the tracked shape while preserving the document count, replacing it
+    /// with an `Unknown` shape of the given size.
+    pub fn reset(&mut self, num_values: u64) {
+        self.inferred_type = CountedShape::new(ShapeEnum::Unknown, num_values);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableSummary {
-    inferred_type: CountedShape<ProdConfig>,
-    total_size: u64,
+    count: TableCount,
+    shape: TableShape,
 }
 
 impl fmt::Display for TableSummary {
@@ -89,7 +171,7 @@ impl fmt::Display for TableSummary {
         write!(
             f,
             "TableSummary {{ inferred_type: {}, total_size: {} }}",
-            self.inferred_type, self.total_size
+            self.shape.inferred_type, self.count.total_size
         )
     }
 }
@@ -97,48 +179,52 @@ impl fmt::Display for TableSummary {
 impl TableSummary {
     pub fn empty() -> Self {
         Self {
-            inferred_type: Shape::empty(),
-            total_size: 0,
+            count: TableCount::empty(),
+            shape: TableShape::empty(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inferred_type.is_empty() && self.total_size == 0
+        self.count.is_empty() && self.shape.is_empty()
+    }
+
+    pub fn count(&self) -> &TableCount {
+        &self.count
+    }
+
+    pub fn shape(&self) -> &TableShape {
+        &self.shape
+    }
+
+    pub fn into_shape(self) -> TableShape {
+        self.shape
     }
 
     pub fn total_size(&self) -> u64 {
-        self.total_size
+        self.count.total_size()
     }
 
     pub fn num_values(&self) -> u64 {
-        *self.inferred_type.num_values()
+        self.count.num_values()
     }
 
     pub fn inferred_type(&self) -> &CountedShape<ProdConfig> {
-        &self.inferred_type
+        self.shape.inferred_type()
     }
 
-    pub fn insert(&self, object: &ConvexObject) -> Self {
-        let total_size = self.total_size + object.size() as u64;
-        Self {
-            inferred_type: self.inferred_type.insert(object),
-            total_size,
-        }
+    pub fn insert(&mut self, object: &ConvexObject) {
+        self.count.insert(object);
+        self.shape.insert(object);
     }
 
-    pub fn remove(&self, object: &ConvexObject) -> anyhow::Result<Self> {
-        let size = object.size() as u64;
-        Ok(Self {
-            inferred_type: self.inferred_type.remove(object)?,
-            total_size: self
-                .total_size
-                .checked_sub(size)
-                .context("total_size went negative?")?,
-        })
+    pub fn remove(&mut self, object: &ConvexObject) -> anyhow::Result<()> {
+        self.shape.remove(object)?;
+        self.count.remove(object)?;
+        Ok(())
     }
 
     pub fn reset_shape(&mut self) {
-        self.inferred_type = CountedShape::new(ShapeEnum::Unknown, self.num_values());
+        self.shape.reset(self.count.num_values());
     }
 
     pub fn persistence_key() -> PersistenceGlobalKey {
@@ -148,10 +234,16 @@ impl TableSummary {
 
 impl From<&TableSummary> for JsonValue {
     fn from(summary: &TableSummary) -> Self {
-        json!({
-            "totalSize": JsonInteger::encode(summary.total_size as i64),
-            "inferredTypeWithOptionalFields": JsonValue::from(&summary.inferred_type)
-        })
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "totalSize".into(),
+            JsonInteger(summary.count.total_size as i64).into(),
+        );
+        object.insert(
+            "inferredTypeWithOptionalFields".into(),
+            JsonValue::from(&summary.shape.inferred_type),
+        );
+        object.into()
     }
 }
 
@@ -170,38 +262,20 @@ impl TryFrom<JsonValue> for TableSummary {
                     Some(v) => CountedShape::<ProdConfig>::json_deserialize_value(v)?,
                     None => anyhow::bail!("Missing field inferredTypeWithOptionalFields"),
                 };
+                // The document count is derived from the shape's own counter on
+                // load; from here on it is maintained authoritatively in
+                // `TableCount`.
+                let num_values = *inferred_type.num_values();
                 Ok(TableSummary {
-                    inferred_type,
-                    total_size,
+                    count: TableCount {
+                        num_values,
+                        total_size,
+                    },
+                    shape: TableShape { inferred_type },
                 })
             },
             _ => anyhow::bail!("Wrong type of json value for TableSummaryJson"),
         }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for TableSummary {
-    type Parameters = ();
-
-    type Strategy = impl Strategy<Value = TableSummary>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        let values = prop::collection::vec((any::<bool>(), any::<ConvexObject>()), 0..10);
-        values.prop_map(|values| {
-            let mut summary = TableSummary::empty();
-            for (_, value) in values.iter() {
-                summary = summary.insert(value);
-            }
-            for (deleted, value) in values.iter() {
-                if *deleted {
-                    summary = summary
-                        .remove(value)
-                        .expect("inserted value should be removable")
-                }
-            }
-            summary
-        })
     }
 }
 
@@ -211,19 +285,75 @@ pub struct TableSummarySnapshot {
     pub ts: Timestamp,
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for TableSummarySnapshot {
-    type Parameters = ();
+/// The inferred shapes of every table, as of a timestamp.
+#[derive(Debug, Clone)]
+pub struct TableShapes {
+    pub tables: BTreeMap<TabletId, TableShape>,
+    /// Timestamp of the snapshot these shapes are accurate for
+    pub ts: Timestamp,
+}
 
-    type Strategy = impl proptest::strategy::Strategy<Value = TableSummarySnapshot>;
+impl TableShapes {
+    pub fn tablet_shape(&self, tablet: &TabletId) -> Option<&TableShape> {
+        self.tables.get(tablet)
+    }
 
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-        (
-            any::<Timestamp>(),
-            proptest::collection::btree_map(any::<TabletId>(), any::<TableSummary>(), 0..4),
-        )
-            .prop_map(|(ts, tables)| TableSummarySnapshot { tables, ts })
+    /// Shape for a table resolved against the given (possibly newer) table
+    /// mapping. `None` when the table doesn't resolve or was created after
+    /// `ts`, i.e. no shape has been computed for it yet.
+    pub fn table_shape(
+        &self,
+        mapping: &NamespacedTableMapping,
+        table: &TableName,
+    ) -> Option<&TableShape> {
+        let table_id = mapping.id(table).ok()?;
+        self.tables.get(&table_id.tablet_id)
+    }
+}
+
+impl From<TableSummarySnapshot> for TableShapes {
+    fn from(snapshot: TableSummarySnapshot) -> Self {
+        Self {
+            tables: snapshot
+                .tables
+                .into_iter()
+                .map(|(tablet, summary)| (tablet, summary.into_shape()))
+                .collect(),
+            ts: snapshot.ts,
+        }
+    }
+}
+
+/// A [`TableSummarySnapshot`] filtered to tables that exist: counts and shapes
+/// together, exact at a single timestamp.
+///
+/// This is for offline tools (`db-info`, `db-verifier`) that load summaries
+/// via `DatabaseSnapshot::load_table_summaries`. The live `Snapshot` holds
+/// only counts (`TableCounts`); live shape readers use the asynchronously
+/// published [`TableShapes`] instead.
+#[derive(Clone)]
+pub struct TableSummaries {
+    pub tables: BTreeMap<TabletId, TableSummary>,
+}
+
+impl TableSummaries {
+    pub fn new(
+        TableSummarySnapshot { tables, ts: _ }: TableSummarySnapshot,
+        table_mapping: &TableMapping,
+    ) -> Self {
+        Self {
+            tables: tables
+                .into_iter()
+                .filter(|(table_id, _table_summary)| table_mapping.tablet_id_exists(*table_id))
+                .collect(),
+        }
+    }
+
+    pub fn tablet_summary(&self, table: &TabletId) -> TableSummary {
+        self.tables
+            .get(table)
+            .cloned()
+            .unwrap_or_else(TableSummary::empty)
     }
 }
 
@@ -249,13 +379,18 @@ impl TableSummarySnapshot {
 
 impl From<&TableSummarySnapshot> for JsonValue {
     fn from(snapshot: &TableSummarySnapshot) -> Self {
-        json!({
-            "tables": snapshot.tables
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "tables".into(),
+            snapshot
+                .tables
                 .iter()
                 .map(|(k, v)| (k.to_string(), JsonValue::from(v)))
-                .collect::<serde_json::Map<String, JsonValue>>(),
-            "ts": JsonInteger::encode(snapshot.ts.into()),
-        })
+                .collect::<serde_json::Map<String, JsonValue>>()
+                .into(),
+        );
+        object.insert("ts".into(), JsonInteger(snapshot.ts.into()).into());
+        object.into()
     }
 }
 
@@ -314,35 +449,13 @@ impl<RT: Runtime> TableSummaryWriter<RT> {
         }
     }
 
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn compute_snapshot(&self, page_size: usize) -> anyhow::Result<TableSummarySnapshot> {
-        let mut tx = self.database.begin(Identity::system()).await?;
-        let start_ts = tx.begin_timestamp();
-        let table_mapping = tx.table_mapping().clone();
-        let by_id_indexes = IndexModel::new(&mut tx).by_id_indexes().await?;
-        drop(tx);
-
-        let snapshot_ts = self.database.now_ts_for_reads();
-
-        let pause_client = self.database.runtime().pause_client();
-        pause_client.wait("table_summary_snapshot_picked").await;
-        let database = self.database.clone();
-        Self::collect_snapshot(
-            *start_ts,
-            move || database.table_iterator(snapshot_ts, page_size),
-            &table_mapping,
-            &by_id_indexes,
-        )
-        .await
-    }
-
     pub async fn collect_snapshot(
         // table_iterator, table_mapping, and by_id_indexes should all be
         // computed at the same snapshot.
         snapshot_ts: Timestamp,
         table_iterator: impl Fn() -> TableIterator<RT>,
         table_mapping: &TableMapping,
-        by_id_indexes: &BTreeMap<TabletId, IndexId>,
+        by_id_indexes: &BTreeMap<TabletId, IndexRef>,
     ) -> anyhow::Result<TableSummarySnapshot> {
         let mut snapshot = BTreeMap::new();
         for (tablet_id, ..) in table_mapping.iter() {
@@ -366,13 +479,25 @@ impl<RT: Runtime> TableSummaryWriter<RT> {
         futures::pin_mut!(revision_stream);
         let mut summary = TableSummary::empty();
         while let Some(rev) = revision_stream.try_next().await? {
-            summary = summary.insert(rev.value.value());
-            let num_values = summary.inferred_type.num_values();
+            summary.insert(rev.value.value());
+            let num_values = summary.num_values();
             if num_values % 10000 == 0 {
                 tracing::info!("Collecting table summary with {num_values} documents")
             }
         }
         Ok(summary)
+    }
+
+    /// Compute a fresh table summary from the last persisted checkpoint,
+    /// persist it as the new checkpoint, and publish its shapes to the
+    /// [`Database`]'s in-memory store. Returns the checkpoint's timestamp.
+    pub async fn checkpoint(&self) -> anyhow::Result<Timestamp> {
+        let snapshot = self.compute_from_last_checkpoint().await?;
+        let ts = snapshot.ts;
+        tracing::info!("Writing table summary checkpoint at ts {ts}");
+        write_snapshot(self.persistence.as_ref(), &snapshot).await?;
+        self.database.publish_table_shapes(snapshot.into());
+        Ok(ts)
     }
 
     pub async fn compute_from_last_checkpoint(&self) -> anyhow::Result<TableSummarySnapshot> {
@@ -398,6 +523,11 @@ impl<RT: Runtime> TableSummaryWriter<RT> {
     }
 }
 
+/// Persist a table summary checkpoint. On a live deployment, use
+/// [`TableSummaryWriter::checkpoint`] instead so the checkpoint's shapes are
+/// also published to the in-memory store; this free function exists for
+/// tooling (e.g. cluster migration) that writes to a persistence with no
+/// running `Database`.
 pub async fn write_snapshot(
     persistence: &dyn Persistence,
     snapshot: &TableSummarySnapshot,
@@ -407,6 +537,7 @@ pub async fn write_snapshot(
         .await
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BootstrapKind {
     FromScratch,
     FromCheckpoint,
@@ -456,7 +587,7 @@ pub async fn bootstrap<RT: Runtime>(
     let (base_snapshot, base_snapshot_ts) = match stored_snapshot {
         Some(base) => base,
         None => {
-            let by_id_indexes = index_registry.by_id_indexes();
+            let by_id_indexes = index_registry.by_id_indexes()?;
             let base_snapshot = TableSummaryWriter::<RT>::collect_snapshot(
                 *recent_ts,
                 || {
@@ -580,327 +711,10 @@ fn add_revision(
         TableSummary::empty,
     );
     if let Some(old_document) = revision_pair.prev_document() {
-        *summary = summary.remove(old_document.value())?;
+        summary.remove(old_document.value())?;
     }
     if let Some(new_document) = revision_pair.document() {
-        *summary = summary.insert(new_document.value());
+        summary.insert(new_document.value());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::BTreeMap,
-        sync::Arc,
-    };
-
-    use cmd_util::env::env_config;
-    use common::{
-        persistence::NoopRetentionValidator,
-        types::{
-            unchecked_repeatable_ts,
-            FieldName,
-            TableName,
-        },
-        value::ConvexObject,
-    };
-    use keybroker::Identity;
-    use prop::collection::vec as prop_vec;
-    use proptest::prelude::*;
-    use runtime::testing::{
-        TestDriver,
-        TestRuntime,
-    };
-    use serde_json::Value as JsonValue;
-    use value::{
-        assert_obj,
-        proptest::{
-            RestrictNaNs,
-            ValueBranching,
-        },
-        resolved_object_strategy,
-        resolved_value_strategy,
-        TableNamespace,
-    };
-
-    use super::{
-        TableSummary,
-        TableSummarySnapshot,
-        TableSummaryWriter,
-    };
-    use crate::{
-        table_summary::{
-            bootstrap,
-            write_snapshot,
-            BootstrapKind,
-        },
-        test_helpers::DbFixtures,
-        TestFacingModel,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_bootstrap_directions(rt: TestRuntime) -> anyhow::Result<()> {
-        // Three documents written at different timestamps: ts1, ts2, ts3.
-        // Test the two reasons for walking by_id, and the documents log walk
-        // forwards and backwards.
-
-        let DbFixtures {
-            db: database,
-            tp: persistence,
-            ..
-        } = DbFixtures::new(&rt).await?;
-        let rv = database.retention_validator();
-        let table_name: TableName = "t".parse()?;
-
-        let mut tx = database.begin(Identity::system()).await?;
-        let inserted = TestFacingModel::new(&mut tx)
-            .insert_and_get(table_name.clone(), assert_obj!("f" => 1))
-            .await?;
-        let value = inserted.value().0.clone();
-        let expected_ts1 = TableSummary::empty().insert(&value);
-        let table_id = tx
-            .table_mapping()
-            .namespace(TableNamespace::test_user())
-            .id(&table_name)?;
-        let ts1 = unchecked_repeatable_ts(database.commit(tx).await?);
-
-        let mut tx = database.begin(Identity::system()).await?;
-        let inserted = TestFacingModel::new(&mut tx)
-            .insert_and_get(table_name.clone(), assert_obj!("f" => true))
-            .await?;
-        let value = inserted.value().0.clone();
-        let expected_ts2 = expected_ts1.insert(&value);
-        let ts2 = unchecked_repeatable_ts(database.commit(tx).await?);
-
-        let mut tx = database.begin(Identity::system()).await?;
-        let inserted = TestFacingModel::new(&mut tx)
-            .insert_and_get(table_name.clone(), assert_obj!("f" => 5.0))
-            .await?;
-        let value = inserted.value().0.clone();
-        let expected_ts3 = expected_ts2.insert(&value);
-        let ts3 = unchecked_repeatable_ts(database.commit(tx).await?);
-
-        // Bootstrap at ts2 by walking by_id, and write the snapshot that later
-        // test cases will use.
-        let (snapshot, _) = bootstrap::<TestRuntime>(
-            rt.clone(),
-            persistence.reader(),
-            rv.clone(),
-            ts2,
-            BootstrapKind::FromCheckpoint,
-        )
-        .await?;
-        assert_eq!(
-            snapshot.tables.get(&table_id.tablet_id),
-            Some(&expected_ts2)
-        );
-        assert_eq!(snapshot.ts, *ts2);
-        write_snapshot(persistence.as_ref(), &snapshot).await?;
-
-        // Bootstrap at ts2 by reading the snapshot and returning it.
-        let (snapshot, walked) = bootstrap(
-            rt.clone(),
-            persistence.reader(),
-            rv.clone(),
-            ts2,
-            BootstrapKind::FromCheckpoint,
-        )
-        .await?;
-        assert_eq!(walked, 0);
-        assert_eq!(
-            snapshot.tables.get(&table_id.tablet_id),
-            Some(&expected_ts2)
-        );
-        assert_eq!(snapshot.ts, *ts2);
-
-        // Bootstrap at ts3 by reading the snapshot and walking forwards.
-        let (snapshot, walked) = bootstrap(
-            rt.clone(),
-            persistence.reader(),
-            rv.clone(),
-            ts3,
-            BootstrapKind::FromCheckpoint,
-        )
-        .await?;
-        assert_eq!(walked, 1);
-        assert_eq!(
-            snapshot.tables.get(&table_id.tablet_id),
-            Some(&expected_ts3)
-        );
-        assert_eq!(snapshot.ts, *ts3);
-
-        // Bootstrap at ts1 by reading the snapshot and walking backwards.
-        let (snapshot, walked) = bootstrap(
-            rt.clone(),
-            persistence.reader(),
-            rv.clone(),
-            ts1,
-            BootstrapKind::FromCheckpoint,
-        )
-        .await?;
-        assert_eq!(walked, 1);
-        assert_eq!(
-            snapshot.tables.get(&table_id.tablet_id),
-            Some(&expected_ts1)
-        );
-        assert_eq!(snapshot.ts, *ts1);
-
-        // Bootstrap from scratch at ts3 by walking by_id.
-        let (snapshot, _) = bootstrap(
-            rt.clone(),
-            persistence.reader(),
-            rv.clone(),
-            ts3,
-            BootstrapKind::FromScratch,
-        )
-        .await?;
-        assert_eq!(
-            snapshot.tables.get(&table_id.tablet_id),
-            Some(&expected_ts3)
-        );
-        assert_eq!(snapshot.ts, *ts3);
-
-        Ok(())
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 32 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, .. ProptestConfig::default() })]
-        #[test]
-        fn test_snapshot_roundtrips(v in any::<TableSummarySnapshot>()) {
-            let roundtripped = TableSummarySnapshot::try_from(JsonValue::from(&v)).unwrap();
-            assert_eq!(v, roundtripped);
-        }
-    }
-
-    fn small_user_object() -> impl Strategy<Value = ConvexObject> {
-        let values = resolved_value_strategy(
-            FieldName::user_strategy,
-            ValueBranching::small(),
-            RestrictNaNs(false),
-        );
-        resolved_object_strategy(FieldName::user_strategy(), values, 0..4)
-    }
-
-    fn small_user_objects() -> impl Strategy<Value = Vec<ConvexObject>> {
-        prop_vec(small_user_object(), 0..8)
-    }
-
-    fn backfill_matches_test(table_name: TableName, vs: Vec<ConvexObject>) {
-        let td = TestDriver::new();
-        let runtime = td.rt();
-        let test = async {
-            let is_empty = vs.is_empty();
-            let DbFixtures {
-                db: database,
-                tp: persistence,
-                ..
-            } = DbFixtures::new(&runtime).await?;
-            let mut expected = TableSummary::empty();
-            let mut tx = database.begin(Identity::system()).await?;
-            for v in vs {
-                let inserted = TestFacingModel::new(&mut tx)
-                    .insert_and_get(table_name.clone(), v)
-                    .await?;
-                let value = inserted.value().0.clone();
-                expected = expected.insert(&value);
-            }
-            let table_mapping = tx.table_mapping().clone();
-            database.commit(tx).await?;
-
-            let writer = TableSummaryWriter::new_with_config(
-                runtime.clone(),
-                persistence,
-                database,
-                Arc::new(NoopRetentionValidator),
-            );
-            let computed = writer.compute_snapshot(2).await?;
-
-            if !is_empty {
-                let table_id = table_mapping
-                    .namespace(TableNamespace::test_user())
-                    .id(&table_name)?;
-                assert_eq!(computed.tables.get(&table_id.tablet_id), Some(&expected));
-            }
-
-            Ok::<_, anyhow::Error>(())
-        };
-        td.run_until(test).unwrap();
-    }
-
-    fn multiple_tables_test(values: BTreeMap<TableName, Vec<ConvexObject>>) {
-        let td = TestDriver::new();
-        let runtime = td.rt();
-        let test = async {
-            let DbFixtures {
-                db: database,
-                tp: persistence,
-                ..
-            } = DbFixtures::new(&runtime).await?;
-            let mut expected: BTreeMap<_, TableSummary> = BTreeMap::new();
-            let mut tx = database.begin(Identity::system()).await?;
-
-            for (table_name, values) in &values {
-                for value in values {
-                    let inserted = TestFacingModel::new(&mut tx)
-                        .insert_and_get(table_name.clone(), value.clone())
-                        .await?;
-                    let table_id = tx
-                        .table_mapping()
-                        .namespace(TableNamespace::test_user())
-                        .name_to_tablet()(table_name.clone())?;
-                    let summary = expected.entry(table_id).or_insert_with(TableSummary::empty);
-                    let inserted = inserted.value().0.clone();
-                    *summary = summary.insert(&inserted);
-                }
-            }
-            let table_mapping = tx.table_mapping().clone();
-            database.commit(tx).await?;
-
-            let writer = TableSummaryWriter::new_with_config(
-                runtime.clone(),
-                persistence,
-                database,
-                Arc::new(NoopRetentionValidator),
-            );
-            let computed = writer.compute_snapshot(2).await?;
-
-            for (table_name, values) in &values {
-                if !values.is_empty() {
-                    let table_id = table_mapping
-                        .namespace(TableNamespace::test_user())
-                        .id(table_name)?;
-                    let expected = expected.get(&table_id.tablet_id).unwrap();
-                    assert_eq!(expected, computed.tables.get(&table_id.tablet_id).unwrap());
-                }
-            }
-            Ok::<_, anyhow::Error>(())
-        };
-        td.run_until(test).unwrap();
-    }
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_backfill_matches(
-            table_name in TableName::user_strategy(),
-            objects in small_user_objects(),
-        ) {
-            backfill_matches_test(table_name, objects);
-        }
-
-        #[test]
-        fn test_multiple_tables(
-            values in prop::collection::btree_map(
-                TableName::user_strategy(),
-                small_user_objects(),
-                0..4,
-            ),
-        ) {
-            multiple_tables_test(values);
-        }
-    }
 }

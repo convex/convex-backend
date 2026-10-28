@@ -1,12 +1,16 @@
 use anyhow::Context;
 use common::{
-    document::ResolvedDocument,
+    document::{
+        PendingDocument,
+        ResolvedDocument,
+    },
     runtime::Runtime,
 };
 use value::{
     ConvexObject,
     DeveloperDocumentId,
     InternalId,
+    PendingValue,
     ResolvedDocumentId,
     TableName,
     TableNamespace,
@@ -124,6 +128,18 @@ impl<'a, RT: Runtime> SystemMetadataModel<'a, RT> {
         table: &TableName,
         value: ConvexObject,
     ) -> anyhow::Result<ResolvedDocumentId> {
+        self.insert_metadata_pending(table, value.into()).await
+    }
+
+    /// Like [`Self::insert_metadata`], for a value that may contain
+    /// unresolved commit timestamps (see [`PendingDocument`]).
+    #[fastrace::trace]
+    #[convex_macro::instrument_future]
+    pub async fn insert_metadata_pending(
+        &mut self,
+        table: &TableName,
+        value: PendingValue,
+    ) -> anyhow::Result<ResolvedDocumentId> {
         TableModel::new(self.tx)
             .insert_table_metadata(self.namespace, table)
             .await?;
@@ -134,8 +150,8 @@ impl<'a, RT: Runtime> SystemMetadataModel<'a, RT> {
             .id(table)?;
         let id = self.tx.id_generator.generate_resolved(table_id);
         let creation_time = self.tx.next_creation_time.increment()?;
-        let document = ResolvedDocument::new(id, creation_time, value)?;
-        self.tx.insert_document(document).await
+        let document = PendingDocument::new(id, creation_time, value)?;
+        self.tx.insert_pending_document(document).await
     }
 
     /// Merges the existing document with the given object. Will overwrite any
@@ -146,7 +162,7 @@ impl<'a, RT: Runtime> SystemMetadataModel<'a, RT> {
         &mut self,
         id: ResolvedDocumentId,
         value: PatchValue,
-    ) -> anyhow::Result<ResolvedDocument> {
+    ) -> anyhow::Result<PendingDocument> {
         anyhow::ensure!(self.tx.table_mapping().is_system_tablet(id.tablet_id));
 
         self.tx.patch_inner(id, value).await
@@ -171,7 +187,7 @@ impl<'a, RT: Runtime> SystemMetadataModel<'a, RT> {
         value: ConvexObject,
     ) -> anyhow::Result<ResolvedDocument> {
         anyhow::ensure!(self.tx.table_mapping().is_system_tablet(id.tablet_id));
-        self.tx.replace_inner(id, value).await
+        self.tx.replace_inner(id, value).await?.into_resolved()
     }
 
     /// Delete the document at the given path.

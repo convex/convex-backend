@@ -1,8 +1,8 @@
 import { Toaster } from "sonner";
-import { useTheme } from "next-themes";
+import { useCurrentTheme } from "../lib/useCurrentTheme";
 
 export function ToastContainer() {
-  const { resolvedTheme } = useTheme();
+  const resolvedTheme = useCurrentTheme();
 
   return (
     <Toaster

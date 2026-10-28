@@ -9,7 +9,7 @@ export const list = query({
       messages.map(async (message) => {
         // For each message in this channel, fetch the `User` who wrote it and
         // insert their name into the `author` field.
-        const user = await ctx.db.get(message.user);
+        const user = await ctx.db.get("users", message.user);
         return {
           author: user!.name,
           ...message,

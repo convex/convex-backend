@@ -14,6 +14,8 @@ export const mockDeploymentInfo: DeploymentInfo = {
     slug: "team",
   }),
   useTeamMembers: () => [],
+  useCurrentMemberName: () => undefined,
+  useMemberPreference: () => ({ value: undefined, set: async () => {} }),
   useTeamEntitlements: () => ({}),
   useCurrentUsageBanner: () => null,
   useCurrentProject: () => ({
@@ -24,7 +26,10 @@ export const mockDeploymentInfo: DeploymentInfo = {
   }),
   useLogDeploymentEvent: () => () => {},
   workOSOperations: {
-    useDeploymentWorkOSEnvironment: () => undefined,
+    useDeploymentWorkOSEnvironment: () => ({
+      data: undefined,
+      error: undefined,
+    }),
     useTeamWorkOSIntegration: () => undefined,
     useWorkOSTeamHealth: () => undefined,
     useWorkOSEnvironmentHealth: () => ({ data: undefined, error: undefined }),
@@ -69,6 +74,8 @@ export const mockDeploymentInfo: DeploymentInfo = {
   }),
   useIsProtectedDeployment: () => false,
   useHasProjectAdminPermissions: () => true,
+  useHasCustomRole: () => false,
+  useIsOperationAllowed: () => true,
   useIsDeploymentPaused: () => false,
   useProjectEnvironmentVariables: () => ({ configs: [] }),
   CloudImport: ({ sourceCloudBackupId }: { sourceCloudBackupId: number }) => (
@@ -80,12 +87,34 @@ export const mockDeploymentInfo: DeploymentInfo = {
   TeamMemberLink: ({ name }: { name: string }) => (
     <span className="font-semibold">{name}</span>
   ),
+  Link: ({
+    href,
+    children,
+    ...props
+  }: {
+    href: string;
+    children?: React.ReactNode;
+    className?: string;
+    target?: string;
+    rel?: string;
+  }) => (
+    <a href={href} {...props}>
+      {children}
+    </a>
+  ),
   DisconnectOverlay: () => <div>Disconnected</div>,
   useTeamUsageState: () => "Default",
+  useTeamPlanType: () => null,
   teamsURI: "",
   projectsURI: "",
   deploymentsURI: "",
   isSelfHosted: true,
   workosIntegrationEnabled: false,
+  healthDeployProgressEnabled: true,
+  s3ExportIntegrationEnabled: false,
   connectionStateCheckIntervalMs: 2500,
+  showFivetranSyncProgress: false,
+  componentSwitcherTreeEnabled: false,
+  openFeedbackForm: () => {},
+  captureEvent: () => {},
 };

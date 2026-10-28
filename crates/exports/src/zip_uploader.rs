@@ -18,10 +18,6 @@ use futures::{
     AsyncWriteExt,
 };
 use serde_json::Value as JsonValue;
-use shape_inference::{
-    export_context::GeneratedSchema,
-    ShapeConfig,
-};
 use storage::ChannelWriter;
 use tokio::io::{
     AsyncBufRead,
@@ -134,11 +130,13 @@ impl<'a> ZipSnapshotUpload<'a> {
         ZipSnapshotTableUpload::new(&mut self.writer, path_prefix, table_name).await
     }
 
-    pub async fn write_legacy_generated_schema<T: ShapeConfig>(
+    /// Writes a `generated_schema.jsonl` file with a "uniform" marker to
+    /// distinguish it from the previous export format; this parses as
+    /// GeneratedSchema::Uniform.
+    pub async fn write_legacy_generated_schema(
         &mut self,
         path_prefix: &str,
         table_name: &TableName,
-        generated_schema: GeneratedSchema<T>,
     ) -> anyhow::Result<()> {
         let generated_schema_path = format!("{path_prefix}{table_name}/generated_schema.jsonl");
         let builder = ZipEntryBuilder::new(generated_schema_path.into(), Compression::Deflate)
@@ -148,12 +146,10 @@ impl<'a> ZipSnapshotUpload<'a> {
             .write_entry_stream(builder.build())
             .await?
             .compat_write();
-        for line in generated_schema.serialize() {
-            entry_writer
-                .write_all(serde_json::to_string(&line)?.as_bytes())
-                .await?;
-            entry_writer.write_all(b"\n").await?;
-        }
+        entry_writer
+            .write_all(serde_json::to_string("uniform")?.as_bytes())
+            .await?;
+        entry_writer.write_all(b"\n").await?;
         entry_writer.into_inner().close().await?;
         Ok(())
     }

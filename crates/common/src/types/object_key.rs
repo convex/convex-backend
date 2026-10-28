@@ -16,20 +16,14 @@ use value::ConvexString;
 static OBJECT_KEY_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9-_./]+$").unwrap());
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord, Hash)]
 #[must_use]
 pub struct ObjectKey(
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "\"[a-zA-Z0-9-_./]+\"")
-    )]
     String,
 );
 
 /// Fully qualified object key. For s3, in the format
 /// {bucket}/{prefix}-{object_key}
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(
     Debug,
     Clone,
@@ -43,10 +37,6 @@ pub struct ObjectKey(
     derive_more::Into,
 )]
 pub struct FullyQualifiedObjectKey(
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "\"[a-zA-Z0-9-_.]+/[a-zA-Z0-9-_./]+\"")
-    )]
     String,
 );
 

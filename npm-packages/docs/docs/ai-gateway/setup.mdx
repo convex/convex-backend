@@ -1,0 +1,280 @@
+---
+title: "Getting started"
+sidebar_label: "Getting started"
+sidebar_position: 1
+description:
+  "Call the AI Gateway from a Convex action with the OpenAI SDK, the Agent
+  component, the Vercel AI SDK, or fetch"
+---
+
+Call models from an [action](/functions/actions.mdx). The gateway authenticates
+with a short-lived token from `getServiceToken("ai-gateway")`, which needs
+`convex` 1.45+. Model names use the `provider/model` form in
+[Models](/ai-gateway/models.mdx).
+
+## OpenAI SDK
+
+The gateway is OpenAI-compatible. Set `baseURL` to the gateway and pass
+`getServiceToken` as the API key:
+
+```sh
+npm install openai
+```
+
+```ts
+import { action } from "./_generated/server";
+import { v } from "convex/values";
+import OpenAI from "openai";
+import { getServiceToken } from "convex/server";
+
+export const chat = action({
+  args: { prompt: v.string() },
+  handler: async (ctx, { prompt }) => {
+    const openai = new OpenAI({
+      baseURL: "https://ai-gateway.convex.dev/v1",
+      apiKey: () => getServiceToken("ai-gateway"),
+    });
+    const completion = await openai.chat.completions.create({
+      model: "openai/gpt-4o-mini",
+      messages: [{ role: "user", content: prompt }],
+    });
+    return completion.choices[0].message.content;
+  },
+});
+```
+
+## Agent component
+
+Pass `convexGateway` as `languageModel` on
+[`@convex-dev/agent`](/agents/getting-started). It obtains the token for you.
+
+The Agent and RAG components need `convex` 1.46 or later.
+
+```sh
+npm install @convex-dev/agent @convex-dev/ai-sdk-provider
+```
+
+```ts
+import { Agent } from "@convex-dev/agent";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+import { components } from "./_generated/api";
+
+const agent = new Agent(components.agent, {
+  name: "Support agent",
+  languageModel: convexGateway("openai/gpt-4o-mini"),
+  instructions: "You answer questions about our product.",
+});
+```
+
+[Workflows](/agents/workflows.mdx) that call `agent.generateText` use that same
+model. For the [RAG component](/agents/rag.mdx), use
+`convexGateway.embeddingModel(...)` as its embedding model.
+
+## Vercel AI SDK
+
+`convexGateway` works with `generateText`, `streamText`, `embed`, and
+`embedMany` from the [Vercel AI SDK](https://ai-sdk.dev/). Use
+`@convex-dev/ai-sdk-provider` 0.2.1 or later with `convex` 1.45 or later and AI
+SDK 7.0.105 or later. The provider works in the default runtime and
+[Node.js actions](/functions/runtimes.mdx).
+
+For a Node.js action, set
+[`node.nodeVersion`](/config/convex-json.mdx#configuring-the-nodejs-version) to
+`"22"` or `"24"` in `convex.json`. The default Convex runtime doesn't need this
+setting.
+
+```sh
+npm install @convex-dev/ai-sdk-provider@^0.2.1 ai
+```
+
+```ts
+import { action } from "./_generated/server";
+import { v } from "convex/values";
+import { generateText } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+export const chat = action({
+  args: { prompt: v.string() },
+  handler: async (ctx, { prompt }) => {
+    const { text } = await generateText({
+      model: convexGateway("openai/gpt-4o-mini"),
+      prompt,
+    });
+    return text;
+  },
+});
+```
+
+Stream with `streamText`:
+
+```ts
+import { streamText } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+const result = streamText({
+  model: convexGateway("openai/gpt-4o-mini"),
+  prompt,
+});
+for await (const chunk of result.textStream) {
+  console.log(chunk);
+}
+```
+
+### Choose a model interface
+
+For text generation, start with `convexGateway(model)`, which uses Chat
+Completions across model providers. Use the native Messages or Responses
+interface when you need endpoint-specific provider features:
+
+```ts
+const messagesModel = convexGateway.messages("anthropic/claude-sonnet-4.5");
+const responsesModel = convexGateway.responses("openai/gpt-5");
+```
+
+The Responses endpoint is stateless. The provider sets `store: false`; it does
+not support `store: true` or `previous_response_id`.
+
+### Decisions with Jev
+
+<Admonition type="caution" title="Decisions is in alpha">
+
+`convexGateway.evaluationModel()` uses `/alpha/decisions`. The endpoint and AI
+SDK's experimental evaluation interface may change during alpha.
+
+</Admonition>
+
+Use AI SDK's `evaluate` to classify or score data with Jev from an action:
+
+```ts
+import { experimental_evaluate as evaluate } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+const decision = await evaluate({
+  model: convexGateway.evaluationModel("typesafe/jev-1.13"),
+  state: { ticket: "Customer cannot sign in" },
+  questions: {
+    priority: {
+      type: "choice",
+      instructions: "Choose the response priority",
+      criteria: {
+        urgent: "Respond now",
+        normal: "Respond today",
+      },
+    },
+  },
+});
+
+console.log(decision.answers.priority.choice);
+```
+
+Questions can use `choice`, `score`, or `boolean`. Boolean answers contain a
+`probability` between 0 and 1 (called `noul` in the HTTP API). Pass
+`abortSignal` to `evaluate` to cancel a request.
+
+### Embeddings
+
+Create embeddings with `embedMany`. The AI SDK automatically splits batches
+larger than the gateway's 512-input limit:
+
+```ts
+import { embedMany } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+const { embeddings } = await embedMany({
+  model: convexGateway.embeddingModel("openai/text-embedding-3-small"),
+  values: ["hello", "world"],
+});
+```
+
+### Images and videos
+
+Use `convexGateway.imageModel()` with `generateImage`, or
+`convexGateway.videoModel()` with `experimental_generateVideo` and
+`experimental_startVideo`. Image and video generation are in alpha. See
+[Images and videos](/ai-gateway/images-and-videos) for examples and callback
+handling.
+
+### Voice
+
+Use `convexGateway.transcriptionModel()` with `experimental_transcribe`, or
+`convexGateway.speechModel()` with `experimental_generateSpeech`. Voice is in
+alpha and needs `@convex-dev/ai-sdk-provider` 0.3.0-alpha.0 or later, installed
+with `npm install @convex-dev/ai-sdk-provider@alpha`. See
+[Voice](/ai-gateway/voice) for examples and for audio chat models.
+
+## Manual fetch
+
+Use `fetch` when you want the HTTP API without an SDK. Mint a token, then send
+it as `Authorization: Bearer <token>`:
+
+```ts
+import { action } from "./_generated/server";
+import { v } from "convex/values";
+import { getServiceToken } from "convex/server";
+
+export const chat = action({
+  args: { prompt: v.string() },
+  handler: async (ctx, { prompt }) => {
+    const token = await getServiceToken("ai-gateway");
+    const response = await fetch(
+      "https://ai-gateway.convex.dev/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+        }),
+      },
+    );
+    return await response.json();
+  },
+});
+```
+
+See [HTTP API](/ai-gateway/api.mdx) for other endpoints, including
+[Decisions](/ai-gateway/api.mdx#post-alphadecisions).
+
+## Local development
+
+Local development requires `convex` 1.46 or later, an up-to-date local backend,
+and a deployment linked to a project whose team has AI Gateway access. From your
+project directory, run:
+
+```sh
+npx convex login
+npx convex deployment select local
+npx convex dev
+```
+
+Restart `npx convex dev` after signing in if it was already running, and accept
+the backend upgrade if prompted. The examples above, including
+`getServiceToken("ai-gateway")`, work unchanged. See
+[Local deployments](/cli/local-deployments-for-dev.mdx) for more setup options.
+
+Inference runs in the cloud and is charged to the linked project's team.
+Anonymous local deployments cannot use the gateway.
+
+## Token and timeouts
+
+Call `getServiceToken("ai-gateway")` inside an action whenever a gateway request
+needs a credential. It returns a short-lived token scoped to your deployment.
+You can call it as many times as you want: the action runtime caches the token
+and returns a fresh one when the cached token is close to expiring. Keep the
+token private. Don't return it to clients, store it in environment variables, or
+cache it yourself.
+
+A long action that sends many requests can outlive a single token, so call
+`getServiceToken` again before each request instead of reusing one token for the
+whole action.
+
+The request runs inside your action, so a long completion can hit the
+[action timeout](/production/state/limits.mdx#execution-time-and-scheduling) (30
+minutes in the Convex runtime, 10 minutes in Node) and fail as an action error
+rather than a gateway error.
+
+If getting a token fails with `AiGatewayDisabled` or `AiGatewayUnavailable`, see
+[Who can use it](/ai-gateway/overview.mdx#who-can-use-it).

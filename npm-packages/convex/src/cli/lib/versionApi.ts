@@ -1,8 +1,17 @@
 import * as Sentry from "@sentry/node";
+import { z } from "zod";
 import { version } from "../version.js";
 
-const VERSION_ENDPOINT = "https://version.convex.dev/v1/version";
-const GUIDELINES_ENDPOINT = "https://version.convex.dev/v1/guidelines";
+const DEFAULT_VERSION_API_ORIGIN = "https://version.convex.dev";
+const VERSION_API_ORIGIN_ENV_VAR = "CONVEX_VERSION_API_ORIGIN";
+
+function versionApiOrigin() {
+  return process.env[VERSION_API_ORIGIN_ENV_VAR] ?? DEFAULT_VERSION_API_ORIGIN;
+}
+
+function versionApiEndpoint(path: string) {
+  return `${versionApiOrigin()}${path}`;
+}
 
 const HEADERS: Record<string, string> = {
   "Convex-Client": `npm-cli-${version}`,
@@ -13,16 +22,70 @@ if (process.env.CONVEX_AGENT_MODE) {
   HEADERS["Convex-Agent-Mode"] = process.env.CONVEX_AGENT_MODE;
 }
 
-export type VersionResult = {
-  message: string | null;
-  guidelinesHash: string | null;
-  agentSkillsSha: string | null;
-  disableSkillsCli: boolean;
-};
+const optionalStringToNullSchema = z
+  .unknown()
+  .optional()
+  .transform((value) => (typeof value === "string" ? value : null));
 
-export async function getVersion(): Promise<VersionResult | null> {
+const optionalTrueToBooleanSchema = z
+  .unknown()
+  .optional()
+  .transform((value) => value === true);
+
+const versionResultSchema = z.object({
+  message: z.string().nullable(),
+  guidelinesHash: optionalStringToNullSchema,
+  agentSkillsSha: optionalStringToNullSchema,
+  disableSkillsCli: optionalTrueToBooleanSchema,
+  disableSkillsCliMessage: optionalStringToNullSchema,
+});
+
+const agentSkillStatusSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("active"),
+  }),
+  z.object({
+    kind: z.literal("deleted"),
+    deletedAt: z.number(),
+  }),
+]);
+
+const agentSkillCatalogEntrySchema = z.object({
+  skillName: z.string(),
+  status: agentSkillStatusSchema,
+  hash: z.string(),
+  lastSeenRepoSha: z.string(),
+  lastSeenAt: z.number(),
+});
+
+const agentSkillCatalogResultSchema = z.object({
+  latestRepoSha: z.string().nullable(),
+  skills: z.array(agentSkillCatalogEntrySchema),
+});
+
+export type VersionResult = z.infer<typeof versionResultSchema>;
+
+export type VersionFetchResult =
+  | { kind: "ok"; data: VersionResult }
+  | { kind: "error" };
+
+export type AgentSkillStatus = z.infer<typeof agentSkillStatusSchema>;
+
+export type AgentSkillCatalogEntry = z.infer<
+  typeof agentSkillCatalogEntrySchema
+>;
+
+export type AgentSkillCatalogResult = z.infer<
+  typeof agentSkillCatalogResultSchema
+>;
+
+export type AgentSkillCatalogFetchResult =
+  | { kind: "ok"; data: AgentSkillCatalogResult }
+  | { kind: "error" };
+
+export async function getVersion(): Promise<VersionFetchResult> {
   try {
-    const req = await fetch(VERSION_ENDPOINT, {
+    const req = await fetch(versionApiEndpoint("/v1/version"), {
       headers: HEADERS,
     });
 
@@ -30,53 +93,78 @@ export async function getVersion(): Promise<VersionResult | null> {
       Sentry.captureException(
         new Error(`Failed to fetch version: status = ${req.status}`),
       );
-      return null;
+      return { kind: "error" };
     }
 
     const json = await req.json();
-    return validateVersionResult(json);
+    const result = validateVersionResult(json);
+
+    if (result === null) return { kind: "error" };
+    return { kind: "ok", data: result };
   } catch (error) {
     Sentry.captureException(error);
-    return null;
+    return { kind: "error" };
   }
 }
 
-export function validateVersionResult(json: any): VersionResult | null {
-  if (typeof json !== "object" || json === null) {
+export function validateVersionResult(json: unknown): VersionResult | null {
+  const result = versionResultSchema.safeParse(json);
+  if (!result.success) {
     Sentry.captureMessage("Invalid version result", "error");
     return null;
   }
+  return result.data;
+}
 
-  if (typeof json.message !== "string" && json.message !== null) {
-    Sentry.captureMessage("Invalid version.message result", "error");
+export function validateAgentSkillCatalogResult(
+  json: unknown,
+): AgentSkillCatalogResult | null {
+  const result = agentSkillCatalogResultSchema.safeParse(json);
+  if (!result.success) {
+    Sentry.captureMessage("Invalid agent skill catalog result", "error");
     return null;
   }
-
-  // Treat missing optional hashes as null.
-  const agentSkillsSha =
-    typeof json.agentSkillsSha === "string" ? json.agentSkillsSha : null;
-
-  const guidelinesHash =
-    typeof json.guidelinesHash === "string" ? json.guidelinesHash : null;
-  const disableSkillsCli = json.disableSkillsCli === true;
-
-  return {
-    message: json.message,
-    guidelinesHash,
-    agentSkillsSha,
-    disableSkillsCli,
-  };
+  return result.data;
 }
 
 /** Fetch the latest agent skills SHA from version.convex.dev. */
 export async function fetchAgentSkillsSha(): Promise<string | null> {
   const versionData = await getVersion();
-  return versionData?.agentSkillsSha ?? null;
+  if (versionData.kind === "error") return null;
+  return versionData.data.agentSkillsSha;
+}
+
+export async function fetchAgentSkillsCatalog(): Promise<AgentSkillCatalogFetchResult> {
+  try {
+    const req = await fetch(versionApiEndpoint("/v1/agent_skills"), {
+      headers: HEADERS,
+    });
+
+    if (!req.ok) {
+      Sentry.captureException(
+        new Error(
+          `Failed to fetch agent skills catalog: status = ${req.status}`,
+        ),
+      );
+      return { kind: "error" };
+    }
+
+    const json = await req.json();
+    const result = validateAgentSkillCatalogResult(json);
+
+    if (result === null) return { kind: "error" };
+    return { kind: "ok", data: result };
+  } catch (error) {
+    Sentry.captureException(error);
+    return { kind: "error" };
+  }
 }
 
 export async function downloadGuidelines(): Promise<string | null> {
   try {
-    const req = await fetch(GUIDELINES_ENDPOINT, { headers: HEADERS });
+    const req = await fetch(versionApiEndpoint("/v1/guidelines"), {
+      headers: HEADERS,
+    });
 
     if (!req.ok) {
       Sentry.captureMessage(

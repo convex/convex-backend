@@ -5,12 +5,20 @@ description: "Export your data out of Convex"
 sidebar_position: 168
 ---
 
-You can export your data from Convex by
-[taking a backup](/database/backup-restore) and downloading it as a zip file.
+## Zip Export
+
+You can export your data to a zip file from Convex by
+[taking a backup](/database/backup-restore) and downloading it.
 
 Alternatively, you can export the same data with the
-[command line](/cli.md#export-data-to-a-file):
+[command line](/cli/reference/export.mdx):
 
 ```sh
 npx convex export --path ~/Downloads
 ```
+
+## Streaming Export
+
+You can programmatically do a paginated streaming export by using the
+[Data Sync API](https://docs.convex.dev/deployment-api/data-sync) or with an
+[integration with a third party provider](https://docs.convex.dev/production/integrations/streaming-import-export).

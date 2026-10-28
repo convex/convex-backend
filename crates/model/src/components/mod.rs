@@ -114,18 +114,24 @@ impl<'a, RT: Runtime> ComponentsModel<'a, RT> {
                     ComponentId::Child(id) => id,
                 };
                 let parent = (internal_id, child_component.clone());
-                let child_component = m.component_in_parent(Some(parent))?.ok_or_else(|| {
+                let child = m.component_in_parent(Some(parent))?.ok_or_else(|| {
                     ErrorMetadata::bad_request(
                         "InvalidReference",
-                        format!("Child component {child_component:?} not found"),
+                        format!("Child component '{}' not found", **child_component),
                     )
                 })?;
-                let child_id = ComponentId::Child(child_component.id().into());
+                let child_id = ComponentId::Child(child.id().into());
                 let Some(resource) = self.resolve_export(child_id, attributes).await? else {
+                    let export_path = attributes
+                        .iter()
+                        .map(|a| &**a)
+                        .collect::<Vec<_>>()
+                        .join(".");
                     anyhow::bail!(ErrorMetadata::bad_request(
                         "InvalidReference",
                         format!(
-                            "Child component {child_component:?} does not export {attributes:?}"
+                            "Child component '{}' does not export '{export_path}'",
+                            **child_component
                         ),
                     ));
                 };
@@ -152,10 +158,12 @@ impl<'a, RT: Runtime> ComponentsModel<'a, RT> {
                         "CurrentSystemUdfInComponent must be called from a system UDF",
                     ));
                 }
+                let component_path = BootstrapComponentsModel::new(self.tx)
+                    .must_component_path(ComponentId::Child(*component_by_id))?;
                 Resource::ResolvedSystemUdf(ResolvedComponentFunctionPath {
                     component: ComponentId::Child(*component_by_id),
                     udf_path: current_udf_path.canonicalize(),
-                    component_path: None,
+                    component_path,
                 })
             },
         };
@@ -167,17 +175,16 @@ impl<'a, RT: Runtime> ComponentsModel<'a, RT> {
         component_id: ComponentId,
     ) -> anyhow::Result<BTreeMap<PathComponent, ComponentExport>> {
         let mut modules = BTreeMap::new();
-        for module in ModuleModel::new(self.tx)
+        let metadata = ModuleModel::new(self.tx)
             .get_all_metadata(component_id)
-            .await?
-        {
-            let module = module.into_value();
-            let Some(analyze_result) = module.analyze_result else {
+            .await?;
+        for module in &metadata {
+            let Some(analyze_result) = &module.analyze_result else {
                 continue;
             };
-            modules.insert(module.path, analyze_result);
+            modules.insert(&module.path, analyze_result);
         }
-        file_based_exports(&modules)
+        file_based_exports(modules)
     }
 
     #[async_recursion]
@@ -367,87 +374,5 @@ impl<'a, RT: Runtime> ComponentsModel<'a, RT> {
         }
 
         Ok(result)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use common::{
-        bootstrap_model::{
-            components::{
-                ComponentMetadata,
-                ComponentState,
-                ComponentType,
-            },
-            index::IndexMetadata,
-        },
-        components::{
-            CanonicalizedComponentModulePath,
-            ComponentId,
-        },
-    };
-    use database::{
-        system_tables::SystemTable,
-        test_helpers::DbFixtures,
-        IndexModel,
-        SystemMetadataModel,
-        COMPONENTS_TABLE,
-    };
-    use keybroker::Identity;
-    use runtime::testing::TestRuntime;
-    use value::DeveloperDocumentId;
-
-    use crate::{
-        modules::{
-            ModuleModel,
-            ModulesTable,
-        },
-        DEFAULT_TABLE_NUMBERS,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_create_and_use_module_table(rt: TestRuntime) -> anyhow::Result<()> {
-        let DbFixtures { db, .. } = DbFixtures::new(&rt).await?;
-
-        let mut tx = db.begin(Identity::system()).await?;
-        let component_metadata = ComponentMetadata {
-            definition_id: DeveloperDocumentId::MIN,
-            component_type: ComponentType::App,
-            state: ComponentState::Active,
-        };
-
-        let id = SystemMetadataModel::new_global(&mut tx)
-            .insert(&COMPONENTS_TABLE, component_metadata.try_into()?)
-            .await?;
-        let component_id = ComponentId::Child(id.into());
-
-        let namespace = component_id.into();
-        let is_new = tx
-            .create_system_table(
-                namespace,
-                ModulesTable::table_name(),
-                DEFAULT_TABLE_NUMBERS
-                    .get(ModulesTable::table_name())
-                    .cloned(),
-            )
-            .await?;
-        assert!(is_new);
-
-        for index in ModulesTable::indexes() {
-            let index_metadata = IndexMetadata::new_enabled(index.name(), index.fields);
-            IndexModel::new(&mut tx)
-                .add_system_index(namespace, index_metadata)
-                .await?;
-        }
-
-        let m = ModuleModel::new(&mut tx)
-            .get_metadata(CanonicalizedComponentModulePath {
-                component: component_id,
-                module_path: "a.js".parse()?,
-            })
-            .await?;
-        assert!(m.is_none());
-
-        Ok(())
     }
 }

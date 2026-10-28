@@ -1,37 +1,24 @@
-import path from "path";
 import { Context } from "../../../bundler/context.js";
 import {
-  logFailure,
   logFinishedStep,
   logVerbose,
+  logWarning,
 } from "../../../bundler/log.js";
-import { runSystemQuery } from "../run.js";
 import {
+  LocalDeploymentConfig,
   LocalDeploymentKind,
-  deploymentStateDir,
-  loadDeploymentConfig,
   saveDeploymentConfig,
 } from "./filePaths.js";
-import {
-  ensureBackendStopped,
-  localDeploymentUrl,
-  runLocalBackend,
-} from "./run.js";
-import {
-  downloadSnapshotExport,
-  startSnapshotExport,
-} from "../convexExport.js";
-import { deploymentFetch, logAndHandleFetchError } from "../utils/utils.js";
-import {
-  confirmImport,
-  uploadForImport,
-  waitForStableImportState,
-} from "../convexImport.js";
-import { promptOptions, promptYesNo } from "../utils/prompts.js";
-import { recursivelyDelete } from "../fsUtils.js";
-import { LocalDeploymentError } from "./errors.js";
+import { runLocalBackend } from "./run.js";
+import { releaseDate } from "./utils.js";
+import { promptYesNo } from "../utils/prompts.js";
 import { ensureBackendBinaryDownloaded } from "./download.js";
-export async function handlePotentialUpgrade(
+import {
+  generateLocalDevSecretsWithLatestBinary,
+  LEGACY_LOCAL_BACKEND_INSTANCE_SECRET,
+} from "./secrets.js";
+
+export async function handlePotentialUpgradeAndStart(
   ctx: Context,
   args: {
     deploymentKind: LocalDeploymentKind;
@@ -43,16 +30,32 @@ export async function handlePotentialUpgrade(
       cloud: number;
       site: number;
     };
-    adminKey: string;
-    instanceSecret: string;
+    existingCredentials: { adminKey: string; instanceSecret: string } | null;
     forceUpgrade: boolean;
+    cloudProjectId: number | undefined;
   },
-): Promise<{ cleanupHandle: string }> {
-  const newConfig = {
+): Promise<{ cleanupHandle: string; adminKey: string }> {
+  const { adminKey, instanceSecret } =
+    args.existingCredentials === null ||
+    args.existingCredentials.instanceSecret ===
+      LEGACY_LOCAL_BACKEND_INSTANCE_SECRET
+      ? // Using `generateLocalDevSecretsFromLatestBinary` instead of `generateLocalDevSecrets`
+        // here, because `newBinaryPath` can be a binary that doesn’t support
+        // the `keygen admin-key` subcommand (when the --local-backend-version flag is provided to the CLI)
+        //
+        // In most cases (the user is not using the flag), we have already downloaded the latest binary
+        // shortly before in handleLocalDeployment/handleAnonymousDeployment, so this doesn’t cause an
+        // extra download (even if the user chooses later not to upgrade their deployment)
+        await generateLocalDevSecretsWithLatestBinary(ctx, {
+          deploymentName: args.deploymentName,
+        })
+      : args.existingCredentials;
+  const newConfig: LocalDeploymentConfig = {
     ports: args.ports,
     backendVersion: args.newVersion,
-    adminKey: args.adminKey,
-    instanceSecret: args.instanceSecret,
+    adminKey,
+    instanceSecret,
+    cloudProjectId: args.cloudProjectId,
   };
   if (args.oldVersion === null || args.oldVersion === args.newVersion) {
     // No upgrade needed. Save the current config and start running the backend.
@@ -62,20 +65,23 @@ export async function handlePotentialUpgrade(
       args.deploymentName,
       newConfig,
     );
-    return runLocalBackend(ctx, {
+    const { cleanupHandle } = await runLocalBackend(ctx, {
       binaryPath: args.newBinaryPath,
+      backendVersion: args.newVersion,
       deploymentKind: args.deploymentKind,
       deploymentName: args.deploymentName,
       ports: args.ports,
-      instanceSecret: args.instanceSecret,
+      instanceSecret,
       isLatestVersion: true,
     });
+    return { cleanupHandle, adminKey };
   }
   logVerbose(
     `Considering upgrade from ${args.oldVersion} to ${args.newVersion}`,
   );
   const confirmed =
     args.forceUpgrade ||
+    !process.stdin.isTTY ||
     (await promptYesNo(ctx, {
       message: `This deployment is using an older version of the Convex backend. Upgrade now?`,
       default: true,
@@ -93,64 +99,36 @@ export async function handlePotentialUpgrade(
       ...newConfig,
       backendVersion: args.oldVersion,
     });
-    return runLocalBackend(ctx, {
+    const { cleanupHandle } = await runLocalBackend(ctx, {
       binaryPath: oldBinaryPath,
+      backendVersion: args.oldVersion,
       ports: args.ports,
       deploymentKind: args.deploymentKind,
       deploymentName: args.deploymentName,
-      instanceSecret: args.instanceSecret,
+      instanceSecret,
       isLatestVersion: false,
     });
+    return { cleanupHandle, adminKey };
   }
-  const choice = args.forceUpgrade
-    ? "transfer"
-    : await promptOptions(ctx, {
-        message: "Transfer data from existing deployment?",
-        default: "transfer",
-        choices: [
-          { name: "transfer data", value: "transfer" },
-          { name: "start fresh", value: "reset" },
-        ],
-      });
-  const deploymentStatePath = deploymentStateDir(
-    ctx,
-    args.deploymentKind,
-    args.deploymentName,
-  );
-  if (choice === "reset") {
-    recursivelyDelete(ctx, deploymentStatePath, { force: true });
-    saveDeploymentConfig(
-      ctx,
-      args.deploymentKind,
-      args.deploymentName,
-      newConfig,
-    );
-    return runLocalBackend(ctx, {
-      binaryPath: args.newBinaryPath,
-      deploymentKind: args.deploymentKind,
-      deploymentName: args.deploymentName,
-      ports: args.ports,
-      instanceSecret: args.instanceSecret,
-      isLatestVersion: true,
-    });
-  }
-  const newAdminKey = args.adminKey;
-  const oldAdminKey =
-    loadDeploymentConfig(ctx, args.deploymentKind, args.deploymentName)
-      ?.adminKey ?? args.adminKey;
-  return handleUpgrade(ctx, {
+  const { cleanupHandle } = await handleUpgrade(ctx, {
     deploymentKind: args.deploymentKind,
     deploymentName: args.deploymentName,
-    oldVersion: args.oldVersion!,
+    oldVersion: args.oldVersion,
     newBinaryPath: args.newBinaryPath,
     newVersion: args.newVersion,
     ports: args.ports,
-    oldAdminKey,
-    newAdminKey,
-    instanceSecret: args.instanceSecret,
+    adminKey,
+    instanceSecret,
+    cloudProjectId: args.cloudProjectId,
   });
+  return { cleanupHandle, adminKey };
 }
 
+/**
+ * Upgrade in place: hand the existing data directory to the new binary, which
+ * migrates its own on-disk state on startup (the same path self-hosted
+ * deployments take).
+ */
 async function handleUpgrade(
   ctx: Context,
   args: {
@@ -163,89 +141,24 @@ async function handleUpgrade(
       cloud: number;
       site: number;
     };
-    // In most of the cases the admin key is the same for the old and new version.
-    // This is helpful when we start generating new admin key formats that might
-    // be incompatible with older backend versions.
-    oldAdminKey: string;
-    newAdminKey: string;
     instanceSecret: string;
+    adminKey: string;
+    cloudProjectId: number | undefined;
   },
 ): Promise<{ cleanupHandle: string }> {
-  const { binaryPath: oldBinaryPath } = await ensureBackendBinaryDownloaded(
-    ctx,
-    {
-      kind: "version",
-      version: args.oldVersion,
-    },
-  );
-
-  logVerbose("Running backend on old version");
-  const { cleanupHandle: oldCleanupHandle } = await runLocalBackend(ctx, {
-    binaryPath: oldBinaryPath,
-    ports: args.ports,
-    deploymentKind: args.deploymentKind,
-    deploymentName: args.deploymentName,
-    instanceSecret: args.instanceSecret,
-    isLatestVersion: false,
-  });
-
-  logVerbose("Downloading env vars");
-  const deploymentUrl = localDeploymentUrl(args.ports.cloud);
-  const envs = (await runSystemQuery(ctx, {
-    deploymentUrl,
-    adminKey: args.oldAdminKey,
-    functionName: "_system/cli/queryEnvironmentVariables",
-    componentPath: undefined,
-    args: {},
-  })) as Array<{
-    name: string;
-    value: string;
-  }>;
-
-  logVerbose("Doing a snapshot export");
-  const exportPath = path.join(
-    deploymentStateDir(ctx, args.deploymentKind, args.deploymentName),
-    "export.zip",
-  );
-  if (ctx.fs.exists(exportPath)) {
-    ctx.fs.unlink(exportPath);
+  const isDowngrade = _isDowngrade(args.oldVersion, args.newVersion);
+  if (isDowngrade) {
+    logWarning(
+      `Moving a local deployment back to an older backend version (${args.oldVersion} → ${args.newVersion}) isn't supported: ` +
+        `the older backend may not be able to read data written by the newer one. ` +
+        `If it fails to start, delete the deployment's state directory to start fresh on this version.`,
+    );
   }
-  const snaphsotExportState = await startSnapshotExport(ctx, {
-    deploymentUrl,
-    adminKey: args.oldAdminKey,
-    includeStorage: true,
-    inputPath: exportPath,
-  });
-  if (snaphsotExportState.state !== "completed") {
-    return ctx.crash({
-      exitCode: 1,
-      errorType: "fatal",
-      printedMessage: "Failed to export snapshot",
-    });
-  }
-  await downloadSnapshotExport(ctx, {
-    snapshotExportTs: snaphsotExportState.start_ts,
-    inputPath: exportPath,
-    adminKey: args.oldAdminKey,
-    deploymentUrl,
-  });
 
-  logVerbose("Stopping the backend on the old version");
-  const oldCleanupFunc = ctx.removeCleanup(oldCleanupHandle);
-  if (oldCleanupFunc) {
-    await oldCleanupFunc(0);
-  }
-  await ensureBackendStopped(ctx, {
-    ports: args.ports,
-    maxTimeSecs: 5,
-    deploymentName: args.deploymentName,
-    allowOtherDeployments: false,
-  });
-
-  // TODO(ENG-7078) save old artifacts to backup files
-  logVerbose("Running backend on new version");
+  logVerbose(`Running backend on new version ${args.newVersion}`);
   const { cleanupHandle } = await runLocalBackend(ctx, {
     binaryPath: args.newBinaryPath,
+    backendVersion: args.newVersion,
     ports: args.ports,
     deploymentKind: args.deploymentKind,
     deploymentName: args.deploymentName,
@@ -253,89 +166,23 @@ async function handleUpgrade(
     isLatestVersion: true,
   });
 
-  logVerbose("Importing the env vars");
-  if (envs.length > 0) {
-    const fetch = deploymentFetch(ctx, {
-      deploymentUrl,
-      adminKey: args.newAdminKey,
-    });
-    try {
-      await fetch("/api/update_environment_variables", {
-        body: JSON.stringify({ changes: envs }),
-        method: "POST",
-      });
-    } catch (e) {
-      // TODO: this should ideally have a `LocalDeploymentError`
-      return await logAndHandleFetchError(ctx, e);
-    }
-  }
-
-  logVerbose("Doing a snapshot import");
-  const importId = await uploadForImport(ctx, {
-    deploymentUrl,
-    adminKey: args.newAdminKey,
-    filePath: exportPath,
-    importArgs: { format: "zip", mode: "replace", tableName: undefined },
-    onImportFailed: async (e) => {
-      logFailure(`Failed to import snapshot: ${e}`);
-    },
-  });
-  logVerbose(`Snapshot import started`);
-  let status = await waitForStableImportState(ctx, {
-    importId,
-    deploymentUrl,
-    adminKey: args.newAdminKey,
-    onProgress: () => {
-      // do nothing for now
-      return 0;
-    },
-  });
-  if (status.state !== "waiting_for_confirmation") {
-    const message = "Error while transferring data: Failed to upload snapshot";
-    return ctx.crash({
-      exitCode: 1,
-      errorType: "fatal",
-      printedMessage: message,
-      errForSentry: new LocalDeploymentError(message),
-    });
-  }
-
-  await confirmImport(ctx, {
-    importId,
-    adminKey: args.newAdminKey,
-    deploymentUrl,
-    onError: async (e) => {
-      logFailure(`Failed to confirm import: ${e}`);
-    },
-  });
-  logVerbose(`Snapshot import confirmed`);
-  status = await waitForStableImportState(ctx, {
-    importId,
-    deploymentUrl,
-    adminKey: args.newAdminKey,
-    onProgress: () => {
-      // do nothing for now
-      return 0;
-    },
-  });
-  logVerbose(`Snapshot import status: ${status.state}`);
-  if (status.state !== "completed") {
-    const message = "Error while transferring data: Failed to import snapshot";
-    return ctx.crash({
-      exitCode: 1,
-      errorType: "fatal",
-      printedMessage: message,
-      errForSentry: new LocalDeploymentError(message),
-    });
-  }
-
-  logFinishedStep("Successfully upgraded to a new backend version");
+  logFinishedStep(
+    `Successfully ${isDowngrade ? "moved" : "upgraded"} to backend version ${args.newVersion}`,
+  );
   saveDeploymentConfig(ctx, args.deploymentKind, args.deploymentName, {
     ports: args.ports,
     backendVersion: args.newVersion,
-    adminKey: args.newAdminKey,
+    adminKey: args.adminKey,
     instanceSecret: args.instanceSecret,
+    cloudProjectId: args.cloudProjectId,
   });
 
   return { cleanupHandle };
+}
+
+/** Whether `newVersion` predates `oldVersion`, as far as we can tell. */
+export function _isDowngrade(oldVersion: string, newVersion: string): boolean {
+  const oldDate = releaseDate(oldVersion);
+  const newDate = releaseDate(newVersion);
+  return oldDate !== null && newDate !== null && newDate < oldDate;
 }

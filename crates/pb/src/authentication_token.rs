@@ -59,23 +59,3 @@ impl From<(String, Option<UserIdentityAttributes>)>
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use convex_sync_types::AuthenticationToken;
-    use proptest::prelude::*;
-    use value::testing::assert_roundtrips;
-
-    use crate::convex_identity::AuthenticationToken as AuthenticationTokenProto;
-    proptest! {
-        #![proptest_config(ProptestConfig {
-            cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1),
-            failure_persistence: None, ..ProptestConfig::default()
-        })]
-        #[test]
-        fn test_attributes_proto_roundtrips(attributes in any::<AuthenticationToken>()) {
-            assert_roundtrips::<AuthenticationToken, AuthenticationTokenProto>(attributes);
-        }
-    }
-}

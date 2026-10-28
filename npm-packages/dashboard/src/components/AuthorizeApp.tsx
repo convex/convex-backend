@@ -1,5 +1,5 @@
 import { useTeams } from "api/teams";
-import { usePaginatedProjects } from "api/projects";
+import { usePaginatedProjects, useProjectById } from "api/projects";
 import Head from "next/head";
 import { Button } from "@ui/Button";
 import { Combobox, MAX_DISPLAYED_OPTIONS } from "@ui/Combobox";
@@ -13,10 +13,10 @@ import { useAuthorizeApp } from "api/accessTokens";
 import { useCheckOauthApp } from "api/oauth";
 import { LoginLayout } from "layouts/LoginLayout";
 import { Sheet } from "@ui/Sheet";
-import { PlusIcon, ResetIcon, InfoCircledIcon } from "@radix-ui/react-icons";
+import { PlusIcon, ResetIcon } from "@radix-ui/react-icons";
 import { CreateProjectForm } from "hooks/useCreateProjectModal";
 import { Callout } from "@ui/Callout";
-import { Tooltip } from "@ui/Tooltip";
+import { HelpTooltip } from "@ui/HelpTooltip";
 import { captureException } from "@sentry/nextjs";
 import { OauthAppResponse } from "generatedApi";
 
@@ -86,6 +86,7 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
   // Project selection logic (only used for project scope)
   const {
     projects,
+    selectedProject,
     selectedProjectId,
     setSelectedProjectId,
     projectQuery,
@@ -101,14 +102,25 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
       nameCountMap.set(p.name, (nameCountMap.get(p.name) || 0) + 1);
     });
 
-    return (
+    const options =
       projects?.map((p) => {
         const isDuplicate = (nameCountMap.get(p.name) || 0) > 1;
         const label = isDuplicate && p.slug ? `${p.name} (${p.slug})` : p.name;
         return { label, value: p.id };
-      }) ?? []
-    );
-  }, [projects]);
+      }) ?? [];
+
+    // Ensure the selected project is always an option, even when it's filtered
+    // out of the paginated list, so its label survives in the button and
+    // blurring the combobox doesn't deselect it.
+    if (
+      selectedProject &&
+      !options.some((o) => o.value === selectedProject.id)
+    ) {
+      options.push({ label: selectedProject.name, value: selectedProject.id });
+    }
+
+    return options;
+  }, [projects, selectedProject]);
 
   // Auto-show create project form if team has no projects
   useEffect(() => {
@@ -191,7 +203,7 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
         <LoginLayout>
           <Sheet className="flex max-w-prose flex-col gap-4 sm:min-w-lg">
             <h3>Authorize access to your {authorizationScope}</h3>
-            <Callout variant="error" className="max-w-prose">
+            <Callout variant="error">
               <div>
                 Missing required OAuth parameters.
                 <ul className="list-disc pl-4">
@@ -245,7 +257,7 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
         <LoginLayout>
           <Sheet className="flex max-w-prose flex-col gap-4 sm:min-w-lg">
             <h3>Authorize access to your {authorizationScope}</h3>
-            <Callout variant="error" className="max-w-prose">
+            <Callout variant="error">
               <div>
                 {currentError}
                 <p className="mt-2">
@@ -274,11 +286,9 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
           authorizationScope === "team" ? (
             <div className="flex items-center gap-1">
               <span>Select a team</span>
-              <Tooltip
-                tip={`${oauthAppData?.appName} will only be able to operate within the selected team.`}
-              >
-                <InfoCircledIcon />
-              </Tooltip>
+              <HelpTooltip>
+                {`${oauthAppData?.appName} will only be able to operate within the selected team.`}
+              </HelpTooltip>
             </div>
           ) : (
             "Select a team"
@@ -332,11 +342,9 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
             label={
               <div className="flex items-center gap-1">
                 <span>Select a project</span>
-                <Tooltip
-                  tip={`${oauthAppData?.appName} will only be able to operate within the selected project.`}
-                >
-                  <InfoCircledIcon />
-                </Tooltip>
+                <HelpTooltip>
+                  {`${oauthAppData?.appName} will only be able to operate within the selected project.`}
+                </HelpTooltip>
               </div>
             }
             labelHidden={false}
@@ -360,7 +368,7 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
                 setShowProjectForm(true);
                 setSelectedProjectId(null);
               }}
-              icon={<PlusIcon className="h-4 w-4" />}
+              icon={<PlusIcon className="size-4" />}
             >
               Create a new project
             </Button>
@@ -384,17 +392,20 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
             <li>
               <span className="flex items-center gap-1">
                 Manage all projects on the selected team
-                <Tooltip tip="This includes actions like deleting projects, managing custom domains, managing project environment variable defaults, and managing cloud backups and restores.">
-                  <InfoCircledIcon />
-                </Tooltip>
+                <HelpTooltip>
+                  This includes actions like deleting projects, managing custom
+                  domains, managing project environment variable defaults, and
+                  managing cloud backups and restores.
+                </HelpTooltip>
               </span>
             </li>
             <li>
               <span className="flex items-center gap-1">
                 Read and write data in all projects on the selected team
-                <Tooltip tip="Write access to Production deployments will depend on your team-level and project-level roles.">
-                  <InfoCircledIcon />
-                </Tooltip>
+                <HelpTooltip>
+                  Write access to Production deployments will depend on your
+                  team-level and project-level roles.
+                </HelpTooltip>
               </span>
             </li>
           </ul>
@@ -414,17 +425,20 @@ export function AuthorizeApp({ authorizationScope }: AuthorizeAppProps) {
           <li>
             <span className="flex items-center gap-1">
               Manage the selected project project
-              <Tooltip tip="This includes actions like managing custom domains, managing environment variable defaults, and managing cloud backups and restores.">
-                <InfoCircledIcon />
-              </Tooltip>
+              <HelpTooltip>
+                This includes actions like managing custom domains, managing
+                environment variable defaults, and managing cloud backups and
+                restores.
+              </HelpTooltip>
             </span>
           </li>
           <li>
             <span className="flex items-center gap-1">
               Read and write data in any deployment in this project
-              <Tooltip tip="Write access to Production deployments will depend on your team-level and project-level roles.">
-                <InfoCircledIcon />
-              </Tooltip>
+              <HelpTooltip>
+                Write access to Production deployments will depend on your
+                team-level and project-level roles.
+              </HelpTooltip>
             </span>
           </li>
         </ul>
@@ -620,8 +634,15 @@ function useProjectSelection(team?: { id: number }) {
   const projects = paginatedData ? paginatedData.items : undefined;
   const isLoading = paginatedData === undefined;
 
+  // Fetch the selected project directly so its label survives even when it's
+  // filtered out of the paginated list.
+  const { project: selectedProject } = useProjectById(
+    selectedProjectId ?? undefined,
+  );
+
   return {
     projects,
+    selectedProject: selectedProject ?? null,
     selectedProjectId,
     setSelectedProjectId,
     projectQuery,

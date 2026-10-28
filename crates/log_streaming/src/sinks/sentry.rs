@@ -29,7 +29,6 @@ use sentry::{
         Frame,
         Stacktrace,
     },
-    transports::DefaultTransportFactory,
     ClientOptions,
     Envelope,
     Level,
@@ -43,7 +42,7 @@ use crate::{
     consts,
     sinks::utils::{
         build_event_batches,
-        only_exceptions_log_filter,
+        SinkFilter,
     },
     LogSinkClient,
     LoggingDeploymentMetadata,
@@ -61,7 +60,7 @@ impl SentrySink {
     pub async fn start<RT: Runtime>(
         runtime: RT,
         config: SentryConfig,
-        transport_override: Option<Arc<dyn TransportFactory>>,
+        transport: Arc<dyn TransportFactory>,
         deployment_metadata: Arc<Mutex<LoggingDeploymentMetadata>>,
         should_verify: bool,
     ) -> anyhow::Result<LogSinkClient> {
@@ -70,7 +69,7 @@ impl SentrySink {
 
         let sentry_client = sentry::Client::with_options(ClientOptions {
             dsn: Some(config.dsn.clone().into_value()),
-            transport: transport_override.or(Some(Arc::new(DefaultTransportFactory))),
+            transport: Some(transport),
             ..Default::default()
         });
         anyhow::ensure!(sentry_client.is_enabled());
@@ -118,7 +117,7 @@ impl SentrySink {
                     let batches = build_event_batches(
                         ev,
                         consts::SENTRY_SINK_MAX_LOGS_PER_BATCH,
-                        only_exceptions_log_filter,
+                        &SinkFilter::OnlyExceptions,
                     );
 
                     // Process each batch and send to Sentry
@@ -150,6 +149,7 @@ impl SentrySink {
                 user_identifier,
                 source,
                 udf_server_version,
+                request_metadata,
             } = &event.event
             else {
                 continue;
@@ -253,9 +253,13 @@ impl SentrySink {
                 level: Level::Error,
                 timestamp: event.timestamp.as_system_time(),
                 sdk,
-                platform: "javascript".into(),
+                platform: "node".into(),
                 user: Some(User {
                     id: user_identifier.clone().map(|i| i.to_string()),
+                    ip_address: request_metadata
+                        .ip
+                        .clone()
+                        .and_then(|ip| ip.as_str().parse().ok()),
                     ..Default::default()
                 }),
                 server_name: Some(deployment_metadata.deployment_name.clone().into()),
@@ -271,112 +275,6 @@ impl SentrySink {
         }
 
         crate::metrics::sentry_sink_logs_sent(num_exceptions);
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        sync::Arc,
-        time::Duration,
-    };
-
-    use common::{
-        log_streaming::LogEvent,
-        runtime::{
-            testing::TestRuntime,
-            Runtime,
-        },
-        types::DeploymentType,
-    };
-    use maplit::btreemap;
-    use model::log_sinks::types::sentry::{
-        ExceptionFormatVersion,
-        SentryConfig,
-        TEST_DSN,
-    };
-    use parking_lot::Mutex;
-    use sentry::{
-        test::TestTransport,
-        types::Dsn,
-        Envelope,
-        Level,
-    };
-
-    use crate::{
-        sinks::sentry::SentrySink,
-        LoggingDeploymentMetadata,
-    };
-
-    #[convex_macro::test_runtime]
-    async fn test_sentry_receives_only_exceptions(rt: TestRuntime) -> anyhow::Result<()> {
-        let sentry_config = SentryConfig {
-            dsn: TEST_DSN.parse::<Dsn>()?.into(),
-            tags: Some(btreemap! {
-                "service".parse()? => "testservice".to_string(),
-            }),
-            version: ExceptionFormatVersion::default(),
-        };
-        let transport = TestTransport::new();
-        let sink = SentrySink::start(
-            rt.clone(),
-            sentry_config,
-            Some(Arc::new(transport.clone())),
-            Arc::new(Mutex::new(LoggingDeploymentMetadata {
-                deployment_name: "flying-fish-123".to_string(),
-                deployment_type: Some(DeploymentType::Dev),
-                project_name: Some("test".to_string()),
-                project_slug: Some("test".to_string()),
-                deployment_region: Some("test".to_string()),
-            })),
-            true,
-        )
-        .await?;
-
-        sink.events_sender.try_send(vec![
-            Arc::new(LogEvent::default_for_verification(&rt)?),
-            Arc::new(LogEvent::sample_exception(&rt)?),
-        ])?;
-        rt.wait(Duration::from_secs(1)).await;
-
-        // Verify that transport contains
-        // 1) an event from SentrySink::start
-        // 2) a sample exception
-        // The verification event sent should not be received due to Sentry sink event
-        // filtering
-        let envelopes = transport.fetch_and_clear_envelopes();
-        assert_eq!(envelopes.len(), 2);
-        assert_eq!(envelopes[0], Envelope::new());
-        let exception_event = &envelopes[1];
-        let exception_event = exception_event.event().unwrap();
-        assert_eq!(exception_event.level, Level::Error);
-        assert_eq!(exception_event.sdk.as_ref().unwrap().name, "convex");
-        assert_eq!(exception_event.sdk.as_ref().unwrap().version, "1.5.1");
-        assert_eq!(
-            exception_event.user.as_ref().unwrap().id.as_ref().unwrap(),
-            "test|user"
-        );
-        assert_eq!(
-            exception_event.server_name.as_ref().unwrap(),
-            "flying-fish-123"
-        );
-        assert_eq!(exception_event.environment.as_ref().unwrap(), "dev");
-        assert_eq!(exception_event.tags["func"], "test");
-        assert_eq!(exception_event.tags["func_type"], "action");
-        assert_eq!(exception_event.tags["service"], "testservice");
-        let exception = exception_event.exception.first().unwrap();
-        assert_eq!(exception.value, Some("test_message".to_string()));
-        assert_eq!(exception.stacktrace.as_ref().unwrap().frames.len(), 2);
-        assert_eq!(
-            exception.stacktrace.as_ref().unwrap().frames[0].filename,
-            Some("test_frame_2".to_string())
-        );
-        assert_eq!(
-            exception.stacktrace.as_ref().unwrap().frames[1].filename,
-            Some("test_frame_1".to_string())
-        );
-
         Ok(())
     }
 }

@@ -6,13 +6,13 @@ description: "Fetch data from the database with caching and reactivity"
 
 import Example from "!!raw-loader!@site/../private-demos/snippets/convex/queriesExample.ts";
 import Constructor from "!!raw-loader!@site/../private-demos/snippets/convex/queriesConstructor.ts";
-import ArgsWithoutValidationTS from "!!raw-loader!@site/../private-demos/snippets/convex/queriesArgsWithoutValidation.ts";
-import ArgsWithoutValidationJS from "!!raw-loader!@site/../private-demos/snippets/convex/queriesArgsWithoutValidationJS.js";
+import ArgsWithoutValidation from "!!raw-loader!@site/../private-demos/snippets/convex/queriesArgsWithoutValidation.ts";
+
 import ArgsWithValidation from "!!raw-loader!@site/../private-demos/snippets/convex/queriesArgsWithValidation.ts";
 import Context from "!!raw-loader!@site/../private-demos/snippets/convex/queriesContext.ts";
 import ContextDB from "!!raw-loader!@site/../private-demos/snippets/convex/queriesContextDB.ts";
 import Helper from "!!raw-loader!@site/../private-demos/snippets/convex/queriesHelper.ts";
-import HelperJS from "!!raw-loader!@site/../private-demos/snippets/convex/queriesHelperJS.js";
+
 import NPM from "!!raw-loader!@site/../private-demos/snippets/convex/queriesNPM.ts";
 import Call from "!!raw-loader!@site/../private-demos/snippets/src/queriesCall.tsx";
 
@@ -23,18 +23,13 @@ back to the client application.
 This is an example query, taking in named arguments, reading data from the
 database and returning a result:
 
-<TSAndJSSnippet
-  sourceTS={Example}
-  sourceJS={Example}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={Example} title="convex/myFunctions.ts" />
 
 Read on to understand how to build queries yourself.
 
 ## Query names
 
-Queries are defined in <LanguageSelector verbose /> files inside your `convex/`
-directory.
+Queries are defined in TypeScript files inside your `convex/` directory.
 
 The path and name of the file, as well as the way the function is exported from
 the file, determine the name the client will use to call it:
@@ -77,22 +72,14 @@ instead of API objects:
 To actually declare a query in Convex you use the `query` constructor function.
 Pass it an object with a `handler` function, which returns the query result:
 
-<TSAndJSSnippet
-  sourceTS={Constructor}
-  sourceJS={Constructor}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={Constructor} title="convex/myFunctions.ts" />
 
 ### Query arguments
 
 Queries accept named arguments. The argument values are accessible as fields of
 the second parameter of the handler function:
 
-<TSAndJSSnippet
-  sourceTS={ArgsWithoutValidationTS}
-  sourceJS={ArgsWithoutValidationJS}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={ArgsWithoutValidation} title="convex/myFunctions.ts" />
 
 Arguments and responses are automatically serialized and deserialized, and you
 can pass and return most value-like JavaScript data to and from your query.
@@ -100,9 +87,8 @@ can pass and return most value-like JavaScript data to and from your query.
 To both declare the types of arguments and to validate them, add an `args`
 object using `v` validators:
 
-<TSAndJSSnippet
-  sourceTS={ArgsWithValidation}
-  sourceJS={ArgsWithValidation}
+<Snippet
+  source={ArgsWithValidation}
   highlightPatterns={["args:"]}
   title="convex/myFunctions.ts"
 />
@@ -124,14 +110,10 @@ query returns `undefined` **it is translated to `null`** on the client.
 ### Query context
 
 The `query` constructor enables fetching data, and other Convex features by
-passing a [QueryCtx](/generated-api/server.md#queryctx) object to the handler
+passing a [QueryCtx](/generated-api/server.mdx#queryctx) object to the handler
 function as the first parameter:
 
-<TSAndJSSnippet
-  sourceTS={Context}
-  sourceJS={Context}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={Context} title="convex/myFunctions.ts" />
 
 Which part of the query context is used depends on what your query needs to do:
 
@@ -139,9 +121,8 @@ Which part of the query context is used depends on what your query needs to do:
   function an `async` function so we can `await` the promise returned by
   `db.get()`:
 
-  <TSAndJSSnippet
-    sourceTS={ContextDB}
-    sourceJS={ContextDB}
+  <Snippet
+    source={ContextDB}
     highlightPatterns={["db."]}
     title="convex/myFunctions.ts"
   />
@@ -149,21 +130,16 @@ Which part of the query context is used depends on what your query needs to do:
   Read more about [Reading Data](/database/reading-data/reading-data.mdx).
 
 - To return URLs to stored files use the `storage` field. Read more about
-  [File Storage](/file-storage.mdx).
+  [File Storage](/file-storage/overview.mdx).
 - To check user authentication use the `auth` field. Read more about
-  [Authentication](/auth.mdx).
+  [Authentication](/auth/overview.mdx).
 
 ## Splitting up query code via helpers
 
 When you want to split up the code in your query or reuse logic across multiple
-Convex functions you can define and call helper <LanguageSelector verbose />
-functions:
+Convex functions you can define and call helper functions:
 
-<TSAndJSSnippet
-  sourceTS={Helper}
-  sourceJS={HelperJS}
-  title="convex/myFunctions.ts"
-/>
+<Snippet source={Helper} title="convex/myFunctions.ts" />
 
 You can `export` helpers to use them across multiple files. They will not be
 callable from outside of your Convex functions.
@@ -182,18 +158,18 @@ packages are supported, see
 npm install @faker-js/faker
 ```
 
-<TSAndJSSnippet sourceTS={NPM} sourceJS={NPM} title="convex/myFunctions.ts" />
+<Snippet source={NPM} title="convex/myFunctions.ts" />
 
 ## Calling queries from clients
 
-To call a query from [React](/client/react.mdx) use the
-[`useQuery`](/client/react.mdx#fetching-data) hook along with the generated
-[`api`](/generated-api/api) object.
+To call a query from [React](/client/react/overview.mdx) use the
+[`useQuery`](/client/react/overview.mdx#fetching-data) hook along with the
+generated [`api`](/generated-api/api) object.
 
-<TSAndJSSnippet sourceTS={Call} sourceJS={Call} title="src/MyApp.tsx" />
+<Snippet source={Call} title="src/MyApp.tsx" />
 
-See the [React](/client/react.mdx) client documentation for all the ways queries
-can be called.
+See the [React](/client/react/overview.mdx) client documentation for all the
+ways queries can be called.
 
 ## Caching & reactivity & consistency
 
@@ -228,5 +204,12 @@ on the Convex runtime.
 Queries have a limit to the amount of data they can read at once to guarantee
 good performance. Check out these limits in
 [Read/write limit errors](/functions/error-handling/error-handling.mdx#readwrite-limit-errors).
+
+See
+[Write performance and limits](/database/writing-data#write-performance-and-limits)
+for tools to stay within these limits: measuring document sizes, limiting
+paginated reads with `maximumBytesRead`/`maximumRowsRead`, checking headroom via
+`ctx.meta.getTransactionMetrics()`, and bounding nested `ctx.runQuery` calls
+with a `transactionLimits` option.
 
 For information on other limits, see [Limits](/production/state/limits.mdx).

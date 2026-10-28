@@ -11,33 +11,33 @@ export function atomicMutators(table: string) {
       args: { value: v.any() },
       handler: async (ctx, { value }) => {
         const id = await ctx.db.insert(table, value);
-        const newDoc = await ctx.db.get(id);
+        const newDoc = await ctx.db.get(table, id);
         return { newDoc };
       },
     }),
     atomicPatch: internalMutationGeneric({
       args: { id: v.id(table), value: v.any() },
       handler: async (ctx, { id, value }) => {
-        const oldDoc = await ctx.db.get(id);
-        await ctx.db.patch(id, value);
-        const newDoc = await ctx.db.get(id);
+        const oldDoc = await ctx.db.get(table, id);
+        await ctx.db.patch(table, id, value);
+        const newDoc = await ctx.db.get(table, id);
         return { oldDoc, newDoc };
       },
     }),
     atomicReplace: internalMutationGeneric({
       args: { id: v.id(table), value: v.any() },
       handler: async (ctx, { id, value }) => {
-        const oldDoc = await ctx.db.get(id);
-        await ctx.db.replace(id, value);
-        const newDoc = await ctx.db.get(id);
+        const oldDoc = await ctx.db.get(table, id);
+        await ctx.db.replace(table, id, value);
+        const newDoc = await ctx.db.get(table, id);
         return { oldDoc, newDoc };
       },
     }),
     atomicDelete: internalMutationGeneric({
       args: { id: v.id(table) },
       handler: async (ctx, { id }) => {
-        const oldDoc = await ctx.db.get(id);
-        await ctx.db.delete(id);
+        const oldDoc = await ctx.db.get(table, id);
+        await ctx.db.delete(table, id);
         return { oldDoc };
       },
     }),

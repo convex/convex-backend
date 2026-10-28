@@ -13,7 +13,6 @@ use crate::{
     TabletIdAndTableNumber,
 };
 
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
 pub enum TableNamespace {
     /// For tables that have a single global namespace, e.g. _tables, _index,
@@ -27,19 +26,6 @@ pub enum TableNamespace {
 }
 
 impl TableNamespace {
-    /// Default namespace for user tables in tests.
-    /// Ideally we should be able to change this to a different namespace
-    /// without any test failures.
-    #[cfg(any(test, feature = "testing"))]
-    pub const fn test_user() -> Self {
-        Self::Global
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub const fn test_component() -> Self {
-        Self::ByComponent(DeveloperDocumentId::MIN)
-    }
-
     /// Use this to make it clear that a table pertains to the root component.
     /// It doesn't extend between components like a plain Global.
     /// This is useful for code searching.

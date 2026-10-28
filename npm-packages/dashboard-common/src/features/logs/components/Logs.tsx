@@ -7,6 +7,8 @@ import React, {
   useState,
 } from "react";
 import { useDebounce, usePrevious } from "react-use";
+import { useRouter, type NextRouter } from "next/router";
+import type { ParsedUrlQuery } from "querystring";
 import isEqual from "lodash/isEqual";
 import { dismissToast, toast } from "@common/lib/utils";
 import { LogList } from "@common/features/logs/components/LogList";
@@ -18,13 +20,81 @@ import {
   itemIdentifier,
   useModuleFunctions,
 } from "@common/lib/functions/FunctionsProvider";
-import { functionIdentifierValue } from "@common/lib/functions/generateFileTree";
+import {
+  functionIdentifierFromValue,
+  functionIdentifierValue,
+} from "@common/lib/functions/generateFileTree";
 import { MAX_LOGS, UdfLog, useLogs } from "@common/lib/useLogs";
 import { useDeploymentAuditLogs } from "@common/lib/useDeploymentAuditLog";
 import { Button } from "@ui/Button";
 import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { MultiSelectValue } from "@ui/MultiSelectCombobox";
+
+function logsQuerySignature(query: ParsedUrlQuery) {
+  return JSON.stringify({
+    filter: query.filter,
+    components: query.components,
+    functions: query.functions,
+    logTypes: query.logTypes,
+  });
+}
+
+function parseLogSelection(
+  value: string | string[] | undefined,
+  isValid: (option: string) => boolean = () => true,
+): MultiSelectValue | undefined {
+  if (value === "all") return "all";
+  if (typeof value !== "string") return undefined;
+  try {
+    const selection: unknown = JSON.parse(value);
+    return Array.isArray(selection) &&
+      selection.every((option) => typeof option === "string" && isValid(option))
+      ? selection
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isValidFunctionSelection(value: string) {
+  const identifier = functionIdentifierFromValue(value);
+  return (
+    typeof identifier.identifier === "string" &&
+    (identifier.componentPath === undefined ||
+      typeof identifier.componentPath === "string") &&
+    (identifier.componentId === undefined ||
+      typeof identifier.componentId === "string")
+  );
+}
+
+function serializeLogSelection(selection: MultiSelectValue) {
+  return selection === "all" ? undefined : JSON.stringify(selection);
+}
+
+function logsUrl(router: NextRouter, query: ParsedUrlQuery) {
+  const cleanQuery = { ...query };
+  for (const key of ["components", "functions", "logTypes"] as const) {
+    if (cleanQuery[key] === undefined || cleanQuery[key] === "all") {
+      delete cleanQuery[key];
+    }
+  }
+  if (cleanQuery.filter === undefined || cleanQuery.filter === "") {
+    delete cleanQuery.filter;
+  }
+  // Next.js also exposes dynamic path segments through router.query.
+  for (const match of router.pathname.matchAll(
+    /\[{1,2}(?:\.\.\.)?([^\]]+)\]{1,2}/g,
+  )) {
+    delete cleanQuery[match[1]];
+  }
+  const [pathAndSearch, hash] = router.asPath.split("#");
+  return {
+    pathname: pathAndSearch.split("?")[0],
+    query: cleanQuery,
+    ...(hash ? { hash: `#${hash}` } : {}),
+  };
+}
 
 export function Logs({
   nents: allNents,
@@ -33,6 +103,9 @@ export function Logs({
   nents: Nent[];
   selectedNent: Nent | null;
 }) {
+  const router = useRouter();
+  const { query } = router;
+  const querySignature = logsQuerySignature(query);
   const { useCurrentDeployment } = useContext(DeploymentInfoContext);
   const deployment = useCurrentDeployment();
   const deploymentPrefix = deployment?.name;
@@ -51,6 +124,9 @@ export function Logs({
         "logStreamError",
         false,
       );
+    },
+    onPermissionDenied: (message: string) => {
+      toast("error", message, "logStreamPermissionDenied", false);
     },
   });
 
@@ -73,17 +149,6 @@ export function Logs({
       `logs/${deploymentPrefix}/selectedNents`,
       defaultSelectedNent,
     );
-
-  // When the selected nent changes from props, update the storage if not already set
-  useEffect(() => {
-    if (
-      selectedNent &&
-      selectedNents !== "all" &&
-      !selectedNents.includes(selectedNent.path)
-    ) {
-      setSelectedNents([selectedNent.path]);
-    }
-  }, [selectedNent, selectedNents, setSelectedNents]);
 
   const moduleFunctions = useModuleFunctions();
   const functions = useMemo(
@@ -191,9 +256,23 @@ export function Logs({
   }, [filters, previousFilters, logs]);
 
   const [innerFilter, setInnerFilter] = useState(filter);
+  const pendingFilterRef = useRef(false);
+  const pendingQuerySignatureRef = useRef<string | null>(null);
+  const pendingQueryUpdateRef = useRef(false);
+  const [queryUpdateVersion, setQueryUpdateVersion] = useState(0);
+  const requestedQueryUpdateVersionRef = useRef(0);
+  const markFiltersChanged = useCallback(() => {
+    pendingQueryUpdateRef.current = true;
+    requestedQueryUpdateVersionRef.current += 1;
+    setQueryUpdateVersion(requestedQueryUpdateVersionRef.current);
+  }, []);
   useDebounce(
     () => {
       setFilter(innerFilter);
+      if (pendingFilterRef.current) {
+        pendingFilterRef.current = false;
+        markFiltersChanged();
+      }
     },
     200,
     [innerFilter],
@@ -202,11 +281,156 @@ export function Logs({
   // Function to set filter that also updates the text input
   const setFilterAndInput = useCallback(
     (newFilter: string) => {
+      pendingFilterRef.current = false;
       setFilter(newFilter);
       setInnerFilter(newFilter);
+      markFiltersChanged();
     },
-    [setFilter],
+    [setFilter, markFiltersChanged],
   );
+
+  const previousQuerySignatureRef = useRef(querySignature);
+  useEffect(() => {
+    const currentQuery: ParsedUrlQuery = JSON.parse(querySignature);
+    const hasLogParams = querySignature !== "{}";
+    const hadLogParams = previousQuerySignatureRef.current !== "{}";
+    previousQuerySignatureRef.current = querySignature;
+    // A completed URL update can arrive after the user has started the next edit.
+    const isOwnUpdate = querySignature === pendingQuerySignatureRef.current;
+    pendingQuerySignatureRef.current = null;
+    if (isOwnUpdate) {
+      return;
+    }
+    pendingQueryUpdateRef.current = false;
+    const newFilter =
+      typeof currentQuery.filter === "string"
+        ? currentQuery.filter
+        : currentQuery.filter === undefined && (hasLogParams || hadLogParams)
+          ? ""
+          : undefined;
+    if (newFilter !== undefined) {
+      pendingFilterRef.current = false;
+      setFilter(newFilter);
+      setInnerFilter(newFilter);
+    }
+    const selectionSetters = {
+      components: setSelectedNents,
+      functions: setSelectedFunctions,
+      logTypes: setLevels,
+    };
+    for (const key of ["components", "functions", "logTypes"] as const) {
+      const selection = parseLogSelection(
+        currentQuery[key],
+        key === "functions"
+          ? isValidFunctionSelection
+          : key === "logTypes"
+            ? (option) =>
+                [
+                  "success",
+                  "failure",
+                  "DEBUG",
+                  "INFO",
+                  "WARN",
+                  "ERROR",
+                ].includes(option)
+            : undefined,
+      );
+      if (selection !== undefined) {
+        selectionSetters[key](selection);
+      } else if (
+        currentQuery[key] === undefined &&
+        (hasLogParams || hadLogParams)
+      ) {
+        selectionSetters[key]("all");
+      }
+    }
+  }, [
+    querySignature,
+    setFilter,
+    setSelectedNents,
+    setSelectedFunctions,
+    setLevels,
+  ]);
+
+  // Initial URL selections take precedence; subsequent context changes follow the switcher.
+  const previousContextPathRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const path = selectedNent?.path ?? null;
+    const previousPath = previousContextPathRef.current;
+    previousContextPathRef.current = path;
+    if (path === previousPath) return;
+    const isInitialSeed = previousPath === undefined;
+    if (isInitialSeed && (query.components !== undefined || path === null)) {
+      return;
+    }
+    setSelectedNents(path === null ? "all" : [path]);
+    if (!isInitialSeed) markFiltersChanged();
+  }, [selectedNent, query.components, setSelectedNents, markFiltersChanged]);
+
+  useEffect(() => {
+    if (!router.isReady) return;
+    const url = logsUrl(router, query);
+    const newSignature = logsQuerySignature(url.query);
+    const searchParams = new URLSearchParams(
+      router.asPath.split("#")[0].split("?")[1],
+    );
+    const hasRedundantParams = [...searchParams.keys()].some(
+      (key) => !(key in url.query),
+    );
+    if (newSignature === querySignature && !hasRedundantParams) return;
+    if (newSignature !== querySignature) {
+      pendingQuerySignatureRef.current = newSignature;
+    }
+    void router.replace(url, undefined, { shallow: true, scroll: false });
+  }, [router, query, querySignature]);
+
+  useEffect(() => {
+    // Component switches can queue filter state from an effect; use its committed render.
+    if (
+      !pendingQueryUpdateRef.current ||
+      queryUpdateVersion !== requestedQueryUpdateVersionRef.current
+    )
+      return;
+    pendingQueryUpdateRef.current = false;
+    const newQuery: ParsedUrlQuery = {
+      ...query,
+      components: serializeLogSelection(selectedNents),
+      functions: serializeLogSelection(selectedFunctions),
+      logTypes: serializeLogSelection(levels),
+    };
+    if (selectedNents === "all" && selectedNent) {
+      delete newQuery.component;
+    }
+    if (filter) {
+      newQuery.filter = filter;
+    } else {
+      delete newQuery.filter;
+    }
+    const url = logsUrl(router, newQuery);
+    const newSignature = logsQuerySignature(url.query);
+    if (
+      newSignature === querySignature &&
+      isEqual(url.query, logsUrl(router, query).query)
+    )
+      return;
+    if (newSignature !== querySignature) {
+      pendingQuerySignatureRef.current = newSignature;
+    }
+    void router.replace(url, undefined, {
+      shallow: true,
+      scroll: false,
+    });
+  }, [
+    queryUpdateVersion,
+    filter,
+    levels,
+    selectedNents,
+    selectedNent,
+    selectedFunctions,
+    query,
+    querySignature,
+    router,
+  ]);
 
   // Note: fromTimestamp used to be a `useMemo` result, but it was causing a bug
   // where fromTimestamp would keep changing and causing the query to be refetched
@@ -226,27 +450,39 @@ export function Logs({
       : latestAuditLog?._creationTime;
 
   return (
-    <div className="flex h-full w-full min-w-[48rem] flex-col overflow-hidden p-6 py-4">
+    <div className="flex size-full min-w-3xl flex-col overflow-hidden p-6 py-4">
       <div className="flex shrink-0 flex-col gap-4">
         <LogToolbar
           firstItem={<LogsHeader />}
           selectedLevels={levels}
           selectedFunctions={selectedFunctions}
-          setSelectedFunctions={setSelectedFunctions}
+          setSelectedFunctions={(selection) => {
+            setSelectedFunctions(selection);
+            markFiltersChanged();
+          }}
           functions={functions}
-          setSelectedLevels={setLevels}
+          setSelectedLevels={(selection) => {
+            setLevels(selection);
+            markFiltersChanged();
+          }}
           nents={
             nents.length >= 1
               ? [NENT_APP_PLACEHOLDER, ...nents.map((nent) => nent.path)]
               : undefined
           }
           selectedNents={selectedNents}
-          setSelectedNents={setSelectedNents}
+          setSelectedNents={(selection) => {
+            setSelectedNents(selection);
+            markFiltersChanged();
+          }}
         />
         <div className="mb-2 flex w-full gap-2">
           <SearchLogsInput
             value={innerFilter}
-            onChange={(e) => setInnerFilter(e.target.value)}
+            onChange={(e) => {
+              pendingFilterRef.current = true;
+              setInnerFilter(e.target.value);
+            }}
             logs={logs}
           />
           <Button

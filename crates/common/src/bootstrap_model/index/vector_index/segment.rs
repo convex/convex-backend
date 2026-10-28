@@ -20,7 +20,6 @@ use crate::types::ObjectKey;
 /// Each file is stored independently, but they're composed to form a queryable
 /// segment. The deleted bitset can be written to independently. The id tracker
 /// can be queried independently. Using the segment requires all three files.
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FragmentedVectorSegment {
     pub segment_key: ObjectKey,

@@ -1,4 +1,10 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::{
+        BTreeMap,
+        BTreeSet,
+    },
+    net::Ipv4Addr,
+};
 
 use anyhow::Context;
 use application::{
@@ -16,13 +22,25 @@ use common::{
             MtState,
             Path,
         },
+        ExtractRequestMetadata,
         HttpResponseError,
     },
     knobs::AXIOM_MAX_ATTRIBUTES,
-    log_streaming::LogEventFormatVersion,
+    log_streaming::{
+        LogEventFormatVersion,
+        LogTopic,
+    },
+    types::streaming_export::selection::{
+        ColumnSelection,
+        ComponentSelection,
+        InclusionDefault,
+        Selection,
+        TableSelection,
+    },
 };
 use errors::ErrorMetadata;
 use http::StatusCode;
+use keybroker::Identity;
 use model::log_sinks::types::{
     axiom::{
         AxiomAttribute,
@@ -35,10 +53,14 @@ use model::log_sinks::types::{
     },
     posthog_error_tracking::PostHogErrorTrackingConfig,
     posthog_logs::PostHogLogsConfig,
+    s3_export::{
+        S3ExportConfig,
+        S3ExportCredentials,
+        SyncPeriod,
+    },
     sentry::{
         ExceptionFormatVersion,
         SentryConfig,
-        SerializedSentryConfig,
     },
     webhook::{
         generate_webhook_hmac_secret,
@@ -48,6 +70,7 @@ use model::log_sinks::types::{
     SinkConfig,
     SinkType,
 };
+use roles::RequireDeploymentOp;
 use runtime::prod::ProdRuntime;
 use sentry::types::Dsn;
 use serde::{
@@ -56,16 +79,9 @@ use serde::{
 };
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
-use value::{
-    FieldName,
-    ResolvedDocumentId,
-};
+use value::FieldName;
 
 use crate::{
-    admin::{
-        must_be_admin,
-        must_be_admin_with_write_access,
-    },
     authentication::ExtractIdentity,
     LocalAppState,
 };
@@ -114,247 +130,59 @@ fn validate_axiom_ingest_url(ingest_url: Option<&String>) -> anyhow::Result<()> 
     Ok(())
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DatadogSinkPostArgs {
-    site_location: DatadogSiteLocation,
-    dd_api_key: String,
-    dd_tags: Vec<String>,
-    version: Option<String>,
-    service: Option<String>,
-}
-
-impl TryFrom<DatadogSinkPostArgs> for DatadogConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(value: DatadogSinkPostArgs) -> Result<Self, Self::Error> {
-        Ok(Self {
-            site_location: value.site_location,
-            dd_api_key: value.dd_api_key.into(),
-            dd_tags: value.dd_tags,
-            version: match value.version {
-                Some(v) => v.parse().context(ErrorMetadata::bad_request(
-                    "InvalidLogStreamVersion",
-                    format!("Invalid log stream version {v}"),
-                ))?,
-                None => LogEventFormatVersion::V1,
-            },
-            service: value.service,
+fn validate_subscribed_topics(
+    topics: Option<Vec<LogTopic>>,
+) -> anyhow::Result<Option<BTreeSet<LogTopic>>> {
+    topics
+        .map(|topics| {
+            if topics.is_empty() {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "EmptyLogTopics",
+                    "A log stream must be subscribed to at least one topic.",
+                ));
+            }
+            topics
+                .into_iter()
+                .map(|topic| {
+                    if topic.is_subscribable() {
+                        Ok(topic)
+                    } else {
+                        Err(anyhow::anyhow!(ErrorMetadata::bad_request(
+                            "InvalidLogTopic",
+                            format!("Log stream topic `{topic}` cannot be subscribed to"),
+                        )))
+                    }
+                })
+                .collect::<anyhow::Result<BTreeSet<LogTopic>>>()
         })
+        .transpose()
+}
+
+async fn ensure_topic_entitlements(
+    application: &Application<ProdRuntime>,
+    identity: &keybroker::Identity,
+    topics: &Option<BTreeSet<LogTopic>>,
+) -> Result<(), HttpResponseError> {
+    if topics
+        .as_ref()
+        .is_some_and(|topics| topics.contains(&LogTopic::CustomAudit))
+    {
+        application
+            .ensure_custom_audit_logs_in_log_streams_allowed(identity.clone())
+            .await?;
     }
+    Ok(())
 }
 
-pub async fn add_datadog_sink(
-    MtState(st): MtState<LocalAppState>,
-    ExtractIdentity(identity): ExtractIdentity,
-    Json(args): Json<DatadogSinkPostArgs>,
-) -> Result<impl IntoResponse, HttpResponseError> {
-    tracing::info!("add_datadog_sink called (deprecated, use create_log_stream instead)");
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
-
-    let config: DatadogConfig = args.try_into()?;
-    st.application
-        .add_log_sink(SinkConfig::Datadog(config))
-        .await?;
-    Ok(StatusCode::OK)
-}
-
-pub async fn regenerate_webhook_secret(
-    MtState(st): MtState<LocalAppState>,
-    ExtractIdentity(identity): ExtractIdentity,
-) -> Result<impl IntoResponse, HttpResponseError> {
-    tracing::info!(
-        "regenerate_webhook_secret called (deprecated, use rotate_webhook_secret instead)"
-    );
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
-
-    let Some(SinkConfig::Webhook(existing_webhook_sink)) =
-        st.application.get_log_sink(&SinkType::Webhook).await?
-    else {
-        return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
-            "NoWebhookLogStream",
-            "No webhook log stream exists for this deployment"
-        ))
-        .into());
-    };
-
-    let hmac_secret = generate_webhook_hmac_secret(st.application.runtime());
-
-    let config = WebhookConfig {
-        url: existing_webhook_sink.url,
-        format: existing_webhook_sink.format,
-        hmac_secret,
-    };
-    st.application
-        .add_log_sink(SinkConfig::Webhook(config))
-        .await?;
-
-    Ok(StatusCode::OK)
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebhookSinkPostArgs {
-    url: String,
-    format: WebhookFormat,
-}
-
-pub async fn add_webhook_sink(
-    MtState(st): MtState<LocalAppState>,
-    ExtractIdentity(identity): ExtractIdentity,
-    Json(args): Json<WebhookSinkPostArgs>,
-) -> Result<impl IntoResponse, HttpResponseError> {
-    tracing::info!("add_webhook_sink called (deprecated, use create_log_stream instead)");
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
-
-    add_webhook_sink_inner(st.application, args).await?;
-
-    Ok(StatusCode::OK)
-}
-
-async fn add_webhook_sink_inner(
-    application: Application<ProdRuntime>,
-    args: WebhookSinkPostArgs,
-) -> Result<(ResolvedDocumentId, String), HttpResponseError> {
-    let existing_webhook_sink = application.get_log_sink(&SinkType::Webhook).await?;
-
-    let hmac_secret = match existing_webhook_sink {
-        Some(SinkConfig::Webhook(WebhookConfig {
-            hmac_secret: existing_secret,
-            ..
-        })) => existing_secret,
-        _ => generate_webhook_hmac_secret(application.runtime()),
-    };
-
-    let url = args.url.parse().map_err(|_| {
-        anyhow::anyhow!(ErrorMetadata::bad_request(
-            "InvalidWebhookUrl",
-            "The URL passed was invalid"
-        ))
-    })?;
-
-    let config = WebhookConfig {
-        url,
-        format: args.format,
-        hmac_secret: hmac_secret.clone(),
-    };
-    let id = application
-        .add_log_sink(SinkConfig::Webhook(config))
-        .await?;
-
-    Ok((id, hmac_secret))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AxiomSinkPostArgs {
-    api_key: String,
-    dataset_name: String,
-    attributes: Vec<AxiomAttribute>,
-    version: Option<String>,
-    ingest_url: Option<String>,
-}
-
-impl TryFrom<AxiomSinkPostArgs> for AxiomConfig {
-    type Error = anyhow::Error;
-
-    fn try_from(value: AxiomSinkPostArgs) -> Result<Self, Self::Error> {
-        validate_axiom_ingest_url(value.ingest_url.as_ref())?;
-
-        Ok(Self {
-            api_key: value.api_key.into(),
-            dataset_name: value.dataset_name,
-            attributes: value.attributes,
-            version: match value.version {
-                Some(v) => v.parse().context(ErrorMetadata::bad_request(
-                    "InvalidLogStreamVersion",
-                    format!("Invalid log stream version {v}"),
-                ))?,
-                None => LogEventFormatVersion::V1,
-            },
-            ingest_url: value.ingest_url,
-        })
+fn resolve_topics_update(
+    // Outer option None means there is no update. Inner None means subscribe to all topics.
+    update: Option<Option<Vec<LogTopic>>>,
+    existing: Option<BTreeSet<LogTopic>>,
+) -> anyhow::Result<Option<BTreeSet<LogTopic>>> {
+    match update {
+        None => Ok(existing),
+        Some(topics) => validate_subscribed_topics(topics),
     }
-}
-
-pub async fn add_axiom_sink(
-    MtState(st): MtState<LocalAppState>,
-    ExtractIdentity(identity): ExtractIdentity,
-    Json(args): Json<AxiomSinkPostArgs>,
-) -> Result<impl IntoResponse, HttpResponseError> {
-    tracing::info!("add_axiom_sink called (deprecated, use create_log_stream instead)");
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
-
-    add_axiom_sink_inner(st.application, args).await?;
-
-    Ok(StatusCode::OK)
-}
-
-async fn add_axiom_sink_inner(
-    application: Application<ProdRuntime>,
-    args: AxiomSinkPostArgs,
-) -> Result<ResolvedDocumentId, HttpResponseError> {
-    if args.attributes.len() > *AXIOM_MAX_ATTRIBUTES {
-        return Err(anyhow::anyhow!(
-            "Exceeded max number of Axiom attributes. Contact support@convex.dev to request a \
-             limit increase."
-        )
-        .into());
-    }
-
-    let config: AxiomConfig = args.try_into()?;
-    let id = application.add_log_sink(SinkConfig::Axiom(config)).await?;
-
-    Ok(id)
-}
-
-pub async fn add_sentry_sink(
-    MtState(st): MtState<LocalAppState>,
-    ExtractIdentity(identity): ExtractIdentity,
-    Json(args): Json<SerializedSentryConfig>,
-) -> Result<impl IntoResponse, HttpResponseError> {
-    tracing::info!("add_sentry_sink called (deprecated, use create_log_stream instead)");
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
-    st.application
-        .add_log_sink(SinkConfig::Sentry(args.try_into()?))
-        .await?;
-    Ok(StatusCode::OK)
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LogSinkDeleteArgs {
-    sink_type: SinkType,
-}
-
-pub async fn delete_log_sink(
-    MtState(st): MtState<LocalAppState>,
-    ExtractIdentity(identity): ExtractIdentity,
-    Json(LogSinkDeleteArgs { sink_type }): Json<LogSinkDeleteArgs>,
-) -> Result<impl IntoResponse, HttpResponseError> {
-    tracing::info!("delete_log_sink called (deprecated, use delete_log_stream instead)");
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
-
-    st.application.remove_log_sink(sink_type).await?;
-    Ok(StatusCode::OK)
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -381,12 +209,42 @@ impl From<LogStreamType> for SinkType {
     }
 }
 
+/// Analytics export destinations are gated on the streaming export entitlement;
+/// every other sink type streams logs and is gated on log streaming.
+async fn ensure_integration_allowed(
+    application: &Application<ProdRuntime>,
+    identity: &Identity,
+    sink_type: &SinkType,
+) -> anyhow::Result<()> {
+    match sink_type {
+        SinkType::S3Export => {
+            application
+                .ensure_streaming_export_enabled(identity.clone())
+                .await
+        },
+        SinkType::Local
+        | SinkType::Datadog
+        | SinkType::DatadogV2
+        | SinkType::Webhook
+        | SinkType::Axiom
+        | SinkType::AxiomV2
+        | SinkType::Sentry
+        | SinkType::PostHogLogs
+        | SinkType::PostHogErrorTracking => {
+            application
+                .ensure_log_streaming_allowed(identity.clone())
+                .await
+        },
+    }
+}
+
 /// Delete log stream
 ///
 /// Delete the deployment's log stream with the given id.
 #[utoipa::path(
     post,
     path = "/delete_log_stream/{id}",
+    tag = "Log Streams",
     responses((status = 200)),
     params(
         ("id" = String, Path, description = "id of the log stream to delete"),
@@ -401,14 +259,16 @@ impl From<LogStreamType> for SinkType {
 pub async fn delete_log_stream(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
+    identity.require_operation(keybroker::DeploymentOp::WriteIntegrations)?;
+    let sink = st.application.must_get_log_sink_by_id(&id).await?;
+    ensure_integration_allowed(&st.application, &identity, &sink.config.sink_type()).await?;
 
-    st.application.remove_log_sink_by_id(id).await?;
+    st.application
+        .remove_log_sink_by_id(identity, request_metadata, id)
+        .await?;
     Ok(StatusCode::OK)
 }
 
@@ -424,6 +284,10 @@ pub struct CreateDatadogLogStreamArgs {
     dd_tags: Vec<String>,
     /// Service name used as a special tag in Datadog.
     service: Option<String>,
+    /// The topics this log stream is subscribed to. Omit to
+    /// subscribe to all topics, including ones added in the future.
+    #[serde(default)]
+    topics: Option<Vec<LogTopic>>,
 }
 
 impl TryFrom<CreateDatadogLogStreamArgs> for DatadogConfig {
@@ -436,6 +300,7 @@ impl TryFrom<CreateDatadogLogStreamArgs> for DatadogConfig {
             dd_tags: value.dd_tags,
             version: LogEventFormatVersion::V2,
             service: value.service,
+            topics: validate_subscribed_topics(value.topics)?,
         })
     }
 }
@@ -448,6 +313,10 @@ pub struct CreateWebhookLogStreamArgs {
     /// Format for the webhook payload. JSONL sends one object per line of
     /// request, JSON sends one array per request.
     format: WebhookFormat,
+    /// The topics this log stream is subscribed to. Omit to
+    /// subscribe to all topics, including ones added in the future.
+    #[serde(default)]
+    topics: Option<Vec<LogTopic>>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -462,6 +331,10 @@ pub struct CreateAxiomLogStreamArgs {
     attributes: Vec<AxiomAttribute>,
     /// Optional ingest endpoint for Axiom
     ingest_url: Option<String>,
+    /// The topics this log stream is subscribed to. Omit to
+    /// subscribe to all topics, including ones added in the future.
+    #[serde(default)]
+    topics: Option<Vec<LogTopic>>,
 }
 
 impl TryFrom<CreateAxiomLogStreamArgs> for AxiomConfig {
@@ -476,6 +349,7 @@ impl TryFrom<CreateAxiomLogStreamArgs> for AxiomConfig {
             attributes: value.attributes,
             version: LogEventFormatVersion::V2,
             ingest_url: value.ingest_url,
+            topics: validate_subscribed_topics(value.topics)?,
         })
     }
 }
@@ -524,12 +398,16 @@ fn validate_posthog_host(host: Option<&String>) -> anyhow::Result<()> {
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePostHogLogsLogStreamArgs {
-    /// PostHog project API key.
+    /// PostHog project token.
     api_key: String,
     /// PostHog host URL. Defaults to https://us.i.posthog.com.
     host: Option<String>,
     /// OTLP service.name attribute. Defaults to the deployment name.
     service_name: Option<String>,
+    /// The topics this log stream is subscribed to. Omit to
+    /// subscribe to all topics, including ones added in the future.
+    #[serde(default)]
+    topics: Option<Vec<LogTopic>>,
 }
 
 impl TryFrom<CreatePostHogLogsLogStreamArgs> for PostHogLogsConfig {
@@ -541,6 +419,7 @@ impl TryFrom<CreatePostHogLogsLogStreamArgs> for PostHogLogsConfig {
             api_key: value.api_key.into(),
             host: value.host,
             service_name: value.service_name,
+            topics: validate_subscribed_topics(value.topics)?,
         })
     }
 }
@@ -548,7 +427,7 @@ impl TryFrom<CreatePostHogLogsLogStreamArgs> for PostHogLogsConfig {
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePostHogErrorTrackingLogStreamArgs {
-    /// PostHog project API key.
+    /// PostHog project token.
     api_key: String,
     /// PostHog host URL. Defaults to https://us.i.posthog.com.
     host: Option<String>,
@@ -562,6 +441,173 @@ impl TryFrom<CreatePostHogErrorTrackingLogStreamArgs> for PostHogErrorTrackingCo
         Ok(Self {
             api_key: value.api_key.into(),
             host: value.host,
+        })
+    }
+}
+
+/// Reserved by AWS for bucket names.
+const S3_RESERVED_BUCKET_PREFIXES: [&str; 2] = ["xn--", "sthree-"];
+const S3_RESERVED_BUCKET_SUFFIXES: [&str; 2] = ["-s3alias", "--ol-s3"];
+
+// Changing field filters would require re-exporting documents that the cursor
+// has already passed. Table selection changes are handled by the iterator.
+fn validate_s3_selection(selection: &Selection) -> anyhow::Result<()> {
+    let filters_fields = selection
+        .components
+        .values()
+        .any(|component| match component {
+            ComponentSelection::Included { tables, .. } => tables.values().any(|table| {
+                matches!(table, TableSelection::Included { columns, other_columns }
+                if *other_columns == InclusionDefault::Excluded
+                    || columns.values().any(|c| *c == ColumnSelection::Excluded))
+            }),
+            ComponentSelection::Excluded(_) => false,
+        });
+    anyhow::ensure!(
+        !filters_fields,
+        ErrorMetadata::bad_request(
+            "FieldFiltersUnsupported",
+            "S3 exports can't filter fields within a table yet. Select whole tables instead.",
+        )
+    );
+    Ok(())
+}
+
+// Resuming a cursor in a different destination would skip all previously
+// exported pages. `/` and `None` address the same S3 directory, so an update
+// that only respells the prefix keeps the stored one.
+fn ensure_same_s3_destination(
+    existing: &S3ExportConfig,
+    updated: S3ExportConfig,
+) -> anyhow::Result<S3ExportConfig> {
+    let trimmed = |prefix: &Option<String>| {
+        prefix
+            .as_deref()
+            .unwrap_or_default()
+            .trim_matches('/')
+            .to_owned()
+    };
+    let updated = if trimmed(&existing.prefix) == trimmed(&updated.prefix) {
+        S3ExportConfig {
+            prefix: existing.prefix.clone(),
+            ..updated
+        }
+    } else {
+        updated
+    };
+    anyhow::ensure!(
+        !existing.requires_resync(&updated),
+        ErrorMetadata::bad_request(
+            "S3ExportDestinationChanged",
+            "An S3 export's bucket, region, prefix, and credential type can't change. Delete the \
+             export and create a new one instead.",
+        )
+    );
+    Ok(updated)
+}
+
+// The prefix lands in IAM policy resource ARNs, where `*` and `?` are wildcards
+// and `$` starts a policy variable.
+fn validate_s3_prefix(prefix: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !prefix.contains(['*', '?', '$']),
+        ErrorMetadata::bad_request(
+            "InvalidS3Prefix",
+            "Prefixes may not contain `*`, `?` or `$`",
+        )
+    );
+    Ok(())
+}
+
+fn validate_s3_bucket(bucket: &str) -> anyhow::Result<()> {
+    // https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+    let is_lower_alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let valid = (3..=63).contains(&bucket.len())
+        && bucket
+            .chars()
+            .all(|c| is_lower_alnum(c) || c == '-' || c == '.')
+        && bucket.starts_with(is_lower_alnum)
+        && bucket.ends_with(is_lower_alnum)
+        && !bucket.contains("..")
+        && bucket.parse::<Ipv4Addr>().is_err()
+        && !S3_RESERVED_BUCKET_PREFIXES
+            .iter()
+            .any(|prefix| bucket.starts_with(prefix))
+        && !S3_RESERVED_BUCKET_SUFFIXES
+            .iter()
+            .any(|suffix| bucket.ends_with(suffix));
+    if !valid {
+        anyhow::bail!(ErrorMetadata::bad_request(
+            "InvalidS3Bucket",
+            format!("`{bucket}` is not a valid S3 bucket name"),
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateS3ExportLogStreamArgs {
+    /// Name of the S3 bucket to mirror into.
+    bucket: String,
+    /// AWS region the bucket lives in, e.g. `us-east-1`.
+    region: String,
+    /// Key prefix within the bucket. Omit to write at the bucket root.
+    #[serde(default)]
+    prefix: Option<String>,
+    /// Access key of an IAM user that can write to the bucket. Send both key
+    /// fields, or `roleArn` instead.
+    // TODO(ENG-11116): drop the access key fields once existing exports have
+    // moved to roles, so an export authenticates with a role only.
+    #[serde(default)]
+    access_key_id: Option<String>,
+    #[serde(default)]
+    secret_access_key: Option<String>,
+    /// ARN of a role in the bucket's account that Convex assumes to write.
+    /// Send an empty string to create the export first: the response carries
+    /// the `roleExternalId` the role's trust policy needs, and the export waits
+    /// until an update supplies the ARN.
+    #[serde(default)]
+    role_arn: Option<String>,
+    /// The components and tables to export. Defaults to everything. Each table
+    /// exports whole documents, so filtering fields within a table is rejected.
+    #[serde(default)]
+    selection: Option<Selection>,
+    /// How often the mirror is refreshed.
+    period: SyncPeriod,
+}
+
+impl TryFrom<CreateS3ExportLogStreamArgs> for S3ExportConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(value: CreateS3ExportLogStreamArgs) -> Result<Self, Self::Error> {
+        validate_s3_bucket(&value.bucket)?;
+        validate_s3_prefix(value.prefix.as_deref().unwrap_or_default())?;
+        let selection = value.selection.unwrap_or_default();
+        validate_s3_selection(&selection)?;
+        let credentials = match (value.access_key_id, value.secret_access_key, value.role_arn) {
+            (Some(access_key_id), Some(secret_access_key), None) => {
+                S3ExportCredentials::AccessKey {
+                    access_key_id: access_key_id.into(),
+                    secret_access_key: secret_access_key.into(),
+                }
+            },
+            (None, None, Some(role_arn)) => S3ExportCredentials::Role {
+                role_arn,
+                external_id: S3ExportCredentials::new_external_id(),
+            },
+            _ => anyhow::bail!(ErrorMetadata::bad_request(
+                "S3ExportCredentialsRequired",
+                "Send `accessKeyId` with `secretAccessKey`, or `roleArn` on its own.",
+            )),
+        };
+        Ok(Self {
+            bucket: value.bucket,
+            region: value.region,
+            prefix: value.prefix,
+            credentials,
+            selection,
+            period: value.period,
         })
     }
 }
@@ -581,6 +627,22 @@ pub enum CreateLogStreamArgs {
     PostHogLogs(CreatePostHogLogsLogStreamArgs),
     #[schema(title = "PostHogErrorTracking")]
     PostHogErrorTracking(CreatePostHogErrorTrackingLogStreamArgs),
+    #[schema(title = "S3Export")]
+    S3Export(CreateS3ExportLogStreamArgs),
+}
+
+impl CreateLogStreamArgs {
+    fn sink_type(&self) -> SinkType {
+        match self {
+            Self::Datadog(_) => SinkType::Datadog,
+            Self::Webhook(_) => SinkType::Webhook,
+            Self::Axiom(_) => SinkType::Axiom,
+            Self::Sentry(_) => SinkType::Sentry,
+            Self::PostHogLogs(_) => SinkType::PostHogLogs,
+            Self::PostHogErrorTracking(_) => SinkType::PostHogErrorTracking,
+            Self::S3Export(_) => SinkType::S3Export,
+        }
+    }
 }
 
 #[derive(Serialize, ToSchema)]
@@ -606,6 +668,15 @@ pub enum CreateLogStreamResponse {
     PostHogLogs { id: String },
     #[schema(title = "PostHogErrorTracking")]
     PostHogErrorTracking { id: String },
+    #[schema(title = "S3Export")]
+    #[serde(rename_all = "camelCase")]
+    S3Export {
+        id: String,
+        /// Set for role exports. The role's trust policy must require it as
+        /// `sts:ExternalId`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        role_external_id: Option<String>,
+    },
 }
 
 async fn ensure_log_sink_does_not_exist(
@@ -629,6 +700,7 @@ async fn ensure_log_sink_does_not_exist(
 #[utoipa::path(
     post,
     path = "/create_log_stream",
+    tag = "Log Streams",
     responses((status = 200, body = CreateLogStreamResponse)),
     security(
         ("Deploy Key" = []),
@@ -640,21 +712,28 @@ async fn ensure_log_sink_does_not_exist(
 pub async fn create_log_stream(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(args): Json<CreateLogStreamArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
+    identity.require_operation(keybroker::DeploymentOp::WriteIntegrations)?;
+    if matches!(&args, CreateLogStreamArgs::S3Export(_)) {
+        identity.require_operation(keybroker::DeploymentOp::ViewData)?;
+    }
+    ensure_integration_allowed(&st.application, &identity, &args.sink_type()).await?;
 
     match args {
         CreateLogStreamArgs::Datadog(datadog_sink_post_args) => {
             ensure_log_sink_does_not_exist(&st.application, &SinkType::Datadog).await?;
 
             let config: DatadogConfig = datadog_sink_post_args.try_into()?;
+            ensure_topic_entitlements(&st.application, &identity, &config.topics).await?;
             let id = st
                 .application
-                .add_log_sink(SinkConfig::Datadog(config))
+                .add_log_sink(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    SinkConfig::Datadog(config),
+                )
                 .await?;
             Ok(Json(CreateLogStreamResponse::Datadog {
                 id: id.to_string(),
@@ -672,14 +751,21 @@ pub async fn create_log_stream(
                 ))
             })?;
 
+            let topics = validate_subscribed_topics(webhook_sink_post_args.topics)?;
+            ensure_topic_entitlements(&st.application, &identity, &topics).await?;
             let config = WebhookConfig {
                 url,
                 format: webhook_sink_post_args.format,
                 hmac_secret: hmac_secret.clone(),
+                topics,
             };
             let id = st
                 .application
-                .add_log_sink(SinkConfig::Webhook(config))
+                .add_log_sink(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    SinkConfig::Webhook(config),
+                )
                 .await?;
 
             Ok(Json(CreateLogStreamResponse::Webhook(
@@ -701,9 +787,14 @@ pub async fn create_log_stream(
             }
 
             let config: AxiomConfig = axiom_sink_post_args.try_into()?;
+            ensure_topic_entitlements(&st.application, &identity, &config.topics).await?;
             let id = st
                 .application
-                .add_log_sink(SinkConfig::Axiom(config))
+                .add_log_sink(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    SinkConfig::Axiom(config),
+                )
                 .await?;
 
             Ok(Json(CreateLogStreamResponse::Axiom { id: id.to_string() }))
@@ -714,7 +805,11 @@ pub async fn create_log_stream(
             let config = sentry_config_args.try_into()?;
             let id = st
                 .application
-                .add_log_sink(SinkConfig::Sentry(config))
+                .add_log_sink(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    SinkConfig::Sentry(config),
+                )
                 .await?;
             Ok(Json(CreateLogStreamResponse::Sentry { id: id.to_string() }))
         },
@@ -722,9 +817,14 @@ pub async fn create_log_stream(
             ensure_log_sink_does_not_exist(&st.application, &SinkType::PostHogLogs).await?;
 
             let config: PostHogLogsConfig = args.try_into()?;
+            ensure_topic_entitlements(&st.application, &identity, &config.topics).await?;
             let id = st
                 .application
-                .add_log_sink(SinkConfig::PostHogLogs(config))
+                .add_log_sink(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    SinkConfig::PostHogLogs(config),
+                )
                 .await?;
             Ok(Json(CreateLogStreamResponse::PostHogLogs {
                 id: id.to_string(),
@@ -737,10 +837,35 @@ pub async fn create_log_stream(
             let config: PostHogErrorTrackingConfig = args.try_into()?;
             let id = st
                 .application
-                .add_log_sink(SinkConfig::PostHogErrorTracking(config))
+                .add_log_sink(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    SinkConfig::PostHogErrorTracking(config),
+                )
                 .await?;
             Ok(Json(CreateLogStreamResponse::PostHogErrorTracking {
                 id: id.to_string(),
+            }))
+        },
+        CreateLogStreamArgs::S3Export(args) => {
+            ensure_log_sink_does_not_exist(&st.application, &SinkType::S3Export).await?;
+
+            let config: S3ExportConfig = args.try_into()?;
+            let role_external_id = match &config.credentials {
+                S3ExportCredentials::Role { external_id, .. } => Some(external_id.clone()),
+                S3ExportCredentials::AccessKey { .. } => None,
+            };
+            let id = st
+                .application
+                .add_log_sink(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    SinkConfig::S3Export(config),
+                )
+                .await?;
+            Ok(Json(CreateLogStreamResponse::S3Export {
+                id: id.to_string(),
+                role_external_id,
             }))
         },
     }
@@ -766,6 +891,7 @@ pub enum RotateLogStreamSecretResponse {
 #[utoipa::path(
     post,
     path = "/rotate_webhook_secret/{id}",
+    tag = "Log Streams",
     responses((status = 200, body = RotateLogStreamSecretResponse)),
     params(
         ("id" = String, Path, description = "id of the webhook log stream for which to rotate the secret"),
@@ -780,24 +906,18 @@ pub enum RotateLogStreamSecretResponse {
 pub async fn rotate_webhook_secret(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::WriteIntegrations)?;
     st.application
-        .ensure_log_streaming_allowed(identity)
+        .ensure_log_streaming_allowed(identity.clone())
         .await?;
 
-    let Some(LogSinkWithId {
+    let LogSinkWithId {
         config: sink_config,
         ..
-    }) = st.application.get_log_sink_by_id(&id).await?
-    else {
-        return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
-            "LogStreamDoesntExist",
-            "No log stream with the given id exists for this deployment",
-        ))
-        .into());
-    };
+    } = st.application.must_get_log_sink_by_id(&id).await?;
 
     match sink_config {
         SinkConfig::Webhook(existing_webhook_sink) => {
@@ -807,9 +927,10 @@ pub async fn rotate_webhook_secret(
                 url: existing_webhook_sink.url,
                 format: existing_webhook_sink.format,
                 hmac_secret: hmac_secret.clone(),
+                topics: existing_webhook_sink.topics,
             };
             st.application
-                .patch_log_sink_config(&id, SinkConfig::Webhook(config))
+                .patch_log_sink_config(identity, request_metadata, &id, SinkConfig::Webhook(config))
                 .await?;
 
             Ok(Json(RotateLogStreamSecretResponse::Webhook { hmac_secret }))
@@ -837,6 +958,8 @@ enum LogStreamConfig {
     PostHogLogs(PostHogLogsLogStreamConfig),
     #[schema(title = "PostHogErrorTracking")]
     PostHogErrorTracking(PostHogErrorTrackingLogStreamConfig),
+    #[schema(title = "S3Export")]
+    S3Export(S3ExportLogStreamConfig),
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -854,6 +977,9 @@ pub struct DatadogLogStreamConfig {
     /// Service name used as a special tag in Datadog.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service: Option<String>,
+    /// The topics this log stream is subscribed to. `null` means subscribed to
+    /// all topics, including ones added in the future.
+    pub topics: Option<Vec<LogTopic>>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -870,6 +996,9 @@ pub struct WebhookLogStreamConfig {
     pub format: WebhookFormat,
     /// Use this secret to verify webhook signatures.
     pub hmac_secret: String,
+    /// The topics this log stream is subscribed to. `null` means subscribed to
+    /// all topics, including ones added in the future.
+    pub topics: Option<Vec<LogTopic>>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -887,6 +1016,9 @@ pub struct AxiomLogStreamConfig {
     /// Optional ingest endpoint for Axiom
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ingest_url: Option<String>,
+    /// The topics this log stream is subscribed to. `null` means subscribed to
+    /// all topics, including ones added in the future.
+    pub topics: Option<Vec<LogTopic>>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -914,6 +1046,9 @@ pub struct PostHogLogsLogStreamConfig {
     /// OTLP service.name attribute.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_name: Option<String>,
+    /// The topics this log stream is subscribed to. `null` means subscribed to
+    /// all topics, including ones added in the future.
+    pub topics: Option<Vec<LogTopic>>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
@@ -928,6 +1063,37 @@ pub struct PostHogErrorTrackingLogStreamConfig {
     pub host: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+#[schema(title = "S3ExportConfig")]
+pub struct S3ExportLogStreamConfig {
+    pub id: String,
+    /// Status of the integration
+    pub status: LogStreamStatus,
+    /// Name of the S3 bucket being mirrored into.
+    pub bucket: String,
+    /// AWS region the bucket lives in.
+    pub region: String,
+    /// Key prefix within the bucket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    /// AWS access key ID used to write to the bucket. The matching secret
+    /// access key is write-only and is never returned. Absent for role exports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_key_id: Option<String>,
+    /// ARN of the role Convex assumes to write. Empty until the admin pastes
+    /// it. Absent for access-key exports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_arn: Option<String>,
+    /// Value the role's trust policy must require as `sts:ExternalId`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_external_id: Option<String>,
+    /// The components and tables being exported.
+    pub selection: Selection,
+    /// How often the mirror is refreshed.
+    pub period: SyncPeriod,
+}
+
 fn log_sink_to_log_stream_config(sink: LogSinkWithId) -> Option<LogStreamConfig> {
     let status: LogStreamStatus =
         Into::<model::log_sinks::types::SerializedSinkState>::into(sink.status).into();
@@ -938,6 +1104,7 @@ fn log_sink_to_log_stream_config(sink: LogSinkWithId) -> Option<LogStreamConfig>
             site_location: config.site_location,
             dd_tags: config.dd_tags,
             service: config.service,
+            topics: config.topics.map(|topics| topics.into_iter().collect()),
         })),
         SinkConfig::Webhook(config) => Some(LogStreamConfig::Webhook(WebhookLogStreamConfig {
             id: sink.id.to_string(),
@@ -945,6 +1112,7 @@ fn log_sink_to_log_stream_config(sink: LogSinkWithId) -> Option<LogStreamConfig>
             url: config.url.to_string(),
             format: config.format,
             hmac_secret: config.hmac_secret,
+            topics: config.topics.map(|topics| topics.into_iter().collect()),
         })),
         SinkConfig::Axiom(config) => Some(LogStreamConfig::Axiom(AxiomLogStreamConfig {
             id: sink.id.to_string(),
@@ -952,6 +1120,7 @@ fn log_sink_to_log_stream_config(sink: LogSinkWithId) -> Option<LogStreamConfig>
             dataset_name: config.dataset_name,
             attributes: config.attributes,
             ingest_url: config.ingest_url,
+            topics: config.topics.map(|topics| topics.into_iter().collect()),
         })),
         SinkConfig::Sentry(config) => Some(LogStreamConfig::Sentry(SentryLogStreamConfig {
             id: sink.id.to_string(),
@@ -966,6 +1135,7 @@ fn log_sink_to_log_stream_config(sink: LogSinkWithId) -> Option<LogStreamConfig>
                 status,
                 host: config.host,
                 service_name: config.service_name,
+                topics: config.topics.map(|topics| topics.into_iter().collect()),
             }))
         },
         SinkConfig::PostHogErrorTracking(config) => Some(LogStreamConfig::PostHogErrorTracking(
@@ -975,6 +1145,29 @@ fn log_sink_to_log_stream_config(sink: LogSinkWithId) -> Option<LogStreamConfig>
                 host: config.host,
             },
         )),
+        SinkConfig::S3Export(config) => {
+            let (access_key_id, role_arn, role_external_id) = match config.credentials {
+                S3ExportCredentials::AccessKey { access_key_id, .. } => {
+                    (Some(access_key_id.into_value()), None, None)
+                },
+                S3ExportCredentials::Role {
+                    role_arn,
+                    external_id,
+                } => (None, Some(role_arn), Some(external_id)),
+            };
+            Some(LogStreamConfig::S3Export(S3ExportLogStreamConfig {
+                id: sink.id.to_string(),
+                status,
+                bucket: config.bucket,
+                region: config.region,
+                prefix: config.prefix,
+                access_key_id,
+                role_arn,
+                role_external_id,
+                selection: config.selection,
+                period: config.period,
+            }))
+        },
         _ => None,
     }
 }
@@ -985,6 +1178,7 @@ fn log_sink_to_log_stream_config(sink: LogSinkWithId) -> Option<LogStreamConfig>
 #[utoipa::path(
     get,
     path = "/list_log_streams",
+    tag = "Log Streams",
     responses((status = 200, body = Vec<LogStreamConfig>)),
     security(
         ("Deploy Key" = []),
@@ -997,7 +1191,7 @@ pub async fn list_log_streams(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ViewIntegrations)?;
 
     Ok(Json(
         st.application
@@ -1015,6 +1209,7 @@ pub async fn list_log_streams(
 #[utoipa::path(
     get,
     path = "/get_log_stream/{id}",
+    tag = "Log Streams",
     responses((status = 200, body = LogStreamConfig)),
     params(
         ("id" = String, Path, description = "id of the log stream to retrieve"),
@@ -1031,15 +1226,9 @@ pub async fn get_log_stream(
     ExtractIdentity(identity): ExtractIdentity,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin(&identity)?;
+    identity.require_operation(keybroker::DeploymentOp::ViewIntegrations)?;
 
-    let Some(log_sink_with_id) = st.application.get_log_sink_by_id(&id).await? else {
-        return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
-            "LogStreamDoesntExist",
-            "No log stream with the given id exists for this deployment",
-        ))
-        .into());
-    };
+    let log_sink_with_id = st.application.must_get_log_sink_by_id(&id).await?;
 
     let config = log_sink_to_log_stream_config(log_sink_with_id).ok_or_else(|| {
         anyhow::anyhow!(ErrorMetadata::bad_request(
@@ -1067,6 +1256,11 @@ pub struct UpdateDatadogSinkArgs {
     /// Service name used as a special tag in Datadog.
     #[serde(default, with = "::serde_with::rust::double_option")]
     service: Option<Option<String>>,
+    /// The topics this log stream is subscribed to. Omit to keep the current
+    /// subscription, or pass `null` to subscribe to all topics (including ones
+    /// added in the future).
+    #[serde(default, with = "::serde_with::rust::double_option")]
+    topics: Option<Option<Vec<LogTopic>>>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -1079,6 +1273,11 @@ pub struct UpdateWebhookSinkArgs {
     /// request, JSON sends one array per request.
     #[serde(default)]
     format: Option<WebhookFormat>,
+    /// The topics this log stream is subscribed to. Omit to keep the current
+    /// subscription, or pass `null` to subscribe to all topics (including ones
+    /// added in the future).
+    #[serde(default, with = "::serde_with::rust::double_option")]
+    topics: Option<Option<Vec<LogTopic>>>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -1097,6 +1296,11 @@ pub struct UpdateAxiomSinkArgs {
     /// Optional ingest endpoint for Axiom
     #[serde(default, with = "::serde_with::rust::double_option")]
     ingest_url: Option<Option<String>>,
+    /// The topics this log stream is subscribed to. Omit to keep the current
+    /// subscription, or pass `null` to subscribe to all topics (including ones
+    /// added in the future).
+    #[serde(default, with = "::serde_with::rust::double_option")]
+    topics: Option<Option<Vec<LogTopic>>>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -1114,7 +1318,7 @@ pub struct UpdateSentrySinkArgs {
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdatePostHogLogsSinkArgs {
-    /// PostHog project API key.
+    /// PostHog project token.
     #[serde(default)]
     api_key: Option<String>,
     /// PostHog host URL.
@@ -1123,17 +1327,42 @@ pub struct UpdatePostHogLogsSinkArgs {
     /// OTLP service.name attribute.
     #[serde(default, with = "::serde_with::rust::double_option")]
     service_name: Option<Option<String>>,
+    /// The topics this log stream is subscribed to. Omit to keep the current
+    /// subscription, or pass `null` to subscribe to all topics (including ones
+    /// added in the future).
+    #[serde(default, with = "::serde_with::rust::double_option")]
+    topics: Option<Option<Vec<LogTopic>>>,
 }
 
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdatePostHogErrorTrackingSinkArgs {
-    /// PostHog project API key.
+    /// PostHog project token.
     #[serde(default)]
     api_key: Option<String>,
     /// PostHog host URL.
     #[serde(default, with = "::serde_with::rust::double_option")]
     host: Option<Option<String>>,
+}
+
+/// Destination and AWS access key ID are fixed at creation.
+#[derive(Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateS3ExportSinkArgs {
+    /// A new secret for the export's access key ID. Access-key exports only.
+    #[serde(default)]
+    secret_access_key: Option<String>,
+    /// The role ARN from the customer's stack. Role exports only; sets or
+    /// replaces the ARN, within the same AWS account.
+    #[serde(default)]
+    role_arn: Option<String>,
+    /// The components and tables to export. Each table exports whole
+    /// documents, so filtering fields within a table is rejected.
+    #[serde(default)]
+    selection: Option<Selection>,
+    /// How often the mirror is refreshed.
+    #[serde(default)]
+    period: Option<SyncPeriod>,
 }
 
 #[derive(Deserialize, ToSchema)]
@@ -1151,6 +1380,8 @@ pub enum UpdateLogStreamArgs {
     PostHogLogs(UpdatePostHogLogsSinkArgs),
     #[schema(title = "PostHogErrorTracking")]
     PostHogErrorTracking(UpdatePostHogErrorTrackingSinkArgs),
+    #[schema(title = "S3Export")]
+    S3Export(UpdateS3ExportSinkArgs),
 }
 
 /// Update log stream
@@ -1160,6 +1391,7 @@ pub enum UpdateLogStreamArgs {
 #[utoipa::path(
     post,
     path = "/update_log_stream/{id}",
+    tag = "Log Streams",
     responses((status = 200)),
     params(
         ("id" = String, Path, description = "id of the log stream to update"),
@@ -1174,25 +1406,20 @@ pub enum UpdateLogStreamArgs {
 pub async fn update_log_stream(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Path(id): Path<String>,
     Json(args): Json<UpdateLogStreamArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    must_be_admin_with_write_access(&identity)?;
-    st.application
-        .ensure_log_streaming_allowed(identity)
-        .await?;
+    identity.require_operation(keybroker::DeploymentOp::WriteIntegrations)?;
 
-    let Some(LogSinkWithId {
+    let LogSinkWithId {
         config: sink_config,
         ..
-    }) = st.application.get_log_sink_by_id(&id).await?
-    else {
-        return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
-            "LogStreamDoesntExist",
-            "No log stream with the given id exists for this deployment",
-        ))
-        .into());
-    };
+    } = st.application.must_get_log_sink_by_id(&id).await?;
+    if matches!(&sink_config, SinkConfig::S3Export(_)) {
+        identity.require_operation(keybroker::DeploymentOp::ViewData)?;
+    }
+    ensure_integration_allowed(&st.application, &identity, &sink_config.sink_type()).await?;
 
     match sink_config {
         SinkConfig::Datadog(existing_config) => {
@@ -1205,6 +1432,8 @@ pub async fn update_log_stream(
                 .into());
             };
 
+            let topics = resolve_topics_update(update_args.topics, existing_config.topics)?;
+            ensure_topic_entitlements(&st.application, &identity, &topics).await?;
             let config = DatadogConfig {
                 site_location: update_args
                     .site_location
@@ -1216,10 +1445,16 @@ pub async fn update_log_stream(
                 dd_tags: update_args.dd_tags.unwrap_or(existing_config.dd_tags),
                 version: existing_config.version,
                 service: update_args.service.unwrap_or(existing_config.service),
+                topics,
             };
 
             st.application
-                .patch_log_sink_config(&id, SinkConfig::Datadog(config))
+                .patch_log_sink_config(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    &id,
+                    SinkConfig::Datadog(config),
+                )
                 .await?;
         },
         SinkConfig::Webhook(existing_config) => {
@@ -1243,14 +1478,22 @@ pub async fn update_log_stream(
                 existing_config.url
             };
 
+            let topics = resolve_topics_update(update_args.topics, existing_config.topics)?;
+            ensure_topic_entitlements(&st.application, &identity, &topics).await?;
             let config = WebhookConfig {
                 url,
                 format: update_args.format.unwrap_or(existing_config.format),
                 hmac_secret: existing_config.hmac_secret,
+                topics,
             };
 
             st.application
-                .patch_log_sink_config(&id, SinkConfig::Webhook(config))
+                .patch_log_sink_config(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    &id,
+                    SinkConfig::Webhook(config),
+                )
                 .await?;
         },
         SinkConfig::Axiom(existing_config) => {
@@ -1277,6 +1520,8 @@ pub async fn update_log_stream(
                 validate_axiom_ingest_url(ingest_url.as_ref())?
             }
 
+            let topics = resolve_topics_update(update_args.topics, existing_config.topics)?;
+            ensure_topic_entitlements(&st.application, &identity, &topics).await?;
             let config = AxiomConfig {
                 api_key: update_args
                     .api_key
@@ -1288,10 +1533,16 @@ pub async fn update_log_stream(
                 attributes,
                 version: existing_config.version,
                 ingest_url,
+                topics,
             };
 
             st.application
-                .patch_log_sink_config(&id, SinkConfig::Axiom(config))
+                .patch_log_sink_config(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    &id,
+                    SinkConfig::Axiom(config),
+                )
                 .await?;
         },
         SinkConfig::Sentry(existing_config) => {
@@ -1323,7 +1574,12 @@ pub async fn update_log_stream(
             };
 
             st.application
-                .patch_log_sink_config(&id, SinkConfig::Sentry(config))
+                .patch_log_sink_config(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    &id,
+                    SinkConfig::Sentry(config),
+                )
                 .await?;
         },
         SinkConfig::PostHogLogs(existing_config) => {
@@ -1341,6 +1597,8 @@ pub async fn update_log_stream(
                 validate_posthog_host(host.as_ref())?;
             }
 
+            let topics = resolve_topics_update(update_args.topics, existing_config.topics)?;
+            ensure_topic_entitlements(&st.application, &identity, &topics).await?;
             let config = PostHogLogsConfig {
                 api_key: update_args
                     .api_key
@@ -1350,10 +1608,16 @@ pub async fn update_log_stream(
                 service_name: update_args
                     .service_name
                     .unwrap_or(existing_config.service_name),
+                topics,
             };
 
             st.application
-                .patch_log_sink_config(&id, SinkConfig::PostHogLogs(config))
+                .patch_log_sink_config(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    &id,
+                    SinkConfig::PostHogLogs(config),
+                )
                 .await?;
         },
         SinkConfig::PostHogErrorTracking(existing_config) => {
@@ -1380,8 +1644,78 @@ pub async fn update_log_stream(
             };
 
             st.application
-                .patch_log_sink_config(&id, SinkConfig::PostHogErrorTracking(config))
+                .patch_log_sink_config(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    &id,
+                    SinkConfig::PostHogErrorTracking(config),
+                )
                 .await?;
+        },
+        SinkConfig::S3Export(existing_config) => {
+            let UpdateLogStreamArgs::S3Export(update_args) = args else {
+                return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
+                    "LogStreamTypeMismatch",
+                    "Cannot update an S3 export integration with arguments for a different \
+                     integration type",
+                ))
+                .into());
+            };
+
+            if let Some(selection) = &update_args.selection {
+                validate_s3_selection(selection)?;
+            }
+            let credentials = match (
+                existing_config.credentials.clone(),
+                update_args.secret_access_key,
+                update_args.role_arn,
+            ) {
+                (credentials, None, None) => credentials,
+                (S3ExportCredentials::AccessKey { access_key_id, .. }, Some(secret), None) => {
+                    S3ExportCredentials::AccessKey {
+                        access_key_id,
+                        secret_access_key: secret.into(),
+                    }
+                },
+                (S3ExportCredentials::Role { external_id, .. }, None, Some(role_arn)) => {
+                    S3ExportCredentials::Role {
+                        role_arn,
+                        external_id,
+                    }
+                },
+                _ => {
+                    return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
+                        "S3ExportCredentialTypeMismatch",
+                        "Send `secretAccessKey` for an access-key export or `roleArn` for a role \
+                         export, not the other.",
+                    ))
+                    .into());
+                },
+            };
+            let config = S3ExportConfig {
+                credentials,
+                selection: update_args
+                    .selection
+                    .unwrap_or(existing_config.selection.clone()),
+                period: update_args.period.unwrap_or(existing_config.period),
+                ..existing_config.clone()
+            };
+            let config = ensure_same_s3_destination(&existing_config, config)?;
+            // The S3 export worker, not the log manager, sets this status: a
+            // failure stays Failed until a page lands. New credentials start
+            // over at Pending; other edits keep the status, so a tables-only
+            // edit cannot hide a failure.
+            let credentials_changed = config.credentials != existing_config.credentials;
+            st.application
+                .patch_log_sink_config_and_status(
+                    identity.clone(),
+                    request_metadata.clone(),
+                    &id,
+                    SinkConfig::S3Export(config),
+                    credentials_changed,
+                )
+                .await?;
+            return Ok(StatusCode::OK);
         },
         _ => {
             return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
@@ -1410,934 +1744,4 @@ where
         .routes(utoipa_axum::routes!(create_log_stream))
         .routes(utoipa_axum::routes!(update_log_stream))
         .routes(utoipa_axum::routes!(rotate_webhook_secret))
-}
-
-#[cfg(test)]
-mod tests {
-    use model::log_sinks::types::{
-        axiom::AxiomConfig,
-        datadog::{
-            DatadogConfig,
-            DatadogSiteLocation,
-        },
-        LogSinksRow,
-    };
-    use serde_json::json;
-
-    use crate::log_sinks::{
-        AxiomSinkPostArgs,
-        DatadogSinkPostArgs,
-    };
-
-    #[test]
-    fn datadog_config_deserialize() -> anyhow::Result<()> {
-        // Basic deserialize
-        let json = json!({
-            "siteLocation": "US1",
-            "ddApiKey": "test_key",
-            "ddTags": vec!["tag:abc","abc"],
-        });
-        let post_args: DatadogSinkPostArgs = serde_json::from_value(json)?;
-        let config = DatadogConfig::try_from(post_args)?;
-        assert_eq!(config.site_location, DatadogSiteLocation::US1);
-        assert_eq!(config.dd_api_key, "test_key".to_string().into());
-        assert_eq!(
-            config.dd_tags,
-            vec!["tag:abc".to_string(), "abc".to_string()]
-        );
-
-        // No tags
-        let json = json!({
-            "siteLocation": "US1",
-            "ddApiKey": "test_key",
-            "ddTags": Vec::<String>::new()
-        });
-        let post_args: DatadogSinkPostArgs = serde_json::from_value(json)?;
-        let config = DatadogConfig::try_from(post_args)?;
-        assert_eq!(config.site_location, DatadogSiteLocation::US1);
-        assert_eq!(config.dd_api_key, "test_key".to_string().into());
-        assert!(config.dd_tags.is_empty());
-
-        // US1_FED -- ensure we handle the SCREAMING_SNAKE_CASE
-        let json = json!({
-            "siteLocation": "US1_FED",
-            "ddApiKey": "test_key",
-            "ddTags": Vec::<String>::new()
-        });
-        let post_args: DatadogSinkPostArgs = serde_json::from_value(json)?;
-        let config = DatadogConfig::try_from(post_args)?;
-        assert_eq!(config.site_location, DatadogSiteLocation::US1_FED);
-        assert_eq!(config.dd_api_key, "test_key".to_string().into());
-        assert!(config.dd_tags.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn axiom_config_valid_ingest_urls() -> anyhow::Result<()> {
-        // Test with no ingest_url (default)
-        let json = json!({
-            "apiKey": "test_key",
-            "datasetName": "test_dataset",
-            "attributes": [],
-        });
-        let post_args: AxiomSinkPostArgs = serde_json::from_value(json)?;
-        let config = AxiomConfig::try_from(post_args)?;
-        assert!(config.ingest_url.is_none());
-
-        // Test with default URL
-        let json = json!({
-            "apiKey": "test_key",
-            "datasetName": "test_dataset",
-            "attributes": [],
-            "ingestUrl": "https://api.axiom.co",
-        });
-        let post_args: AxiomSinkPostArgs = serde_json::from_value(json)?;
-        let config = AxiomConfig::try_from(post_args)?;
-        assert_eq!(config.ingest_url, Some("https://api.axiom.co".to_string()));
-
-        // Test with US East 1
-        let json = json!({
-            "apiKey": "test_key",
-            "datasetName": "test_dataset",
-            "attributes": [],
-            "ingestUrl": "https://us-east-1.aws.edge.axiom.co",
-        });
-        let post_args: AxiomSinkPostArgs = serde_json::from_value(json)?;
-        let config = AxiomConfig::try_from(post_args)?;
-        assert_eq!(
-            config.ingest_url,
-            Some("https://us-east-1.aws.edge.axiom.co".to_string())
-        );
-
-        // Test with EU Central 1
-        let json = json!({
-            "apiKey": "test_key",
-            "datasetName": "test_dataset",
-            "attributes": [],
-            "ingestUrl": "https://eu-central-1.aws.edge.axiom.co",
-        });
-        let post_args: AxiomSinkPostArgs = serde_json::from_value(json)?;
-        let config = AxiomConfig::try_from(post_args)?;
-        assert_eq!(
-            config.ingest_url,
-            Some("https://eu-central-1.aws.edge.axiom.co".to_string())
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn axiom_config_invalid_ingest_url() {
-        // Test with invalid URL
-        let json = json!({
-            "apiKey": "test_key",
-            "datasetName": "test_dataset",
-            "attributes": [],
-            "ingestUrl": "https://invalid.axiom.co",
-        });
-        let post_args: AxiomSinkPostArgs = serde_json::from_value(json).unwrap();
-        let result = AxiomConfig::try_from(post_args);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Invalid Axiom ingest URL"));
-        assert!(err.to_string().contains("https://invalid.axiom.co"));
-
-        // Test with completely wrong URL
-        let json = json!({
-            "apiKey": "test_key",
-            "datasetName": "test_dataset",
-            "attributes": [],
-            "ingestUrl": "https://example.com",
-        });
-        let post_args: AxiomSinkPostArgs = serde_json::from_value(json).unwrap();
-        let result = AxiomConfig::try_from(post_args);
-        assert!(result.is_err());
-    }
-
-    // Endpoint tests
-    use axum::body::Body;
-    use axum_extra::headers::authorization::Credentials;
-    use common::{
-        document::{
-            ParseDocument,
-            ParsedDocument,
-        },
-        log_streaming::LogEventFormatVersion,
-    };
-    use http::{
-        Request,
-        StatusCode,
-    };
-    use keybroker::Identity;
-    use model::log_sinks::types::{
-        sentry::ExceptionFormatVersion,
-        SinkConfig,
-    };
-    use runtime::prod::ProdRuntime;
-    use serde_json::Value as JsonValue;
-
-    use crate::test_helpers::{
-        setup_backend_for_test,
-        TestLocalBackend,
-    };
-
-    async fn create_log_stream(
-        backend: &TestLocalBackend,
-        body: JsonValue,
-    ) -> anyhow::Result<JsonValue> {
-        let req = Request::builder()
-            .uri("/api/v1/create_log_stream")
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::from(serde_json::to_vec(&body)?))?;
-        backend.expect_success(req).await
-    }
-
-    async fn list_log_streams(backend: &TestLocalBackend) -> anyhow::Result<Vec<JsonValue>> {
-        let req = Request::builder()
-            .uri("/api/v1/list_log_streams")
-            .method("GET")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-        backend.expect_success(req).await
-    }
-
-    async fn get_log_stream(backend: &TestLocalBackend, id: &str) -> anyhow::Result<JsonValue> {
-        let req = Request::builder()
-            .uri(format!("/api/v1/get_log_stream/{id}"))
-            .method("GET")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-        backend.expect_success(req).await
-    }
-
-    async fn update_log_stream(
-        backend: &TestLocalBackend,
-        id: &str,
-        body: JsonValue,
-    ) -> anyhow::Result<()> {
-        let req = Request::builder()
-            .uri(format!("/api/v1/update_log_stream/{id}"))
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::from(serde_json::to_vec(&body)?))?;
-        backend.expect_success(req).await
-    }
-
-    async fn delete_log_stream(backend: &TestLocalBackend, id: &str) -> anyhow::Result<()> {
-        let req = Request::builder()
-            .uri(format!("/api/v1/delete_log_stream/{id}"))
-            .method("POST")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-        backend.expect_success(req).await
-    }
-
-    async fn rotate_webhook_secret(
-        backend: &TestLocalBackend,
-        id: &str,
-    ) -> anyhow::Result<JsonValue> {
-        let req = Request::builder()
-            .uri(format!("/api/v1/rotate_webhook_secret/{id}"))
-            .method("POST")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-        backend.expect_success(req).await
-    }
-
-    async fn get_log_sink_from_db(
-        backend: &TestLocalBackend,
-        id: &str,
-    ) -> anyhow::Result<Option<SinkConfig>> {
-        let mut tx = backend.st.application.begin(Identity::system()).await?;
-        let resolved_id = tx.resolve_developer_id(&id.parse()?, value::TableNamespace::Global)?;
-        let doc = tx.get(resolved_id).await?;
-        if let Some(doc) = doc {
-            let row: ParsedDocument<LogSinksRow> = doc.parse()?;
-            Ok(Some(row.config.clone()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_list_log_streams_empty(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-        let streams = list_log_streams(&backend).await?;
-        assert_eq!(streams.len(), 0);
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_list_log_streams(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        // Create a webhook log stream
-        create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        // Create a datadog log stream
-        create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "datadog",
-                "siteLocation": "US1",
-                "ddApiKey": "test_key",
-                "ddTags": ["tag1", "tag2"],
-                "service": "my-service",
-            }),
-        )
-        .await?;
-
-        let streams = list_log_streams(&backend).await?;
-        assert_eq!(streams.len(), 2);
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_get_log_stream(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-        let stream = get_log_stream(&backend, id).await?;
-
-        assert_eq!(stream["logStreamType"], "webhook");
-        assert_eq!(stream["url"], "https://example.com/webhook");
-        assert_eq!(stream["format"], "jsonl");
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_get_log_stream_not_found(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let req = Request::builder()
-            .uri("/api/v1/get_log_stream/invalid_id")
-            .method("GET")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "InvalidLogStreamId")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_log_stream_webhook(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        assert!(response["id"].is_string());
-        assert!(response["hmacSecret"].is_string());
-        assert_eq!(response["logStreamType"], "webhook");
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_log_stream_datadog_defaults_to_v2(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "datadog",
-                "siteLocation": "US1",
-                "ddApiKey": "test_key",
-                "ddTags": ["tag1"],
-                "service": "my-service",
-            }),
-        )
-        .await?;
-
-        let id = response["id"].as_str().unwrap();
-
-        // Check the version in the database
-        let config = get_log_sink_from_db(&backend, id).await?;
-        assert!(config.is_some());
-        match config.unwrap() {
-            SinkConfig::Datadog(config) => {
-                assert_eq!(config.version, LogEventFormatVersion::V2);
-            },
-            _ => panic!("Expected Datadog config"),
-        }
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_log_stream_axiom_defaults_to_v2(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "axiom",
-                "apiKey": "test_key",
-                "datasetName": "my-dataset",
-                "attributes": [],
-            }),
-        )
-        .await?;
-
-        let id = response["id"].as_str().unwrap();
-
-        // Check the version in the database
-        let config = get_log_sink_from_db(&backend, id).await?;
-        assert!(config.is_some());
-        match config.unwrap() {
-            SinkConfig::Axiom(config) => {
-                assert_eq!(config.version, LogEventFormatVersion::V2);
-            },
-            _ => panic!("Expected Axiom config"),
-        }
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_log_stream_sentry_defaults_to_v2(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "sentry",
-                "dsn": "https://ef1d32d342354c87869ab2db8b490b2c@o1192621.ingest.sentry.io/6333191",
-                "tags": null,
-            }),
-        )
-        .await?;
-
-        let id = response["id"].as_str().unwrap();
-
-        // Check the version in the database
-        let config = get_log_sink_from_db(&backend, id).await?;
-        assert!(config.is_some());
-        match config.unwrap() {
-            SinkConfig::Sentry(config) => {
-                assert_eq!(config.version, ExceptionFormatVersion::V2);
-            },
-            _ => panic!("Expected Sentry config"),
-        }
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_log_stream_already_exists(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        let req = Request::builder()
-            .uri("/api/v1/create_log_stream")
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::from(serde_json::to_vec(&json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook2",
-                "format": "json",
-            }))?))?;
-
-        backend
-            .expect_error(req, StatusCode::CONFLICT, "LogStreamAlreadyExists")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_log_stream_invalid_webhook_url(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let req = Request::builder()
-            .uri("/api/v1/create_log_stream")
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::from(serde_json::to_vec(&json!({
-                "logStreamType": "webhook",
-                "url": "not-a-valid-url",
-                "format": "jsonl",
-            }))?))?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "InvalidWebhookUrl")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_create_log_stream_invalid_sentry_dsn(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let req = Request::builder()
-            .uri("/api/v1/create_log_stream")
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::from(serde_json::to_vec(&json!({
-                "logStreamType": "sentry",
-                "dsn": "not-a-valid-dsn",
-                "tags": null,
-            }))?))?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "InvalidSentryDsn")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_update_log_stream_omit_field(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "datadog",
-                "siteLocation": "US1",
-                "ddApiKey": "original_key",
-                "ddTags": ["tag1"],
-                "service": "original-service",
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-
-        // Update only the service field
-        update_log_stream(
-            &backend,
-            id,
-            json!({
-                "logStreamType": "datadog",
-                "service": "updated-service",
-            }),
-        )
-        .await?;
-
-        let stream = get_log_stream(&backend, id).await?;
-        assert_eq!(stream["siteLocation"], "US1");
-        assert_eq!(stream["ddTags"], json!(["tag1"]));
-        assert_eq!(stream["service"], "updated-service");
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_update_log_stream_unset_optional_field(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "datadog",
-                "siteLocation": "US1",
-                "ddApiKey": "test_key",
-                "ddTags": [],
-                "service": "my-service",
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-
-        // Unset the service field
-        update_log_stream(
-            &backend,
-            id,
-            json!({
-                "logStreamType": "datadog",
-                "service": null,
-            }),
-        )
-        .await?;
-
-        let stream = get_log_stream(&backend, id).await?;
-        assert!(stream.get("service").is_none());
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_update_log_stream_not_found(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let req = Request::builder()
-            .uri("/api/v1/update_log_stream/invalid_id")
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::from(serde_json::to_vec(&json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/new",
-            }))?))?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "InvalidLogStreamId")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_update_log_stream_type_mismatch(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-
-        let req = Request::builder()
-            .uri(format!("/api/v1/update_log_stream/{id}"))
-            .method("POST")
-            .header("Content-Type", "application/json")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::from(serde_json::to_vec(&json!({
-                "logStreamType": "datadog",
-                "ddApiKey": "new_key",
-            }))?))?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "LogStreamTypeMismatch")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_update_log_stream_preserves_version(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "datadog",
-                "siteLocation": "US1",
-                "ddApiKey": "test_key",
-                "ddTags": [],
-                "service": null,
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-
-        // Update the API key
-        update_log_stream(
-            &backend,
-            id,
-            json!({
-                "logStreamType": "datadog",
-                "ddApiKey": "new_key",
-            }),
-        )
-        .await?;
-
-        // Check the version is still V2
-        let config = get_log_sink_from_db(&backend, id).await?;
-        match config.unwrap() {
-            SinkConfig::Datadog(config) => {
-                assert_eq!(config.version, LogEventFormatVersion::V2);
-            },
-            _ => panic!("Expected Datadog config"),
-        }
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_update_log_stream_webhook_preserves_hmac_secret(
-        rt: ProdRuntime,
-    ) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-        let original_secret = create_response["hmacSecret"].as_str().unwrap();
-
-        // Update the URL
-        update_log_stream(
-            &backend,
-            id,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/new-webhook",
-            }),
-        )
-        .await?;
-
-        let stream = get_log_stream(&backend, id).await?;
-        assert_eq!(stream["url"], "https://example.com/new-webhook");
-        assert_eq!(stream["hmacSecret"], original_secret);
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_delete_log_stream(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-
-        delete_log_stream(&backend, id).await?;
-
-        // Verify it's deleted
-        let req = Request::builder()
-            .uri(format!("/api/v1/get_log_stream/{id}"))
-            .method("GET")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "LogStreamDoesntExist")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_delete_log_stream_not_found(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let req = Request::builder()
-            .uri("/api/v1/delete_log_stream/invalid_id")
-            .method("POST")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "InvalidLogStreamId")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_delete_and_recreate_same_type(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-        delete_log_stream(&backend, id).await?;
-
-        // Create a new webhook log stream
-        let new_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/new-webhook",
-                "format": "json",
-            }),
-        )
-        .await?;
-
-        assert!(new_response["id"].is_string());
-        assert_ne!(new_response["id"], id);
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_rotate_webhook_secret(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-        let original_secret = create_response["hmacSecret"].as_str().unwrap();
-
-        let rotate_response = rotate_webhook_secret(&backend, id).await?;
-        let new_secret = rotate_response["hmacSecret"].as_str().unwrap();
-
-        assert_ne!(new_secret, original_secret);
-
-        // Verify the stream still has the same URL and format
-        let stream = get_log_stream(&backend, id).await?;
-        assert_eq!(stream["url"], "https://example.com/webhook");
-        assert_eq!(stream["format"], "jsonl");
-        assert_eq!(stream["hmacSecret"], new_secret);
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_rotate_secret_non_webhook_errors(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let create_response = create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "datadog",
-                "siteLocation": "US1",
-                "ddApiKey": "test_key",
-                "ddTags": [],
-                "service": null,
-            }),
-        )
-        .await?;
-
-        let id = create_response["id"].as_str().unwrap();
-
-        let req = Request::builder()
-            .uri(format!("/api/v1/rotate_webhook_secret/{id}"))
-            .method("POST")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "NoSecretToRotate")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_rotate_secret_not_found(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        let req = Request::builder()
-            .uri("/api/v1/rotate_webhook_secret/invalid_id")
-            .method("POST")
-            .header("Authorization", backend.admin_auth_header.0.encode())
-            .body(Body::empty())?;
-
-        backend
-            .expect_error(req, StatusCode::BAD_REQUEST, "InvalidLogStreamId")
-            .await?;
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_multiple_log_streams_different_types(rt: ProdRuntime) -> anyhow::Result<()> {
-        let backend = setup_backend_for_test(rt).await?;
-
-        create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "webhook",
-                "url": "https://example.com/webhook",
-                "format": "jsonl",
-            }),
-        )
-        .await?;
-
-        create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "datadog",
-                "siteLocation": "US1",
-                "ddApiKey": "test_key",
-                "ddTags": [],
-                "service": null,
-            }),
-        )
-        .await?;
-
-        create_log_stream(
-            &backend,
-            json!({
-                "logStreamType": "axiom",
-                "apiKey": "test_key",
-                "datasetName": "my-dataset",
-                "attributes": [],
-            }),
-        )
-        .await?;
-
-        let streams = list_log_streams(&backend).await?;
-        assert_eq!(streams.len(), 3);
-
-        Ok(())
-    }
 }

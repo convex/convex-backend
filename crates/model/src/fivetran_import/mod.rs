@@ -34,22 +34,9 @@ use database::{
     UserFacingModel,
 };
 use errors::ErrorMetadata;
-use fivetran_destination::{
-    api_types::{
-        BatchWriteOperation,
-        BatchWriteRow,
-        DeleteType,
-    },
-    constants::{
-        FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR,
-        FIVETRAN_SYNCED_INDEX_DESCRIPTOR,
-        FIVETRAN_SYNC_INDEX_WITHOUT_SOFT_DELETE_FIELDS,
-        FIVETRAN_SYNC_INDEX_WITH_SOFT_DELETE_FIELDS,
-        METADATA_CONVEX_FIELD_NAME,
-        SOFT_DELETE_CONVEX_FIELD_NAME,
-        SOFT_DELETE_FIELD_PATH,
-        SYNCED_FIELD_PATH,
-    },
+use serde::{
+    Deserialize,
+    Serialize,
 };
 use value::{
     ConvexObject,
@@ -58,6 +45,40 @@ use value::{
     TableName,
     TableNamespace,
 };
+
+use self::constants::{
+    FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR,
+    FIVETRAN_SYNCED_INDEX_DESCRIPTOR,
+    FIVETRAN_SYNC_INDEX_WITHOUT_SOFT_DELETE_FIELDS,
+    FIVETRAN_SYNC_INDEX_WITH_SOFT_DELETE_FIELDS,
+    METADATA_CONVEX_FIELD_NAME,
+    SOFT_DELETE_CONVEX_FIELD_NAME,
+    SOFT_DELETE_FIELD_PATH,
+    SYNCED_FIELD_PATH,
+};
+
+pub mod constants;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub enum BatchWriteOperation {
+    Upsert,
+    Update,
+    HardDelete,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BatchWriteRow {
+    pub table: String,
+    pub operation: BatchWriteOperation,
+    #[serde(with = "common::value::json_object")]
+    pub row: ConvexObject,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteType {
+    SoftDelete,
+    HardDelete,
+}
 
 pub struct FivetranImportModel<'a, RT: Runtime> {
     tx: &'a mut Transaction<RT>,
@@ -92,10 +113,9 @@ impl<'a, RT: Runtime> FivetranImportModel<'a, RT> {
                 let Some(existing_document) = existing_document else {
                     anyhow::bail!(ErrorMetadata::not_found(
                         "FivetranMissingUpdatedRow",
-                        format!(
-                            "Fivetran is trying to update a row that doesn’t exist in the Convex \
-                             destination.",
-                        ),
+                        "Fivetran is trying to update a row that doesn’t exist in the Convex \
+                         destination."
+                            .to_string(),
                     ));
                 };
 
@@ -155,7 +175,7 @@ impl<'a, RT: Runtime> FivetranImportModel<'a, RT> {
             .map(|index| index.into_value())
             .find(|index: &DeveloperIndexMetadata| {
                 index.name.table() == table_name
-                    && *index.name.descriptor() == *FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR
+                    && *index.name.descriptor() == FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR
                     && index.is_database_index()
             })
             .ok_or_else(|| {
@@ -231,7 +251,7 @@ impl<'a, RT: Runtime> FivetranImportModel<'a, RT> {
             .map(|index| index.into_value())
             .find(|index| {
                 *index.name.table() == *table_name
-                    && *index.name.descriptor() == *FIVETRAN_SYNCED_INDEX_DESCRIPTOR
+                    && *index.name.descriptor() == FIVETRAN_SYNCED_INDEX_DESCRIPTOR
             })
             .ok_or_else(|| {
                 ErrorMetadata::bad_request(
@@ -311,7 +331,7 @@ impl<'a, RT: Runtime> FivetranImportModel<'a, RT> {
 /// separate, which means we must make sure that we’re not overriding the entire
 /// `fivetran` field if it contains attributes that are not overridden.
 fn fivetran_patch_value(existing_document: ConvexObject, patch: ConvexObject) -> PatchValue {
-    let metadata_field_name = FieldName::from(METADATA_CONVEX_FIELD_NAME.clone());
+    let metadata_field_name = FieldName::from(METADATA_CONVEX_FIELD_NAME);
 
     let mut existing_document: BTreeMap<FieldName, ConvexValue> = existing_document.into();
     let Some(ConvexValue::Object(existing_metadata)) =
@@ -326,17 +346,19 @@ fn fivetran_patch_value(existing_document: ConvexObject, patch: ConvexObject) ->
         return PatchValue::from(patch);
     };
 
+    // Merge `new_metadata` into `existing_metadata` field-by-field
+    let mut merged_metadata: BTreeMap<_, _> = existing_metadata.into();
+    for (field, value) in new_metadata.into_iter() {
+        merged_metadata.insert(field, value);
+    }
+
     PatchValue::from(
         patch
-            .shallow_merge(
-                ConvexObject::for_value(
-                    metadata_field_name,
-                    ConvexValue::Object(existing_metadata.shallow_merge(new_metadata).expect(
-                        "The number of metadata fields should always be under the field count \
-                         limit",
-                    )),
-                )
-                .expect("Putting the merged object in a new object is always valid"),
+            .insert(
+                METADATA_CONVEX_FIELD_NAME.into(),
+                merged_metadata.try_into().expect(
+                    "The number of metadata fields should always be under the field count limit",
+                ),
             )
             .expect(
                 "Adding a field to an object that previously had the same field keeps the object \
@@ -346,7 +368,7 @@ fn fivetran_patch_value(existing_document: ConvexObject, patch: ConvexObject) ->
 }
 
 fn mark_as_soft_deleted(object: ConvexObject) -> anyhow::Result<ConvexObject> {
-    let metadata_key = FieldName::from(METADATA_CONVEX_FIELD_NAME.clone());
+    let metadata_key = FieldName::from(METADATA_CONVEX_FIELD_NAME);
 
     let mut new_value: BTreeMap<FieldName, ConvexValue> = object.into();
     let metadata_object = match new_value.remove(&metadata_key) {
@@ -356,144 +378,9 @@ fn mark_as_soft_deleted(object: ConvexObject) -> anyhow::Result<ConvexObject> {
 
     new_value.insert(
         metadata_key,
-        ConvexValue::Object(metadata_object.shallow_merge(ConvexObject::for_value(
-            FieldName::from(SOFT_DELETE_CONVEX_FIELD_NAME.clone()),
-            ConvexValue::Boolean(true),
-        )?)?),
+        ConvexValue::Object(
+            metadata_object.insert(SOFT_DELETE_CONVEX_FIELD_NAME.into(), true.into())?,
+        ),
     );
     new_value.try_into()
-}
-
-#[cfg(test)]
-mod tests {
-    use database::PatchValue;
-    use value::{
-        assert_obj,
-        ConvexValue,
-    };
-
-    use crate::fivetran_import::{
-        fivetran_patch_value,
-        mark_as_soft_deleted,
-    };
-
-    #[test]
-    fn test_mark_as_soft_deleted_for_object_with_fivetran_field() -> anyhow::Result<()> {
-        assert_eq!(
-            mark_as_soft_deleted(assert_obj!(
-                "top_level_field" => ConvexValue::Int64(42),
-                "fivetran" => assert_obj!(
-                    "id" => ConvexValue::Int64(1),
-                    "synced" => ConvexValue::Float64(1715336497241.0),
-                    "deleted" => ConvexValue::Boolean(false),
-                ),
-            ))?,
-            assert_obj!(
-                "top_level_field" => ConvexValue::Int64(42),
-                "fivetran" => assert_obj!(
-                    "id" => ConvexValue::Int64(1),
-                    "synced" => ConvexValue::Float64(1715336497241.0),
-                    "deleted" => ConvexValue::Boolean(true),
-                ),
-            )
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_mark_as_soft_deleted_for_object_without_fivetran_field() -> anyhow::Result<()> {
-        assert_eq!(
-            mark_as_soft_deleted(assert_obj!(
-                "top_level_field" => ConvexValue::Int64(42),
-            ))?,
-            assert_obj!(
-                "top_level_field" => ConvexValue::Int64(42),
-                "fivetran" => assert_obj!(
-                    "deleted" => ConvexValue::Boolean(true),
-                ),
-            )
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_fivetran_patch_value_with_no_metadata_field() {
-        assert_eq!(
-            fivetran_patch_value(
-                assert_obj!(
-                    "id" => 42,
-                    "name" => "Nathan",
-                ),
-                assert_obj!("name" => "Nicolas")
-            ),
-            PatchValue::from(assert_obj!("name" => "Nicolas"))
-        );
-    }
-
-    #[test]
-    fn test_fivetran_patch_value_with_metadata_field_only_on_existing() {
-        assert_eq!(
-            fivetran_patch_value(
-                assert_obj!(
-                    "id" => 42,
-                    "name" => "Nathan",
-                    "fivetran" => assert_obj!("synced" => 1716672331152),
-                ),
-                assert_obj!("name" => "Nicolas")
-            ),
-            PatchValue::from(assert_obj!("name" => "Nicolas"))
-        );
-    }
-
-    #[test]
-    fn test_fivetran_patch_value_with_metadata_field_only_on_patch() {
-        assert_eq!(
-            fivetran_patch_value(
-                assert_obj!(
-                    "id" => 42,
-                    "name" => "Nathan",
-                ),
-                assert_obj!(
-                    "name" => "Nicolas",
-                    "fivetran" => assert_obj!("synced" => 1716672331152),
-                )
-            ),
-            PatchValue::from(assert_obj!(
-                "name" => "Nicolas",
-                "fivetran" => assert_obj!("synced" => 1716672331152),
-            ))
-        );
-    }
-
-    #[test]
-    fn test_fivetran_patch_value_merge() {
-        assert_eq!(
-            fivetran_patch_value(
-                assert_obj!(
-                    "id" => 42,
-                    "name" => "Nathan",
-                    "fivetran" => assert_obj!(
-                        "id" => 42,
-                        "deleted" => false,
-                        "synced" => 1716672331152,
-                    ),
-                ),
-                assert_obj!(
-                    "name" => "Nicolas",
-                    "fivetran" => assert_obj!(
-                        "id" => 42,
-                        "synced" => 1716672354859,
-                    ),
-                )
-            ),
-            PatchValue::from(assert_obj!(
-                "name" => "Nicolas",
-                "fivetran" => assert_obj!(
-                    "id" => 42,
-                    "deleted" => false,
-                    "synced" => 1716672354859,
-                ),
-            ))
-        );
-    }
 }

@@ -17,8 +17,7 @@ use sha2::Digest;
 use crate::ConvexValue;
 
 #[must_use]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub struct Sha256Digest([u8; 32]);
 
 impl Sha256Digest {
@@ -33,13 +32,13 @@ impl Sha256Digest {
     }
 
     pub fn as_hex(&self) -> String {
-        hex::encode(self)
+        const_hex::encode(self)
     }
 }
 
 impl fmt::Debug for Sha256Digest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Sha256Digest({})", hex::encode(self.0))
+        write!(f, "Sha256Digest({})", const_hex::encode(self.0))
     }
 }
 
@@ -112,7 +111,7 @@ impl SetDigest {
 
 impl fmt::Debug for SetDigest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SetDigest({})", hex::encode(self.0))
+        write!(f, "SetDigest({})", const_hex::encode(self.0))
     }
 }
 

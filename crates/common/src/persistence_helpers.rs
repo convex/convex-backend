@@ -22,14 +22,12 @@ use crate::{
 };
 
 #[derive(Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq))]
 pub struct DocumentRevision {
     pub ts: Timestamp,
     pub document: Option<ResolvedDocument>,
 }
 
 #[derive(Debug)]
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq))]
 pub struct RevisionPair {
     pub id: InternalDocumentId,
     pub rev: DocumentRevision,

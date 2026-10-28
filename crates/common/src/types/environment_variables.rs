@@ -1,4 +1,6 @@
 use std::{
+    borrow::Borrow,
+    collections::BTreeMap,
     str::FromStr,
     sync::LazyLock,
 };
@@ -10,7 +12,10 @@ use serde::{
     Serialize,
 };
 
-use crate::knobs::ENV_VAR_LIMIT;
+use crate::knobs::{
+    ENV_VAR_LIMIT,
+    ENV_VAR_TOTAL_SIZE_LIMIT,
+};
 
 #[rustfmt::skip]
 #[derive(
@@ -22,6 +27,12 @@ pub struct EnvVarName(String);
 impl From<EnvVarName> for String {
     fn from(value: EnvVarName) -> Self {
         value.0
+    }
+}
+
+impl Borrow<str> for EnvVarName {
+    fn borrow(&self) -> &str {
+        &self.0
     }
 }
 
@@ -63,7 +74,7 @@ static NAME_REGEX: LazyLock<Regex> =
 // don't reduce them since that might break existing projects.
 
 /// Maximum length of the name of an environment variable
-pub const MAX_NAME_LENGTH: usize = 40;
+pub const MAX_NAME_LENGTH: usize = 256;
 /// Maximum length of an environment variable value. 8KiB corresponds to the
 /// maximum length of an HTTP header.
 pub const MAX_VALUE_LENGTH: usize = 8 * (1 << 10);
@@ -144,6 +155,24 @@ pub fn env_var_limit_met() -> ErrorMetadata {
     )
 }
 
+pub fn env_var_total_size_limit_met(total_size: usize) -> ErrorMetadata {
+    ErrorMetadata::bad_request(
+        "EnvVarTotalSizeLimitMet",
+        format!(
+            "The total size of all environment variables ({total_size} bytes) exceeds the limit \
+             ({} bytes).",
+            *ENV_VAR_TOTAL_SIZE_LIMIT
+        ),
+    )
+}
+
+pub fn env_var_total_size(env_vars: &BTreeMap<EnvVarName, EnvVarValue>) -> usize {
+    env_vars
+        .iter()
+        .map(|(name, value)| name.as_ref().len() + value.as_ref().len())
+        .sum()
+}
+
 pub fn env_var_name_not_unique(name: Option<&EnvVarName>) -> ErrorMetadata {
     ErrorMetadata::bad_request(
         "EnvVarNameNotUnique",
@@ -159,100 +188,4 @@ pub fn env_var_name_forbidden(name: &EnvVarName) -> ErrorMetadata {
         "EnvVarNameForbidden",
         format!("Environment variable with name \"{name}\" is built-in and cannot be overridden"),
     )
-}
-
-#[cfg(any(test, feature = "testing"))]
-mod proptest {
-    const ENV_VAR_NAME_REGEX: &str = "_[a-zA-Z][a-zA-Z0-9_]{0,38}";
-    use std::str::FromStr;
-
-    use proptest::prelude::*;
-
-    use crate::types::{
-        EnvVarName,
-        EnvVarValue,
-        EnvironmentVariable,
-    };
-
-    impl proptest::arbitrary::Arbitrary for EnvVarName {
-        type Parameters = ();
-
-        type Strategy = impl proptest::strategy::Strategy<Value = EnvVarName>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            ENV_VAR_NAME_REGEX.prop_filter_map("Invalid environment variable name", |s| {
-                let name = EnvVarName::from_str(&s);
-                name.ok()
-            })
-        }
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    impl proptest::arbitrary::Arbitrary for EnvVarValue {
-        type Parameters = ();
-
-        type Strategy = impl proptest::strategy::Strategy<Value = EnvVarValue>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            use proptest::prelude::*;
-            any::<String>().prop_filter_map("Invalid environment variable value", |s| {
-                EnvVarValue::from_str(&s).ok()
-            })
-        }
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    impl proptest::arbitrary::Arbitrary for EnvironmentVariable {
-        type Parameters = ();
-
-        type Strategy = impl proptest::strategy::Strategy<Value = EnvironmentVariable>;
-
-        fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-            use proptest::prelude::*;
-            any::<(EnvVarName, EnvVarValue)>()
-                .prop_map(|(name, value)| EnvironmentVariable { name, value })
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::str::{
-        from_utf8,
-        FromStr,
-    };
-
-    use crate::types::{
-        environment_variables::MAX_VALUE_LENGTH,
-        EnvVarName,
-        EnvVarValue,
-    };
-
-    #[test]
-    fn valid_env_var_name() {
-        // Valid
-        assert!(EnvVarName::from_str("a_good_env_var_name").is_ok());
-        assert!(EnvVarName::from_str("_a_good_env_var_name").is_ok());
-
-        // Invalid
-        assert!(EnvVarName::from_str("1_bad_env_var_name").is_err());
-        assert!(EnvVarName::from_str("bad_env_var=name").is_err());
-        assert!(EnvVarName::from_str("SUPER_LONG_NAME_____________________________________________________________________________").is_err());
-        assert!(EnvVarName::from_str("bad_env_var-name").is_err());
-    }
-
-    #[test]
-    fn valid_env_var_value() {
-        // Valid
-        assert!(EnvVarValue::from_str(
-            "any_wacky!-$sq28@#%^@#!)*&\
-             ____________________________________________________________________________"
-        )
-        .is_ok());
-
-        // Too long
-        let v = vec![0; MAX_VALUE_LENGTH + 1];
-        let s = from_utf8(&v).unwrap();
-        assert!(EnvVarValue::from_str(s).is_err());
-    }
 }

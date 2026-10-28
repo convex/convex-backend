@@ -1,4 +1,7 @@
-import { useIsCurrentMemberTeamAdmin } from "api/roles";
+import {
+  useHasCustomRolePermission,
+  useIsCurrentMemberTeamAdmin,
+} from "api/roles";
 import { Button } from "@ui/Button";
 import {
   OrbSubscriptionResponse,
@@ -14,6 +17,8 @@ import {
 } from "components/billing/planCards/ChangePlanDialogs";
 import { planNameMap } from "components/billing/planCards/PlanCard";
 import startCase from "lodash/startCase";
+import { BILLING_RESOURCE } from "lib/permissions";
+import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { SelfServePlan } from "./SelfServePlan";
 
 export function OrbSelfServePlan({
@@ -27,7 +32,14 @@ export function OrbSelfServePlan({
   team: TeamResponse;
   isLoading?: boolean;
 }) {
-  const hasAdminPermissions = useIsCurrentMemberTeamAdmin();
+  const isTeamAdmin = useIsCurrentMemberTeamAdmin();
+  const canChangePlanCustom = useHasCustomRolePermission(
+    team.id,
+    "billing:subscription:changePlan",
+    BILLING_RESOURCE,
+    false,
+  );
+  const canChangePlan = isTeamAdmin || canChangePlanCustom;
 
   const { push } = useRouter();
 
@@ -77,19 +89,20 @@ export function OrbSelfServePlan({
         action={
           orbSub?.plan.planType === plan.planType ||
           orbSub?.plan.id === plan.id ? (
-            <p className="flex h-[2.125rem] items-center px-2 font-semibold">
+            <p className="flex h-8.5 items-center px-2 font-semibold">
               Current Plan
             </p>
           ) : orbSub ? (
             <Button
               loading={isLoading}
               tip={
-                !hasAdminPermissions
-                  ? "You do not have permission to modify the team subscription."
+                canChangePlan === false
+                  ? permissionDeniedTip(
+                      "You do not have permission to modify the team subscription.",
+                      "billing:subscription:changePlan",
+                    )
                   : team.managedBy === "vercel"
-                    ? plan.planType === "CONVEX_PROFESSIONAL"
-                      ? `Convex Professional is not available for teams managed by ${startCase(team.managedBy)}. You can create a new team to use Convex Professional. Existing projects can be transferred to another team on the Project Settings page.`
-                      : `You can manage your subscription in ${startCase(team.managedBy)}.`
+                    ? `You can manage your subscription in ${startCase(team.managedBy)}.`
                     : isOnBusinessPlan
                       ? "Please contact support to change your plan."
                       : missingRequiredPaymentMethod
@@ -100,7 +113,7 @@ export function OrbSelfServePlan({
                 setIsChangingPlan(true);
               }}
               disabled={
-                !hasAdminPermissions ||
+                canChangePlan !== true ||
                 missingRequiredPaymentMethod ||
                 team.managedBy === "vercel" ||
                 isOnBusinessPlan
@@ -115,15 +128,16 @@ export function OrbSelfServePlan({
             <Button
               onClick={() => upgrade()}
               loading={isLoading}
-              disabled={!hasAdminPermissions || team.managedBy === "vercel"}
+              disabled={canChangePlan !== true || team.managedBy === "vercel"}
               variant="neutral"
               tip={
-                !hasAdminPermissions
-                  ? "You do not have permission to modify the team subscription."
+                canChangePlan === false
+                  ? permissionDeniedTip(
+                      "You do not have permission to modify the team subscription.",
+                      "billing:subscription:changePlan",
+                    )
                   : team.managedBy === "vercel"
-                    ? plan.planType === "CONVEX_PROFESSIONAL"
-                      ? `Convex Professional is not available for teams managed by ${startCase(team.managedBy)}. You can create a new team to use Convex Professional. Existing projects can be transferred to another team on the Project Settings page.`
-                      : `You can manage your subscription in ${startCase(team.managedBy)}.`
+                    ? `You can manage your subscription in ${startCase(team.managedBy)}.`
                     : undefined
               }
             >
@@ -143,7 +157,9 @@ export function OrbSelfServePlan({
         ) : (
           <UpgradePlanDialog
             onClose={() => setIsChangingPlan(false)}
-            onConfirm={(newPlanId) => changePlan({ newPlanId })}
+            onConfirm={(newPlanId, promoCode) =>
+              changePlan({ newPlanId, promoCode })
+            }
             newPlan={plan}
             team={team}
           />

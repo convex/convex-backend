@@ -8,7 +8,7 @@ import { useRouter } from "next/router";
 
 export { getServerSideProps } from "lib/ssr";
 
-function AuditLogPage() {
+export function AuditLogPage() {
   const team = useCurrentTeam();
   const auditLogRetentionDays = useTeamEntitlements(
     team?.id,

@@ -26,13 +26,16 @@ use value::{
 pub mod migr_119;
 pub mod migr_121;
 pub mod migr_124;
+pub mod migr_125;
+pub mod migr_130;
+pub mod migr_133;
 
 pub type DatabaseVersion = i64;
 // The version for the format of the database. We support all previous
 // migrations unless explicitly dropping support.
 // Add a user name next to the version when you make a change to highlight merge
 // conflicts.
-pub const DATABASE_VERSION: DatabaseVersion = 124; // reece
+pub const DATABASE_VERSION: DatabaseVersion = 134; // nipunn
 
 pub struct MigrationExecutor<RT: Runtime> {
     pub db: Database<RT>,
@@ -96,7 +99,78 @@ impl<RT: Runtime> MigrationExecutor<RT> {
                     .await?;
                 MigrationCompletionCriterion::MigrationComplete(to_version)
             },
+            125 => {
+                let mut tx = self.db.begin_system().await?;
+                migr_125::run_migration(&mut tx).await?;
+                self.db
+                    .commit_with_write_source(tx, "migration_125")
+                    .await?;
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            126 => {
+                // This is an empty migration because we added a new system
+                // table, _usage_limits.
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            127 => {
+                // This is an empty migration because we added a new system
+                // table, _data_sync_progress.
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            128 => {
+                // This is an empty migration because we added the
+                // by_action_and_creation_time index to _deployment_audit_log,
+                // which is backfilled automatically on startup.
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            129 => {
+                // The application system-table initializer creates the persistence index ID
+                // allocator before this migration runs.
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            130 => {
+                // Backfill in bounded batches, resuming the `_index` scan from
+                // the previous batch's cursor so the table is scanned once
+                // rather than re-scanned from the start each batch. Each batch
+                // stays under the per-transaction read and write caps; rerun
+                // until the scan reaches the end.
+                let mut cursor = None;
+                loop {
+                    let mut tx = self.db.begin_system().await?;
+                    let progress = migr_130::run_migration(&mut tx, cursor).await?;
+                    if progress.patched > 0 {
+                        self.db
+                            .commit_with_write_source(tx, "migration_130")
+                            .await?;
+                    }
+                    let Some(next) = progress.cursor else {
+                        break;
+                    };
+                    cursor = Some(next);
+                }
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
             // NOTE: Make sure to increase DATABASE_VERSION when adding new migrations.
+            131 => {
+                // Bootstrap creates _schema_validations and its indexes before migration runs.
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            132 => {
+                // Bootstrap creates by_validation_id before attempt-owned counters are written.
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            133 => {
+                let mut tx = self.db.begin_system().await?;
+                migr_133::run_migration(&mut tx).await?;
+                self.db
+                    .commit_with_write_source(tx, "migration_133")
+                    .await?;
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            134 => {
+                // Bootstrap creates _s3_export_state and its index before migration runs.
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
             _ => anyhow::bail!("Version did not define a migration! {}", to_version),
         };
         tracing::warn!(

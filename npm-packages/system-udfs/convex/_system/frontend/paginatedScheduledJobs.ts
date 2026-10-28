@@ -4,7 +4,7 @@ import { queryPrivateSystem } from "../secretSystemTables";
 import { v } from "convex/values";
 import { maximumBytesRead, maximumRowsRead } from "../paginationLimits";
 
-export default queryPrivateSystem({
+export default queryPrivateSystem("ViewData")({
   args: {
     componentId: v.optional(v.union(v.string(), v.null())),
     paginationOpts: paginationOptsValidator,

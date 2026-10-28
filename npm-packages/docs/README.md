@@ -6,7 +6,7 @@ static website generator.
 ## Local Development
 
 ```sh
-just rush install
+just install-js
 npm run dev
 ```
 
@@ -14,7 +14,8 @@ This command starts a local dev server and opens up a browser window. Most
 changes are reflected live without having to restart the server.
 
 If you make changes to the `convex` NPM package and want to see them reflected
-in API docs, run `just rush build -t convex` and restart the server.
+in API docs, run `just turbo run build --filter=convex...` and restart the
+server.
 
 The command runs `npm run dev`, which will not run all checks in our presubmits.
 For example, broken links are not checked. To view all errors, try building and
@@ -71,8 +72,8 @@ See [here](/ops/services/docs/release.md#preview-deployment).
 ## Updating the Component docs
 
 The Component docs are in the /docs folder of the Components that we keep in
-sync. For example, https://github.com/get-convex/component/tree/main/docs To
-update them, run the following command in this directory:
+sync. For example, https://github.com/convex/component/tree/main/docs To update
+them, run the following command in this directory:
 
 ```sh
 node scripts/pull-component-docs.js
@@ -87,22 +88,22 @@ docs change and there is a new release of the component package.
 
 # Dependency notes
 
-Typedoc plugins don't seem to work in our monorepo with Rush: they only work
-when installed from npm.
+These typedoc plugins are forked because they didn't work when the monorepo used
+Rush. FIXME: they might work unforked now that this is a plain pnpm workspace.
 
 We needed to update a couple, so we forked them at
-https://github.com/get-convex/typedoc-plugin-markdown
+https://github.com/convex/typedoc-plugin-markdown
 
 Iterating on typedoc plugins is rough, typedoc implements their own module
-resolution such that our rush/pnpm solution doesn't work. So to iterate I
+resolution such that our pnpm workspace setup doesn't work. So to iterate I
 
-1. cloned our typedoc-plugin-markdown fork and set a globalOverride in
-   rush/pnpm-config.json
+1. cloned our typedoc-plugin-markdown fork and set an override in
+   pnpm-workspace.yaml (overrides)
 2. make changes there and did a build with yarn run build
 3. removed the dependency from dashboard's package.json
-4. just rush update
+4. just update-js
 5. re-added the dependency to dashboard's package.json
-6. just rush update
+6. just update-js
 7. repeat from 2.
 8. remove the globalOverridel, increment the typedoc-plugin-markdown version
    number and publish, and update docs package.json deps

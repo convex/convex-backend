@@ -71,7 +71,7 @@ mod v1 {
             None => return Ok(vec![]),
         };
         let mut sort_key = Vec::with_capacity(value.size());
-        let Ok(()) = write_sort_key::<_, true>(
+        let Ok(()) = write_sort_key(
             ConvexValueType::<&ConvexValue>::Object(value),
             &mut sort_key,
         );
@@ -85,49 +85,6 @@ mod v1 {
         Ok(compressed)
     }
 
-    #[cfg(test)]
-    mod tests {
-        use cmd_util::env::env_config;
-        use proptest::prelude::*;
-        use value::assert_val;
-
-        #[test]
-        fn test_frozen_document() {
-            let doc = ResolvedDocument::from_database(
-                TabletId::MIN,
-                assert_val!({
-                    "_id" => "2pj577m1qs11bje4wwb6abkt9wa3m6g",
-                    "_creationTime" => 1770416476.678,
-                    "null" => null,
-                    "int64" => 0x1234,
-                    "float_normal" => std::f64::consts::E,
-                    "float_nan" => f64::NAN,
-                    "bool" => true,
-                    "string" => "a".repeat(1000),
-                    "array" => [1,2,3,4, {"foo"=>"bar"}],
-                }),
-            )
-            .unwrap();
-            let frozen_encoding = b"\x01\0\0\x04\x88\x0c\x10\0\x81\xc1\xdaa\x9aW+dZ-\0\xf0A2pj577m1qs11bje4wwb6abkt9wa3m6g\0array\0\x12\t\x01\t\x02\t\x03\t\x04\x15foo\0\x10bar\0\0\0bool\0\x0ffloat_nan\0\r\xff\xf8\0\0\x02\0\x03\x13\0\xff\x19ormal\0\r\xc0\x05\xbf\n\x8b\x14Wiint64\0\n\x124null\0\x03string\0\x10aa\x02\0\xff\xff\xff\xd2`aaaa\0\0";
-            assert_eq!(
-                decode(frozen_encoding, doc.id().tablet_id).unwrap(),
-                Some(doc)
-            );
-        }
-
-        use super::*;
-        proptest! {
-            #![proptest_config(
-                ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-            )]
-
-            #[test]
-            fn test_roundtrip(doc in any::<ResolvedDocument>()) {
-                let table_id = doc.id().tablet_id;
-                assert_eq!(decode(&encode(Some(&doc)).unwrap(), table_id).unwrap(), Some(doc));
-            }
-        }
-    }
 }
 
 pub(crate) fn encode(maybe_doc: Option<&ResolvedDocument>) -> anyhow::Result<Vec<u8>> {

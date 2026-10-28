@@ -9,6 +9,6 @@ export const getCurrent = query({
     if (!userId) {
       throw new Error("Unauthorized");
     }
-    return await ctx.db.get(userId);
+    return await ctx.db.get("users", userId);
   },
 });

@@ -8,18 +8,19 @@ use std::{
     slice,
 };
 
-use axum::{
-    debug_handler,
-    http::HeaderMap,
-};
+use anyhow::Context as _;
+use axum::debug_handler;
 use common::http::HttpResponseError;
 use serde::Deserialize;
 use tikv_jemalloc_sys::malloc_stats_print;
 use tikv_jemallocator::Jemalloc;
 
-use crate::performance::{
-    JemallocStats,
-    JEMALLOC_STATS_REPORTER,
+use crate::{
+    metrics::log_process_level_stats,
+    performance::{
+        JemallocStats,
+        JEMALLOC_STATS_REPORTER,
+    },
 };
 
 // Configure jemalloc as Rust's global allocator. Based on:
@@ -98,15 +99,13 @@ async fn collect_profile() -> anyhow::Result<Vec<u8>> {
 }
 
 #[debug_handler]
-pub async fn heap_profile(
-    headers: HeaderMap,
-) -> Result<impl axum::response::IntoResponse, HttpResponseError> {
-    match headers.get("Authorization") {
-        Some(hdr) if hdr == "Bearer MUSTEATALPASTOR" => (),
-        _ => {
-            let err = errors::ErrorMetadata::forbidden("Forbidden", "Unauthorized");
-            return Err(anyhow::Error::new(err).into());
-        },
-    }
+pub async fn heap_profile() -> Result<impl axum::response::IntoResponse, HttpResponseError> {
     Ok(collect_profile().await?)
+}
+
+pub fn log_process_memory_stats() -> anyhow::Result<()> {
+    let jemalloc_stats = load_jemalloc_stats()?;
+    let process_stats = memory_stats::memory_stats().context("failed to get memory stats")?;
+    log_process_level_stats(process_stats.physical_mem, &jemalloc_stats);
+    Ok(())
 }

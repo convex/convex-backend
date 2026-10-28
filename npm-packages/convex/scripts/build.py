@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# requires-python = "~=3.13.0"
+# dependencies = [
+#     "toml",
+# ]
+# ///
 
 import os
 import random
@@ -6,17 +12,17 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 from pathlib import Path
-from typing import Callable, Dict, List, Union
 
 NPM = "npm.CMD" if os.name == "nt" else "npm"
 
-times: Dict[str, float] = {}
+times: dict[str, float] = {}
 
 
-def run(cmd: Union[str, List[str]]) -> None:
+def run(cmd: str | list[str]) -> None:
     try:
         subprocess.run(
             cmd,

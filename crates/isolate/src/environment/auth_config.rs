@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::anyhow;
@@ -23,7 +24,6 @@ use deno_core::{
     v8::{
         self,
         scope,
-        scope_with_context,
     },
     ModuleSpecifier,
 };
@@ -47,22 +47,27 @@ use value::NamespacedTableMapping;
 
 use super::ModuleCodeCacheResult;
 use crate::{
+    context_cache::ContextCache,
     environment::{
         helpers::syscall_error::{
             syscall_description_for_error,
             syscall_name_for_error,
         },
         AsyncOpRequest,
-        IsolateEnvironment,
+        JsEnvironment,
+        OpProvider,
+        SyscallProvider,
     },
     helpers,
     isolate::{
         Isolate,
         CONVEX_SCHEME,
     },
+    module_cache::V8ModuleSource,
     request_scope::RequestScope,
     strings,
     timeout::Timeout,
+    ConcurrencyPermit,
 };
 
 pub struct AuthConfigEnvironment {
@@ -71,7 +76,7 @@ pub struct AuthConfigEnvironment {
     environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
 }
 
-impl<RT: Runtime> IsolateEnvironment<RT> for AuthConfigEnvironment {
+impl OpProvider for AuthConfigEnvironment {
     fn trace(&mut self, _level: LogLevel, messages: Vec<String>) -> anyhow::Result<()> {
         tracing::warn!(
             "Unexpected Console access when evaluating auth config file: {}",
@@ -101,6 +106,20 @@ impl<RT: Runtime> IsolateEnvironment<RT> for AuthConfigEnvironment {
         ))
     }
 
+    fn performance_now(&mut self) -> anyhow::Result<Duration> {
+        anyhow::bail!(ErrorMetadata::bad_request(
+            "NoPerformanceDuringAuthConfig",
+            "The Performance API is not supported when evaluating auth config file"
+        ))
+    }
+
+    fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
+        anyhow::bail!(ErrorMetadata::bad_request(
+            "NoPerformanceDuringAuthConfig",
+            "The Performance API is not supported when evaluating auth config file"
+        ))
+    }
+
     fn get_environment_variable(
         &mut self,
         name: EnvVarName,
@@ -127,12 +146,14 @@ impl<RT: Runtime> IsolateEnvironment<RT> for AuthConfigEnvironment {
             "Getting the table mapping unsupported when evaluating auth config file"
         ))
     }
+}
 
+impl<RT: Runtime> SyscallProvider<RT> for AuthConfigEnvironment {
     async fn lookup_source(
         &mut self,
         path: &str,
         _timeout: &mut Timeout<RT>,
-    ) -> anyhow::Result<Option<(Arc<FullModuleSource>, ModuleCodeCacheResult)>> {
+    ) -> anyhow::Result<Option<(Arc<V8ModuleSource>, ModuleCodeCacheResult)>> {
         if path != AUTH_CONFIG_FILE_NAME {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "NoImportModuleDuringAuthConfig",
@@ -140,10 +161,10 @@ impl<RT: Runtime> IsolateEnvironment<RT> for AuthConfigEnvironment {
             ))
         }
         Ok(Some((
-            Arc::new(FullModuleSource {
+            Arc::new(V8ModuleSource::new(FullModuleSource {
                 source: self.auth_config_bundle.clone(),
                 source_map: self.source_map.clone(),
-            }),
+            })),
             ModuleCodeCacheResult::noop(),
         )))
     }
@@ -154,12 +175,21 @@ impl<RT: Runtime> IsolateEnvironment<RT> for AuthConfigEnvironment {
             format!("Syscall {name} unsupported when evaluating auth config file")
         ))
     }
+}
+
+impl<RT: Runtime> JsEnvironment<RT> for AuthConfigEnvironment {
+    type AsyncResolver = v8::Global<v8::PromiseResolver>;
+    type SyscallProvider = Self;
+
+    fn syscall_provider(&mut self) -> &mut Self::SyscallProvider {
+        self
+    }
 
     fn start_async_syscall(
         &mut self,
         name: String,
         _args: JsonValue,
-        _resolver: v8::Global<v8::PromiseResolver>,
+        _resolver: Self::AsyncResolver,
     ) -> anyhow::Result<()> {
         anyhow::bail!(ErrorMetadata::bad_request(
             format!("No{}DuringAuthConfig", syscall_name_for_error(&name)),
@@ -173,7 +203,7 @@ impl<RT: Runtime> IsolateEnvironment<RT> for AuthConfigEnvironment {
     fn start_async_op(
         &mut self,
         request: AsyncOpRequest,
-        _resolver: v8::Global<v8::PromiseResolver>,
+        _resolver: Self::AsyncResolver,
     ) -> anyhow::Result<()> {
         anyhow::bail!(ErrorMetadata::bad_request(
             format!("No{}DuringAuthConfig", request.name_for_error()),
@@ -195,9 +225,9 @@ impl<RT: Runtime> IsolateEnvironment<RT> for AuthConfigEnvironment {
 
 impl AuthConfigEnvironment {
     pub async fn evaluate_auth_config<RT: Runtime>(
-        client_id: String,
         isolate: &mut Isolate<RT>,
-        v8_context: v8::Global<v8::Context>,
+        context_cache: &mut ContextCache,
+        permit: ConcurrencyPermit,
         auth_config_bundle: ModuleSource,
         source_map: Option<SourceMap>,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
@@ -207,11 +237,13 @@ impl AuthConfigEnvironment {
             source_map,
             environment_variables,
         };
-        let client_id = Arc::new(client_id);
-        let (handle, state, mut timeout) = isolate.start_request(client_id, environment).await?;
-        scope_with_context!(let context_scope, isolate.isolate(), v8_context);
-        let mut isolate_context =
-            RequestScope::new(context_scope, handle.clone(), state, false).await?;
+        let (handle, state, mut timeout) = isolate
+            .start_request(context_cache, permit, environment)
+            .await?;
+        scope!(let handle_scope, isolate.isolate());
+        let v8_context = context_cache.get_or_create_fresh_context(handle_scope);
+        let context_scope = &mut v8::ContextScope::new(handle_scope, v8_context);
+        let mut isolate_context = RequestScope::new(context_scope, handle.clone(), state, false)?;
         let handle = isolate_context.handle();
         let result = Self::run_evaluate_auth_config(&mut isolate_context, &mut timeout).await;
 
@@ -226,7 +258,7 @@ impl AuthConfigEnvironment {
         drop(isolate_context);
         drop(timeout);
 
-        handle.take_termination_error(None, "auth")??;
+        handle.take_termination_error("auth")??;
         result
     }
 
@@ -325,8 +357,8 @@ fn check_for_common_confusions(config_str: &str) -> anyhow::Result<()> {
                         format!(
                             "This auth configuration appears potentially insecure: Provider at \
                              index {index} has an issuer that is shared among many applications, \
-                             so must to specify an ApplicationID to check against an `aud` field \
-                             of a JWT.",
+                             so must specify an ApplicationID to check against an `aud` field of \
+                             a JWT.",
                         ),
                     ));
                 }
@@ -359,52 +391,4 @@ pub fn config_not_matching_schema_error(error: String) -> ErrorMetadata {
         "AuthConfigNotMatchingSchemaError",
         format!("auth config file must include a list of provider credentials: {error}"),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_traditional_oidc() -> anyhow::Result<()> {
-        // not "legacy" because we'll support it forever, the only legacy aspect is not
-        // having a "type" field.
-        let valid_config = r#"{"providers": [{"domain": "a", "applicationID": "b"}]}"#;
-        check_for_common_confusions(valid_config)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_newer_oidc() -> anyhow::Result<()> {
-        let valid_config =
-            r#"{"providers": [{"type": "oidc", "domain": "example.com", "applicationID": "c"}]}"#;
-        check_for_common_confusions(valid_config)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_misspell_application_id() -> anyhow::Result<()> {
-        let invalid_config = r#"{"providers": [{"domain": "example.com", "applicationId": "b"}]}"#;
-        let result = check_for_common_confusions(invalid_config);
-        assert!(result.is_err());
-        let error_message = result.unwrap_err().to_string();
-        assert!(error_message.contains("applicationID"));
-        assert!(error_message.contains("spelled lowercase 'application', capital I, capital D."));
-        Ok(())
-    }
-
-    #[test]
-    fn test_valid_custom_jwt() -> anyhow::Result<()> {
-        let valid_config = r#"{ "providers": [ { "type": "customJwt", "applicationID": "your-application-id", "issuer": "https://your.issuer.url.com", "jwks": "https://your.issuer.url.com/.well-known/jwks.json", "algorithm": "RS256" }]}"#;
-
-        check_for_common_confusions(valid_config)?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_valid_custom_jwt_without_application() -> anyhow::Result<()> {
-        let valid_config = r#"{ "providers": [ { "type": "customJwt", "issuer": "https://your.issuer.url.com", "jwks": "https://your.issuer.url.com/.well-known/jwks.json", "algorithm": "RS256" }]}"#;
-        check_for_common_confusions(valid_config)?;
-        Ok(())
-    }
 }

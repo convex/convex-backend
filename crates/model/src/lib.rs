@@ -35,6 +35,10 @@ use std::{
     sync::LazyLock,
 };
 
+use audit_log_config::{
+    AuditLogConfigTable,
+    AUDIT_LOG_CONFIG_TABLE,
+};
 use auth::AUTH_TABLE;
 use aws_lambda_versions::{
     AwsLambdaVersionsTable,
@@ -82,7 +86,6 @@ use cron_jobs::{
     CRON_NEXT_RUN_INDEX_BY_CRON_JOB_ID,
     CRON_NEXT_RUN_INDEX_BY_NEXT_TS,
     CRON_NEXT_RUN_TABLE,
-    DEPRECATED_CRON_JOBS_INDEX_BY_NEXT_TS,
 };
 pub use database::system_tables::{
     SystemIndex,
@@ -99,7 +102,9 @@ use database::{
     IndexModel,
     IndexTable,
     IndexWorkerMetadataTable,
+    NextPersistenceIndexIdTable,
     SchemaValidationProgressTable,
+    SchemaValidationTable,
     SchemasTable,
     TablesTable,
     Transaction,
@@ -110,10 +115,13 @@ use database::{
     INDEX_BACKFILLS_TABLE,
     INDEX_DOC_ID_INDEX,
     INDEX_WORKER_METADATA_TABLE,
+    NEXT_PERSISTENCE_INDEX_ID_TABLE,
     NUM_RESERVED_LEGACY_TABLE_NUMBERS,
     SCHEMAS_STATE_INDEX,
     SCHEMAS_TABLE,
-    SCHEMA_VALIDATION_PROGRESS_BY_SCHEMA_ID,
+    SCHEMA_VALIDATIONS_BY_SCHEMA_ID_AND_TABLE_NAME,
+    SCHEMA_VALIDATIONS_TABLE,
+    SCHEMA_VALIDATION_PROGRESS_BY_VALIDATION_ID,
     SCHEMA_VALIDATION_PROGRESS_TABLE,
     TABLES_BY_NAME_INDEX,
 };
@@ -150,7 +158,6 @@ use migrations_model::{
 use modules::{
     ModulesTable,
     MODULES_TABLE,
-    MODULE_INDEX_BY_DELETED,
     MODULE_INDEX_BY_PATH,
 };
 use scheduled_jobs::{
@@ -194,21 +201,39 @@ use crate::{
         CronJobsTable,
         CronNextRunTable,
     },
+    data_sync_progress::{
+        DataSyncProgressTable,
+        DATA_SYNC_PROGRESS_INDEX_BY_LAST_UPDATED,
+        DATA_SYNC_PROGRESS_INDEX_BY_SYNC_ID,
+        DATA_SYNC_PROGRESS_TABLE,
+    },
     deployment_audit_log::{
         DeploymentAuditLogsTable,
+        AUDIT_LOG_INDEX_BY_ACTION,
         DEPLOYMENT_AUDIT_LOG_TABLE,
     },
     environment_variables::EnvironmentVariablesTable,
     exports::ExportsTable,
     external_packages::EXTERNAL_PACKAGES_TABLE,
     log_sinks::LOG_SINKS_TABLE,
+    s3_export_state::{
+        S3ExportStateTable,
+        S3_EXPORT_STATE_BY_CONFIG_ID,
+        S3_EXPORT_STATE_TABLE,
+    },
     scheduled_jobs::args::{
         ScheduledJobArgsTable,
         SCHEDULED_JOBS_ARGS_TABLE,
     },
+    usage_limits::{
+        UsageLimitsTable,
+        USAGE_LIMITS_INDEX_BY_SELECTOR,
+        USAGE_LIMITS_TABLE,
+    },
 };
 
 pub mod airbyte_import;
+pub mod audit_log_config;
 pub mod auth;
 pub mod aws_lambda_versions;
 pub mod backend_info;
@@ -217,6 +242,7 @@ pub mod canonical_urls;
 pub mod components;
 pub mod config;
 pub mod cron_jobs;
+pub mod data_sync_progress;
 pub mod database_globals;
 pub mod deployment_audit_log;
 pub mod environment_variables;
@@ -228,14 +254,13 @@ pub mod log_sinks;
 mod metrics;
 pub mod migrations;
 pub mod modules;
+pub mod s3_export_state;
 pub mod scheduled_jobs;
 pub mod session_requests;
 pub mod snapshot_imports;
 pub mod source_packages;
 pub mod udf_config;
-
-#[cfg(any(test, feature = "testing"))]
-pub mod test_helpers;
+pub mod usage_limits;
 
 /// Default best effort table number when creating the table. If it is taken
 /// already, another number is selected. Legacy deployments don't
@@ -274,9 +299,15 @@ enum DefaultTableNumber {
     IndexBackfills = 36,
     SchemaValidationProgress = 37,
     ScheduledJobArgs = 38,
+    AuditLogConfig = 39,
+    UsageLimits = 40,
+    DataSyncProgress = 41,
+    NextPersistenceIndexId = 42,
+    SchemaValidations = 43,
+    S3ExportState = 44,
     // Keep this number and your user name up to date. The number makes it easy to know
     // what to use next. The username on the same line detects merge conflicts
-    // Next Number - 39 - emma
+    // Next Number - 45 - nipunn
 }
 
 impl From<DefaultTableNumber> for TableNumber {
@@ -307,6 +338,7 @@ impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
             DefaultTableNumber::Schemas => &SchemasTable,
             DefaultTableNumber::CronJobLogs => &CronJobLogsTable,
             DefaultTableNumber::LogSinks => &LogSinksTable,
+            DefaultTableNumber::S3ExportState => &S3ExportStateTable,
             DefaultTableNumber::BackendState => &BackendStateTable,
             DefaultTableNumber::ExternalPackages => &ExternalPackagesTable,
             DefaultTableNumber::ScheduledJobs => &ScheduledJobsTable,
@@ -320,7 +352,12 @@ impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
             DefaultTableNumber::CronNextRun => &CronNextRunTable,
             DefaultTableNumber::IndexBackfills => &IndexBackfillTable,
             DefaultTableNumber::SchemaValidationProgress => &SchemaValidationProgressTable,
+            DefaultTableNumber::SchemaValidations => &SchemaValidationTable,
             DefaultTableNumber::ScheduledJobArgs => &ScheduledJobArgsTable,
+            DefaultTableNumber::AuditLogConfig => &AuditLogConfigTable,
+            DefaultTableNumber::UsageLimits => &UsageLimitsTable,
+            DefaultTableNumber::DataSyncProgress => &DataSyncProgressTable,
+            DefaultTableNumber::NextPersistenceIndexId => &NextPersistenceIndexIdTable,
         }
     }
 }
@@ -358,14 +395,12 @@ static SYSTEM_INDEXES_WITHOUT_CREATION_TIME: LazyLock<BTreeSet<IndexName>> = Laz
     btreeset! {
         BY_COMPONENT_PATH_INDEX.name(),
         CRON_JOBS_INDEX_BY_NAME.name(),
-        DEPRECATED_CRON_JOBS_INDEX_BY_NEXT_TS.name(),
         CRON_JOB_LOGS_INDEX_BY_NAME_TS.name(),
         CRON_NEXT_RUN_INDEX_BY_NEXT_TS.name(),
         CRON_NEXT_RUN_INDEX_BY_CRON_JOB_ID.name(),
         ENVIRONMENT_VARIABLES_INDEX_BY_NAME.name(),
         EXPORTS_BY_STATE_AND_TS_INDEX.name(),
         FILE_STORAGE_ID_INDEX.name(),
-        MODULE_INDEX_BY_DELETED.name(),
         MODULE_INDEX_BY_PATH.name(),
         SCHEDULED_JOBS_INDEX.name(),
         SCHEDULED_JOBS_INDEX_BY_COMPLETED_TS.name(),
@@ -383,7 +418,17 @@ pub async fn initialize_application_system_tables<RT: Runtime>(
     database: &Database<RT>,
 ) -> anyhow::Result<()> {
     let mut tx = database.begin(Identity::system()).await?;
+    NextPersistenceIndexIdTable::initialize(
+        &mut tx,
+        DEFAULT_TABLE_NUMBERS
+            .get(&NEXT_PERSISTENCE_INDEX_ID_TABLE)
+            .copied(),
+    )
+    .await?;
     for table in app_system_tables() {
+        if table.table_name() == NEXT_PERSISTENCE_INDEX_ID_TABLE {
+            continue;
+        }
         let is_new = initialize_application_system_table(
             &mut tx,
             table,
@@ -415,7 +460,11 @@ pub async fn initialize_application_system_tables<RT: Runtime>(
         if component_id.is_root() {
             continue;
         }
-        for table in component_system_tables() {
+        for table in component_system_tables().into_iter().chain([
+            &SchemasTable as &dyn ErasedSystemTable,
+            &SchemaValidationProgressTable,
+            &SchemaValidationTable,
+        ]) {
             initialize_application_system_table(
                 &mut tx,
                 table,
@@ -450,8 +499,8 @@ pub async fn initialize_application_system_table<RT: Runtime>(
     let is_new = tx
         .create_system_table(
             namespace,
-            table.table_name(),
-            default_table_numbers.get(table.table_name()).cloned(),
+            &table.table_name(),
+            default_table_numbers.get(&table.table_name()).cloned(),
         )
         .await?;
     if is_new {
@@ -465,7 +514,7 @@ pub async fn initialize_application_system_table<RT: Runtime>(
         let table_id = tx
             .table_mapping()
             .namespace(namespace)
-            .id(table.table_name())?
+            .id(&table.table_name())?
             .tablet_id;
         let existing_indexes: BTreeMap<_, _> = IndexModel::new(tx)
             .all_indexes_on_table(table_id)
@@ -476,6 +525,7 @@ pub async fn initialize_application_system_table<RT: Runtime>(
                 let IndexConfig::Database {
                     spec,
                     on_disk_state: _,
+                    persistence_index_id: _,
                 } = &index.config
                 else {
                     // This isn't a strict requirement; it's just not implemented or needed.
@@ -556,16 +606,19 @@ pub fn app_system_tables() -> Vec<&'static dyn ErasedSystemTable> {
         &FunctionHandlesTable,
         &CanonicalUrlsTable,
         &LogSinksTable,
+        &S3ExportStateTable,
+        &AuditLogConfigTable,
         &AwsLambdaVersionsTable,
         &BackendInfoTable,
+        &UsageLimitsTable,
+        &DataSyncProgressTable,
     ];
     system_tables.extend(component_system_tables());
     system_tables.extend(bootstrap_system_tables());
     system_tables
 }
 
-/// NOTE: Does not include _schemas or _schema_validation_progress because they
-/// are in bootstrapped system tables, but they are created for each component.
+/// Schema tables are bootstrapped separately for each component.
 pub fn component_system_tables() -> Vec<&'static dyn ErasedSystemTable> {
     vec![
         &FileStorageTable,
@@ -594,15 +647,8 @@ static APP_TABLES_TO_LOAD_IN_MEMORY: LazyLock<BTreeSet<TableName>> = LazyLock::n
         BACKEND_INFO_TABLE.clone(),
         AWS_LAMBDA_VERSIONS_TABLE.clone(),
         SOURCE_PACKAGES_TABLE.clone(),
-    }
-});
-
-/// System tables that we allow the `DatabaseSnapshotIndexCache` to be refreshed
-/// for. We will store documents in the write log for only these tables so we
-/// can walk the write log to refresh the cache to do efficient queries.
-pub static REFRESHABLE_APP_TABLES: LazyLock<BTreeSet<TableName>> = LazyLock::new(|| {
-    btreeset! {
-        SCHEDULED_JOBS_TABLE.clone()
+        USAGE_LIMITS_TABLE.clone(),
+        NEXT_PERSISTENCE_INDEX_ID_TABLE.clone(),
     }
 });
 
@@ -640,6 +686,7 @@ pub static FIRST_SEEN_TABLE: LazyLock<BTreeMap<TableName, DatabaseVersion>> = La
         BACKEND_INFO_TABLE.clone() => 44,
         EXPORTS_TABLE.clone() => 44,
         LOG_SINKS_TABLE.clone() => 68,
+        S3_EXPORT_STATE_TABLE.clone() => 134,
         TABLES_TABLE.clone() => 44,
         INDEX_TABLE.clone() => 44,
         SCHEMAS_TABLE.clone() => 50,
@@ -651,7 +698,12 @@ pub static FIRST_SEEN_TABLE: LazyLock<BTreeMap<TableName, DatabaseVersion>> = La
         CANONICAL_URLS_TABLE.clone() => 116,
         INDEX_BACKFILLS_TABLE.clone() => 120,
         SCHEMA_VALIDATION_PROGRESS_TABLE.clone() => 122,
+        SCHEMA_VALIDATIONS_TABLE.clone() => 131,
         SCHEDULED_JOBS_ARGS_TABLE.clone() => 123,
+        AUDIT_LOG_CONFIG_TABLE.clone() => 124,
+        USAGE_LIMITS_TABLE.clone() => 126,
+        DATA_SYNC_PROGRESS_TABLE.clone() => 127,
+        NEXT_PERSISTENCE_INDEX_ID_TABLE.clone() => 129,
     }
 });
 
@@ -663,7 +715,6 @@ pub static FIRST_SEEN_INDEX: LazyLock<BTreeMap<IndexName, DatabaseVersion>> = La
         SCHEDULED_JOBS_INDEX_BY_UDF_PATH.name() => 44,
         SESSION_REQUESTS_INDEX.name() => 44,
         FILE_STORAGE_ID_INDEX.name() => 44,
-        DEPRECATED_CRON_JOBS_INDEX_BY_NEXT_TS.name() => 47,
         CRON_JOBS_INDEX_BY_NAME.name() => 49,
         CRON_JOB_LOGS_INDEX_BY_NAME_TS.name() => 51,
         CRON_NEXT_RUN_INDEX_BY_NEXT_TS.name() => 118,
@@ -671,230 +722,18 @@ pub static FIRST_SEEN_INDEX: LazyLock<BTreeMap<IndexName, DatabaseVersion>> = La
         EXPORTS_BY_STATE_AND_TS_INDEX.name() => 88,
         TABLES_BY_NAME_INDEX.name() => 44,
         SCHEMAS_STATE_INDEX.name() => 44,
-        MODULE_INDEX_BY_DELETED.name() => 90,
         ENVIRONMENT_VARIABLES_INDEX_BY_NAME.name() => 91,
         INDEX_DOC_ID_INDEX.name() => 92,
         COMPONENTS_BY_PARENT_INDEX.name() => 100,
         BY_COMPONENT_PATH_INDEX.name() => 102,
         EXPORTS_BY_REQUESTOR.name() => 110,
         INDEX_BACKFILLS_BY_INDEX_ID.name() => 120,
-        SCHEMA_VALIDATION_PROGRESS_BY_SCHEMA_ID.name() => 122,
+        SCHEMA_VALIDATION_PROGRESS_BY_VALIDATION_ID.name() => 132,
+        SCHEMA_VALIDATIONS_BY_SCHEMA_ID_AND_TABLE_NAME.name() => 131,
+        USAGE_LIMITS_INDEX_BY_SELECTOR.name() => 126,
+        DATA_SYNC_PROGRESS_INDEX_BY_SYNC_ID.name() => 127,
+        S3_EXPORT_STATE_BY_CONFIG_ID.name() => 134,
+        DATA_SYNC_PROGRESS_INDEX_BY_LAST_UPDATED.name() => 127,
+        AUDIT_LOG_INDEX_BY_ACTION.name() => 128,
     }
 });
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::BTreeSet,
-        sync::Arc,
-    };
-
-    use common::{
-        components::{
-            CanonicalizedComponentFunctionPath,
-            ComponentPath,
-        },
-        document::{
-            ParseDocument,
-            ParsedDocument,
-        },
-        execution_context::ExecutionContext,
-        runtime::UnixTimestamp,
-        testing::TestPersistence,
-    };
-    use database::{
-        defaults::DEFAULT_BOOTSTRAP_TABLE_NUMBERS,
-        test_helpers::{
-            DbFixtures,
-            DbFixturesArgs,
-        },
-        TableUsage,
-        TablesUsage,
-        TestFacingModel,
-        UserFacingModel,
-    };
-    use maplit::btreemap;
-    use migrations_model::DATABASE_VERSION;
-    use pretty_assertions::assert_eq;
-    use runtime::testing::TestRuntime;
-    use value::{
-        assert_obj,
-        ConvexArray,
-        TableNamespace,
-    };
-
-    use crate::{
-        app_system_tables,
-        scheduled_jobs::{
-            types::ScheduledJobMetadata,
-            SchedulerModel,
-        },
-        test_helpers::DbFixturesWithModel,
-        virtual_system_mapping,
-        DEFAULT_TABLE_NUMBERS,
-        FIRST_SEEN_INDEX,
-        FIRST_SEEN_TABLE,
-    };
-
-    #[test]
-    fn test_ensure_consistent() {
-        // Ensure consistent with the bootstrap model defaults
-        for (bootstrap_table_name, bootstrap_table_number) in DEFAULT_BOOTSTRAP_TABLE_NUMBERS.iter()
-        {
-            assert!(
-                DEFAULT_TABLE_NUMBERS.contains_key(bootstrap_table_name),
-                "{bootstrap_table_name} missing from DEFAULT_TABLE_NUMBERS"
-            );
-            assert_eq!(
-                DEFAULT_TABLE_NUMBERS[bootstrap_table_name],
-                *bootstrap_table_number
-            );
-        }
-    }
-
-    #[test]
-    fn test_ensure_defaults() {
-        for table in app_system_tables() {
-            let table_name = table.table_name();
-            assert!(
-                DEFAULT_TABLE_NUMBERS.contains_key(table_name),
-                "{table_name} missing from DEFAULT_TABLE_NUMBERS"
-            );
-        }
-    }
-
-    #[convex_macro::test_runtime]
-    async fn test_initialize_model(rt: TestRuntime) -> anyhow::Result<()> {
-        let args = DbFixturesArgs {
-            tp: Some(Arc::new(TestPersistence::new())),
-            virtual_system_mapping: virtual_system_mapping().clone(),
-            ..Default::default()
-        };
-        // Initialize
-        DbFixtures::new_with_model_and_args(&rt, args.clone()).await?;
-        // Reinitialize (should work a second time - simulating a restart)
-        DbFixtures::new_with_model_and_args(&rt, args).await?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_first_seen() -> anyhow::Result<()> {
-        let tables: BTreeSet<_> = app_system_tables()
-            .into_iter()
-            .map(|table| table.table_name())
-            .collect();
-        let first_seen: BTreeSet<_> = FIRST_SEEN_TABLE.keys().collect();
-        assert_eq!(tables, first_seen);
-        let max_first_seen = *FIRST_SEEN_TABLE.values().max().unwrap();
-        println!("max_first_seen: {max_first_seen}");
-        assert!(max_first_seen <= DATABASE_VERSION);
-        Ok(())
-    }
-
-    #[test]
-    fn test_first_seen_indexes() -> anyhow::Result<()> {
-        let tables: BTreeSet<_> = app_system_tables()
-            .into_iter()
-            .flat_map(|table| table.indexes())
-            .map(|index| index.name)
-            .collect();
-        let first_seen: BTreeSet<_> = FIRST_SEEN_INDEX.keys().cloned().collect();
-        assert_eq!(tables, first_seen);
-        let max_first_seen = *FIRST_SEEN_INDEX.values().max().unwrap();
-        assert!(max_first_seen <= DATABASE_VERSION);
-        Ok(())
-    }
-
-    /// Easier to put this test in model - so it tests the actual virtual tables
-    #[convex_macro::test_runtime]
-    async fn test_get_document_and_index_storage(rt: TestRuntime) -> anyhow::Result<()> {
-        let args = DbFixturesArgs {
-            tp: Some(Arc::new(TestPersistence::new())),
-            virtual_system_mapping: virtual_system_mapping().clone(),
-            ..Default::default()
-        };
-        let DbFixtures { db, .. } = DbFixtures::new_with_model_and_args(&rt, args.clone()).await?;
-
-        let t1 = "usertable".parse()?;
-        let obj = assert_obj!("name" => "Nipunn" );
-        let mut tx = db.begin_system().await?;
-        let id = TestFacingModel::new(&mut tx)
-            .insert(&t1, obj.clone())
-            .await?;
-        let doc = tx.get(id).await?.unwrap();
-
-        let path = CanonicalizedComponentFunctionPath {
-            component: ComponentPath::root(),
-            udf_path: "scheduler:test_get_document_and_index_storage".parse()?,
-        };
-        let id = SchedulerModel::new(&mut tx, TableNamespace::Global)
-            .schedule(
-                path,
-                ConvexArray::empty(),
-                UnixTimestamp::from_millis(15),
-                ExecutionContext::new_for_test(),
-            )
-            .await?;
-        let scheduled_job_doc = tx.get(id).await?.unwrap();
-        let scheduled_job_metadata_size = scheduled_job_doc.size();
-        let scheduled_job_metadata: ParsedDocument<ScheduledJobMetadata> =
-            scheduled_job_doc.parse()?;
-        let scheduled_job_args = UserFacingModel::new(&mut tx, TableNamespace::Global)
-            .get(scheduled_job_metadata.args_id.unwrap(), None)
-            .await?
-            .unwrap();
-        db.commit(tx).await?;
-
-        let expected_user_usage = TableUsage {
-            document_size: doc.size() as u64,
-            index_size: 0,
-            system_index_size: 2 * doc.size() as u64,
-        };
-        let expected_scheduled_jobs_usage = TableUsage {
-            document_size: scheduled_job_metadata_size as u64,
-            index_size: 0,
-            system_index_size: 5 * scheduled_job_metadata_size as u64,
-        };
-        let expected_scheduled_job_args_usage = TableUsage {
-            document_size: scheduled_job_args.size() as u64,
-            index_size: 0,
-            system_index_size: 2 * scheduled_job_args.size() as u64,
-        };
-        let expected_scheduled_functions_usage = TableUsage {
-            document_size: scheduled_job_metadata_size as u64 + scheduled_job_args.size() as u64,
-            index_size: 0,
-            system_index_size: 5 * scheduled_job_metadata_size as u64
-                + 2 * scheduled_job_args.size() as u64, /* by_id and by_creation_time indexes
-                                                         * defined on both tables + 3 indexes on
-                                                         * _scheduled_jobs table */
-        };
-
-        let snapshot = db.latest_snapshot()?;
-        let TablesUsage {
-            user_tables,
-            system_tables,
-            virtual_tables,
-            orphaned_tables,
-        } = snapshot.get_document_and_index_storage()?;
-        assert_eq!(
-            user_tables,
-            btreemap! {
-                (TableNamespace::Global, t1) => (expected_user_usage, ComponentPath::root())
-            }
-        );
-        assert_eq!(
-            system_tables[&(TableNamespace::Global, "_scheduled_jobs".parse()?)],
-            (expected_scheduled_jobs_usage, ComponentPath::root())
-        );
-        assert_eq!(
-            system_tables[&(TableNamespace::Global, "_scheduled_job_args".parse()?)],
-            (expected_scheduled_job_args_usage, ComponentPath::root())
-        );
-        assert_eq!(
-            virtual_tables[&(TableNamespace::Global, "_scheduled_functions".parse()?)],
-            (expected_scheduled_functions_usage, ComponentPath::root())
-        );
-        assert_eq!(orphaned_tables, btreemap! {});
-        Ok(())
-    }
-}

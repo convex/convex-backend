@@ -95,6 +95,8 @@ export declare const internalAction: ActionBuilder<DataModel, "internal">;
  */
 export declare const httpAction: HttpActionBuilder;
 
+export declare const env: Record<string, string | undefined>;
+
 /**
  * A set of services for use within Convex query functions.
  *

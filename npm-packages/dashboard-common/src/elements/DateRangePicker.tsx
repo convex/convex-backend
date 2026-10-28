@@ -110,7 +110,7 @@ export function DateRangePicker({
       {({ close }) => (
         <div className="flex flex-col gap-4 md:flex-row">
           {shortcuts && (
-            <div className="flex w-[13rem] flex-col gap-2 border-b pb-4 md:border-r md:border-b-0 md:pb-0">
+            <div className="flex w-52 flex-col gap-2 border-b pb-4 md:border-r md:border-b-0 md:pb-0">
               {shortcuts.map((s) => (
                 <Button
                   key={s.label}
@@ -200,7 +200,6 @@ export function useDateFilters(router: NextRouter) {
   const checkAndSetStartDate = React.useCallback(
     async (date: Date) => {
       const start = startOfDay(date);
-      // eslint-disable-next-line no-param-reassign
       router.query.startDate = format(start, DATE_FORMAT);
       await router.replace({
         query: router.query,
@@ -212,7 +211,6 @@ export function useDateFilters(router: NextRouter) {
   const checkAndSetEndDate = React.useCallback(
     async (date: Date) => {
       const end = startOfDay(date);
-      // eslint-disable-next-line no-param-reassign
       router.query.endDate = format(end, DATE_FORMAT);
       await router.replace({
         query: router.query,

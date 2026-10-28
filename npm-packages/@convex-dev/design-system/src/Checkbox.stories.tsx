@@ -7,9 +7,6 @@ const meta = {
   args: {
     onChange: fn(),
   },
-  parameters: {
-    a11y: { test: "todo" },
-  },
 } satisfies Meta<typeof Checkbox>;
 
 export default meta;

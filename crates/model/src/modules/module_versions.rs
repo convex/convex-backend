@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    mem,
     ops::Deref,
     str::FromStr,
     sync::Arc,
@@ -17,8 +16,7 @@ use common::{
     },
 };
 use errors::ErrorMetadata;
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
+use packed_value::StringBuffer;
 use serde::{
     Deserialize,
     Serialize,
@@ -42,30 +40,17 @@ use crate::cron_jobs::types::{
     SerializedCronSpec,
 };
 
-/// System-assigned version number for modules.
-pub type ModuleVersion = i64;
-
 /// User-specified JavaScript source code for a module.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleSource {
     source: Arc<str>,
-    is_ascii: bool,
 }
 
 impl ModuleSource {
     pub fn new(source: &str) -> Self {
         Self {
-            is_ascii: source.is_ascii(),
             source: source.into(),
         }
-    }
-
-    pub fn is_ascii(&self) -> bool {
-        self.is_ascii
-    }
-
-    pub fn source_arc(&self) -> &Arc<str> {
-        &self.source
     }
 }
 
@@ -90,7 +75,7 @@ impl From<&str> for ModuleSource {
 }
 
 /// Bundler-generated source map for a `ModuleSource`.
-pub type SourceMap = String;
+pub type SourceMap = Arc<str>;
 
 #[derive(Debug, Clone)]
 pub struct FullModuleSource {
@@ -105,27 +90,18 @@ impl SizedValue for FullModuleSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AnalyzedModule {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "value::heap_size::of(prop::collection::vec(any::<AnalyzedFunction>(), \
-                        0..4))"
-        )
-    )]
     pub functions: WithHeapSize<Vec<AnalyzedFunction>>,
     pub http_routes: Option<AnalyzedHttpRoutes>,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::option::of(value::heap_size::of(prop::collection::btree_map(any::<CronIdentifier>(), \
-                        any::<CronSpec>(), 0..4)))"
-        )
-    )]
     pub cron_specs: Option<WithHeapSize<BTreeMap<CronIdentifier, CronSpec>>>,
     /// Index of the module's original source in the source map.
     pub source_index: Option<u32>,
+    /// Whether to keep around the JS context after running a function from this
+    /// module. If true, state will non-deterministically leak from UDF to UDF
+    /// (e.g. on the global object or module attributes).
+    ///
+    /// This is experimental for now and the reuse isn't guaranteed to happen.
+    pub reuse_context: bool,
 }
 
 impl HeapSize for AnalyzedModule {
@@ -144,6 +120,9 @@ pub struct SerializedAnalyzedModule {
     http_routes: Option<Vec<SerializedAnalyzedHttpRoute>>,
     cron_specs: Option<Vec<SerializedNamedCronSpec>>,
     source_mapped: Option<SerializedMappedModule>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    reuse_context: bool,
 }
 
 impl TryFrom<AnalyzedModule> for SerializedAnalyzedModule {
@@ -170,6 +149,7 @@ impl TryFrom<AnalyzedModule> for SerializedAnalyzedModule {
                 .map(|specs| specs.into_iter().map(TryFrom::try_from).try_collect())
                 .transpose()?,
             source_mapped,
+            reuse_context: m.reuse_context,
         })
     }
 }
@@ -198,6 +178,7 @@ impl TryFrom<SerializedAnalyzedModule> for AnalyzedModule {
             source_index: m
                 .source_mapped
                 .and_then(|mapped_module| mapped_module.source_index),
+            reuse_context: m.reuse_context,
         })
     }
 }
@@ -229,7 +210,6 @@ impl TryFrom<SerializedNamedCronSpec> for (CronIdentifier, CronSpec) {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Visibility {
     Public,
@@ -237,7 +217,6 @@ pub enum Visibility {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AnalyzedSourcePosition {
     pub path: CanonicalizedModulePath,
     pub start_lineno: u32,
@@ -294,7 +273,6 @@ pub fn invalid_function_name_error(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AnalyzedFunction {
     pub name: FunctionName,
     pub pos: Option<AnalyzedSourcePosition>,
@@ -305,9 +283,11 @@ pub struct AnalyzedFunction {
     // case of reading ModuleMetadata without needing to validate the function.
 
     // JSON-serialized ArgsValidator
-    pub args_str: Option<String>,
+    // Note that we use `StringBuffer` so that this can be a refcounted slice
+    // into the `PackedDocument` stored in the `ModulesTable` memory index
+    pub args_str: Option<StringBuffer>,
     // JSON-serialized ReturnsValidator
-    pub returns_str: Option<String>,
+    pub returns_str: Option<StringBuffer>,
 }
 
 impl AnalyzedFunction {
@@ -326,8 +306,8 @@ impl AnalyzedFunction {
             pos,
             udf_type,
             visibility,
-            args_str: Some(args_json),
-            returns_str: Some(returns_json),
+            args_str: Some(StringBuffer::new(args_json)),
+            returns_str: Some(StringBuffer::new(returns_json)),
         })
     }
 
@@ -348,11 +328,10 @@ impl AnalyzedFunction {
 
 impl HeapSize for AnalyzedFunction {
     fn heap_size(&self) -> usize {
-        // Undercount ArgsValidator for simplicity sake.
         self.name.heap_size()
-            + mem::size_of::<UdfType>()
-            + mem::size_of::<Visibility>()
-            + mem::size_of::<ArgsValidator>()
+            + self.pos.heap_size()
+            + self.args_str.heap_size()
+            + self.returns_str.heap_size()
     }
 }
 
@@ -363,8 +342,8 @@ pub struct SerializedAnalyzedFunction {
     pos: Option<SerializedAnalyzedSourcePosition>,
     udf_type: String,
     visibility: Option<Visibility>,
-    args: Option<String>,
-    returns: Option<String>,
+    args: Option<StringBuffer>,
+    returns: Option<StringBuffer>,
 }
 
 impl TryFrom<AnalyzedFunction> for SerializedAnalyzedFunction {
@@ -439,7 +418,6 @@ impl TryFrom<SerializedHttpActionRoute> for HttpActionRoute {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AnalyzedHttpRoute {
     pub route: HttpActionRoute,
     pub pos: Option<AnalyzedSourcePosition>,
@@ -481,15 +459,7 @@ impl TryFrom<SerializedAnalyzedHttpRoute> for AnalyzedHttpRoute {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct AnalyzedHttpRoutes {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "value::heap_size::of(prop::collection::vec(any::<AnalyzedHttpRoute>(), \
-                        0..4))"
-        )
-    )]
     routes: WithHeapSize<Vec<AnalyzedHttpRoute>>,
 }
 
@@ -568,7 +538,7 @@ impl Deref for AnalyzedHttpRoutes {
 // TODO: consider denormalizing SerializedMappedModule into
 // SerializedAnalyzedModule and  instead just include source information. This
 // requires a decent migration from Dashboard  schema.
-//  See https://github.com/get-convex/convex/pull/14382/files#r1252372646 for further discussion.
+//  See https://github.com/convex/convex/pull/14382/files#r1252372646 for further discussion.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SerializedMappedModule {
@@ -602,32 +572,5 @@ impl TryFrom<AnalyzedModule> for SerializedMappedModule {
                 .map(|specs| specs.into_iter().map(TryFrom::try_from).try_collect())
                 .transpose()?,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use value::{
-        obj,
-        ConvexObject,
-    };
-
-    use super::AnalyzedFunction;
-    use crate::modules::function_validators::ArgsValidator;
-
-    #[test]
-    fn test_analyzed_function_backwards_compatibility() -> anyhow::Result<()> {
-        // Old metadata won't have `visibility` or `args`
-        let metadata: ConvexObject = obj!(
-            "name" =>  "myFunction",
-            "lineno" => 1,
-            "udfType" => "Query"
-        )?;
-        let function = AnalyzedFunction::try_from(metadata)?;
-
-        // Should parse as `visibility: None`, and `args: Unvalidated`.
-        assert_eq!(function.visibility, None);
-        assert_eq!(function.args()?, ArgsValidator::Unvalidated);
-        Ok(())
     }
 }

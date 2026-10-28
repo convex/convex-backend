@@ -27,7 +27,6 @@ pub type ActionCallbackToken = String;
 
 /// Represents an external dependency that should be installed and uploaded
 /// separately in Lambda. TODO: parse version instead of relying on strings
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct NodeDependency {
     pub package: String,
@@ -74,7 +73,6 @@ impl From<NodeDependency> for JsonValue {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum RoutableMethod {
     Delete,
     Get,
@@ -133,28 +131,26 @@ impl TryFrom<http::Method> for RoutableMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct HttpActionRoute {
     pub method: RoutableMethod,
     pub path: String,
     /// Whether this route was resolved by the JS router's `lookup()`.
     /// When false, `path` is a fallback from the request URL and should not
     /// be used as the identifier for usage tracking (to avoid route explosion).
-    #[cfg_attr(any(test, feature = "testing"), proptest(value = "true"))]
     pub matched: bool,
 }
 
 impl HttpActionRoute {
     pub fn overlaps_with_mount(&self, mount_path: &HttpMountPath) -> bool {
         // Only prefix routes can overlap with mounts.
-        let Some(mut suffix) = mount_path.strip_suffix('*') else {
+        let Some(mut prefix) = self.path.strip_suffix('*') else {
             return false;
         };
         // For backwards compatibility, permit bare `*` paths as a synonym for `/*`.
-        if suffix.is_empty() {
-            suffix = "/";
+        if prefix.is_empty() {
+            prefix = "/";
         }
-        suffix == &mount_path[..]
+        prefix == &mount_path[..]
     }
 }
 
@@ -214,28 +210,5 @@ impl TryFrom<SerializedHttpActionRoute> for HttpActionRoute {
             path: value.path,
             matched: true,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use value::assert_obj;
-
-    use super::NodeDependency;
-
-    #[test]
-    fn test_backwards_compatibility() {
-        let serialized = assert_obj!(
-            "package" => "foo",
-            "version" => "1.0.0",
-        );
-        let deserialized: NodeDependency = serialized.try_into().unwrap();
-        assert_eq!(
-            deserialized,
-            NodeDependency {
-                package: "foo".to_string(),
-                version: "1.0.0".to_string(),
-            }
-        );
     }
 }

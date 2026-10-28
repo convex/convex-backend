@@ -42,7 +42,7 @@ HTTP actions are exposed at `https://<your deployment name>.convex.site` (e.g.
 `https://happy-animal-123.convex.site`).
 
 **Example:**
-[HTTP Actions](https://github.com/get-convex/convex-demos/tree/main/http)
+[HTTP Actions](https://github.com/convex/convex-demos/tree/main/http)
 
 ## Defining HTTP actions
 
@@ -50,11 +50,7 @@ HTTP action handlers are defined using the
 [`httpAction`](/generated-api/server#httpaction) constructor, similar to the
 `action` constructor for normal actions:
 
-<TSAndJSSnippet
-  title="convex/myHttpActions.ts"
-  sourceTS={Constructor}
-  sourceJS={Constructor}
-/>
+<Snippet title="convex/myHttpActions.ts" source={Constructor} />
 
 The first argument to the `handler` is an
 [`ActionCtx`](/api/interfaces/server.GenericActionCtx) object, which provides
@@ -70,25 +66,16 @@ incoming Request is left entirely to you.
 
 Here's an example:
 
-<TSAndJSSnippet
-  title="convex/messages.ts"
-  sourceTS={httpFunction}
-  sourceJS={httpFunction}
-/>
+<Snippet title="convex/messages.ts" source={httpFunction} />
 
-<>
-  {/* Wrapped in fragment because Prettier pushes the JSDialectFileName on new line */}
-  To expose the HTTP Action, export an instance of
-  [`HttpRouter`](/api/classes/server.HttpRouter) from the
-  <JSDialectFileName name="convex/http.ts" /> file. To create the instance call
-  the `httpRouter` function. On the `HttpRouter` you can expose routes using the
-  `route` method:
-</>
+To expose the HTTP Action, export an instance of
+[`HttpRouter`](/api/classes/server.HttpRouter) from the `convex/http.ts` file.
+To create the instance call the `httpRouter` function. On the `HttpRouter` you
+can expose routes using the `route` method:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/http.ts"
-  sourceTS={http}
-  sourceJS={http}
+  source={http}
   snippet="router"
   highlightPatterns={["handler: postMessage"]}
 />
@@ -97,16 +84,36 @@ You can now call this action via HTTP and interact with data stored in the
 Convex Database. HTTP actions are exposed on
 `https://<your deployment name>.convex.site`.
 
-```bash
+```sh
 export DEPLOYMENT_NAME=... # example: "happy-animal-123"
 curl -d '{ "author": "User 123", "body": "Hello world" }' \
     -H 'content-type: application/json' "https://$DEPLOYMENT_NAME.convex.site/postMessage"
 ```
 
 Like other Convex functions, you can view your HTTP actions in the
-[Functions view](/dashboard/deployments/functions.md) of
+[Functions view](/dashboard/deployments/functions.mdx) of
 [your dashboard](https://dashboard.convex.dev/) and view logs produced by them
-in the [Logs view](/dashboard/deployments/logs.md).
+in the [Logs view](/dashboard/deployments/logs.mdx).
+
+## Routing with `httpPrefix`
+
+By default, all routes defined in `convex/http.ts` are served at the root of
+your deployment's `.convex.site` domain. You can use the `httpPrefix` option in
+`convex/convex.config.ts` to namespace your app's routes under a path prefix:
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+
+const app = defineApp({ httpPrefix: "/app/" });
+export default app;
+```
+
+With this configuration, a route defined for `/hello` in `convex/http.ts` will
+be accessible at `/app/hello`.
+
+[Components](/components/overview.mdx) can also define their own HTTP routes
+that are mounted under a prefix you choose. See
+[Using Components: HTTP Routes](/components/using.mdx#http-routes) for details.
 
 ## Limits
 
@@ -119,7 +126,10 @@ side-effects and will not be automatically retried by Convex when errors occur.
 It is a responsibility of the caller to handle errors and retry the request if
 appropriate.
 
-Request and response size is limited to 20MB.
+There is no specific limit on request size, except `multipart/form-data` bodies,
+which are limited to 20 MiB. Response size is limited to 100 MiB. HTTP actions
+in the Convex runtime have 64 MiB of memory, so to return a response larger than
+that, stream the body with a `ReadableStream` instead of building it in memory.
 
 HTTP actions support request and response body types of `.text()`, `.json()`,
 `.blob()`, and `.arrayBuffer()`.
@@ -127,7 +137,7 @@ HTTP actions support request and response body types of `.text()`, `.json()`,
 Note that you don't need to define an HTTP action to call your queries,
 mutations and actions over HTTP if you control the caller, since you can use use
 the JavaScript [`ConvexHttpClient`](/api/classes/browser.ConvexHttpClient) or
-the [Python client](/client/python.md) to call these functions directly.
+the [Python client](/client/python.mdx) to call these functions directly.
 
 ## Debugging
 
@@ -152,7 +162,7 @@ Make sure this is the URL that ends in **`.convex.site`**, and not
 Run a `curl` command to hit one of your defined endpoints, potentially defining
 a new endpoint specifically for testing
 
-```
+```sh
 curl -X GET https://<deployment name>.convex.site/myEndpoint
 ```
 
@@ -200,29 +210,27 @@ on the use case. [This site](https://httptoolkit.com/will-it-cors/) provides an
 interactive walkthrough for what CORS headers to add. Here's an example of
 adding CORS headers to a Convex HTTP action:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/http.ts"
-  sourceTS={httpStorage}
-  sourceJS={httpStorage}
+  source={httpStorage}
   snippet={["sendImageStore"]}
   highlightPatterns={["headers: new Headers", "        ", "     \\}\\)"]}
 />
 
 Here's an example of handling a pre-flight `OPTIONS` request:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/http.ts"
-  sourceTS={httpStorage}
-  sourceJS={httpStorage}
+  source={httpStorage}
   snippet="preflight"
   highlightPatterns={["headers: new Headers", "          ", "       \\}\\)"]}
 />
 
 ### Authentication
 
-You can leverage Convex's built-in [authentication](/auth.mdx) integration and
-access a user identity from
+You can leverage Convex's built-in [authentication](/auth/overview.mdx)
+integration and access a user identity from
 [`ctx.auth.getUserIdentity()`](/api/interfaces/server.Auth#getuseridentity). To
 do this call your endpoint with an `Authorization` header including a JWT token:
 
-<TSAndJSSnippet sourceTS={Fetch} sourceJS={Fetch} title="myPage.ts" />
+<Snippet source={Fetch} title="myPage.ts" />

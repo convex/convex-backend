@@ -7,9 +7,10 @@ import { WaitForDeploymentApi } from "@common/lib/deploymentContext";
 import { useDeployments } from "api/deployments";
 import { useTeamMembers } from "api/teams";
 import { useDeleteProject } from "api/projects";
-import { useQuery } from "convex/react";
 import { ProjectDetails, TeamResponse } from "generatedApi";
 import udfs from "@common/udfs";
+import { permissionDenial, useSystemQuery } from "@common/lib/useSystemQuery";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
 import { useState } from "react";
 import { DeploymentInfoProvider } from "providers/DeploymentInfoProvider";
 import { MaybeDeploymentApiProvider } from "providers/MaybeDeploymentApiProvider";
@@ -45,7 +46,14 @@ export function DeleteProjectModal({
   );
 
   return deployments && defaultProdDeployment ? (
-    <DeploymentInfoProvider deploymentOverride={defaultProdDeployment.name}>
+    <DeploymentInfoProvider
+      deploymentOverride={defaultProdDeployment.name}
+      deploymentUrlOverride={
+        defaultProdDeployment.kind === "cloud"
+          ? defaultProdDeployment.deploymentUrl
+          : undefined
+      }
+    >
       <MaybeDeploymentApiProvider
         deploymentOverride={defaultProdDeployment.name}
       >
@@ -63,11 +71,7 @@ export function DeleteProjectModal({
     <DeleteProjectDialog
       onClose={onClose}
       onConfirm={handleDelete}
-      validationText={
-        project.isDemo
-          ? undefined
-          : `Delete ${project.name} and data in all deployments, including Production`
-      }
+      validationText={`Delete ${project.name} and data in all deployments, including Production`}
     >
       <DeleteProjectModalContent team={team} />
     </DeleteProjectDialog>
@@ -85,16 +89,28 @@ function DeleteProjectModalContentWithDefaultProd({
   onClose: () => void;
   handleDelete: () => Promise<void>;
 }) {
-  const numFiles = useQuery(udfs.fileStorageV2.numFiles, {
+  const files = useSystemQuery(udfs.fileStorageV2.numFiles, {
     componentId: null,
   });
-  const numDocuments = useQuery(udfs.tableSize.sizeOfAllTables, {
+  const documents = useSystemQuery(udfs.tableSize.sizeOfAllTables, {
     componentId: null,
   });
 
-  const doneLoading = numFiles !== undefined && numDocuments !== undefined;
+  const doneLoading =
+    files.status !== "pending" && documents.status !== "pending";
+  // Counts are unavailable to a member without `deployment:data:view`, so ask
+  // for the acknowledgement rather than assuming the project is empty.
   const showAdditionalConfirmation =
-    !doneLoading || numFiles > 0 || numDocuments > 0;
+    files.status !== "success" ||
+    documents.status !== "success" ||
+    files.data > 0 ||
+    documents.data > 0;
+  // A dropped connection or a backend error leaves the counts unavailable
+  // too, so only blame permissions when that's what actually happened.
+  const countsDenied =
+    (files.status === "error" && permissionDenial(files.error) !== null) ||
+    (documents.status === "error" &&
+      permissionDenial(documents.error) !== null);
 
   const [acceptedConsequences, setAcceptedConsequences] = useState(false);
 
@@ -120,9 +136,10 @@ function DeleteProjectModalContentWithDefaultProd({
             additionalBody={
               showAdditionalConfirmation && (
                 <Callout className="flex flex-col gap-2">
-                  <div className="flex items-start gap-2">
-                    <ExclamationTriangleIcon className="mt-1" />
-                    <div className="flex flex-col gap-1">
+                  {files.status === "success" &&
+                  documents.status === "success" ? (
+                    <div className="flex items-start gap-2">
+                      <ExclamationTriangleIcon className="mt-1" />
                       <div className="flex flex-col gap-1">
                         <span>
                           This project contains data in{" "}
@@ -131,20 +148,30 @@ function DeleteProjectModalContentWithDefaultProd({
                         <ul className="ml-4 flex list-disc flex-col gap-1">
                           <li>
                             <span className="font-semibold">
-                              {numDocuments.toLocaleString()} Documents
+                              {documents.data.toLocaleString()} Documents
                             </span>{" "}
                             stored across all tables.
                           </li>
                           <li>
                             <span className="font-semibold">
-                              {numFiles.toLocaleString()} Files
+                              {files.data.toLocaleString()} Files
                             </span>{" "}
                             stored.
                           </li>
                         </ul>
                       </div>
                     </div>
-                  </div>
+                  ) : countsDenied ? (
+                    <NoPermissionMessage
+                      message="You do not have permission to read this project's Production data, so its contents can't be listed here."
+                      missingPermission="deployment:data:view"
+                    />
+                  ) : (
+                    <Callout variant="error">
+                      This project's Production data could not be loaded, so its
+                      contents can't be listed here.
+                    </Callout>
+                  )}
                   <label className="flex gap-2 text-sm">
                     <Checkbox
                       className="mt-0.5"

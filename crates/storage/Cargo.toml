@@ -5,10 +5,6 @@ authors = ["Convex, Inc. <no-reply@convex.dev>"]
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["runtime"]
-development = ["runtime"]
-
 [lib]
 doctest = false
 
@@ -30,6 +26,7 @@ pb = { workspace = true }
 runtime = { workspace = true, optional = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
@@ -39,7 +36,7 @@ value = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
+convex_macro = { workspace = true, features = ["testing"] }
 parking_lot = { workspace = true }
 runtime = { workspace = true, features = ["testing"] }
 value = { workspace = true, features = ["testing"] }

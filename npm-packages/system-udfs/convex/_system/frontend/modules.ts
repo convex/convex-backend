@@ -1,4 +1,5 @@
 import {
+  AnalyzedModuleFunction,
   CronSpec,
   Module,
   ResolvedSourcePos,
@@ -11,7 +12,7 @@ import { DEFAULT_ARGS_VALIDATOR } from "../cli/modules";
 import { currentSystemUdfInComponent } from "convex/server";
 import { DatabaseReader } from "../../_generated/server";
 
-export const listForAllComponents = queryPrivateSystem({
+export const listForAllComponents = queryPrivateSystem("ViewData")({
   args: {},
   handler: async (ctx): Promise<[string | null, [string, Module][]][]> => {
     // NOTE this UDF calls itself recursively in each component with
@@ -45,12 +46,46 @@ export const listForAllComponents = queryPrivateSystem({
  * Note that this does not include system modules because they are not stored
  * in the `_modules` table.
  */
-export const list = queryPrivateSystem({
+export const list = queryPrivateSystem("ViewData")({
   args: {
     componentId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async ({ db }): Promise<[string, Module][]> => {
     return await listHandler(db);
+  },
+});
+
+export const argsValidator = queryPrivateSystem("ViewData")({
+  args: {
+    componentId: v.optional(v.union(v.string(), v.null())),
+    // The function display name e.g. myFunctions/messages:send
+    function: v.string(),
+  },
+  handler: async (
+    { db },
+    { function: functionName },
+  ): Promise<string | null> => {
+    const [path, name] = functionName.split(":");
+    const module = await db
+      .query("_modules")
+      .withIndex("by_path", (q) => q.eq("path", path + ".js"))
+      .unique();
+    if (!module) {
+      return null;
+    }
+    const analyzeResult = module.analyzeResult;
+    if (!analyzeResult) {
+      return null;
+    }
+
+    const analyzedFunction = analyzeResult.functions.find(
+      (f) => f.name === (name ?? "default"),
+    );
+    if (!analyzedFunction) {
+      return null;
+    }
+
+    return analyzedFunction.args ?? DEFAULT_ARGS_VALIDATOR;
   },
 });
 
@@ -107,7 +142,6 @@ function processHttpRoute(f: {
     lineno: lineno ? Number(lineno) : undefined,
     udfType: "HttpAction",
     visibility: { kind: "public" },
-    argsValidator: f.args || DEFAULT_ARGS_VALIDATOR,
   } as const;
 }
 
@@ -118,12 +152,12 @@ function processFunction(f: {
   udfType: UdfType;
   visibility?: Visibility | null;
   args?: string;
-}) {
+}): AnalyzedModuleFunction {
   const lineno = f.pos?.start_lineno ?? f.lineno;
   return {
-    ...f,
+    name: f.name,
     lineno: lineno ? Number(lineno) : undefined,
+    udfType: f.udfType,
     visibility: f.visibility ?? { kind: "public" },
-    argsValidator: f.args || DEFAULT_ARGS_VALIDATOR,
   };
 }

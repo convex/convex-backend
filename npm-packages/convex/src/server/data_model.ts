@@ -1,4 +1,5 @@
 import { Value } from "../values/index.js";
+import type { SystemIndexes } from "./system_fields.js";
 
 // Document Types  /////////////////////////////////////////////////////////////
 
@@ -262,7 +263,7 @@ export type AnyDataModel = {
   [tableName: string]: {
     document: any;
     fieldPaths: GenericFieldPaths;
-    indexes: {};
+    indexes: SystemIndexes;
     searchIndexes: {};
     vectorIndexes: {};
   };

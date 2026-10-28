@@ -223,19 +223,20 @@ impl IndexRange {
                 tablet_index_name,
                 self.indexed_fields.clone(),
                 used_interval,
+                &tx.limits,
             )?;
 
             // Database bandwidth for index reads
             let component_path = tx.must_component_path(ComponentId::from(self.namespace))?;
             tx.usage_tracker.track_database_egress(
                 component_path.clone(),
-                self.printable_index_name.table().to_string(),
+                self.printable_index_name.table(),
                 index_bytes as u64,
                 self.printable_index_name.is_system_owned(),
             );
             tx.usage_tracker.track_database_egress_v2(
                 component_path,
-                self.printable_index_name.table().to_string(),
+                self.printable_index_name.table(),
                 index_bytes as u64,
                 self.printable_index_name.is_system_owned(),
             );
@@ -247,6 +248,7 @@ impl IndexRange {
                 tablet_index_name,
                 self.indexed_fields.clone(),
                 self.initial_unfetched_interval.clone(),
+                &tx.limits,
             )?;
             return Ok(QueryStreamNext::Ready(None));
         }
@@ -255,6 +257,7 @@ impl IndexRange {
                 tablet_index_name,
                 self.indexed_fields.clone(),
                 self.initial_unfetched_interval.clone(),
+                &tx.limits,
             )?;
             // We're out of results. If we have an end cursor then we must
             // have reached it. Otherwise we're at the end of the entire

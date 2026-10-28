@@ -1,4 +1,5 @@
 import { DotsVerticalIcon } from "@radix-ui/react-icons";
+import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
 import { JSONValue, jsonToConvex } from "convex/values";
 import Link from "next/link";
 import { memo, useContext, useState } from "react";
@@ -6,7 +7,7 @@ import { ScheduledJob } from "system-udfs/convex/_system/frontend/common";
 import { areEqual } from "react-window";
 import { useCancelJob } from "@common/features/schedules/lib/api";
 import { useNents } from "@common/lib/useNents";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { PermissionsContext } from "@common/lib/deploymentContext";
 import { useFunctionUrl } from "@common/lib/deploymentApi";
 import { useCopy } from "@common/lib/useCopy";
 import { DetailPanel } from "@common/elements/DetailPanel";
@@ -71,15 +72,8 @@ function JobItemImpl({
   const [showArgs, setShowArgs] = useState(false);
   const { selectedNent } = useNents();
   const cancelJob = useCancelJob();
-  const { useCurrentDeployment, useHasProjectAdminPermissions } = useContext(
-    DeploymentInfoContext,
-  );
-  const deployment = useCurrentDeployment();
-  const hasAdminPermissions = useHasProjectAdminPermissions(
-    deployment?.projectId,
-  );
-  const canCancelJobs =
-    deployment?.deploymentType !== "prod" || hasAdminPermissions;
+  const { useIsOperationAllowed } = useContext(PermissionsContext);
+  const canCancelJobs = useIsOperationAllowed("WriteData");
 
   if (nextTs === null) {
     throw new Error("Could not find timestamp to run scheduled job at");
@@ -98,7 +92,11 @@ function JobItemImpl({
         (udfArgs ? (
           <ShowArgsPanelWithArgs udfArgs={udfArgs} setShowArgs={setShowArgs} />
         ) : argsId ? (
-          <ShowArgsPanel argsId={argsId} setShowArgs={setShowArgs} />
+          <ShowArgsPanel
+            argsId={argsId}
+            setShowArgs={setShowArgs}
+            componentId={selectedNent?.id ?? null}
+          />
         ) : null)}
       <div className="flex items-center gap-4 p-2 text-sm">
         {/* eslint-disable-next-line react/forbid-elements */}
@@ -140,8 +138,12 @@ function JobItemImpl({
               action={() => setShowDeleteModal(true)}
               disabled={currentlyRunning || !canCancelJobs}
               tip={
-                !canCancelJobs &&
-                "You do not have permission to cancel scheduled runs in production."
+                !canCancelJobs && (
+                  <PermissionDeniedTip
+                    message="You do not have permission to cancel scheduled runs in this deployment."
+                    action="deployment:data:write"
+                  />
+                )
               }
               variant="danger"
             >
@@ -170,16 +172,22 @@ function JobItemImpl({
 function ShowArgsPanel({
   argsId,
   setShowArgs,
+  componentId,
 }: {
   argsId: Id<"_scheduled_job_args">;
   setShowArgs: React.Dispatch<React.SetStateAction<boolean>>;
+  componentId: string | null;
 }) {
-  const args = useQuery(udfs.scheduler.getArgs, { argsId });
+  const args = useQuery(udfs.scheduler.getArgs, { argsId, componentId });
   const udfArgs = args?.args;
   return udfArgs ? (
     <ShowArgsPanelWithArgs udfArgs={udfArgs} setShowArgs={setShowArgs} />
   ) : (
-    <Loading />
+    <DetailPanel
+      onClose={() => setShowArgs(false)}
+      header="Arguments for scheduled function"
+      content={undefined}
+    />
   );
 }
 
@@ -191,7 +199,7 @@ function ShowArgsPanelWithArgs({
   setShowArgs: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
   const udfArgsParsed: JSONValue[] = JSON.parse(
-    Buffer.from(udfArgs).toString("utf8"),
+    new TextDecoder().decode(udfArgs),
   );
   return (
     <DetailPanel

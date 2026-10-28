@@ -14,9 +14,6 @@ use shape_inference::{
     ShapeConfig,
 };
 use value::ConvexValue;
-#[cfg(feature = "testing")]
-use value::IdentifierFieldName;
-
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum SmallConfig {}
 
@@ -28,15 +25,6 @@ impl ShapeConfig for SmallConfig {
         ProdConfig::is_valid_string_literal(s)
     }
 
-    #[cfg(feature = "testing")]
-    fn string_literal_strategy() -> proptest::strategy::BoxedStrategy<String> {
-        ProdConfig::string_literal_strategy()
-    }
-
-    #[cfg(feature = "testing")]
-    fn object_field_strategy() -> proptest::strategy::BoxedStrategy<IdentifierFieldName> {
-        ProdConfig::object_field_strategy()
-    }
 }
 
 fn repl<C: ShapeConfig>() -> anyhow::Result<()> {

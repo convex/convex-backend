@@ -7,8 +7,6 @@ use common::{
     types::Timestamp,
     RequestId,
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
 use serde::{
     Deserialize,
     Serialize,
@@ -68,7 +66,6 @@ impl MatchesScheduledJobMetadata for ScheduledJob {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 /// Corresponds to a document in the `_scheduled_jobs` table.
 pub struct ScheduledJobMetadata {
     /// This ScheduledJob lives the queue / _scheduled_jobs table of the
@@ -78,13 +75,6 @@ pub struct ScheduledJobMetadata {
     /// We no longer write this field in favor of storing arguments in the
     /// `_scheduled_job_args` table, but it is not safe to remove it because we
     /// are not migrating existing scheduled job documents.
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop_oneof![Just(None),\
-                             proptest::arbitrary::any_with::<ConvexArray>((0..4).into()).\
-                             prop_map(args_to_bytes).prop_filter_map(\"invalid json\", |b| \
-                             b.ok()).prop_map(Some)]")
-    )]
     pub udf_args_bytes: Option<ByteBuf>,
 
     /// ID for the document in the `_scheduled_jobs_args` table in the same
@@ -226,10 +216,11 @@ impl TryFrom<SerializedScheduledJob> for ScheduledJobMetadata {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduledJobAttempts {
     pub system_errors: u32,
+    // Deprecated field that's no longer used for tracking OCCs since we changed to retry
+    // indefinitely on OCCs
     pub occ_errors: u32,
 }
 
@@ -243,18 +234,14 @@ impl ScheduledJobAttempts {
 /// InProgress state. Mutations jump straight from Pending to one of the
 /// completion states.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ScheduledJobState {
     /// Job has not started yet.
     Pending,
     /// Job has started running but is not completed yet. This state only
     /// applies to actions, and is used to make actions execute at most once.
-    ///
-    /// TODO: remove `None` case for scheduled jobs that started before we
-    /// started recording execution id.
     InProgress {
-        request_id: Option<RequestId>,
-        execution_id: Option<ExecutionId>,
+        request_id: RequestId,
+        execution_id: ExecutionId,
     },
 
     /// Completion states
@@ -274,8 +261,8 @@ pub enum ScheduledJobState {
 pub enum SerializedScheduledJobState {
     Pending,
     InProgress {
-        request_id: Option<RequestId>,
-        execution_id: Option<ExecutionId>,
+        request_id: RequestId,
+        execution_id: ExecutionId,
     },
     Success,
     Failed {
@@ -338,15 +325,7 @@ mod state {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct ScheduledJobArgs {
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "proptest::arbitrary::any_with::<ConvexArray>((0..4).into()).\
-                        prop_map(args_to_bytes).prop_filter_map(\"invalid json\", |b| b.ok())"
-        )
-    )]
     pub args: ByteBuf,
 }
 

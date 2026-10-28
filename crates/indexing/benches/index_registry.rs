@@ -14,7 +14,6 @@ use common::{
     testing::TestIdGenerator,
     types::{
         GenericIndexName,
-        PersistenceVersion,
         Timestamp,
     },
 };
@@ -69,7 +68,6 @@ fn index_registry_bootstrap(bencher: divan::Bencher, num_indexes: usize) {
         IndexRegistry::bootstrap(
             &id_generator,
             index_documents.values().map(|(_, d)| d.clone()),
-            PersistenceVersion::default(),
         )
         .unwrap();
     });

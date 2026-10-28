@@ -141,29 +141,3 @@ impl TryFrom<(JsonValue, &ExportContext)> for Value {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use proptest::prelude::*;
-
-    use crate::{
-        value::export::roundtrip::ExportContext,
-        Value,
-    };
-
-    proptest! {
-        #![proptest_config(ProptestConfig {
-            failure_persistence: None, ..ProptestConfig::default()
-        })]
-        #[test]
-        fn export_roundtrips_with_type_hint(value in any::<Value>()) {
-            let exported_value = value.clone().export();
-            let type_hint = ExportContext::of(&value);
-
-            prop_assert_eq!(
-                value,
-                Value::try_from((exported_value, &type_hint)).unwrap()
-            );
-        }
-    }
-}

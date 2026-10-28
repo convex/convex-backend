@@ -4,13 +4,21 @@ use std::{
         BTreeSet,
     },
     fmt::Display,
+    future::Future,
     num::NonZeroU32,
     sync::Arc,
+    time::Duration,
 };
 
+use anyhow::Context;
 use common::{
     self,
     bootstrap_model::index::database_index::IndexedFields,
+    errors::{
+        is_db_deadlock_error,
+        is_transient_db_error,
+    },
+    fmt::format_read_write_balance,
     knobs::{
         INDEX_BACKFILL_CHUNK_RATE,
         INDEX_BACKFILL_CHUNK_SIZE,
@@ -19,7 +27,7 @@ use common::{
         INDEX_BACKFILL_WORKERS,
     },
     persistence::{
-        ConflictStrategy,
+        IndexBackfillEntry,
         LatestDocument,
         Persistence,
         PersistenceIndexEntry,
@@ -33,6 +41,14 @@ use common::{
         RevisionPair,
     },
     query::Order,
+    read_write_balance::{
+        ReadWriteBalance,
+        ReadWriteReporter,
+    },
+    retry::{
+        retry_with_backoff,
+        RetryConfig,
+    },
     runtime::{
         new_rate_limiter,
         try_join,
@@ -42,9 +58,11 @@ use common::{
     types::{
         DatabaseIndexUpdate,
         IndexId,
+        IndexRef,
         RepeatableTimestamp,
         TabletIndexName,
         Timestamp,
+        WriteTimestamp,
     },
     value::TabletId,
 };
@@ -71,12 +89,23 @@ use value::{
 };
 
 use crate::{
-    retention::LeaderRetentionWorkers,
+    retention::{
+        IndexRetentionSource,
+        LeaderRetentionWorkers,
+    },
     TableIterator,
 };
 
 pub const PERFORM_BACKFILL_LABEL: &str = "perform_backfill";
 pub const UPDATE_BACKFILL_PROGRESS_LABEL: &str = "update_backfill_progress";
+
+pub enum IndexRateLimit {
+    /// Apply the default quota (`INDEX_BACKFILL_CHUNK_RATE *
+    /// INDEX_BACKFILL_CHUNK_SIZE`).
+    Default,
+    /// No rate limit — use for migrations where maximum throughput is needed.
+    Unlimited,
+}
 
 #[derive(Clone)]
 pub enum IndexSelector {
@@ -111,7 +140,7 @@ impl IndexSelector {
     fn filter_index_update(&self, index_update: &DatabaseIndexUpdate) -> bool {
         match self {
             Self::All(_) => true,
-            Self::ManyIndexes { indexes, .. } => indexes.contains_key(&index_update.index_id),
+            Self::ManyIndexes { indexes, .. } => indexes.contains_key(&index_update.index.id()),
         }
     }
 
@@ -131,7 +160,7 @@ impl IndexSelector {
             Self::All(index_registry) => index_registry
                 .all_database_indexes()
                 .into_iter()
-                .map(|doc| doc.id().internal_id())
+                .map(|doc| doc.id().internal_id().into())
                 .collect(),
             Self::ManyIndexes { indexes, .. } => indexes.keys().copied().collect(),
         };
@@ -146,6 +175,16 @@ impl IndexSelector {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IndexWriteKind {
+    /// Entries come from a point-in-time table scan and use the persistence
+    /// layer's snapshot backfill path.
+    Snapshot,
+    /// Entries come from an ordered document-log range and apply revisions to
+    /// an existing snapshot.
+    Replay,
+}
+
 #[derive(Clone)]
 pub struct IndexWriter<RT: Runtime> {
     // Persistence target for writing indexes.
@@ -153,9 +192,15 @@ pub struct IndexWriter<RT: Runtime> {
     // Reader must have by_id index fully populated.
     reader: Arc<dyn PersistenceReader>,
     retention_validator: Arc<dyn RetentionValidator>,
-    rate_limiter: Arc<RateLimiter<RT>>,
+    // None means unlimited — skip rate limiting entirely.
+    rate_limiter: Option<Arc<RateLimiter<RT>>>,
     runtime: RT,
     progress_tx: Option<mpsc::Sender<TabletBackfillProgress>>,
+    chunk_size: NonZeroU32,
+    progress_interval: Duration,
+    // Optional sink for the read-vs-write timing measured during backfill, so a
+    // caller with extra labels (e.g. a db-cluster migration) can emit a metric.
+    read_write_reporter: Option<ReadWriteReporter>,
 }
 
 pub struct TabletBackfillProgress {
@@ -165,7 +210,6 @@ pub struct TabletBackfillProgress {
     pub num_docs_indexed: u64,
     pub backfill_bytes_read: u64,
     pub backfill_bytes_written: u64,
-    pub phase: String,
 }
 
 impl<RT: Runtime> IndexWriter<RT> {
@@ -175,25 +219,42 @@ impl<RT: Runtime> IndexWriter<RT> {
         retention_validator: Arc<dyn RetentionValidator>,
         runtime: RT,
         progress_tx: Option<mpsc::Sender<TabletBackfillProgress>>,
+        rate_limit: IndexRateLimit,
     ) -> Self {
-        let entries_per_second =
-            INDEX_BACKFILL_CHUNK_RATE.saturating_mul(*INDEX_BACKFILL_CHUNK_SIZE);
-        debug_assert!(
-            entries_per_second >= *INDEX_BACKFILL_CHUNK_SIZE,
-            "Entries per second must be at least {}",
-            *INDEX_BACKFILL_CHUNK_SIZE
-        );
+        let rate_limiter = match rate_limit {
+            IndexRateLimit::Unlimited => None,
+            IndexRateLimit::Default => {
+                let entries_per_second =
+                    INDEX_BACKFILL_CHUNK_RATE.saturating_mul(*INDEX_BACKFILL_CHUNK_SIZE);
+                debug_assert!(
+                    entries_per_second >= *INDEX_BACKFILL_CHUNK_SIZE,
+                    "Entries per second must be at least {}",
+                    *INDEX_BACKFILL_CHUNK_SIZE
+                );
+                Some(Arc::new(new_rate_limiter(
+                    runtime.clone(),
+                    Quota::per_second(entries_per_second),
+                )))
+            },
+        };
         Self {
             persistence,
             reader,
             retention_validator,
-            rate_limiter: Arc::new(new_rate_limiter(
-                runtime.clone(),
-                Quota::per_second(entries_per_second),
-            )),
+            rate_limiter,
             runtime,
             progress_tx,
+            read_write_reporter: None,
+            chunk_size: *INDEX_BACKFILL_CHUNK_SIZE,
+            progress_interval: *INDEX_BACKFILL_PROGRESS_INTERVAL,
         }
+    }
+
+    /// Attach a sink that receives the read- and write-side durations of each
+    /// backfill reporting window, so callers can report read- vs write-bound.
+    pub fn with_read_write_reporter(mut self, reporter: ReadWriteReporter) -> Self {
+        self.read_write_reporter = Some(reporter);
+        self
     }
 
     /// Backfill indexes based on a snapshot at the current time.  After the
@@ -217,6 +278,29 @@ impl<RT: Runtime> IndexWriter<RT> {
         index_selector: IndexSelector,
         concurrency: usize,
         cursor: Option<ResolvedDocumentId>,
+        retry_config: Option<RetryConfig>,
+    ) -> anyhow::Result<u64> {
+        self.backfill_snapshot(
+            snapshot_ts,
+            index_metadata,
+            index_selector,
+            concurrency,
+            cursor,
+            retry_config,
+            IndexWriteKind::Snapshot,
+        )
+        .await
+    }
+
+    async fn backfill_snapshot(
+        &self,
+        snapshot_ts: RepeatableTimestamp,
+        index_metadata: &IndexRegistry,
+        index_selector: IndexSelector,
+        concurrency: usize,
+        cursor: Option<ResolvedDocumentId>,
+        retry_config: Option<RetryConfig>,
+        write_kind: IndexWriteKind,
     ) -> anyhow::Result<u64> {
         let pause_client = self.runtime.pause_client();
         pause_client.wait(PERFORM_BACKFILL_LABEL).await;
@@ -234,6 +318,8 @@ impl<RT: Runtime> IndexWriter<RT> {
                                 &index_metadata,
                                 tablet_id,
                                 cursor,
+                                retry_config,
+                                write_kind,
                             )
                             .await
                     })
@@ -263,6 +349,8 @@ impl<RT: Runtime> IndexWriter<RT> {
         index_registry: &IndexRegistry,
         tablet_id: TabletId,
         cursor: Option<ResolvedDocumentId>,
+        retry_config: Option<RetryConfig>,
+        write_kind: IndexWriteKind,
     ) -> anyhow::Result<u64> {
         let table_iterator = TableIterator::new(
             self.runtime.clone(),
@@ -273,20 +361,26 @@ impl<RT: Runtime> IndexWriter<RT> {
         );
 
         let (index_update_tx, index_update_rx) = mpsc::channel(32);
-        // Convert document stream into revision pairs, ignoring previous revisions
-        // because we are backfilling at exactly snapshot_ts
+        let balance = ReadWriteBalance::new();
         let producer = async {
-            let by_id = index_registry.must_get_by_id(tablet_id)?.id();
+            let by_id = IndexRef::try_from(index_registry.must_get_by_id(tablet_id)?)?;
             let mut stream =
                 std::pin::pin!(table_iterator.stream_documents_in_table(tablet_id, by_id, cursor));
             let mut docs_sent = 0;
-            while let Some(item) = stream.try_next().await? {
+            loop {
+                let read_start = self.runtime.monotonic_now();
+                let next = stream.try_next().await?;
+                balance.record_read(self.runtime.monotonic_now() - read_start);
+                let Some(item) = next else {
+                    break;
+                };
                 let LatestDocument {
                     ts,
                     value: document,
-                    ..
+                    prev_ts,
                 } = item;
                 docs_sent += 1;
+                let write_start = self.runtime.monotonic_now();
                 _ = index_update_tx
                     .send(RevisionPair {
                         id: document.id().into(),
@@ -294,9 +388,10 @@ impl<RT: Runtime> IndexWriter<RT> {
                             ts,
                             document: Some(document),
                         },
-                        prev_rev: None,
+                        prev_rev: prev_ts.map(|ts| DocumentRevision { ts, document: None }),
                     })
                     .await;
+                balance.record_write(self.runtime.monotonic_now() - write_start);
             }
             drop(index_update_tx);
             Ok(docs_sent)
@@ -307,8 +402,13 @@ impl<RT: Runtime> IndexWriter<RT> {
             index_registry,
             ReceiverStream::new(index_update_rx),
             index_selector,
+            retry_config,
+            &balance,
+            write_kind,
         );
-        let (docs_indexed, _) = future::try_join(producer, consumer).await?;
+        // A dropped chunk write either rolls back or commits an idempotent
+        // update. Lease serialization orders later persistence writes after it.
+        let (docs_indexed, ()) = future::try_join(producer, consumer).await?;
         Ok(docs_indexed)
     }
 
@@ -324,18 +424,19 @@ impl<RT: Runtime> IndexWriter<RT> {
     /// - `index_selector`: Subset of `index_registry` to backfill.
     ///
     /// Preconditions:
-    /// - The selected indexes are fully backfilled for all revisions at
-    ///   `start_ts`.
+    /// - The selected indexes are fully backfilled at `start_ts`, or the latest
+    ///   documents at `end_ts` have already been snapshot-backfilled.
+    /// - No concurrent writes target the selected indexes.
     ///
     /// Postconditions:
-    /// - The selected indexes will be fully backfilled up to `end_ts`, and they
-    ///   will be valid for all timestamps less than or equal to `end_ts`.
+    /// - The selected indexes represent the documents at `end_ts`.
     pub async fn backfill_forwards(
         &self,
         start_ts: Timestamp,
         end_ts: RepeatableTimestamp,
         index_registry: &IndexRegistry,
         index_selector: &IndexSelector,
+        retry_config: Option<RetryConfig>,
     ) -> anyhow::Result<()> {
         let repeatable_persistence = RepeatablePersistence::new(
             self.reader.clone(),
@@ -343,6 +444,7 @@ impl<RT: Runtime> IndexWriter<RT> {
             self.retention_validator.clone(),
         );
         let (tx, rx) = mpsc::channel(32);
+        let balance = ReadWriteBalance::new();
         let producer = async {
             let revision_stream = repeatable_persistence.load_revision_pairs(
                 index_selector.tablet_id(),
@@ -350,8 +452,16 @@ impl<RT: Runtime> IndexWriter<RT> {
                 Order::Asc,
             );
             futures::pin_mut!(revision_stream);
-            while let Some(revision_pair) = revision_stream.try_next().await? {
+            loop {
+                let read_start = self.runtime.monotonic_now();
+                let next = revision_stream.try_next().await?;
+                balance.record_read(self.runtime.monotonic_now() - read_start);
+                let Some(revision_pair) = next else {
+                    break;
+                };
+                let write_start = self.runtime.monotonic_now();
                 tx.send(revision_pair).await?;
+                balance.record_write(self.runtime.monotonic_now() - write_start);
             }
             drop(tx);
             Ok(())
@@ -361,125 +471,64 @@ impl<RT: Runtime> IndexWriter<RT> {
             index_registry,
             ReceiverStream::new(rx),
             index_selector,
+            retry_config,
+            &balance,
+            IndexWriteKind::Replay,
         );
 
         // Consider ourselves successful if both the producer and consumer exit
         // successfully.
         let ((), ()) = futures::try_join!(producer, consumer)?;
+        let marker_indexes: BTreeSet<_> = self
+            .persistence
+            .index_backfill_marker_indexes()
+            .await?
+            .into_iter()
+            .collect();
+        let selected_indexes = index_selector
+            .index_ids()
+            .map(|id| {
+                let index = index_registry
+                    .enabled_index_by_index_id(&id)
+                    .or_else(|| index_registry.pending_index_by_index_id(&id))
+                    .with_context(|| format!("Missing selected index {id}"))?;
+                Ok(IndexRef::try_from(index)?.persistence_index_id())
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let selected_indexes: Vec<_> = selected_indexes
+            .into_iter()
+            .flatten()
+            .filter(|id| marker_indexes.contains(id))
+            .collect();
+        for index in &selected_indexes {
+            retry_persistence_operation("reconcile_index_backfill", retry_config, || async {
+                self.persistence.reconcile_index_backfill(*index).await
+            })
+            .await?;
+        }
         Ok(())
     }
 
-    /// Backfill indexes backwards through the documents log, stopping early if
-    /// we hit the retention window's minimum snapshot timestamp.
-    ///
-    /// Arguments:
-    /// - `start_ts`: Non-inclusive upper bound for scanning the documents log.
-    /// - `end_ts`: Inclusive lower bound for scanning the documents log. Note
-    ///   that we may not reach this timestamp if we stop early due to hitting
-    ///   end of the retention window.
-    /// - `index_registry` Index metadata to backfill.
-    /// - `index_selector`: Subset of `index_registry` to backfill.
-    ///
-    /// Returns:
-    /// - The minimum log revision we successfully processed.
-    ///
-    /// Preconditions:
-    /// - The selected indexes are fully backfilled at `start_ts`.
-    /// - `start_ts > end_ts`.
-    ///
-    /// Postconditions:
-    /// - The selected indexes will be fully backfilled for all revisions `ts`
-    ///   where `end_ts <= ts <= start_ts`.
-    pub async fn backfill_backwards(
+    async fn write_chunk_with_optional_retry(
         &self,
-        start_ts: RepeatableTimestamp,
-        end_ts: Timestamp,
-        index_registry: &IndexRegistry,
-        index_selector: &IndexSelector,
-    ) -> anyhow::Result<RepeatableTimestamp> {
-        anyhow::ensure!(*start_ts > end_ts);
-        let (tx, rx) = mpsc::channel(32);
-        let repeatable_persistence = RepeatablePersistence::new(
-            self.reader.clone(),
-            start_ts,
-            self.retention_validator.clone(),
-        );
-        let producer = async {
-            let revision_stream = repeatable_persistence.load_revision_pairs(
-                index_selector.tablet_id(),
-                TimestampRange::new(end_ts..*start_ts),
-                Order::Desc,
-            );
-            futures::pin_mut!(revision_stream);
-            while let Some(revision_pair) = revision_stream.try_next().await? {
-                let ts = revision_pair.ts();
-                if ts < *self.retention_validator.min_snapshot_ts().await? {
-                    // We may not have fully processed the entirety of the transaction at
-                    // `min_chunk_ts` (since we paginate by `(ts, id)`), so only consider
-                    // ourselves backfilled up to the subsequent timestamp.
-                    return ts.succ();
-                }
-
-                let prev_doc_and_ts = if let Some(ref prev_rev) = revision_pair.prev_rev {
-                    if let Some(prev_doc) = prev_rev.document.clone() {
-                        Some((prev_doc, prev_rev.ts))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                tx.send(revision_pair).await?;
-
-                // Let's say we're backfilling backwards and processing a revision for `id`
-                // at `ts`:
-                //
-                //                  end_ts          |<------start_ts
-                // timestamps: --------|------------------------|----->
-                // id:            o                 o
-                //                ^ prev_ts         ^ ts
-                //
-                // Processing the log entry for `ts` will generate at most two index entries:
-                // one for deleting `prev_ts`'s value from the index and one for inserting
-                // `ts`'s value.
-                //
-                // However, since we're backfilling backwards, we need to inductively guarantee
-                // that all timestamps past our current timestamp are valid for the index. If
-                // we just wrote our two entries, a historical read between `prev_ts` and `ts`
-                // wouldn't see the add for `prev_ts`'s entry. Therefore, we need to write
-                // three entries for `ts`: its add, `prev_rev`'s delete, and `prev_ts`'s add.
-                //
-                // This does mean that we'll potentially write `prev_rev`'s add again when we
-                // process `prev_rev`'s log entry, but setting `ConflictStrategy::Overwrite` and
-                // deduplicating using `BTreeSet` in `write_index_entries`
-                // in `Persistence::write` makes this a no-op.
-                if let Some((prev_doc, prev_ts)) = prev_doc_and_ts {
-                    tx.send(RevisionPair {
-                        id: prev_doc.id().into(),
-                        rev: DocumentRevision {
-                            ts: prev_ts,
-                            document: Some(prev_doc),
-                        },
-                        prev_rev: None,
-                    })
-                    .await?;
-                }
-            }
-            drop(tx);
-            Ok(end_ts)
+        persistence: &Arc<dyn Persistence>,
+        index_updates: &[PersistenceIndexEntry],
+        retry_config: Option<RetryConfig>,
+        write_kind: IndexWriteKind,
+    ) -> anyhow::Result<()> {
+        let backfill_entries = match write_kind {
+            IndexWriteKind::Snapshot => index_updates
+                .iter()
+                .cloned()
+                .map(IndexBackfillEntry::try_from)
+                .collect::<anyhow::Result<Vec<_>>>()?,
+            IndexWriteKind::Replay => index_updates
+                .iter()
+                .map(IndexBackfillEntry::from_replay)
+                .collect(),
         };
-
-        let consumer = self.write_index_entries(
-            format!("going backward from {start_ts} to {end_ts}"),
-            index_registry,
-            ReceiverStream::new(rx),
-            index_selector,
-        );
-
-        // Consider ourselves successful if both the reader and writer exit
-        // successfully.
-        let (backfilled_ts, ()) = futures::try_join!(producer, consumer)?;
-        start_ts.prior_ts(backfilled_ts)
+        let write = || async { persistence.write_index_backfill(&backfill_entries).await };
+        retry_persistence_operation("index_chunk_write", retry_config, write).await
     }
 
     async fn write_index_entries(
@@ -488,6 +537,9 @@ impl<RT: Runtime> IndexWriter<RT> {
         index_registry: &IndexRegistry,
         revision_pairs: impl Stream<Item = RevisionPair>,
         index_selector: &IndexSelector,
+        retry_config: Option<RetryConfig>,
+        read_write_balance: &ReadWriteBalance,
+        write_kind: IndexWriteKind,
     ) -> anyhow::Result<()> {
         let should_send_progress = self.progress_tx.is_some();
         let approx_num_indexes = match index_selector {
@@ -498,7 +550,7 @@ impl<RT: Runtime> IndexWriter<RT> {
         };
 
         let updates = revision_pairs
-            .chunks((INDEX_BACKFILL_CHUNK_SIZE.get() as usize).div_ceil(approx_num_indexes))
+            .chunks((self.chunk_size.get() as usize).div_ceil(approx_num_indexes))
             .map(|chunk| async move {
                 let persistence = self.persistence.clone();
                 let rate_limiter = self.rate_limiter.clone();
@@ -514,8 +566,13 @@ impl<RT: Runtime> IndexWriter<RT> {
                     let prev_doc_size =
                         revision_pair.prev_document().map_or(0, |d| d.size() as u64);
                     bytes_read += doc_size + prev_doc_size;
+                    let prev_revision = revision_pair.prev_rev.as_ref().and_then(|rev| {
+                        rev.document
+                            .as_ref()
+                            .map(|document| (document, WriteTimestamp::Committed(rev.ts)))
+                    });
                     for update in index_registry
-                        .index_updates(revision_pair.prev_document(), revision_pair.document())
+                        .index_updates(prev_revision, revision_pair.document())
                         .into_iter()
                         .filter(|update| index_selector.filter_index_update(update))
                     {
@@ -526,67 +583,109 @@ impl<RT: Runtime> IndexWriter<RT> {
                         ));
                     }
                 }
-                let num_entries_written = u32::try_from(index_updates.len())?;
                 let docs_in_chunk = chunk.len() as u64;
+                let num_entries_written = u32::try_from(index_updates.len())?;
                 // N.B: it's possible to end up with no entries if we're
                 // backfilling forward through historical documents that have no
                 // present indexes in `index_registry`.
-                if let Some(num_entries_written) = NonZeroU32::new(num_entries_written) {
-                    while let Err(not_until) = rate_limiter
-                        .check_n(num_entries_written)
-                        .expect("RateLimiter capacity impossibly small")
+                if !index_updates.is_empty() {
+                    if let (Some(rate_limiter), Some(num_entries_written)) =
+                        (&rate_limiter, NonZeroU32::new(num_entries_written))
                     {
-                        let delay = not_until.wait_time_from(self.runtime.monotonic_now().into());
-                        self.runtime.wait(delay).await;
+                        let throttle_start = self.runtime.monotonic_now();
+                        while let Err(not_until) = rate_limiter
+                            .check_n(num_entries_written)
+                            .expect("RateLimiter capacity impossibly small")
+                        {
+                            let delay =
+                                not_until.wait_time_from(self.runtime.monotonic_now().into());
+                            self.runtime.wait(delay).await;
+                        }
+                        read_write_balance
+                            .record_throttle(self.runtime.monotonic_now() - throttle_start);
                     }
-                    persistence
-                        .write(&[], &index_updates, ConflictStrategy::Overwrite)
-                        .await?;
+                    self.write_chunk_with_optional_retry(
+                        &persistence,
+                        &index_updates,
+                        retry_config,
+                        write_kind,
+                    )
+                    .await?;
                 }
                 anyhow::Ok((docs_in_chunk, cursor, bytes_read, bytes_written))
             })
             .buffered(*INDEX_BACKFILL_WORKERS);
         pin_mut!(updates);
 
+        let mut last_logged = self.runtime.system_time();
         let mut last_checkpointed = self.runtime.system_time();
+        let mut last_logged_docs_indexed = 0;
+        let mut last_logged_balance = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+        let mut num_docs_indexed_total = 0;
         let mut num_docs_indexed_since_progress_reported = 0;
         let mut backfill_bytes_read = 0;
         let mut backfill_bytes_written = 0u64;
         let mut last_cursor = None;
+        // Blocking in this loop is very bad, don't do it.  If blocked, the futures in
+        // updates will get stuck at arbitrary points.
         while let Some(result) = updates.next().await {
             let (docs_in_chunk, cursor, bytes_read, bytes_written) = result?;
             if cursor.is_some() {
                 last_cursor = cursor;
             }
             num_docs_indexed_since_progress_reported += docs_in_chunk;
+            num_docs_indexed_total += docs_in_chunk;
             backfill_bytes_written += bytes_written;
             backfill_bytes_read += bytes_read;
             if let Some(tx) = self.progress_tx.as_ref()
-                && last_checkpointed.elapsed()? >= *INDEX_BACKFILL_PROGRESS_INTERVAL
+                && last_checkpointed.elapsed()? >= self.progress_interval
                 && let Some(cursor) = cursor
             {
-                tx.send(TabletBackfillProgress {
+                match tx.try_send(TabletBackfillProgress {
                     tablet_id: cursor.table(),
                     index_ids: index_selector.index_ids().collect(),
                     cursor,
                     num_docs_indexed: num_docs_indexed_since_progress_reported,
                     backfill_bytes_read,
                     backfill_bytes_written,
-                    phase: phase.clone(),
-                })
-                .await?;
-                num_docs_indexed_since_progress_reported = 0;
-                backfill_bytes_written = 0;
-                backfill_bytes_read = 0;
-                last_checkpointed = self.runtime.system_time();
-                self.runtime
-                    .pause_client()
-                    .wait(UPDATE_BACKFILL_PROGRESS_LABEL)
-                    .await;
+                }) {
+                    Ok(()) => {
+                        num_docs_indexed_since_progress_reported = 0;
+                        backfill_bytes_written = 0;
+                        backfill_bytes_read = 0;
+                        last_checkpointed = self.runtime.system_time();
+                        self.runtime
+                            .pause_client()
+                            .wait(UPDATE_BACKFILL_PROGRESS_LABEL)
+                            .await;
+                    },
+                    Err(mpsc::error::TrySendError::Full(_)) => {},
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            if last_logged.elapsed()? >= Duration::from_secs(60) {
+                let now = self.runtime.system_time();
+                let (read_total, write_total, throttle_total) = read_write_balance.totals();
+                let read_delta = read_total - last_logged_balance.0;
+                let write_delta = write_total - last_logged_balance.1;
+                let throttle_delta = throttle_total - last_logged_balance.2;
+                tracing::info!(
+                    "Backfilled {num_docs_indexed_total} docs into indexes: {index_selector} \
+                     {phase} ({} rows/s) [{}]",
+                    (num_docs_indexed_total - last_logged_docs_indexed) as f64
+                        / (now.duration_since(last_logged).unwrap_or_default()).as_secs_f64(),
+                    format_read_write_balance(read_delta, write_delta, throttle_delta),
+                );
+                if let Some(reporter) = self.read_write_reporter.as_ref() {
+                    reporter(read_delta, write_delta, throttle_delta);
+                }
+                last_logged = now;
+                last_logged_docs_indexed = num_docs_indexed_total;
+                last_logged_balance = (read_total, write_total, throttle_total);
             }
         }
         // Flush any remaining accumulated bytes that weren't sent during the loop
-        if (backfill_bytes_read > 0 || backfill_bytes_written > 0)
+        if num_docs_indexed_since_progress_reported > 0
             && let Some(tx) = self.progress_tx.as_ref()
             && let Some(cursor) = last_cursor
         {
@@ -597,11 +696,24 @@ impl<RT: Runtime> IndexWriter<RT> {
                 num_docs_indexed: num_docs_indexed_since_progress_reported,
                 backfill_bytes_read,
                 backfill_bytes_written,
-                phase: phase.clone(),
             })
             .await?;
         }
-        tracing::info!("Done backfilling indexes: {index_selector} {phase}",);
+
+        // Flush read/write time accumulated since the last periodic log so the
+        // metric captures the full phase, including a final partial window.
+        if let Some(reporter) = self.read_write_reporter.as_ref() {
+            let (read_total, write_total, throttle_total) = read_write_balance.totals();
+            reporter(
+                read_total - last_logged_balance.0,
+                write_total - last_logged_balance.1,
+                throttle_total - last_logged_balance.2,
+            );
+        }
+
+        tracing::info!(
+            "Done backfilling {num_docs_indexed_total} docs into indexes: {index_selector} {phase}",
+        );
         Ok(())
     }
 
@@ -618,8 +730,33 @@ impl<RT: Runtime> IndexWriter<RT> {
             self.persistence.clone(),
             &all_indexes,
             self.retention_validator.clone(),
+            IndexRetentionSource::Backfill,
         )
         .await?;
         Ok(())
     }
+}
+
+async fn retry_persistence_operation<T, F, Fut>(
+    name: &'static str,
+    retry_config: Option<RetryConfig>,
+    operation: F,
+) -> anyhow::Result<T>
+where
+    F: Fn() -> Fut,
+    Fut: Future<Output = anyhow::Result<T>>,
+{
+    match retry_config {
+        None => operation().await,
+        Some(retry) => {
+            retry_with_backoff(name, retry, is_retriable_persistence_error, operation).await
+        },
+    }
+}
+
+/// A deadlock rolls back only the victim transaction, and backfill writes are
+/// idempotent upserts or conditional deletes, so rerunning an operation whose
+/// earlier transactions already committed is safe.
+fn is_retriable_persistence_error(e: &anyhow::Error) -> bool {
+    is_transient_db_error(e) || is_db_deadlock_error(e)
 }

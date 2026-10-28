@@ -28,9 +28,23 @@ use crate::{
     version::ClientVersion,
 };
 
-#[derive(Serialize, Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
+/// Whether a query call is a fresh invocation or a rerun of a query that has
+/// produced a result before.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum QueryInvocation {
+    /// A fresh invocation: an HTTP request, cron, action, scheduled function,
+    /// dashboard tester, or the first time a client subscribes to a query.
+    Fresh,
+    /// A rerun of a query whose subscription was no longer valid.
+    Invalidated,
+    /// A rerun caused by the client's auth identity changing.
+    IdentityChange,
+}
+
+#[derive(
+    Serialize, Copy, Clone, Debug, PartialEq, Eq, Hash, Ord, PartialOrd, strum::VariantArray,
+)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum UdfType {
     Query,
     Mutation,
@@ -38,8 +52,17 @@ pub enum UdfType {
     HttpAction,
 }
 
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, strum::EnumString, strum::Display,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum UdfRuntime {
+    V8,
+    Wasm,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(utoipa::ToSchema))]
 pub enum UdfTypeJson {
     Query,
     Mutation,
@@ -92,7 +115,9 @@ impl FromStr for UdfType {
             "Query" | "query" => Ok(Self::Query),
             "Mutation" | "mutation" => Ok(Self::Mutation),
             "Action" | "action" => Ok(Self::Action),
-            "HttpEndpoint" | "httpEndpoint" | "HttpAction" | "httpAction" => Ok(Self::HttpAction),
+            "HttpEndpoint" | "httpEndpoint" | "HttpAction" | "httpAction" | "http_action" => {
+                Ok(Self::HttpAction)
+            },
             _ => anyhow::bail!("Expected UdfType, got {:?}", s),
         }
     }
@@ -175,7 +200,6 @@ pub enum AllowedVisibility {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Ord, PartialOrd)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum FunctionCaller {
     SyncWorker(ClientVersion),
     HttpApi(ClientVersion),
@@ -193,9 +217,6 @@ pub enum FunctionCaller {
         parent_scheduled_job: Option<(ComponentId, DeveloperDocumentId)>,
         parent_execution_id: Option<ExecutionId>,
     },
-    #[cfg(any(test, feature = "testing"))]
-    #[proptest(weight = 0)]
-    Test,
 }
 
 impl FunctionCaller {
@@ -208,8 +229,6 @@ impl FunctionCaller {
             | FunctionCaller::Cron
             | FunctionCaller::Scheduler { .. }
             | FunctionCaller::Action { .. } => None,
-            #[cfg(any(test, feature = "testing"))]
-            FunctionCaller::Test => None,
         }
         .cloned()
     }
@@ -221,8 +240,6 @@ impl FunctionCaller {
             | FunctionCaller::Tester(_)
             | FunctionCaller::HttpEndpoint
             | FunctionCaller::Cron => None,
-            #[cfg(any(test, feature = "testing"))]
-            FunctionCaller::Test => None,
             FunctionCaller::Scheduler {
                 job_id,
                 component_id,
@@ -246,8 +263,6 @@ impl FunctionCaller {
                 parent_execution_id,
                 ..
             } => *parent_execution_id,
-            #[cfg(any(test, feature = "testing"))]
-            FunctionCaller::Test => None,
         }
     }
 
@@ -260,8 +275,6 @@ impl FunctionCaller {
             | FunctionCaller::Cron
             | FunctionCaller::Scheduler { .. } => true,
             FunctionCaller::Action { .. } => false,
-            #[cfg(any(test, feature = "testing"))]
-            FunctionCaller::Test => true,
         }
     }
 
@@ -277,8 +290,6 @@ impl FunctionCaller {
             FunctionCaller::Cron
             | FunctionCaller::Scheduler { .. }
             | FunctionCaller::Action { .. } => false,
-            #[cfg(any(test, feature = "testing"))]
-            FunctionCaller::Test => true,
         }
     }
 
@@ -295,8 +306,6 @@ impl FunctionCaller {
             | FunctionCaller::Cron
             | FunctionCaller::Scheduler { .. }
             | FunctionCaller::Action { .. } => AllowedVisibility::All,
-            #[cfg(any(test, feature = "testing"))]
-            FunctionCaller::Test => AllowedVisibility::PublicOnly,
         }
     }
 }
@@ -311,8 +320,6 @@ impl fmt::Display for FunctionCaller {
             FunctionCaller::Cron => "Cron",
             FunctionCaller::Scheduler { .. } => "Scheduler",
             FunctionCaller::Action { .. } => "Action",
-            #[cfg(any(test, feature = "testing"))]
-            FunctionCaller::Test => "Test",
         };
         write!(f, "{s}")
     }
@@ -357,8 +364,6 @@ impl From<FunctionCaller> for pb::common::FunctionCaller {
                 };
                 pb::common::function_caller::Caller::Action(caller)
             },
-            #[cfg(any(test, feature = "testing"))]
-            FunctionCaller::Test => panic!("Can't use test function caller"),
         };
         Self {
             caller: Some(caller),
@@ -421,7 +426,6 @@ impl TryFrom<pb::common::FunctionCaller> for FunctionCaller {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub enum ModuleEnvironment {
     Isolate,
     Node,
@@ -466,31 +470,37 @@ impl ModuleEnvironment {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-    use sync_types::testing::assert_roundtrips;
-
-    use super::{
-        UdfType,
-        UdfTypeProto,
-    };
-    use crate::types::FunctionCaller;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_udf_type_roundtrips(u in any::<UdfType>()) {
-            assert_roundtrips::<UdfType, UdfTypeProto>(u);
+impl From<QueryInvocation> for pb::common::QueryInvocation {
+    fn from(invocation: QueryInvocation) -> Self {
+        let invocation = match invocation {
+            QueryInvocation::Fresh => pb::common::query_invocation::Invocation::Fresh(()),
+            QueryInvocation::Invalidated => {
+                pb::common::query_invocation::Invocation::Invalidation(())
+            },
+            QueryInvocation::IdentityChange => {
+                pb::common::query_invocation::Invocation::IdentityChange(())
+            },
+        };
+        Self {
+            invocation: Some(invocation),
         }
+    }
+}
 
-        #[test]
-        fn test_function_caller_roundtrips(u in any::<FunctionCaller>()) {
-            assert_roundtrips::<FunctionCaller, pb::common::FunctionCaller>(u);
-        }
+impl TryFrom<pb::common::QueryInvocation> for QueryInvocation {
+    type Error = anyhow::Error;
+
+    fn try_from(msg: pb::common::QueryInvocation) -> anyhow::Result<Self> {
+        let invocation = match msg.invocation {
+            Some(pb::common::query_invocation::Invocation::Fresh(())) => QueryInvocation::Fresh,
+            Some(pb::common::query_invocation::Invocation::Invalidation(())) => {
+                QueryInvocation::Invalidated
+            },
+            Some(pb::common::query_invocation::Invocation::IdentityChange(())) => {
+                QueryInvocation::IdentityChange
+            },
+            None => anyhow::bail!("Missing `invocation` field"),
+        };
+        Ok(invocation)
     }
 }

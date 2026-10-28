@@ -14,10 +14,9 @@ File metadata of a file can be accessed from
 [mutations](/functions/mutation-functions.mdx) via `db.system.get` and
 `db.system.query`:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/images.ts"
-  sourceTS={FileMetadata}
-  sourceJS={FileMetadata}
+  source={FileMetadata}
   highlightPatterns={["db.system.get\\(", "db.system.query\\("]}
 />
 
@@ -40,7 +39,7 @@ The returned document has the following fields:
 - `contentType`: the `ContentType` of the file if it was provided on upload
 
 You can check the metadata manually on your
-[dashboard](/dashboard/deployments/files.md).
+[dashboard](/dashboard/deployments/files.mdx).
 
 ## Accessing metadata from actions (deprecated)
 
@@ -50,10 +49,9 @@ function is available to access individual file metadata from
 [actions](/functions/actions.mdx) and
 [HTTP actions](/functions/http-actions.mdx):
 
-<TSAndJSSnippet
+<Snippet
   title="convex/images.ts"
-  sourceTS={FileMetadataDeprecated}
-  sourceJS={FileMetadataDeprecated}
+  source={FileMetadataDeprecated}
   highlightPatterns={["getMetadata\\("]}
 />
 

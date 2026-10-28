@@ -17,6 +17,7 @@ use common::{
         JsError,
     },
     identity::InertIdentity,
+    knobs::UDF_404_ON_BAD_PATH,
     log_lines::LogLines,
     query_journal::QueryJournal,
     runtime::{
@@ -25,8 +26,10 @@ use common::{
     },
     types::{
         AllowedVisibility,
-        BackendState,
+        SystemStopState,
         UdfType,
+        UsageLimitStopState,
+        UserStopState,
     },
     version::{
         Version,
@@ -34,12 +37,17 @@ use common::{
     },
 };
 use database::{
-    unauthorized_error,
     BootstrapComponentsModel,
     Transaction,
 };
-use errors::ErrorMetadata;
-use keybroker::Identity;
+use errors::{
+    ErrorMetadata,
+    ErrorMetadataAnyhowExt,
+};
+use keybroker::{
+    DeploymentOp,
+    Identity,
+};
 use model::{
     backend_info::BackendInfoModel,
     backend_state::BackendStateModel,
@@ -55,27 +63,24 @@ use model::{
     udf_config::UdfConfigModel,
     virtual_system_mapping,
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::arbitrary::Arbitrary;
-#[cfg(any(test, feature = "testing"))]
-use proptest::strategy::Strategy;
 use rand::Rng;
+use roles::RequireDeploymentOp;
 use serde_json::Value as JsonValue;
 use sync_types::types::SerializedArgs;
-#[cfg(any(test, feature = "testing"))]
-use sync_types::CanonicalizedUdfPath;
 use value::{
     heap_size::HeapSize,
     serialized_args_ext::SerializedArgsExt,
     ConvexArray,
-    ConvexValue,
     JsonPackedValue,
     NamespacedTableMapping,
+    PendingValue,
 };
 
 use crate::{
     helpers::{
+        parse_pending_udf_args,
         parse_udf_args,
+        validate_pending_udf_args_size,
         validate_udf_args_size,
     },
     ActionOutcome,
@@ -83,12 +88,32 @@ use crate::{
     UdfOutcome,
 };
 
+/// Whether a function call's arguments may contain the unresolved
+/// `{"$commitTs": null}` token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingArgsPolicy {
+    /// The token is rejected. Applies to every call that doesn't run inside a
+    /// mutation's transaction (clients, actions, the scheduler, queries
+    /// calling queries), where the token has no transaction to resolve
+    /// against.
+    Reject,
+    /// Arguments may contain unresolved commit timestamps, validated via
+    /// their `Int64(i64::MAX)` projection. Only for queries and mutations
+    /// called from a mutation, where the token refers to that transaction's
+    /// eventual commit timestamp.
+    Allow,
+}
+
 pub const DISABLED_ERROR_MESSAGE_FREE_PLAN: &str =
     "You have exceeded the free plan limits, so your deployments have been disabled. Please \
      upgrade to a Pro plan or reach out to us at support@convex.dev for help.";
 pub const DISABLED_ERROR_MESSAGE_PAID_PLAN: &str =
     "You have exceeded your spending limits, so your deployments have been disabled. Please \
      increase your spending limit on the Convex dashboard or wait until limits reset.";
+pub const USAGE_LIMIT_DISABLED_ERROR_MESSAGE: &str =
+    "This deployment has been disabled because it exceeded a configured usage limit. Update or \
+     disable the usage limit in the Convex dashboard in deployment settings to resume function \
+     execution.";
 pub const PAUSED_ERROR_MESSAGE: &str = "Cannot run functions while this deployment is paused. \
                                         Resume the deployment in the dashboard settings to allow \
                                         functions to run.";
@@ -118,12 +143,12 @@ pub async fn fail_while_not_running<RT: Runtime>(
         .get_backend_state()
         .await?
         .into_value();
-    match backend_state {
-        BackendState::Running => {},
-        BackendState::Paused => {
-            return Ok(Err(JsError::from_message(PAUSED_ERROR_MESSAGE.to_string())));
-        },
-        BackendState::Disabled => {
+    match (
+        backend_state.system,
+        backend_state.usage_limit,
+        backend_state.user,
+    ) {
+        (SystemStopState::Disabled, ..) => {
             if is_paid {
                 return Ok(Err(JsError::from_message(
                     DISABLED_ERROR_MESSAGE_PAID_PLAN.to_string(),
@@ -134,11 +159,20 @@ pub async fn fail_while_not_running<RT: Runtime>(
                 )));
             }
         },
-        BackendState::Suspended => {
+        (SystemStopState::None, UsageLimitStopState::Disabled, _) => {
+            return Ok(Err(JsError::from_message(
+                USAGE_LIMIT_DISABLED_ERROR_MESSAGE.to_string(),
+            )));
+        },
+        (SystemStopState::Suspended, ..) => {
             return Ok(Err(JsError::from_message(
                 SUSPENDED_ERROR_MESSAGE.to_string(),
             )));
         },
+        (_, _, UserStopState::Paused) => {
+            return Ok(Err(JsError::from_message(PAUSED_ERROR_MESSAGE.to_string())));
+        },
+        (SystemStopState::None, UsageLimitStopState::None, UserStopState::None) => {},
     }
 
     Ok(Ok(()))
@@ -216,14 +250,118 @@ pub async fn validate_schedule_args<RT: Runtime>(
     Ok((path, udf_args))
 }
 
-fn missing_or_internal_error(path: PublicFunctionPath) -> anyhow::Result<String> {
+/// Check whether the caller's allowed visibility permits running a function
+/// with the given visibility, identity, component, and UDF type.
+///
+/// When `is_system_module` is true the function lives in a system module
+/// (`_system/`).  System modules are not analyzed, so they have no
+/// declared visibility.  We treat them like privileged endpoints: only
+/// admin/system identities may call them, regardless of component.
+/// Fine-grained operation checks are enforced at the TypeScript layer
+/// via `requireOperation` in the system UDF wrappers.
+///
+/// Returns:
+/// - `Ok(Ok(()))` if access is allowed
+/// - `Ok(Err(JsError))` if the function should appear as missing (e.g.
+///   non-admin calling an internal function)
+/// - `Err(anyhow)` if the caller lacks a required deployment operation
+fn check_visibility_access(
+    allowed_visibility: AllowedVisibility,
+    visibility: &Option<Visibility>,
+    identity: &Identity,
+    component: ComponentId,
+    expected_udf_type: UdfType,
+    path: PublicFunctionPath,
+    is_system_module: bool,
+) -> anyhow::Result<Result<(), JsError>> {
+    if identity.is_acting_as_user() {
+        identity.require_operation(DeploymentOp::ActAsUser)?;
+    }
+    // System modules require admin/system identity. Fine-grained operation
+    // checks (e.g. ViewData, WriteData) are enforced at the TypeScript layer
+    // via `requireOperation` in the system UDF wrappers.
+    if is_system_module {
+        return require_admin_identity(identity, path);
+    }
+    match allowed_visibility {
+        AllowedVisibility::All => Ok(Ok(())),
+        AllowedVisibility::PublicOnly => match visibility {
+            Some(Visibility::Public) => {
+                // In a component, public functions still require an
+                // admin/system identity with the appropriate operation.
+                // User and Unknown identities cannot reach into components.
+                if component != ComponentId::Root {
+                    return require_admin_data_op(identity, expected_udf_type, path);
+                }
+                Ok(Ok(()))
+            },
+            Some(Visibility::Internal) => {
+                // Admins may have the ability to run the internal function.
+                if identity.is_admin() || identity.is_system() || identity.is_acting_as_user() {
+                    let op = match expected_udf_type {
+                        UdfType::Query => DeploymentOp::RunInternalQueries,
+                        UdfType::Mutation => DeploymentOp::RunInternalMutations,
+                        UdfType::Action | UdfType::HttpAction => DeploymentOp::RunInternalActions,
+                    };
+                    identity.require_operation(op)?;
+                    Ok(Ok(()))
+                } else {
+                    Ok(Err(missing_or_internal_error(path)?))
+                }
+            },
+            None => {
+                anyhow::bail!("No visibility found for analyzed function");
+            },
+        },
+    }
+}
+
+/// Require that the identity is admin/system with the appropriate
+/// View/WriteData operation. Returns `Ok(Err(JsError))` for
+/// User/Unknown identities so callers can produce a clean error response.
+fn require_admin_data_op(
+    identity: &Identity,
+    expected_udf_type: UdfType,
+    path: PublicFunctionPath,
+) -> anyhow::Result<Result<(), JsError>> {
+    if identity.is_admin() || identity.is_system() || identity.is_acting_as_user() {
+        let op = match expected_udf_type {
+            UdfType::Query => DeploymentOp::ViewData,
+            UdfType::Mutation | UdfType::Action | UdfType::HttpAction => DeploymentOp::WriteData,
+        };
+        identity.require_operation(op)?;
+        Ok(Ok(()))
+    } else {
+        Ok(Err(missing_or_internal_error(path)?))
+    }
+}
+
+/// Require that the identity is admin/system, without checking a specific
+/// deployment operation. Returns `Ok(Err(JsError))` for User/Unknown
+/// identities so callers can produce a clean "not found" error response.
+fn require_admin_identity(
+    identity: &Identity,
+    path: PublicFunctionPath,
+) -> anyhow::Result<Result<(), JsError>> {
+    if identity.is_admin() || identity.is_system() || identity.is_acting_as_user() {
+        Ok(Ok(()))
+    } else {
+        Ok(Err(missing_or_internal_error(path)?))
+    }
+}
+
+fn missing_or_internal_error(path: PublicFunctionPath) -> anyhow::Result<JsError> {
     let path = path.debug_into_component_path();
-    Ok(format!(
-        "Could not find public function for '{}'{}. Did you forget to run `npx convex dev` or \
-         `npx convex deploy`?",
+    let err_str = format!(
+        "Could not find public function for '{}'{}.",
         String::from(path.udf_path.clone().strip()),
         path.component.in_component_str()
-    ))
+    );
+    if *UDF_404_ON_BAD_PATH {
+        anyhow::bail!(ErrorMetadata::not_found("FunctionPathNotFound", err_str));
+    } else {
+        Ok(JsError::from_message(err_str))
+    }
 }
 
 fn should_block_path(path: &ResolvedComponentFunctionPath) -> bool {
@@ -249,16 +387,16 @@ async fn udf_version<RT: Runtime>(
         _ => {
             if udf_config.is_none()
                 && ModuleModel::new(tx)
-                    .get_analyzed_function_by_id(path)
+                    .get_metadata_for_function_by_id(path)
                     .await?
-                    .is_err()
+                    .is_none_or(|m| matches!(m.find_analyzed_function(&path.udf_path), Ok(None)))
             {
                 // We don't have a UDF config and we can't find the analyzed function.
                 // Likely this developer has never pushed before, so give them
                 // the missing error message.
-                return Ok(Err(JsError::from_message(missing_or_internal_error(
+                return Ok(Err(missing_or_internal_error(
                     PublicFunctionPath::ResolvedComponent(path.clone()),
-                )?)));
+                )?));
             }
 
             let unsupported = format!(
@@ -274,6 +412,33 @@ async fn udf_version<RT: Runtime>(
     Ok(Ok(udf_version))
 }
 
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct VisibilityInfo {
+    visibility: Option<Visibility>,
+    component: ComponentId,
+    is_system_module: bool,
+}
+
+impl VisibilityInfo {
+    pub fn check_access(
+        &self,
+        allowed_visibility: AllowedVisibility,
+        identity: &Identity,
+        expected_udf_type: UdfType,
+        path: PublicFunctionPath,
+    ) -> anyhow::Result<Result<(), JsError>> {
+        check_visibility_access(
+            allowed_visibility,
+            &self.visibility,
+            identity,
+            self.component,
+            expected_udf_type,
+            path,
+            self.is_system_module,
+        )
+    }
+}
+
 /// The path and args to a UDF that have already undergone validation.
 ///
 /// This validation includes:
@@ -285,41 +450,12 @@ async fn udf_version<RT: Runtime>(
 /// This should only be constructed via `ValidatedPathAndArgs::new` to use the
 /// type system to enforce that validation is never skipped.
 #[derive(Clone, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(Debug))]
 pub struct ValidatedPathAndArgs {
     path: ResolvedComponentFunctionPath,
     args: SerializedArgs,
     // Not set for system modules.
     npm_version: Option<Version>,
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for ValidatedPathAndArgs {
-    type Parameters = ();
-
-    type Strategy = impl Strategy<Value = ValidatedPathAndArgs>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        any::<(
-            sync_types::CanonicalizedUdfPath,
-            SerializedArgs,
-            ComponentId,
-            ComponentPath,
-        )>()
-        .prop_map(|(udf_path, args, component_id, component_path)| {
-            ValidatedPathAndArgs {
-                path: ResolvedComponentFunctionPath {
-                    component: component_id,
-                    udf_path,
-                    component_path: Some(component_path),
-                },
-                args,
-                npm_version: None,
-            }
-        })
-    }
+    reuse_context: bool,
 }
 
 impl ValidatedPathAndArgs {
@@ -336,14 +472,20 @@ impl ValidatedPathAndArgs {
         args: SerializedArgs,
         expected_udf_type: UdfType,
     ) -> anyhow::Result<Result<ValidatedPathAndArgs, JsError>> {
-        Self::new_with_returns_validator(allowed_visibility, tx, path, args, expected_udf_type)
-            .await
-            .map(|r| r.map(|(path_and_args, _)| path_and_args))
+        Self::new_with_returns_validator(
+            allowed_visibility,
+            tx,
+            path,
+            args,
+            expected_udf_type,
+            PendingArgsPolicy::Reject,
+        )
+        .await
+        .map(|r| r.map(|(path_and_args, ..)| path_and_args))
     }
 
     /// Do argument validation and get returns validator without retrieving
     /// the analyze result twice.
-
     #[fastrace::trace]
     pub async fn new_with_returns_validator<RT: Runtime>(
         allowed_visibility: AllowedVisibility,
@@ -351,42 +493,56 @@ impl ValidatedPathAndArgs {
         public_path: PublicFunctionPath,
         args: SerializedArgs,
         expected_udf_type: UdfType,
-    ) -> anyhow::Result<Result<(ValidatedPathAndArgs, ReturnsValidator), JsError>> {
+        pending_args_policy: PendingArgsPolicy,
+    ) -> anyhow::Result<Result<(ValidatedPathAndArgs, ReturnsValidator, VisibilityInfo), JsError>>
+    {
         if public_path.is_system() {
             let path = match public_path {
                 PublicFunctionPath::RootExport(path) => ResolvedComponentFunctionPath {
                     component: ComponentId::Root,
                     udf_path: path.into(),
-                    component_path: Some(ComponentPath::root()),
+                    component_path: ComponentPath::root(),
                 },
                 PublicFunctionPath::Component(path) => {
                     let (_, component) = BootstrapComponentsModel::new(tx)
-                        .must_component_path_to_ids(&path.component)?;
+                        .component_path_to_ids(&path.component)?
+                        .context(ErrorMetadata::bad_request(
+                            "ComponentPathNotFound",
+                            format!("Component path '{}' not found", path.component),
+                        ))?;
                     ResolvedComponentFunctionPath {
                         component,
                         udf_path: path.udf_path,
-                        component_path: Some(path.component),
+                        component_path: path.component,
                     }
                 },
                 PublicFunctionPath::ResolvedComponent(path) => path,
             };
             // We don't analyze system modules, so we don't validate anything
             // except the identity for them.
-            let result = if tx.identity().is_admin() || tx.identity().is_system() {
-                Ok((
-                    ValidatedPathAndArgs {
-                        path,
-                        args,
-                        npm_version: None,
-                    },
-                    ReturnsValidator::Unvalidated,
-                ))
-            } else {
-                Err(JsError::from_message(
-                    unauthorized_error("Executing function").to_string(),
-                ))
+            let visibility_info = VisibilityInfo {
+                visibility: None,
+                component: path.component,
+                is_system_module: true,
             };
-            return Ok(result);
+            if let Err(js_error) = visibility_info.check_access(
+                allowed_visibility,
+                tx.identity(),
+                expected_udf_type,
+                PublicFunctionPath::ResolvedComponent(path.clone()),
+            )? {
+                return Ok(Err(js_error));
+            }
+            return Ok(Ok((
+                ValidatedPathAndArgs {
+                    path,
+                    args,
+                    npm_version: None,
+                    reuse_context: false,
+                },
+                ReturnsValidator::Unvalidated,
+                visibility_info,
+            )));
         }
 
         match fail_while_not_running(tx).await {
@@ -407,16 +563,20 @@ impl ValidatedPathAndArgs {
                 ResolvedComponentFunctionPath {
                     component,
                     udf_path: path.udf_path,
-                    component_path: Some(path.component),
+                    component_path: path.component,
                 }
             },
             PublicFunctionPath::Component(path) => {
                 let (_, component) = BootstrapComponentsModel::new(tx)
-                    .must_component_path_to_ids(&path.component)?;
+                    .component_path_to_ids(&path.component)?
+                    .context(ErrorMetadata::bad_request(
+                        "ComponentPathNotFound",
+                        format!("Component path '{}' not found", path.component),
+                    ))?;
                 ResolvedComponentFunctionPath {
                     component,
                     udf_path: path.udf_path,
-                    component_path: Some(path.component),
+                    component_path: path.component,
                 }
             },
             PublicFunctionPath::ResolvedComponent(path) => path,
@@ -427,17 +587,20 @@ impl ValidatedPathAndArgs {
             Err(e) => return Ok(Err(e)),
         };
 
-        // AnalyzeResult result should be populated for all supported versions.
-        //
-        //
-        let Ok(analyzed_function) = ModuleModel::new(tx)
-            .get_analyzed_function_by_id(&path)
+        let Some(module) = ModuleModel::new(tx)
+            .get_metadata_for_function_by_id(&path)
             .await?
         else {
-            return Ok(Err(JsError::from_message(missing_or_internal_error(
-                public_path,
-            )?)));
+            return Ok(Err(missing_or_internal_error(public_path)?));
         };
+        // AnalyzeResult result should be populated for all supported versions.
+        let Some(analyzed_function) = module.find_analyzed_function(&path.udf_path)? else {
+            return Ok(Err(missing_or_internal_error(public_path)?));
+        };
+        let analyzed_module = module
+            .analyze_result
+            .as_ref()
+            .context("missing analyze_result")?;
 
         if udf_version < *MIN_NPM_VERSION_FOR_BETTER_AUTH && should_block_path(&path) {
             tracing::warn!(
@@ -445,9 +608,7 @@ impl ValidatedPathAndArgs {
                 path.udf_path,
                 udf_version
             );
-            return Ok(Err(JsError::from_message(missing_or_internal_error(
-                public_path,
-            )?)));
+            return Ok(Err(missing_or_internal_error(public_path)?));
         }
 
         let returns_validator = if path.udf_path.is_system() {
@@ -462,12 +623,16 @@ impl ValidatedPathAndArgs {
             path,
             args,
             expected_udf_type,
+            pending_args_policy,
             analyzed_function,
             udf_version,
+            analyzed_module.reuse_context,
         )? {
-            Ok(validated_udf_path_and_args) => {
-                Ok(Ok((validated_udf_path_and_args, returns_validator)))
-            },
+            Ok((validated_udf_path_and_args, visibility_info)) => Ok(Ok((
+                validated_udf_path_and_args,
+                returns_validator,
+                visibility_info,
+            ))),
             Err(js_err) => Ok(Err(js_err)),
         }
     }
@@ -478,59 +643,74 @@ impl ValidatedPathAndArgs {
         path: ResolvedComponentFunctionPath,
         args: SerializedArgs,
         expected_udf_type: UdfType,
+        pending_args_policy: PendingArgsPolicy,
         analyzed_function: AnalyzedFunction,
         version: Version,
-    ) -> anyhow::Result<Result<ValidatedPathAndArgs, JsError>> {
-        let identity = tx.identity();
-        match identity {
-            // This is an admin, so allow calling all functions
-            Identity::InstanceAdmin(_) | Identity::ActingUser(..) => (),
-            _ => match allowed_visibility {
-                AllowedVisibility::All => (),
-                AllowedVisibility::PublicOnly => match analyzed_function.visibility {
-                    Some(Visibility::Public) => (),
-                    Some(Visibility::Internal) => {
-                        return Ok(Err(JsError::from_message(missing_or_internal_error(
-                            PublicFunctionPath::ResolvedComponent(path),
-                        )?)));
-                    },
-                    None => {
-                        anyhow::bail!(
-                            "No visibility found for analyzed function {}{}",
-                            path.udf_path,
-                            path.clone().for_logging().component.in_component_str(),
-                        );
-                    },
-                },
-            },
+        reuse_context: bool,
+    ) -> anyhow::Result<Result<(ValidatedPathAndArgs, VisibilityInfo), JsError>> {
+        let visibility_info = VisibilityInfo {
+            visibility: analyzed_function.visibility.clone(),
+            component: path.component,
+            is_system_module: false,
         };
+        if let Err(js_error) = visibility_info.check_access(
+            allowed_visibility,
+            tx.identity(),
+            expected_udf_type,
+            PublicFunctionPath::ResolvedComponent(path.clone()),
+        )? {
+            return Ok(Err(js_error));
+        }
         if expected_udf_type != analyzed_function.udf_type {
-            return Ok(Err(JsError::from_message(format!(
+            let err_str = format!(
                 "Trying to execute {}{} as {}, but it is defined as {}.",
                 path.udf_path,
                 path.clone().for_logging().component.in_component_str(),
                 expected_udf_type,
                 analyzed_function.udf_type
-            ))));
-        }
-
-        let udf_args = match parse_udf_args(&path.udf_path, args.clone().into_args()?) {
-            Ok(udf_args) => udf_args,
-            Err(err) => return Ok(Err(err)),
-        };
-        match validate_udf_args_size(&path.udf_path, &udf_args) {
-            Ok(()) => (),
-            Err(err) => return Ok(Err(err)),
+            );
+            return if *UDF_404_ON_BAD_PATH {
+                anyhow::bail!(ErrorMetadata::not_found("FunctionPathWrongType", err_str));
+            } else {
+                Ok(Err(JsError::from_message(err_str)))
+            };
         }
 
         let table_mapping = &tx.table_mapping().namespace(path.component.into());
 
-        // If the UDF has an args validator, check that these args match.
-        let args_validation_error = analyzed_function.args()?.check_args(
-            &udf_args,
-            table_mapping,
-            virtual_system_mapping(),
-        )?;
+        // Parse the args, check their size, and if the UDF has an args
+        // validator, check that they match.
+        let args_validation_error = match pending_args_policy {
+            PendingArgsPolicy::Reject => {
+                let udf_args = match parse_udf_args(&path.udf_path, args.clone().into_args()?) {
+                    Ok(udf_args) => udf_args,
+                    Err(err) => return Ok(Err(err)),
+                };
+                if let Err(err) = validate_udf_args_size(&path.udf_path, &udf_args) {
+                    return Ok(Err(err));
+                }
+                analyzed_function.args()?.check_args(
+                    &udf_args,
+                    table_mapping,
+                    virtual_system_mapping(),
+                )?
+            },
+            PendingArgsPolicy::Allow => {
+                let udf_args =
+                    match parse_pending_udf_args(&path.udf_path, args.clone().into_args()?) {
+                        Ok(udf_args) => udf_args,
+                        Err(err) => return Ok(Err(err)),
+                    };
+                if let Err(err) = validate_pending_udf_args_size(&path.udf_path, &udf_args) {
+                    return Ok(Err(err));
+                }
+                analyzed_function.args()?.check_pending_args(
+                    udf_args,
+                    table_mapping,
+                    virtual_system_mapping(),
+                )?
+            },
+        };
 
         if let Some(error) = args_validation_error {
             return Ok(Err(JsError::from_message(format!(
@@ -538,48 +718,19 @@ impl ValidatedPathAndArgs {
             ))));
         }
 
-        Ok(Ok(ValidatedPathAndArgs {
-            path,
-            args,
-            npm_version: Some(version),
-        }))
+        Ok(Ok((
+            ValidatedPathAndArgs {
+                path,
+                args,
+                npm_version: Some(version),
+                reuse_context,
+            },
+            visibility_info,
+        )))
     }
 
     pub fn args_size(&self) -> usize {
         self.args.heap_size()
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_for_tests(
-        udf_path: CanonicalizedUdfPath,
-        args: SerializedArgs,
-        npm_version: Option<Version>,
-    ) -> Self {
-        Self::new_for_tests_in_component(
-            CanonicalizedComponentFunctionPath {
-                component: ComponentPath::test_user(),
-                udf_path,
-            },
-            args,
-            npm_version,
-        )
-    }
-
-    #[cfg(any(test, feature = "testing"))]
-    pub fn new_for_tests_in_component(
-        path: CanonicalizedComponentFunctionPath,
-        args: SerializedArgs,
-        npm_version: Option<Version>,
-    ) -> Self {
-        Self {
-            path: ResolvedComponentFunctionPath {
-                component: ComponentId::test_user(),
-                udf_path: path.udf_path,
-                component_path: Some(path.component),
-            },
-            args,
-            npm_version,
-        }
     }
 
     pub fn path(&self) -> &ResolvedComponentFunctionPath {
@@ -607,23 +758,30 @@ impl ValidatedPathAndArgs {
             npm_version,
             component_path,
             component_id,
+            reuse_context,
         }: pb::common::ValidatedPathAndArgs,
     ) -> anyhow::Result<Self> {
         let args =
             SerializedArgs::from_slice(&args.ok_or_else(|| anyhow::anyhow!("Missing args"))?)?;
         let component = ComponentId::deserialize_from_string(component_id.as_deref())?;
         let component_path = component_path
-            .context("Missing component path")?
-            .try_into()?;
+            .context("Missing component_path in proto")?
+            .try_into()
+            .context("Invalid component path in proto")?;
         Ok(Self {
             path: ResolvedComponentFunctionPath {
                 component,
                 udf_path: path.context("Missing udf_path")?.parse()?,
-                component_path: Some(component_path),
+                component_path,
             },
             args,
             npm_version: npm_version.map(|v| Version::parse(&v)).transpose()?,
+            reuse_context: reuse_context.unwrap_or(false),
         })
+    }
+
+    pub fn reuse_context(&self) -> bool {
+        self.reuse_context
     }
 }
 
@@ -635,18 +793,18 @@ impl TryFrom<ValidatedPathAndArgs> for pb::common::ValidatedPathAndArgs {
             path,
             args,
             npm_version,
+            reuse_context,
         }: ValidatedPathAndArgs,
     ) -> anyhow::Result<Self> {
         let args = args.get().as_bytes().to_vec();
-        let component_path = path
-            .component_path
-            .map(|component_path| component_path.into());
+        let component_path = Some(path.component_path.into());
         Ok(Self {
             path: Some(path.udf_path.to_string()),
             args: Some(args),
             npm_version: npm_version.map(|v| v.to_string()),
             component_path,
             component_id: path.component.serialize_to_string(),
+            reuse_context: Some(reuse_context),
         })
     }
 }
@@ -659,56 +817,10 @@ impl TryFrom<ValidatedPathAndArgs> for pb::common::ValidatedPathAndArgs {
 pub struct ValidatedHttpPath {
     path: ResolvedComponentFunctionPath,
     npm_version: Option<Version>,
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl Arbitrary for ValidatedHttpPath {
-    type Parameters = ();
-
-    type Strategy = impl Strategy<Value = ValidatedHttpPath>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        any::<(sync_types::CanonicalizedUdfPath, ComponentId, ComponentPath)>().prop_map(
-            |(udf_path, component_id, component_path)| ValidatedHttpPath {
-                path: ResolvedComponentFunctionPath {
-                    component: component_id,
-                    udf_path,
-                    component_path: Some(component_path),
-                },
-                npm_version: Some(Version::parse("0.0.0").unwrap()),
-            },
-        )
-    }
+    reuse_context: bool,
 }
 
 impl ValidatedHttpPath {
-    #[cfg(any(test, feature = "testing"))]
-    pub async fn new_for_tests<RT: Runtime>(
-        tx: &mut Transaction<RT>,
-        udf_path: sync_types::CanonicalizedUdfPath,
-        npm_version: Option<Version>,
-    ) -> anyhow::Result<Result<Self, JsError>> {
-        if !udf_path.is_system() {
-            match fail_while_not_running(tx).await {
-                Ok(Ok(())) => {},
-                Ok(Err(e)) => {
-                    return Ok(Err(e));
-                },
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(Ok(Self {
-            path: ResolvedComponentFunctionPath {
-                component: ComponentId::test_user(),
-                udf_path,
-                component_path: Some(ComponentPath::test_user()),
-            },
-            npm_version,
-        }))
-    }
-
     pub async fn new<RT: Runtime>(
         tx: &mut Transaction<RT>,
         path: CanonicalizedComponentFunctionPath,
@@ -733,15 +845,20 @@ impl ValidatedHttpPath {
         let path = ResolvedComponentFunctionPath {
             component,
             udf_path: path.udf_path,
-            component_path: Some(path.component),
+            component_path: path.component,
         };
         let udf_version = match udf_version(&path, tx).await? {
             Ok(udf_version) => udf_version,
             Err(e) => return Ok(Err(e)),
         };
+        let module = ModuleModel::new(tx)
+            .get_metadata_for_function_by_id(&path)
+            .await?;
         Ok(Ok(ValidatedHttpPath {
             path,
             npm_version: Some(udf_version),
+            reuse_context: module
+                .is_some_and(|m| m.analyze_result.as_ref().is_some_and(|a| a.reuse_context)),
         }))
     }
 
@@ -759,19 +876,22 @@ impl ValidatedHttpPath {
             component_path,
             component_id,
             npm_version,
+            reuse_context,
         }: pb::common::ValidatedHttpPath,
     ) -> anyhow::Result<Self> {
         let component = ComponentId::deserialize_from_string(component_id.as_deref())?;
         let component_path = component_path
-            .context("Missing component path")?
-            .try_into()?;
+            .context("Missing component_path in proto")?
+            .try_into()
+            .context("Invalid component path in proto")?;
         Ok(Self {
             path: ResolvedComponentFunctionPath {
                 component,
                 udf_path: path.context("Missing udf_path")?.parse()?,
-                component_path: Some(component_path),
+                component_path,
             },
             npm_version: npm_version.map(|v| Version::parse(&v)).transpose()?,
+            reuse_context: reuse_context.unwrap_or(false),
         })
     }
 }
@@ -780,54 +900,24 @@ impl TryFrom<ValidatedHttpPath> for pb::common::ValidatedHttpPath {
     type Error = anyhow::Error;
 
     fn try_from(
-        ValidatedHttpPath { path, npm_version }: ValidatedHttpPath,
+        ValidatedHttpPath {
+            path,
+            npm_version,
+            reuse_context,
+        }: ValidatedHttpPath,
     ) -> anyhow::Result<Self> {
-        let component_path = path
-            .component_path
-            .map(|component_path| component_path.into());
+        let component_path = Some(path.component_path.into());
         Ok(Self {
             path: Some(path.udf_path.to_string()),
             npm_version: npm_version.map(|v| v.to_string()),
             component_path,
             component_id: path.component.serialize_to_string(),
+            reuse_context: Some(reuse_context),
         })
     }
 }
 
-#[cfg(test)]
-mod test {
-
-    use cmd_util::env::env_config;
-    use proptest::prelude::*;
-
-    use super::{
-        ValidatedHttpPath,
-        ValidatedPathAndArgs,
-    };
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_http_action_path_proto_roundtrip(v in any::<ValidatedHttpPath>()) {
-            let proto = pb::common::ValidatedHttpPath::try_from(v.clone()).unwrap();
-            let v2 = ValidatedHttpPath::from_proto(proto).unwrap();
-            assert_eq!(v, v2);
-        }
-
-        #[test]
-        fn test_udf_path_proto_roundtrip(v in any::<ValidatedPathAndArgs>()) {
-            let proto = pb::common::ValidatedPathAndArgs::try_from(v.clone()).unwrap();
-            let v2 = ValidatedPathAndArgs::from_proto(proto).unwrap();
-            assert_eq!(v, v2);
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq))]
 pub struct ValidatedUdfOutcome {
     pub path: CanonicalizedComponentFunctionPath,
     pub arguments: SerializedArgs,
@@ -844,7 +934,9 @@ pub struct ValidatedUdfOutcome {
 
     // QueryUdfOutcomes are stored in the Udf level cache, which is why we would like
     // them to have more compact representation.
-    pub result: Result<JsonPackedValue, JsError>,
+    // Mutations and subqueries called by mutations can have unresolved commit_ts, but top-level
+    // queries should be concrete.
+    pub result: Result<JsonPackedValue<PendingValue>, JsError>,
 
     pub syscall_trace: SyscallTrace,
 
@@ -923,29 +1015,37 @@ impl ValidatedUdfOutcome {
 
         // TODO(CX-6318) Don't pack json value until it's been validated.
         if returns_validator.needs_validation() {
-            let returns: ConvexValue = match &validated.result {
-                Ok(json_packed_value) => match json_packed_value.unpack() {
-                    Ok(v) => v,
-                    Err(mut e) => {
-                        report_error_sync(&mut e);
-                        return validated;
-                    },
-                },
+            // Mutation return values may contain unresolved commit
+            // timestamps (resolved after commit).
+            let checked = match &validated.result {
+                Ok(json_packed_value) => json_packed_value.unpack().and_then(|returns| {
+                    returns_validator.check_pending_output(
+                        &returns,
+                        table_mapping,
+                        virtual_system_mapping(),
+                    )
+                }),
                 Err(_) => return validated,
             };
-
-            if let Some(js_err) =
-                returns_validator.check_output(&returns, table_mapping, virtual_system_mapping())
-            {
-                validated.result = Err(js_err);
-            };
+            match checked {
+                Ok(Some(js_err)) => validated.result = Err(js_err),
+                Ok(None) => (),
+                Err(e) => {
+                    let mut e = e.wrap_error_message(|msg| {
+                        format!(
+                            "Function {} return value invalid: {msg}",
+                            validated.path.debug_str(),
+                        )
+                    });
+                    report_error_sync(&mut e);
+                },
+            }
         }
         validated
     }
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(any(test, feature = "testing"), derive(PartialEq))]
 pub struct ValidatedActionOutcome {
     pub path: CanonicalizedComponentFunctionPath,
     pub arguments: SerializedArgs,
@@ -993,7 +1093,13 @@ impl ValidatedActionOutcome {
                         validated.result = Err(js_err);
                     }
                 },
-                Err(mut e) => {
+                Err(e) => {
+                    let mut e = e.wrap_error_message(|msg| {
+                        format!(
+                            "Action {} return value invalid: {msg}",
+                            validated.path.debug_str(),
+                        )
+                    });
                     report_error_sync(&mut e);
                 },
             }

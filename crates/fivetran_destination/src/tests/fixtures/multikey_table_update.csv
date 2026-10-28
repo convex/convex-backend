@@ -1,3 +1,0 @@
-id1,id2,text,_fivetran_deleted,_fivetran_synced
-2,200,"second row updated",false,"2024-02-09T00:00:00.000000000Z"
-3,300,"third row soft deleted - but also this value updated",true,"2024-02-09T00:00:00.000000000Z"

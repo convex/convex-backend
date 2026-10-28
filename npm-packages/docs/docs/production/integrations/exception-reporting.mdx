@@ -17,16 +17,25 @@ Currently, exception reporting is only available to Pro users.
 ## Configuring Sentry
 
 To configure sentry, navigate to the
-[Deployment Settings](/dashboard/deployments/settings.md) in the Dashboard, and
+[Deployment Settings](/dashboard/deployments/settings.mdx) in the Dashboard, and
 the "Integrations" tab in the sidebar.
 
-![Integrations Page](/screenshots/integrations_page.png)
+<Screenshot
+  story="docs/pages/project/deployment/settings/Integrations"
+  alt="Integrations page"
+/>
 
 Click on the Sentry card and follow the setup directions. You will need your
 [Sentry DSN](https://docs.sentry.io/product/sentry-basics/concepts/dsn-explainer/).
 You may optionally specify additional tags to be added to each exception event.
 
-![Configure sentry](/screenshots/configure_sentry.png)
+When creating your project in Sentry, mark its platform as **Node.js** so that
+exception events are processed correctly.
+
+<Screenshot
+  story="docs/pages/project/deployment/settings/Integrations#Configure Sentry"
+  alt="Configure Sentry integration"
+/>
 
 ## Supported Tags
 
@@ -43,7 +52,7 @@ following tags. These tags cannot be overridden.
   the function that errored.
 - `server_name`: The name of the deployment. e.g. `happy-animal-123`
 - `environment`: One of `["prod", "dev", "preview"]`
-- `user`: If the function is [authenticated](/auth.mdx), then the
+- `user`: If the function is [authenticated](/auth/overview.mdx), then the
   [tokenIdentifier](/api/interfaces/server.UserIdentity#tokenidentifier) is used
   as the user id on Sentry. The `tokenIdentifier` is a stable and globally
   unique string representing the authenticated user.
@@ -59,13 +68,12 @@ following tags. These tags cannot be overridden.
 ## Configuring PostHog Error Tracking
 
 To configure PostHog Error Tracking, navigate to the
-[Deployment Settings](/dashboard/deployments/settings.md) in the Dashboard, and
+[Deployment Settings](/dashboard/deployments/settings.mdx) in the Dashboard, and
 the "Integrations" tab in the sidebar.
 
 Click on the PostHog Error Tracking card and follow the setup directions. You
-will need your
-[PostHog project API key](https://us.posthog.com/settings/project#variables),
-found in PostHog under Settings > Project > Project API Key.
+will need your [PostHog project token](https://us.posthog.com/settings/project),
+found in PostHog under Settings > Project > General.
 
 You may optionally specify a custom host URL. Defaults to US Cloud
 (`https://us.i.posthog.com`). Use `https://eu.i.posthog.com` for EU Cloud, or
@@ -87,7 +95,7 @@ event sent to PostHog:
 - `convex_request_id`: The
   [request ID](/functions/debugging.mdx#finding-relevant-logs-by-request-id) of
   the function that errored
-- `distinct_id`: If the function is [authenticated](/auth.mdx), the
+- `distinct_id`: If the function is [authenticated](/auth/overview.mdx), the
   [tokenIdentifier](/api/interfaces/server.UserIdentity#tokenidentifier) is
   used. Otherwise, the deployment name is used as a fallback.
 

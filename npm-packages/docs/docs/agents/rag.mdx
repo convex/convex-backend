@@ -85,7 +85,7 @@ relevant context for a user query.
   context.
 
 For example code, see
-[ragAsPrompt.ts](https://github.com/get-convex/agent/blob/main/example/convex/rag/ragAsPrompt.ts)
+[ragAsPrompt.ts](https://github.com/convex/agent/blob/main/example/convex/rag/ragAsPrompt.ts)
 for the overall code. The simplest version is:
 
 ```ts
@@ -116,14 +116,14 @@ information by providing a tool to search for context.
 - This works well if you want the Agent to be able to dynamically search.
 
 See
-[ragAsTools.ts](https://github.com/get-convex/agent/blob/main/example/convex/rag/ragAsTools.ts)
+[ragAsTools.ts](https://github.com/convex/agent/blob/main/example/convex/rag/ragAsTools.ts)
 for the code. The simplest version is:
 
 ```ts
 searchContext: createTool({
   description: "Search for context related to this user prompt",
-  args: z.object({ query: z.string().describe("Describe the context you're looking for") }),
-  handler: async (ctx, { query }) => {
+  inputSchema: z.object({ query: z.string().describe("Describe the context you're looking for") }),
+  execute: async (ctx, { query }) => {
     const context = await rag.search(ctx, { namespace: userId, query });
     return context.text;
   },
@@ -152,13 +152,13 @@ and transcribe the image, and then use that description to search for relevant
 context. And by storing the associated image, you can then pass the original
 file around once you've retrieved it via searching.
 
-[See an example here](https://github.com/get-convex/rag/blob/main/example/convex/getText.ts#L28-L42).
+[See an example here](https://github.com/convex/rag/blob/main/example/convex/getText.ts#L28-L42).
 
 ```ts
 const description = await thread.generateText({
   message: {
     role: "user",
-    content: [{ type: "image", data: url, mimeType: blob.type }],
+    content: [{ type: "image", image: url, mediaType: blob.type }],
   },
 });
 ```
@@ -177,14 +177,14 @@ browser already has the file, it's a pretty good environment to do the heavy
 lifting in (and free!).
 
 There's an example in
-[the RAG demo](https://github.com/get-convex/rag/blob/main/example/src/pdfUtils.ts#L14),
-[used in the UI here](https://github.com/get-convex/rag/blob/main/example/src/components/UploadSection.tsx#L51),
-[with Pdf.js served statically](https://github.com/get-convex/rag/blob/main/example/public/pdf-worker/).
+[the RAG demo](https://github.com/convex/rag/blob/main/example/src/pdfUtils.ts#L14),
+[used in the UI here](https://github.com/convex/rag/blob/main/example/src/components/UploadSection.tsx#L51),
+[with Pdf.js served statically](https://github.com/convex/rag/blob/main/example/public/pdf-worker/).
 
 If you really want to do it server-side and don't worry about cost or latency,
 you can pass it to an LLM, but note it takes a long time for big files.
 
-[See an example here](https://github.com/get-convex/rag/blob/main/example/convex/getText.ts#L50-L65).
+[See an example here](https://github.com/convex/rag/blob/main/example/convex/getText.ts#L50-L65).
 
 ### Parsing text files
 
@@ -194,12 +194,12 @@ a natural structure an LLM can understand.
 However, to get good embeddings, you can once again use an LLM to translate the
 text into a more structured format.
 
-[See an example here](https://github.com/get-convex/rag/blob/main/example/convex/getText.ts#L68-L89).
+[See an example here](https://github.com/convex/rag/blob/main/example/convex/getText.ts#L68-L89).
 
 ## Examples in Action
 
 To see these examples in action, check out the
-[RAG example](https://github.com/get-convex/rag/blob/main/example/convex/example.ts).
+[RAG example](https://github.com/convex/rag/blob/main/example/convex/example.ts).
 
 - Adding text, pdf, and image content to the RAG component
 - Searching and generating text based on the context.
@@ -209,8 +209,8 @@ To see these examples in action, check out the
 
 Run the example with:
 
-```bash
-git clone https://github.com/get-convex/rag.git
+```sh
+git clone https://github.com/convex/rag.git
 cd rag
 npm run setup
 npm run example

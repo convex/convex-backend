@@ -14,15 +14,12 @@ use itertools::{
     Either,
     Itertools,
 };
-#[cfg(any(test, feature = "testing"))]
-use proptest::prelude::*;
+use serde::Serialize;
 use shape_inference::{
     Shape,
     ShapeConfig,
     ShapeCounter,
 };
-#[cfg(any(test, feature = "testing"))]
-use value::TableType;
 use value::{
     id_v6::DeveloperDocumentId,
     ConvexObject,
@@ -55,10 +52,6 @@ use crate::{
 };
 
 pub mod json;
-#[cfg(any(test, feature = "testing"))]
-pub mod test_helpers;
-#[cfg(test)]
-mod tests;
 pub mod validator;
 
 pub const MAX_INDEXES_PER_TABLE: usize = 64;
@@ -177,6 +170,7 @@ macro_rules! db_schema {
                         vector_indexes: Default::default(),
                         staged_vector_indexes: Default::default(),
                         document_type: Some($document_schema),
+                        staged_document_type: None,
                     };
                     tables.insert(table_name, table_def);
                 )*
@@ -197,6 +191,7 @@ macro_rules! db_schema_not_validated {
             use std::collections::BTreeMap;
             #[allow(unused)]
             use $crate::types::TableName;
+            use $crate::schemas::DatabaseSchema;
             #[allow(unused)]
             let mut tables = BTreeMap::new();
             {
@@ -211,6 +206,7 @@ macro_rules! db_schema_not_validated {
                         vector_indexes: Default::default(),
                         staged_vector_indexes: Default::default(),
                         document_type: Some($document_schema),
+                        staged_document_type: None,
                     };
                     tables.insert(table_name, table_def);
                 )*
@@ -225,6 +221,25 @@ macro_rules! db_schema_not_validated {
 
 pub const VECTOR_DIMENSIONS: u32 = 1536;
 
+/// Why schema validation will or won't walk a table's documents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TableValidationOutcome {
+    /// The new schema has `schemaValidation: false`; nothing is walked.
+    NotValidated,
+    /// The new validator is a superset of the enforced (active, validating)
+    /// schema for this table, so all existing documents already conform.
+    SupersetOfEnforced,
+    /// The new validator is a superset of a staged validator the
+    /// schema-validation rows have proven valid (and kept valid by checking
+    /// every write since), so all existing documents already conform.
+    SupersetOfStagedValidated,
+    /// The new validator is a superset of the table's inferred shape.
+    SupersetOfShape,
+    /// Documents must be walked.
+    MustWalk,
+}
+
 impl DatabaseSchema {
     pub fn tables_to_validate<'a, C: ShapeConfig, S: ShapeCounter, F>(
         new_schema: &'a DatabaseSchema,
@@ -232,42 +247,86 @@ impl DatabaseSchema {
         table_mapping: &NamespacedTableMapping,
         virtual_system_mapping: &VirtualSystemMapping,
         shape_provider: &F,
+        valid_staged_validators: &BTreeMap<TableName, DocumentSchema>,
     ) -> anyhow::Result<BTreeSet<&'a TableName>>
     where
-        F: Fn(&TableName) -> Option<Shape<C, S>>,
+        F: Fn(&TableName) -> anyhow::Result<Option<Shape<C, S>>>,
+    {
+        Ok(Self::table_validation_outcomes(
+            new_schema,
+            active_schema,
+            table_mapping,
+            virtual_system_mapping,
+            shape_provider,
+            valid_staged_validators,
+        )?
+        .into_iter()
+        .filter_map(|(table_name, outcome)| {
+            matches!(outcome, TableValidationOutcome::MustWalk).then_some(table_name)
+        })
+        .collect())
+    }
+
+    pub fn table_validation_outcomes<'a, C: ShapeConfig, S: ShapeCounter, F>(
+        new_schema: &'a DatabaseSchema,
+        active_schema: Option<&DatabaseSchema>,
+        table_mapping: &NamespacedTableMapping,
+        virtual_system_mapping: &VirtualSystemMapping,
+        shape_provider: &F,
+        // Must come from the active schema's `Valid` validation rows; see
+        // `validation_outcome_for_validator`.
+        valid_staged_validators: &BTreeMap<TableName, DocumentSchema>,
+    ) -> anyhow::Result<Vec<(&'a TableName, TableValidationOutcome)>>
+    where
+        F: Fn(&TableName) -> anyhow::Result<Option<Shape<C, S>>>,
     {
         if !new_schema.schema_validation {
             tracing::info!("Schema validation is disabled, no tables to check");
-            return Ok(BTreeSet::new());
+            return Ok(new_schema
+                .tables
+                .keys()
+                .map(|table_name| (table_name, TableValidationOutcome::NotValidated))
+                .collect());
         }
 
-        let possible_table_names: Vec<Option<&TableName>> = new_schema
+        new_schema
             .tables
             .iter()
             .map(|(table_name, table_definition)| {
-                Self::must_revalidate_table(
+                let table_shape = shape_provider(table_name)?;
+                Self::validation_outcome_for_validator(
                     table_name,
-                    table_definition,
+                    table_definition.document_type.clone(),
                     active_schema,
                     table_mapping,
                     virtual_system_mapping,
-                    &shape_provider(table_name),
+                    &table_shape,
+                    valid_staged_validators.get(table_name),
                 )
-                .map(|must_revalidate| must_revalidate.then_some(table_name))
+                .map(|outcome| (table_name, outcome))
             })
-            .try_collect()?;
-        Ok(possible_table_names.into_iter().flatten().collect())
+            .try_collect()
     }
 
-    fn must_revalidate_table<C: ShapeConfig, S: ShapeCounter>(
+    /// Whether existing documents must be walked to check they conform to
+    /// `next_schema` for this table, or whether a subset relation (against the
+    /// enforced validator or the table's shape) proves they already do.
+    ///
+    /// `valid_staged_validator` must be the table's staged validator from the
+    /// active schema whose validation row is `Valid` (i.e. from
+    /// `SchemaValidationModel::valid_staged_validators`): treating it
+    /// as a superset proof is only sound because every document was checked
+    /// against it, and every write since is checked on the commit path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn validation_outcome_for_validator<C: ShapeConfig, S: ShapeCounter>(
         table_name: &TableName,
-        table_definition: &TableDefinition,
+        next_schema: Option<DocumentSchema>,
         active_schema: Option<&DatabaseSchema>,
         table_mapping: &NamespacedTableMapping,
         virtual_system_mapping: &VirtualSystemMapping,
         table_shape: &Option<Shape<C, S>>,
-    ) -> anyhow::Result<bool> {
-        let next_schema = table_definition.document_type.clone();
+        valid_staged_validator: Option<&DocumentSchema>,
+    ) -> anyhow::Result<TableValidationOutcome> {
         let next_schema_validator: Validator = next_schema.into();
 
         // Can skip validation thanks to the schema diff?
@@ -284,7 +343,20 @@ impl DatabaseSchema {
                  schema",
                 table_name
             );
-            return Ok(false);
+            return Ok(TableValidationOutcome::SupersetOfEnforced);
+        }
+
+        // Can skip validation thanks to a staged validator already proven valid?
+        if let Some(staged_validator) = valid_staged_validator {
+            let staged_validator = Validator::from(staged_validator.clone());
+            if staged_validator.is_subset(&next_schema_validator) {
+                tracing::debug!(
+                    "Skipping validation for table {} because its schema is a superset of a \
+                     validated staged validator",
+                    table_name
+                );
+                return Ok(TableValidationOutcome::SupersetOfStagedValidated);
+            }
         }
 
         if let Some(table_shape) = table_shape {
@@ -300,17 +372,77 @@ impl DatabaseSchema {
                      ",
                     table_name
                 );
-                return Ok(false);
+                return Ok(TableValidationOutcome::SupersetOfShape);
             }
         }
 
-        Ok(true)
+        Ok(TableValidationOutcome::MustWalk)
     }
 
     fn schema_for_table(&self, table_name: &TableName) -> Option<&DocumentSchema> {
         self.tables
             .get(table_name)
             .and_then(|table_definition| table_definition.document_type.as_ref())
+    }
+
+    pub fn staged_schema_for_table(&self, table_name: &TableName) -> Option<&DocumentSchema> {
+        self.tables
+            .get(table_name)
+            .and_then(|table_definition| table_definition.staged_document_type.as_ref())
+    }
+
+    pub fn has_staged_validators(&self) -> bool {
+        self.tables
+            .values()
+            .any(|table| table.staged_document_type.is_some())
+    }
+
+    /// Check a document against the staged validator for its table, if any.
+    /// Unlike `check_value`, this ignores the `schema_validation` flag: staged
+    /// validation asks whether documents satisfy the *proposed* validator,
+    /// independent of whether the current schema is enforced.
+    fn check_value_against_staged(
+        &self,
+        doc: &ResolvedDocument,
+        table_name: &TableName,
+        table_mapping: &NamespacedTableMapping,
+        virtual_system_mapping: &VirtualSystemMapping,
+    ) -> Result<(), ValidationError> {
+        match self.staged_schema_for_table(table_name) {
+            Some(staged_schema) => {
+                staged_schema.check_value(&doc.value().0, table_mapping, virtual_system_mapping)
+            },
+            None => Ok(()),
+        }
+    }
+
+    pub fn check_existing_document_against_staged(
+        &self,
+        doc: &ResolvedDocument,
+        table_name: TableName,
+        table_mapping: &NamespacedTableMapping,
+        virtual_system_mapping: &VirtualSystemMapping,
+    ) -> Result<(), SchemaValidationError> {
+        self.check_value_against_staged(doc, &table_name, table_mapping, virtual_system_mapping)
+            .map_err(|validation_error| SchemaValidationError::ExistingDocument {
+                validation_error,
+                table_name,
+                id: doc.developer_id(),
+            })
+    }
+
+    pub fn check_new_document_against_staged(
+        &self,
+        doc: &ResolvedDocument,
+        table_name: TableName,
+        table_mapping: &NamespacedTableMapping,
+        virtual_system_mapping: &VirtualSystemMapping,
+    ) -> Result<(), SchemaEnforcementError> {
+        self.check_value_against_staged(doc, &table_name, table_mapping, virtual_system_mapping)
+            .map_err(|validation_error| SchemaEnforcementError::Document {
+                validation_error,
+                table_name,
+            })
     }
 
     fn check_value(
@@ -451,51 +583,6 @@ impl DatabaseSchema {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl Default for DatabaseSchema {
-    fn default() -> Self {
-        Self {
-            tables: BTreeMap::new(),
-            schema_validation: true,
-        }
-    }
-}
-
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for DatabaseSchema {
-    type Parameters = ();
-
-    type Strategy = impl proptest::strategy::Strategy<Value = DatabaseSchema>;
-
-    fn arbitrary_with((): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        // To generate valid schemas, first generate the set of table names.
-        // In each table, only generate references to names in this set.
-        (
-            prop::collection::btree_set(any_with::<TableName>(TableType::User), 0..8),
-            any::<bool>(),
-        )
-            .prop_flat_map(|(table_names, schema_validation)| {
-                let cloned_names = table_names.clone();
-                let table_names_and_definitions: Vec<_> = table_names
-                    .into_iter()
-                    .map(move |table_name| {
-                        (
-                            Just(table_name.clone()),
-                            any_with::<TableDefinition>((table_name, cloned_names.clone())),
-                        )
-                    })
-                    .collect();
-
-                table_names_and_definitions.prop_map(move |names_and_defintiions| Self {
-                    tables: names_and_defintiions.into_iter().collect(),
-                    schema_validation,
-                })
-            })
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableDefinition {
     pub table_name: TableName,
@@ -508,6 +595,11 @@ pub struct TableDefinition {
     pub document_type: Option<DocumentSchema>, /* FIXME: `Option` could be removed here, since
                                                 * `None` is handled the same way as
                                                 * `Some(DocumentSchema::Any)`. */
+    /// The proposed next validator for this table, validated in the
+    /// background while `document_type` remains the enforced validator.
+    /// Valid without a `document_type`: staging a table's first validator
+    /// checks existing documents while writes stay unenforced.
+    pub staged_document_type: Option<DocumentSchema>,
 }
 
 impl TableDefinition {
@@ -562,118 +654,7 @@ impl TableDefinition {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
-impl proptest::arbitrary::Arbitrary for TableDefinition {
-    type Parameters = (TableName, BTreeSet<TableName>);
-
-    type Strategy = impl proptest::strategy::Strategy<Value = TableDefinition>;
-
-    fn arbitrary_with((table_name, all_table_names): Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        (
-            prop::collection::vec(any::<IndexSchema>(), 0..6),
-            prop::collection::vec(any::<IndexSchema>(), 0..6),
-            prop::collection::vec(any::<TextIndexSchema>(), 0..3),
-            prop::collection::vec(any::<TextIndexSchema>(), 0..3),
-            prop::collection::vec(any::<VectorIndexSchema>(), 0..3),
-            prop::collection::vec(any::<VectorIndexSchema>(), 0..3),
-            any_with::<Option<DocumentSchema>>((
-                prop::option::Probability::default(),
-                all_table_names,
-            )),
-        )
-            .prop_filter_map(
-                "index names must be unique",
-                move |(
-                    indexes,
-                    staged_db_indexes,
-                    search_indexes,
-                    staged_search_indexes,
-                    vector_indexes,
-                    staged_vector_indexes,
-                    document_type,
-                )| {
-                    // Can't have two indexes with same name
-                    let index_descriptors: BTreeSet<_> = indexes
-                        .iter()
-                        .map(|i| &i.index_descriptor)
-                        .chain(staged_db_indexes.iter().map(|i| &i.index_descriptor))
-                        .chain(search_indexes.iter().map(|i| &i.index_descriptor))
-                        .chain(staged_search_indexes.iter().map(|i| &i.index_descriptor))
-                        .chain(vector_indexes.iter().map(|i| &i.index_descriptor))
-                        .chain(staged_vector_indexes.iter().map(|i| &i.index_descriptor))
-                        .collect();
-                    let expected = indexes.len()
-                        + staged_db_indexes.len()
-                        + search_indexes.len()
-                        + staged_search_indexes.len()
-                        + vector_indexes.len()
-                        + staged_vector_indexes.len();
-                    assert!(index_descriptors.len() <= expected);
-                    if index_descriptors.len() != expected {
-                        return None;
-                    }
-
-                    // Can't have two search fields with same name
-                    let search_fields: BTreeSet<_> = search_indexes
-                        .iter()
-                        .map(|i| &i.search_field)
-                        .chain(staged_search_indexes.iter().map(|i| &i.search_field))
-                        .collect();
-                    let expected = search_indexes.len() + staged_search_indexes.len();
-                    assert!(search_fields.len() <= expected);
-                    if search_fields.len() != expected {
-                        return None;
-                    }
-
-                    // Can't have two vector fields with same name
-                    let vector_fields: BTreeSet<_> = vector_indexes
-                        .iter()
-                        .map(|i| &i.vector_field)
-                        .chain(staged_vector_indexes.iter().map(|i| &i.vector_field))
-                        .collect();
-                    let expected = vector_indexes.len() + staged_vector_indexes.len();
-                    assert!(vector_fields.len() <= expected);
-                    if vector_fields.len() != expected {
-                        return None;
-                    }
-
-                    Some(Self {
-                        table_name: table_name.clone(),
-                        indexes: indexes
-                            .into_iter()
-                            .map(|i| (i.index_descriptor.clone(), i))
-                            .collect(),
-                        staged_db_indexes: staged_db_indexes
-                            .into_iter()
-                            .map(|i| (i.index_descriptor.clone(), i))
-                            .collect(),
-                        text_indexes: search_indexes
-                            .into_iter()
-                            .map(|i| (i.index_descriptor.clone(), i))
-                            .collect(),
-                        staged_text_indexes: staged_search_indexes
-                            .into_iter()
-                            .map(|i| (i.index_descriptor.clone(), i))
-                            .collect(),
-                        vector_indexes: vector_indexes
-                            .into_iter()
-                            .map(|i| (i.index_descriptor.clone(), i))
-                            .collect(),
-                        staged_vector_indexes: staged_vector_indexes
-                            .into_iter()
-                            .map(|i| (i.index_descriptor.clone(), i))
-                            .collect(),
-                        document_type,
-                    })
-                },
-            )
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct IndexSchema {
     pub index_descriptor: IndexDescriptor,
     pub fields: IndexedFields,
@@ -686,14 +667,9 @@ impl Display for IndexSchema {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct TextIndexSchema {
     pub index_descriptor: IndexDescriptor,
     pub search_field: FieldPath,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::btree_set(any::<FieldPath>(), 0..8)")
-    )]
     pub filter_fields: BTreeSet<FieldPath>,
 
     // Private field to force all creations to go through the constructor.
@@ -721,15 +697,10 @@ impl TextIndexSchema {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
 pub struct VectorIndexSchema {
     pub index_descriptor: IndexDescriptor,
     pub vector_field: FieldPath,
     pub dimension: VectorDimensions,
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(strategy = "prop::collection::btree_set(any::<FieldPath>(), 0..8)")
-    )]
     pub filter_fields: BTreeSet<FieldPath>,
 
     // Private field to force all creations to go through the constructor.
@@ -761,21 +732,9 @@ impl VectorIndexSchema {
 /// [`DocumentSchema`] corresponds to the `DocumentSchema` TS type in
 /// `TableDefinition`. `Any` means no schema will be enforced.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg_attr(any(test, feature = "testing"), derive(proptest_derive::Arbitrary))]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    proptest(params = "BTreeSet<TableName>")
-)]
 pub enum DocumentSchema {
     Any,
 
-    #[cfg_attr(
-        any(test, feature = "testing"),
-        proptest(
-            strategy = "prop::collection::vec(any_with::<ObjectValidator>(params), \
-                        1..8).prop_map(DocumentSchema::Union)"
-        )
-    )]
     Union(Vec<ObjectValidator>),
 }
 

@@ -10,7 +10,7 @@ import { routeTree } from './routeTree.gen';
 export function getRouter() {
   const CONVEX_URL = (import.meta as any).env.VITE_CONVEX_URL!;
   if (!CONVEX_URL) {
-    throw new Error('missing VITE_CONVEX_URL env var');
+    throw new Error('missing VITE_CONVEX_URL envar');
   }
   const convex = new ConvexReactClient(CONVEX_URL);
   const convexQueryClient = new ConvexQueryClient(convex);
@@ -36,7 +36,7 @@ export function getRouter() {
     context: { queryClient, convexClient: convex, convexQueryClient },
     Wrap: ({ children }) => (
       <AuthKitProvider>
-        <ConvexProviderWithAuth client={convexQueryClient.convexClient} useAuth={useAuthFromWorkOS}>
+        <ConvexProviderWithAuth client={convexQueryClient.convexClient} useAuth={useAuthFromAuthKit}>
           {children}
         </ConvexProviderWithAuth>
       </AuthKitProvider>
@@ -47,19 +47,23 @@ export function getRouter() {
   return router;
 }
 
-function useAuthFromWorkOS() {
+function useAuthFromAuthKit() {
   const { loading, user } = useAuth();
-  const { accessToken, getAccessToken } = useAccessToken();
+  const { getAccessToken, refresh } = useAccessToken();
 
   const fetchAccessToken = useCallback(
     async ({ forceRefreshToken }: { forceRefreshToken: boolean }) => {
-      if (!accessToken || forceRefreshToken) {
-        return (await getAccessToken()) ?? null;
+      if (!user) {
+        return null;
       }
 
-      return accessToken;
+      if (forceRefreshToken) {
+        return (await refresh()) ?? null;
+      }
+
+      return (await getAccessToken()) ?? null;
     },
-    [accessToken, getAccessToken],
+    [user, refresh, getAccessToken],
   );
 
   return useMemo(

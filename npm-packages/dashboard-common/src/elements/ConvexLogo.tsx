@@ -1,8 +1,8 @@
 "use client";
 
-import { useTheme } from "next-themes";
 import Image from "next/image";
 import { useState, useEffect } from "react";
+import { useCurrentTheme } from "../lib/useCurrentTheme";
 
 type LogoProps = {
   width?: number;
@@ -10,7 +10,7 @@ type LogoProps = {
 };
 
 export function ConvexLogo({ width, height }: LogoProps) {
-  const { resolvedTheme: currentTheme } = useTheme();
+  const currentTheme = useCurrentTheme();
   const prefersDark = currentTheme === "dark";
 
   const [mounted, setMounted] = useState(false);

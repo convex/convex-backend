@@ -21,10 +21,10 @@ One time setup:
 
 ```
 # Install dependencies
-just rush install
+just install-js
 
 # Build the project's dependencies
-just rush build -T dashboard-self-hosted
+just turbo run build --filter=dashboard-self-hosted^...
 ```
 
 Run the dashboard:

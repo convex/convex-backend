@@ -3,7 +3,7 @@ import { ValidatorJSON, Value } from "convex/values";
 import { GenericDocument } from "convex/server";
 import isEqual from "lodash/isEqual";
 import omitBy from "lodash/omitBy";
-import Link from "next/link";
+import { Link } from "@ui/Link";
 import { createGlobalState } from "react-use";
 import { JavascriptDocumentsForm } from "@common/features/data/components/Table/EditDocumentPanel/JavascriptDocumentsForm";
 import { useNents } from "@common/lib/useNents";
@@ -89,29 +89,27 @@ export function EditDocumentPanel({
 
   const docsSection = editing ? "editing-a-document" : "creating-documents";
 
-  const closeAndMaybeClearDraft = () => {
-    // We only need to confirm closing the dialog if the user is editing a document. When the user adds documents, we store them as a draft.
-    if (editing) {
-      if (isDirty) {
-        // eslint-disable-next-line no-alert
-        const shouldClose = window.confirm(
-          `You have unsaved changes.
+  // We only need to confirm closing the dialog if the user is editing a document. When the user adds documents, we store them as a draft.
+  const confirmClose = () => {
+    if (editing && isDirty) {
+      const shouldClose = window.confirm(
+        `You have unsaved changes.
   Press "Cancel" to return to the editor, or "OK" to discard unsaved changes.`,
-        );
-        if (!shouldClose) {
-          return;
-        }
-        // If the user is editing a document, clear the drafts. It can be a bit confusing to see a dirty state when opening the edit document dialog
-        // again. Also, using the single-cell editor is more convenient than this editor anyway.
-        setDocuments(undefined);
+      );
+      if (!shouldClose) {
+        return false;
       }
+      // If the user is editing a document, clear the drafts. It can be a bit confusing to see a dirty state when opening the edit document dialog
+      // again. Also, using the single-cell editor is more convenient than this editor anyway.
+      setDocuments(undefined);
     }
-    onClose();
+    return true;
   };
 
   return (
     <DataPanel
       data-testid="editDocumentPanel"
+      fillHeight
       title={
         editing ? (
           <div className="flex flex-wrap items-baseline gap-2">
@@ -124,13 +122,13 @@ export function EditDocumentPanel({
           `Add new documents to ${tableName}`
         )
       }
-      onClose={closeAndMaybeClearDraft}
+      onClose={onClose}
+      onBeforeClose={confirmClose}
     >
       <div className="mb-4 px-4 text-xs text-content-primary sm:px-6">
         <Link
           passHref
           href={`https://docs.convex.dev/dashboard/deployments/data#${docsSection}`}
-          className="text-content-link"
           target="_blank"
         >
           Learn more

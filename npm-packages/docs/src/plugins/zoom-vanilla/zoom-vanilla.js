@@ -2,7 +2,7 @@
   "use strict";
   var OFFSET = 80;
 
-  const SELECTOR = "p > img, .image-center img";
+  const SELECTOR = "p > img, .image-center img, .img-screenshot";
 
   if (typeof document === "undefined") return;
 

@@ -8,9 +8,7 @@ toc_max_heading_level: 4
 
 import UnderTheHood from "@site/docs/auth/_under_the_hood.mdx";
 import AuthConfigTs from "@site/docs/auth/authkit/_auth_config_ts.mdx";
-import ConfigTS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/_mainAuthKit.tsx";
-import ConfigJS from "!!raw-loader!@site/../private-demos/quickstarts/react-vite/src/_mainAuthKit.jsx";
-import Functions from "!!raw-loader!@site/../private-demos/snippets/convex/workosFunctions.ts";
+import Config from "!!raw-loader!@site/../private-demos/quickstarts/react-vite-ts/src/_mainAuthKit.tsx";
 
 [WorkOS AuthKit](https://authkit.com) is an authentication solution that enables
 sign-in using passwords, social login providers, email one-time codes,
@@ -30,13 +28,13 @@ Use the following command to start a new project. It will prompt you to select a
 framework and authentication option. Choose whichever framework you want and
 AuthKit as your authentication option:
 
-```bash
+```sh
 npm create convex@latest
 ```
 
 Start your newly created application in dev mode:
 
-```bash
+```sh
 cd my-app  # or whatever you name the directory
 npm run dev
 ```
@@ -44,20 +42,27 @@ npm run dev
 That will kick off a Convex+WorkOS onboarding flow. For guidance on how to
 proceed, follow the instructions in one of the sections below.
 
-## Option 1: use a Convex-managed WorkOS team {#managed-team}
+## Option 1: use a Convex-managed WorkOS team {/* #managed-team */}
 
 <Admonition type="tip">
   Choose this option if you're new to WorkOS or if you want the convenience of
   the auto-provisioning and auto-configuration that the full integration offers.
 </Admonition>
 
-Follow the prompts to create a WorkOS team that will be associated with your
-Convex team. After this, Convex deployments for projects in this team will be
-able to automatically provision and configure their own WorkOS environments.
+<Admonition type="info">
+  Permissions: provisioning the Convex-managed WorkOS team, disconnecting it,
+  inviting WorkOS team members, and creating/deleting shared project-level
+  WorkOS environments all require **team admin** (or project admin, for the
+  project-level operations). Provisioning a WorkOS environment for an individual
+  deployment uses the same permission as managing that deployment, so any team
+  member can self-serve a WorkOS env for their dev/preview deployment but only
+  admins can do so for production.
+</Admonition>
 
-**That's it!** You and other members of your Convex team can now create and
-configure development WorkOS environments without visiting
-[workos.com](https://workos.com).
+Follow the prompts to create a WorkOS team that will be associated with your
+Convex team. After this, team members of this Convex team can self-serve WorkOS
+environments for their dev/preview deployments, and team admins can provision
+shared project-level environments and production envs.
 
 See what additional functionality is available in [Next steps](#next-steps) and
 see [AuthKit configuration in convex.json](/auth/authkit/auto-provision.mdx) to
@@ -84,7 +89,7 @@ auto-provision WorkOS environments for each of your deployments._
 
 </Details>
 
-## Option 2: use an existing WorkOS team {#existing-team}
+## Option 2: use an existing WorkOS team {/* #existing-team */}
 
 <Admonition type="tip">
   Choose this option if you're an established WorkOS AuthKit user and using your

@@ -1,0 +1,120 @@
+---
+title: "Convex Agent Plugins"
+sidebar_position: 100
+sidebar_label: Agent Plugins
+description:
+  "What the official Convex plugins for coding agents do, how to install them
+  for Claude Code, Codex, and Cursor, how to use them effectively, and how to
+  give feedback."
+slug: "convex-plugins"
+---
+
+import {
+  ClaudeCodeInlineMention,
+  CodexInlineMention,
+  CursorInlineMention,
+} from "@site/src/QuickstartsList.tsx";
+
+Convex publishes official plugins for the major coding agents. With the plugin
+installed, you can describe an app in one sentence and watch your agent scaffold
+it, running, in front of you, then keep shipping features while it reads your
+real deployment instead of guessing, catches its own mistakes as it works, and
+follows idiomatic Convex patterns.
+
+This page explains what the plugins do, how to install them, how to get the most
+out of them, and how to send us feedback. For agent-specific setup, see the
+dedicated pages for [Claude Code](/ai/using-claude-code.mdx),
+[Codex](/ai/using-codex.mdx), and [Cursor](/ai/using-cursor.mdx).
+
+## What the plugin does
+
+Every Convex plugin bundles three kinds of help:
+
+- **Tools**: a built-in [Convex MCP server](/ai/convex-mcp-server.mdx) that lets
+  the agent securely interact with your dev deployment. It can read your data,
+  logs, and insights, and run functions, so the agent works from what your
+  deployment actually contains instead of guessing.
+- **Hooks and monitors**: background checks that run as the agent works. A
+  pre-commit typecheck, an end-of-turn verify loop, and monitors that surface
+  dev and production errors let the agent find and fix issues without you having
+  to point them out.
+- **Skills and specialized agents**: focused instructions that teach the agent
+  how to do specific Convex tasks correctly, invoked automatically when relevant
+  or on demand.
+
+## What you can do with it
+
+A plain-English request goes a long way. The agent picks the right skill
+automatically, or you can invoke one explicitly:
+
+| Ask for…                  | The skill           | What it does                                                                                                      |
+| ------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| "build me a todo app"     | **quickstart**      | One sentence in, a running app out, scaffolded and built live in front of you.                                    |
+| "add sign-in"             | **auth**            | Full authentication wired end to end, passkeys by default, including the `auth.config.ts` that trips everyone up. |
+| "add a chatbot"           | **agent**           | A real in-app AI agent backend: threads, message history, tool calls, and vector-search RAG.                      |
+| "change my schema safely" | **migrate**         | Change a live schema without breaking data: stage, backfill every existing row, verify, then tighten.             |
+| "add \<a feature\>"       | **add**             | Pulls in the right piece of the Convex component ecosystem: crons, file storage, and more.                        |
+| "review my functions"     | **convex-reviewer** | Audits your `convex/` code for validator, auth, and performance issues and shows you the fixes.                   |
+
+On top of the on-demand skills, an always-on Convex specialist quietly reviews
+every function the agent writes under `convex/`, so idiomatic APIs, correct
+validators, and indexed queries are the default, not something you have to ask
+for. New skills land regularly.
+
+## Install
+
+Pick your agent. Each install is one command (full walkthroughs on the per-agent
+pages linked above):
+
+<ClaudeCodeInlineMention />
+
+```
+/plugin install convex@claude-plugins-official
+```
+
+<CodexInlineMention /> (from Codex's built-in plugin directory)
+
+```sh
+codex plugin add convex@openai-curated
+```
+
+For the newest build straight from Convex, see the
+[nightly marketplace install](/ai/using-codex.mdx#install-the-convex-plugin).
+
+<CursorInlineMention />: install from the Cursor Marketplace, or manually:
+
+```bash
+cd ~/.cursor/plugins
+git clone https://github.com/convex/convex-agent-plugins convex
+# then restart Cursor
+```
+
+## Using the plugins effectively
+
+A few habits get you the best results:
+
+- **Describe the outcome, not the API.** "Let users upload profile photos"
+  routes to the right skill better than naming internal Convex primitives. The
+  plugin knows the mapping.
+- **Let the checks work.** The hooks catch typecheck and deploy issues on their
+  own; you rarely need to paste errors back in.
+- **Ask for a review before you ship.** "Audit my Convex functions" runs the
+  security, auth, and performance pass over your backend.
+- **Trust the deployment tools.** For "what's in my database?" or "why is this
+  slow?", the agent can read your dev deployment directly through the MCP server
+  instead of guessing.
+
+## Giving feedback
+
+We're constantly working on improving the plugins with rigorous evals and
+real-world reports. You can help:
+
+- **Report a bug or request a skill** by opening an issue on the plugin repo for
+  your agent:
+  [Claude Code](https://github.com/convex/convex-backend-skill/issues) ·
+  [Codex](https://github.com/convex/convex-codex-plugin/issues) ·
+  [Cursor](https://github.com/convex/convex-agent-plugins/issues).
+- **Improve the AI rules**: if the agent writes non-idiomatic Convex, contribute
+  a case to the [convex-evals repo](https://github.com/convex/convex-evals) so
+  we can measure and fix it.
+- **Ask the community** in the [Convex Discord](https://convex.dev/community).

@@ -9,9 +9,7 @@ description:
 ---
 
 import UserHelpers from "!!raw-loader!@site/../private-demos/snippets/convex/userHelpers.ts";
-import UserHelpersJS from "!!raw-loader!@site/../private-demos/snippets/convex/userHelpersJS.js";
 import Teams from "!!raw-loader!@site/../private-demos/snippets/convex/bestPracticesHelpersTeams.ts";
-import TeamsJS from "!!raw-loader!@site/../private-demos/snippets/convex/bestPracticesHelpersTeamsJS.js";
 
 {/* This page was previously the Best Practices page which has been rewritten */}
 {/* with some of this content dropped. We are keeping this as a hidden page that is */}
@@ -29,10 +27,10 @@ great way to learn the framework.
 
 Even better, Convex supports [code generation](/generated-api/) to create types
 that are specific to your app's [schema](/database/schemas.mdx) and
-[Convex functions](/functions.mdx).
+[Convex functions](/functions/overview.mdx).
 
 Code generation is run automatically by
-[`npx convex dev`](/cli.md#run-the-convex-dev-server).
+[`npx convex dev`](/cli/reference/dev.mdx).
 
 ## Check generated code into version control
 
@@ -62,7 +60,7 @@ publicly accessible.
 ### Use `console.log` to debug your Convex functions.
 
 All server-side logs from Convex functions are shown on the
-[dashboard Logs page](/dashboard/deployments/logs.md). If a server-side
+[dashboard Logs page](/dashboard/deployments/logs.mdx). If a server-side
 exception occurs, it will also be logged as an error event.
 
 On a **dev deployment** the logs will also be forwarded to the client and will
@@ -83,11 +81,10 @@ instead of using `ctx.runAction` reduces function calls and resource usage.
 See the [TypeScript page](/understanding/best-practices/typescript.mdx) for
 useful types.
 
-<TSAndJSSnippet sourceTS={Teams} sourceJS={TeamsJS} title="convex/teams.js" />
+<Snippet source={Teams} title="convex/teams.js" />
 
-<TSAndJSSnippet
-  sourceTS={UserHelpers}
-  sourceJS={UserHelpersJS}
+<Snippet
+  source={UserHelpers}
   title="convex/userHelpers.js"
   snippet="userHelpers"
   suffix={`}`}
@@ -104,8 +101,8 @@ limited scenarios, such as calling third-party services.
 
 ### Use indexes or paginate all large database queries.
 
-[Database indexes](/database/reading-data/indexes/indexes.md) with
-[range expressions](/database/reading-data/indexes/indexes.md#querying-documents-using-indexes)
+[Database indexes](/database/reading-data/indexes/indexes.mdx) with
+[range expressions](/database/reading-data/indexes/indexes.mdx#querying-documents-using-indexes)
 allow you to write efficient database queries that only scan a small number of
 documents in the table. [Pagination](/database/pagination.mdx) allows you to
 quickly display incremental lists of results. If your table could contain more
@@ -113,7 +110,7 @@ than a few thousand documents, you should consider pagination or an index with a
 range expression to ensure that your queries stay fast.
 
 For more details, check out our
-[Introduction to Indexes and Query Performance](/database/reading-data/indexes/indexes-and-query-perf.md)
+[Introduction to Indexes and Query Performance](/database/reading-data/indexes/indexes-and-query-perf.mdx)
 article.
 
 ### Use tables to separate logical object types.
@@ -133,7 +130,7 @@ The [`useQuery` React hook](/api/modules/react#usequery) will return `undefined`
 when it is first mounted, before the query has been loaded from Convex. Once a
 query is loaded it will never be `undefined` again (even as the data reactively
 updates). `undefined` is not a valid return type for queries (you can see the
-types that Convex supports at [Data Types](/database/types.md))
+types that Convex supports at [Data Types](/database/types.mdx))
 
 You can use this as a signal for when to render loading indicators and
 placeholder UI.

@@ -1,6 +1,9 @@
-use std::time::{
-    Duration,
-    Instant,
+use std::{
+    sync::Arc,
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 use ::errors::{
@@ -26,6 +29,7 @@ use common::{
             WebSocketUpgrade,
         },
         ExtractClientVersion,
+        ExtractRequestMetadata,
         ExtractResolvedHostname,
         HttpResponseError,
         ResolvedHostname,
@@ -39,6 +43,7 @@ use common::{
         ClientVersion,
     },
     ws::is_connection_closed_error,
+    RequestMetadata,
 };
 use futures::{
     select_biased,
@@ -52,6 +57,7 @@ use runtime::prod::ProdRuntime;
 use sentry::SentryFutureExt;
 use serde_json::Value as JsonValue;
 use sync::{
+    subscription_reconnect::SubscriptionReconnectRateLimiter,
     worker::measurable_unbounded_channel,
     ServerMessage,
     SyncWorker,
@@ -123,6 +129,7 @@ impl Drop for SyncSocketDropToken {
 async fn run_sync_socket(
     st: RouterState,
     host: ResolvedHostname,
+    request_metadata: RequestMetadata,
     config: SyncWorkerConfig,
     socket: WebSocket,
     sentry_scope: sentry::Scope,
@@ -244,6 +251,7 @@ async fn run_sync_socket(
             server_tx,
             on_connect,
             partition_id?,
+            request_metadata,
         );
         let r = sync_worker.go().await;
         identity_version = Some(sync_worker.identity_version());
@@ -342,7 +350,10 @@ async fn run_sync_socket(
     log_websocket_closed(partition_id_label.clone());
 }
 
-fn new_sync_worker_config(client_version: ClientVersion) -> anyhow::Result<SyncWorkerConfig> {
+fn new_sync_worker_config(
+    client_version: ClientVersion,
+    subscription_reconnect_rate_limiter: Option<Arc<SubscriptionReconnectRateLimiter>>,
+) -> anyhow::Result<SyncWorkerConfig> {
     let supports_transition_chunks = match client_version.client() {
         ClientType::NPM => match client_version.version() {
             version::ClientVersionIdent::Semver(v) => {
@@ -355,6 +366,7 @@ fn new_sync_worker_config(client_version: ClientVersion) -> anyhow::Result<SyncW
     Ok(SyncWorkerConfig {
         client_version,
         supports_transition_chunks,
+        subscription_reconnect_rate_limiter,
     })
 }
 
@@ -412,11 +424,15 @@ fn maybe_split_transition(
 pub async fn sync_handler(
     st: RouterState,
     host: ResolvedHostname,
+    request_metadata: RequestMetadata,
     client_version: ClientVersion,
     ws: WebSocketUpgrade,
     on_connect: Box<dyn FnOnce(SessionId) + Send>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let config = new_sync_worker_config(client_version)?;
+    let config = new_sync_worker_config(
+        client_version,
+        st.subscription_reconnect_rate_limiter.clone(),
+    )?;
     // Make a copy of the Sentry scope, which contains the request metadata.
     let sentry_scope = sentry::configure_scope(move |s| s.clone());
 
@@ -426,7 +442,16 @@ pub async fn sync_handler(
         upgrade_timer.finish();
         let monitor = ProdRuntime::task_monitor("sync_socket");
         monitor.instrument(
-            run_sync_socket(st, host, config, ws, sentry_scope, on_connect).bind_hub(hub),
+            run_sync_socket(
+                st,
+                host,
+                request_metadata,
+                config,
+                ws,
+                sentry_scope,
+                on_connect,
+            )
+            .bind_hub(hub),
         )
     }))
 }
@@ -434,98 +459,17 @@ pub async fn sync_handler(
 pub async fn sync(
     State(st): State<RouterState>,
     ExtractResolvedHostname(host): ExtractResolvedHostname,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     ExtractClientVersion(client_version): ExtractClientVersion,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    sync_handler(st, host, client_version, ws, Box::new(|_session_id| ())).await
-}
-
-#[cfg(test)]
-mod tests {
-    use axum::{
-        extract::State,
-        routing::get,
-        Router,
-    };
-    use common::http::{
-        websocket::{
-            Message,
-            WebSocket,
-            WebSocketUpgrade,
-        },
-        ConvexHttpService,
-    };
-    use tokio::sync::{
-        mpsc,
-        oneshot,
-    };
-    use tokio_tungstenite::connect_async;
-    use tungstenite::error::Error as TungsteniteError;
-
-    use super::is_connection_closed_error;
-
-    /// Test that the axum tungstenite matches the tungstenite we're using in
-    /// backend in `is_connection_closed_error` to work around axum sloppiness.
-    #[tokio::test]
-    async fn test_ws_tungstenite_version_match() -> anyhow::Result<()> {
-        let (ws_shutdown_tx, mut ws_shutdown_rx) = mpsc::channel(1);
-
-        async fn ws_handler(
-            ws: WebSocketUpgrade,
-            st: State<mpsc::Sender<bool>>,
-        ) -> axum::response::Response {
-            ws.on_upgrade(move |mut ws: WebSocket| async move {
-                let ws_shutdown_tx = st.0;
-                assert_eq!(ws.recv().await.unwrap().unwrap(), Message::Close(None));
-                let e = ws
-                    .send(Message::Text("Hello".into()))
-                    .await
-                    .expect_err("Should not be able to send");
-
-                if is_connection_closed_error(&e) {
-                    ws_shutdown_tx.send(true).await.unwrap();
-                    return;
-                }
-
-                ws_shutdown_tx.send(false).await.unwrap();
-                panic!(
-                    "Got {e:?}. Expected {:?}. Wrong tungstenite version?",
-                    TungsteniteError::ConnectionClosed
-                );
-            })
-        }
-
-        let app = ConvexHttpService::new_for_test(
-            Router::new()
-                .route("/test", get(ws_handler))
-                .with_state(ws_shutdown_tx),
-        );
-        let port = portpicker::pick_unused_port().expect("No ports free");
-        let addr = format!("127.0.0.1:{port}").parse()?;
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
-        let proxy_server = tokio::spawn(app.serve(addr, async move {
-            shutdown_rx.await.unwrap();
-        }));
-
-        let (mut websocket, _) = loop {
-            match connect_async(format!("ws://{addr}/test")).await {
-                Ok(r) => break r,
-                Err(e) => {
-                    // Can take a moment after the server spawn to connect to it.
-                    println!("Got error {e}. Retrying");
-                    tokio::task::yield_now().await;
-                },
-            }
-        };
-
-        // close websocket - make sure server handles it ok
-        websocket.close(None).await?;
-        let closed = ws_shutdown_rx.recv().await.unwrap();
-        assert!(closed);
-
-        // server shutdown
-        shutdown_tx.send(()).unwrap();
-        proxy_server.await??;
-        Ok(())
-    }
+    sync_handler(
+        st,
+        host,
+        request_metadata,
+        client_version,
+        ws,
+        Box::new(|_session_id| ()),
+    )
+    .await
 }

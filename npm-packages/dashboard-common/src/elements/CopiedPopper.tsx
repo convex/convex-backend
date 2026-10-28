@@ -1,4 +1,10 @@
-import { usePopper } from "react-popper";
+import {
+  useFloating,
+  autoUpdate,
+  offset as offsetMiddleware,
+  flip,
+  shift,
+} from "@floating-ui/react";
 import { Transition } from "@headlessui/react";
 import { CheckCircledIcon } from "@radix-ui/react-icons";
 
@@ -27,19 +33,16 @@ export function CopiedPopper({
   placement = "bottom-start",
   offset = [0, 4],
 }: CopiedPopperProps) {
-  const { styles, attributes } = usePopper(
-    referenceElement,
-    copiedPopperElement,
-    {
-      placement,
-      modifiers: [
-        {
-          name: "offset",
-          options: { offset },
-        },
-      ],
-    },
-  );
+  const { floatingStyles } = useFloating({
+    placement,
+    middleware: [
+      offsetMiddleware({ mainAxis: offset[1], crossAxis: offset[0] }),
+      flip(),
+      shift(),
+    ],
+    whileElementsMounted: autoUpdate,
+    elements: { reference: referenceElement, floating: copiedPopperElement },
+  });
 
   return (
     <Transition
@@ -53,10 +56,9 @@ export function CopiedPopper({
     >
       <div
         ref={setCopiedPopperElement}
-        style={styles.popper}
+        style={floatingStyles}
         className="z-50 flex items-center gap-1 rounded-sm border bg-background-tertiary p-1 text-xs"
         data-testid="copied-popper"
-        {...attributes.popper}
       >
         <CheckCircledIcon />
         {message}

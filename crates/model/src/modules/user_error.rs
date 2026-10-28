@@ -10,7 +10,7 @@ impl ModuleNotFoundError {
     pub fn new(module_path: &str) -> Self {
         let msg = format!(
             "Couldn't find JavaScript module '{module_path}'. Did you forget to run `npx convex \
-             dev` or `npx convex deploy`?",
+             dev`?",
         );
         Self { msg }
     }

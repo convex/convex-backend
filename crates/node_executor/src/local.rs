@@ -1,7 +1,5 @@
 use std::{
     fs,
-    net::TcpListener,
-    os::fd::AsFd,
     path::PathBuf,
     sync::Arc,
     time::Duration,
@@ -9,10 +7,6 @@ use std::{
 
 use anyhow::Context;
 use async_trait::async_trait;
-use command_fds::{
-    CommandFdExt,
-    FdMapping,
-};
 use common::log_lines::LogLine;
 use errors::ErrorMetadata;
 use futures::{
@@ -21,6 +15,7 @@ use futures::{
 };
 use futures_async_stream::try_stream;
 use isolate::bundled_js::node_executor_file;
+use rand::Rng;
 use reqwest::Client;
 use serde_json::Value as JsonValue;
 use tempfile::TempDir;
@@ -44,15 +39,10 @@ use crate::{
         EXECUTE_TIMEOUT_RESPONSE_JSON,
     },
     handle_node_executor_stream,
+    InvokeCompletion,
     NodeExecutorStreamPart,
 };
 
-/// Always use node version specified in .nvmrc for lambda execution, even if
-/// we're using older version for CLI.
-const NODE_VERSION: &str = include_str!("../../../.nvmrc");
-/// The child fd number we map the pre-bound TCP listener to. Fd 3 is the first
-/// fd after stdin/stdout/stderr.
-const LISTEN_CHILD_FD: i32 = 3;
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_HEALTH_CHECK_ATTEMPTS: u32 = 50;
 
@@ -63,17 +53,21 @@ pub struct LocalNodeExecutor {
 
 struct LocalNodeExecutorConfig {
     node_process_timeout: Duration,
+    /// Overrides the initial callback retry backoff in the spawned node
+    /// process (read by syscalls.ts at module load). Tests zero this so
+    /// callbacks retrying against an unreachable backend settle within test
+    /// timeouts.
+    callback_initial_backoff: Option<Duration>,
 }
 
 struct InnerLocalNodeExecutor {
     _source_dir: TempDir,
-    port: u16,
     client: reqwest::Client,
     _server_handle: Child,
 }
 
 impl InnerLocalNodeExecutor {
-    async fn new() -> anyhow::Result<Self> {
+    async fn new(config: &LocalNodeExecutorConfig) -> anyhow::Result<Self> {
         tracing::info!("Initializing inner local node executor");
         // Create a single temp directory for both source files and Node.js temp files
         let source_dir = TempDir::new()?;
@@ -89,22 +83,39 @@ impl InnerLocalNodeExecutor {
             source_path.to_str().expect("Path is not UTF-8 string?"),
         );
 
-        let client = Client::new();
-        // Bind to port 0 in the parent process to get an OS-assigned port,
-        // then pass the bound socket fd to the child. This avoids TOCTOU races
-        // with portpicker where another process could grab the port between
-        // picking and binding.
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let port = listener.local_addr()?.port();
+        let socket_path = if cfg!(unix) {
+            source_dir.path().join(".executor.sock")
+        } else if cfg!(windows) {
+            PathBuf::from(format!(
+                r"\\.\pipe\cvx-node-executor-{:016x}",
+                rand::rng().random::<u64>()
+            ))
+        } else {
+            panic!("not supported");
+        };
         let server_handle =
-            Self::start_node_with_listener(&source_path, &source_dir, listener).await?;
+            Self::start_node_with_listener(config, &source_path, &source_dir, &socket_path).await?;
+        // Don't keep idle connections in the pool. The Node HTTP server closes
+        // idle keep-alive connections after its (default 5s) `keepAliveTimeout`,
+        // but hyper's pool would hold one much longer and reuse it right as the
+        // server closes it, surfacing as a spurious "connection reset by peer".
+        // Opening a fresh connection per request is cheap over a local socket.
+        let mut client_builder = Client::builder().pool_max_idle_per_host(0);
+        #[cfg(unix)]
+        {
+            client_builder = client_builder.unix_socket(socket_path);
+        }
+        #[cfg(windows)]
+        {
+            client_builder = client_builder.windows_named_pipe(socket_path);
+        }
+        let client = client_builder.build()?;
 
         // Wait for the Node process to be ready to handle HTTP requests.
         for _ in 0..MAX_HEALTH_CHECK_ATTEMPTS {
-            if Self::check_server_health(&client, port).await? {
+            if Self::check_server_health(&client).await? {
                 return Ok(Self {
                     _source_dir: source_dir,
-                    port,
                     client,
                     _server_handle: server_handle,
                 });
@@ -121,15 +132,11 @@ impl InnerLocalNodeExecutor {
             .await?;
         let version = String::from_utf8_lossy(&cmd.stdout);
 
-        if !version.starts_with("v18.")
-            && !version.starts_with("v20.")
-            && !version.starts_with("v22.")
-            && !version.starts_with("v24.")
-        {
+        if !version.starts_with("v22.") && !version.starts_with("v24.") {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "DeploymentNotConfiguredForNodeActions",
                 "Deployment is not configured to deploy \"use node\" actions. \
-                 Node.js v18, 20, 22, or 24 is not installed. \
+                 Node.js v22 or 24 is not installed. \
                  Install a supported Node.js version with nvm (https://github.com/nvm-sh/nvm) \
                  to deploy Node.js actions."
             ))
@@ -137,9 +144,9 @@ impl InnerLocalNodeExecutor {
         Ok(())
     }
 
-    async fn check_server_health(client: &Client, port: u16) -> anyhow::Result<bool> {
+    async fn check_server_health(client: &Client) -> anyhow::Result<bool> {
         match client
-            .get(format!("http://127.0.0.1:{port}/health"))
+            .get("http://localhost/health".to_string())
             .timeout(Duration::from_secs(1))
             .send()
             .await
@@ -150,38 +157,27 @@ impl InnerLocalNodeExecutor {
     }
 
     async fn start_node_with_listener(
+        config: &LocalNodeExecutorConfig,
         source_path: &PathBuf,
         temp_dir: &TempDir,
-        listener: TcpListener,
+        socket_path: &PathBuf,
     ) -> anyhow::Result<Child> {
-        let node_version = NODE_VERSION.trim();
-
-        // Look for node in a few places.
-        let possible_path = home::home_dir()
-            .unwrap()
-            .join(".nvm")
-            .join(format!("versions/node/v{node_version}/bin/node"));
-        let node_path = if possible_path.exists() {
-            possible_path.to_string_lossy().to_string()
-        } else {
-            "node".to_string()
-        };
-        Self::check_node_version(&node_path).await?;
+        let node_path = "node";
+        Self::check_node_version(node_path).await?;
 
         let mut cmd = TokioCommand::new(node_path);
         cmd.arg(source_path)
-            .arg("--fd")
-            .arg(LISTEN_CHILD_FD.to_string())
+            .arg("--ipc-path")
+            .arg(socket_path)
             .arg("--tempdir")
             .arg(temp_dir.path())
             .kill_on_drop(true);
-
-        // Map the listener fd into the child process at a well-known fd number.
-        // command_fds handles clearing CLOEXEC and dup2 for us.
-        cmd.fd_mappings(vec![FdMapping {
-            parent_fd: listener.as_fd().try_clone_to_owned()?,
-            child_fd: LISTEN_CHILD_FD,
-        }])?;
+        if let Some(backoff) = config.callback_initial_backoff {
+            cmd.env(
+                "CALLBACK_INITIAL_BACKOFF_MS",
+                backoff.as_millis().to_string(),
+            );
+        }
 
         let child = cmd.spawn()?;
 
@@ -195,6 +191,7 @@ impl LocalNodeExecutor {
             inner: Arc::new(Mutex::new(None)),
             config: LocalNodeExecutorConfig {
                 node_process_timeout,
+                callback_initial_backoff: None,
             },
         };
 
@@ -212,19 +209,22 @@ impl LocalNodeExecutor {
                         let chunk = chunk?;
                         match chunk {
                             Some(chunk) => {
-                                let chunk_vec = chunk.to_vec();
-                                anyhow::Ok(NodeExecutorStreamPart::Chunk(chunk_vec))
+                                anyhow::Ok(NodeExecutorStreamPart::Chunk(chunk))
                             }
                             None => {
-                                anyhow::Ok(NodeExecutorStreamPart::InvokeComplete(Ok(())))
+                                anyhow::Ok(NodeExecutorStreamPart::InvokeComplete(
+                                    InvokeCompletion::Success,
+                                ))
                             }
                         }
                     },
                     _ = timeout_future.fuse() => {
-                        anyhow::Ok(NodeExecutorStreamPart::InvokeComplete(Err(InvokeResponse {
-                            response: EXECUTE_TIMEOUT_RESPONSE_JSON.clone(),
-                            aws_request_id: None,
-                        })))
+                        anyhow::Ok(NodeExecutorStreamPart::InvokeComplete(
+                            InvokeCompletion::ExplicitError(InvokeResponse {
+                                response: EXECUTE_TIMEOUT_RESPONSE_JSON.clone(),
+                                aws_request_id: None,
+                            }),
+                        ))
                     },
                 }
             };
@@ -250,22 +250,22 @@ impl NodeExecutor for LocalNodeExecutor {
         request: ExecutorRequest,
         log_line_sender: mpsc::UnboundedSender<LogLine>,
     ) -> anyhow::Result<InvokeResponse> {
-        let (client, port) = {
+        let client = {
             let mut inner = self.inner.lock().await;
             if inner.is_none() {
                 *inner = Some(
-                    InnerLocalNodeExecutor::new()
+                    InnerLocalNodeExecutor::new(&self.config)
                         .await
                         .context("Failed to create inner local node executor")?,
                 )
             }
             let inner = inner.as_ref().unwrap();
-            (inner.client.clone(), inner.port)
+            inner.client.clone()
         };
         let request_json = JsonValue::try_from(request)?;
 
         let response_result = client
-            .post(format!("http://127.0.0.1:{port}/invoke"))
+            .post("http://localhost/invoke".to_string())
             .json(&request_json)
             .timeout(self.config.node_process_timeout)
             .send()
@@ -325,1068 +325,4 @@ impl NodeExecutor for LocalNodeExecutor {
     }
 
     fn shutdown(&self) {}
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::BTreeMap,
-        future::Future,
-        sync::{
-            Arc,
-            LazyLock,
-        },
-        time::Duration,
-    };
-
-    use cmd_util::env::config_test;
-    use common::{
-        assert_obj,
-        errors::INTERNAL_SERVER_ERROR_MSG,
-        execution_context::ExecutionContext,
-        fastrace_helpers::EncodedSpan,
-        json::JsonForm as _,
-        log_lines::{
-            run_function_and_collect_log_lines,
-            LogLines,
-        },
-        runtime::Runtime,
-        types::{
-            ModuleEnvironment,
-            UdfType,
-        },
-        value::ConvexValue,
-        version::Version,
-    };
-    use errors::{
-        ErrorMetadata,
-        ErrorMetadataAnyhowExt,
-    };
-    use futures::FutureExt;
-    use isolate::test_helpers::TEST_SOURCE;
-    use keybroker::{
-        testing::TestUserIdentity,
-        UserIdentity,
-    };
-    use maplit::btreemap;
-    use model::{
-        config::types::ModuleConfig,
-        modules::{
-            function_validators::{
-                ArgsValidator,
-                ReturnsValidator,
-            },
-            module_versions::{
-                AnalyzedFunction,
-                AnalyzedSourcePosition,
-                SourceMap,
-                Visibility,
-            },
-        },
-        source_packages::upload_download::upload_package,
-    };
-    use runtime::prod::ProdRuntime;
-    use serde_json::json;
-    use storage::{
-        LocalDirStorage,
-        Storage,
-    };
-    use sync_types::{
-        types::SerializedArgs,
-        CanonicalizedModulePath,
-        ModulePath,
-    };
-    use tokio::sync::mpsc;
-    use udf::validation::ValidatedPathAndArgs;
-    use value::{
-        array,
-        id_v6::DeveloperDocumentId,
-        ConvexArray,
-        ConvexObject,
-    };
-
-    use super::LocalNodeExecutor;
-    use crate::{
-        executor::{
-            NodeActionOutcome,
-            Package,
-        },
-        Actions,
-        AnalyzeRequest,
-        ExecuteRequest,
-        SourcePackage,
-    };
-
-    const TEST_BACKEND_ADDRESS: &str = "http://127.0.0.1:8080";
-    // Use lower timeouts for tests.
-    const TEST_USER_TIMEOUT: Duration = Duration::from_secs(2);
-    const TEST_NODE_PROCESS_TIMEOUT: Duration = Duration::from_secs(5);
-
-    static VERSION: LazyLock<Option<Version>> =
-        LazyLock::new(|| Some("0.18.0".parse().expect("Failed to parse version")));
-
-    async fn upload_modules(
-        storage: Arc<dyn Storage>,
-        modules: Vec<ModuleConfig>,
-    ) -> anyhow::Result<SourcePackage> {
-        config_test();
-        let package = modules
-            .iter()
-            .map(|m| (m.path.clone().canonicalize(), m))
-            .collect();
-        let (key, sha256, _) = upload_package(package, storage.clone(), None).await?;
-        let uri = storage
-            .signed_url(key.clone(), Duration::from_secs(10))
-            .await?;
-        Ok(SourcePackage {
-            bundled_source: Package { uri, key, sha256 },
-            external_deps: None,
-        })
-    }
-
-    fn create_args(args_object: ConvexObject) -> anyhow::Result<ConvexArray> {
-        array![ConvexValue::Object(args_object)]
-    }
-
-    fn execute_request(
-        path_and_args: ValidatedPathAndArgs,
-        source_package: SourcePackage,
-    ) -> ExecuteRequest {
-        ExecuteRequest {
-            path_and_args,
-            source_package,
-            source_package_id: DeveloperDocumentId::MIN.into(),
-            user_identity: None,
-            auth_header: None,
-            environment_variables: btreemap! {},
-            callback_token: "".to_owned(),
-            context: ExecutionContext::new_for_test(),
-            encoded_parent_trace: EncodedSpan::from_parent().0,
-        }
-    }
-
-    #[rustfmt::skip]
-    async fn execute<RT: Runtime>(
-        actions: &Actions<RT>,
-        execute_request: ExecuteRequest,
-        source_maps_callback: impl Future<Output = anyhow::Result<
-            BTreeMap<CanonicalizedModulePath, SourceMap>>>
-            + Send,
-    ) -> anyhow::Result<(NodeActionOutcome, LogLines)> {
-        let (log_line_sender, log_line_receiver) = mpsc::unbounded_channel();
-        let execute_future = Box::pin(
-            actions
-                .execute(execute_request, log_line_sender, source_maps_callback)
-                .fuse(),
-        );
-        let (result, log_lines) =
-            run_function_and_collect_log_lines(execute_future, log_line_receiver, |_| {}).await;
-        match result {
-            Ok(outcome) => Ok((outcome, log_lines)),
-            Err(e) => Err(e),
-        }
-    }
-
-    async fn create_actions<RT: Runtime>(rt: RT) -> Actions<RT> {
-        Actions::new(
-            Arc::new(
-                LocalNodeExecutor::new(TEST_NODE_PROCESS_TIMEOUT)
-                    .await
-                    .unwrap(),
-            ),
-            TEST_BACKEND_ADDRESS.into(),
-            TEST_USER_TIMEOUT,
-            rt,
-        )
-    }
-
-    async fn empty_source_maps_callback(
-    ) -> anyhow::Result<BTreeMap<CanonicalizedModulePath, SourceMap>> {
-        Ok(BTreeMap::new())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_success(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-
-        let numbers: ConvexArray = array![1f64.into(), 7f64.into()]?;
-        let args = create_args(assert_obj!("numbers" => ConvexValue::Array(numbers)))?;
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:addNumbers".parse()?,
-            args.into_serialized_args()?,
-            VERSION.clone(),
-        );
-        let (response, _log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            empty_source_maps_callback(),
-        )
-        .await?;
-
-        assert_eq!(response.result?, ConvexValue::from(8.));
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_log_lines(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:logHelloWorldAndReturn7".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let (response, log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            empty_source_maps_callback(),
-        )
-        .await?;
-
-        assert_eq!(response.result?, ConvexValue::from(7.));
-        assert_eq!(
-            log_lines
-                .into_iter()
-                .map(|l| l.to_pretty_string_test_only())
-                .collect::<Vec<_>>(),
-            vec!["[INFO] 'Hello'".to_owned(), "[ERROR] 'World!'".to_owned()]
-        );
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_auth_syscall(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let identity = UserIdentity::test();
-
-        let (response, _log_lines) = execute(
-            &actions,
-            ExecuteRequest {
-                path_and_args: ValidatedPathAndArgs::new_for_tests(
-                    "node_actions.js:getUserIdentity".parse()?,
-                    SerializedArgs::from_args(vec![])?,
-                    VERSION.clone(),
-                ),
-                source_package,
-                source_package_id: DeveloperDocumentId::MIN.into(),
-                user_identity: Some(identity.attributes.clone()),
-                auth_header: None,
-                environment_variables: btreemap! {},
-                callback_token: "".to_owned(),
-                context: ExecutionContext::new_for_test(),
-                encoded_parent_trace: None,
-            },
-            empty_source_maps_callback(),
-        )
-        .await?;
-
-        assert_eq!(
-            response.result?.to_internal_json(),
-            serde_json::Value::try_from(identity.attributes)?,
-        );
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_query_syscall(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = Actions::new(
-            Arc::new(LocalNodeExecutor::new(TEST_NODE_PROCESS_TIMEOUT).await?),
-            "http://localhost:8719".into(),
-            TEST_USER_TIMEOUT,
-            rt,
-        );
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-
-        let args = create_args(assert_obj!(
-            "name" =>  "getCounter.js"
-        ))?;
-        let (response, _log_lines) = execute(
-            &actions,
-            execute_request(
-                ValidatedPathAndArgs::new_for_tests(
-                    "node_actions.js:runQuery".parse()?,
-                    args.into_serialized_args()?,
-                    VERSION.clone(),
-                ),
-                source_package,
-            ),
-            empty_source_maps_callback(),
-        )
-        .await?;
-
-        // This won't work since the backend is not running but we can check
-        // that we are calling the right url
-        let err = response.result.unwrap_err();
-        assert!(&err.message[..].contains("fetch failed"));
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_schedule_syscall(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = Actions::new(
-            Arc::new(LocalNodeExecutor::new(TEST_NODE_PROCESS_TIMEOUT).await?),
-            "http://localhost:8719".into(),
-            TEST_USER_TIMEOUT,
-            rt,
-        );
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let args = create_args(assert_obj!(
-            "name" =>  "getCounter.js"
-        ))?;
-        let (response, _log_lines) = execute(
-            &actions,
-            execute_request(
-                ValidatedPathAndArgs::new_for_tests(
-                    "node_actions.js:scheduleJob".parse()?,
-                    args.into_serialized_args()?,
-                    VERSION.clone(),
-                ),
-                source_package,
-            ),
-            empty_source_maps_callback(),
-        )
-        .await?;
-
-        // This won't work since the backend is not running but we can check
-        // that we are calling the right url
-        let err = response.result.unwrap_err();
-        assert!(&err.message[..].contains("fetch failed"));
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_error(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let source_maps = TEST_SOURCE
-            .clone()
-            .into_iter()
-            .map(|m| {
-                (
-                    m.path.canonicalize(),
-                    m.source_map.expect("Missing source map"),
-                )
-            })
-            .collect();
-        let source_maps_callback = async { Ok(source_maps) };
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:logAndThrowError".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let (response, log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            source_maps_callback,
-        )
-        .await?;
-
-        let error = response.result.unwrap_err();
-        assert_eq!(&error.message, "Uncaught Error: Oh, no!");
-        let frames = &error.frames.as_ref().unwrap().0;
-        assert_eq!(frames.len(), 1);
-        assert_eq!(
-            frames[0].file_name.as_ref().map(|s| &s[..]),
-            Some("../convex/node_actions.ts")
-        );
-        assert_eq!(
-            log_lines
-                .into_iter()
-                .map(|l| l.to_pretty_string_test_only())
-                .collect::<Vec<_>>(),
-            vec!["[LOG] 'About to do something...'".to_owned()]
-        );
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_process_exit(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let source_maps = TEST_SOURCE
-            .clone()
-            .into_iter()
-            .map(|m| {
-                (
-                    m.path.canonicalize(),
-                    m.source_map.expect("Missing source map"),
-                )
-            })
-            .collect();
-        let source_maps_callback = async { Ok(source_maps) };
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:logAndProcessExit".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let (response, log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            source_maps_callback,
-        )
-        .await?;
-
-        let error = response.result.unwrap_err();
-        assert_eq!(
-            &error.message,
-            "Uncaught process.exit: process.exit() called with exit code 42"
-        );
-        let frames = &error.frames.as_ref().unwrap().0;
-        assert_eq!(frames.len(), 1);
-        assert_eq!(
-            frames[0].file_name.as_ref().map(|s| &s[..]),
-            Some("../convex/node_actions.ts")
-        );
-        assert_eq!(
-            log_lines
-                .into_iter()
-                .map(|l| l.to_pretty_string_test_only())
-                .collect::<Vec<_>>(),
-            vec!["[LOG] 'About to do something...'".to_owned()]
-        );
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_args_too_large(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-
-        // Create ~6MB of args data, which is too large for Node functions.
-        let args = create_args(assert_obj!(
-            "message" =>  "a".repeat(6 * 1024 * 1024)
-        ))?;
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:echoMessage".parse()?,
-            args.into_serialized_args()?,
-            VERSION.clone(),
-        );
-        let error = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            empty_source_maps_callback(),
-        )
-        .await
-        .unwrap_err();
-
-        assert_eq!(
-            &error.to_string(),
-            "Node actions arguments size is too large. The maximum size is 5 MiB. Reduce the size \
-             of the arguments or consider using Convex runtime actions instead, which have a 16 \
-             MiB limit. See https://docs.convex.dev/functions/runtimes"
-        );
-        let metadata = error.downcast_ref::<ErrorMetadata>().unwrap();
-        assert!(metadata.is_deterministic_user_error());
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_forgot_await(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let source_maps = TEST_SOURCE
-            .clone()
-            .into_iter()
-            .map(|m| {
-                (
-                    m.path.canonicalize(),
-                    m.source_map.expect("Missing source map"),
-                )
-            })
-            .collect();
-        let source_maps_callback = async { Ok(source_maps) };
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:forgotAwait".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let (response, log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            source_maps_callback,
-        )
-        .await?;
-
-        assert_eq!(response.result?, ConvexValue::Null);
-        assert_eq!(
-            log_lines
-                .into_iter()
-                .map(|l| l.to_pretty_string_test_only())
-                .collect::<Vec<_>>(),
-            vec![
-                "[WARN] 'You have an outstanding mutation call. Operations should \
-                be awaited or they might not run. Not awaiting promises might result \
-                in unexpected failures. See https://docs.convex.dev/functions/actions#dangling-promises \
-                for more information.'"
-                    .to_owned()
-            ]
-        );
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_missing_export(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:hello".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let (response, _log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            empty_source_maps_callback(),
-        )
-        .await?;
-
-        let error = response.result.unwrap_err();
-        assert_eq!(
-            &error.message[..],
-            "Couldn't find action `hello` in `node_actions.js`"
-        );
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_environment_variables(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let mut environment_variables = BTreeMap::new();
-        environment_variables.insert("TEST_NAME".parse()?, "TEST_VALUE".parse()?);
-        let (response, _log_lines) = execute(
-            &actions,
-            ExecuteRequest {
-                path_and_args: ValidatedPathAndArgs::new_for_tests(
-                    "node_actions.js:getTestEnvVar".parse()?,
-                    SerializedArgs::from_args(vec![])?,
-                    VERSION.clone(),
-                ),
-                source_package,
-                source_package_id: DeveloperDocumentId::MIN.into(),
-                user_identity: None,
-                auth_header: None,
-                environment_variables,
-                callback_token: "".to_owned(),
-                context: ExecutionContext::new_for_test(),
-                encoded_parent_trace: None,
-            },
-            empty_source_maps_callback(),
-        )
-        .await?;
-        assert_eq!(response.result?, ConvexValue::try_from("TEST_VALUE")?);
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_user_timeout(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:sleepAnHour".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let (response, log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            empty_source_maps_callback(),
-        )
-        .await?;
-        // This should be hitting the user timeout in executor.ts, not the Node
-        // process timeout.
-        assert_eq!(
-            &response.result.unwrap_err().message[..],
-            "Action `sleepAnHour` execution timed out (maximum duration 2s)"
-        );
-        // Make sure we have log lines
-        assert_eq!(
-            log_lines
-                .into_iter()
-                .map(|l| l.to_pretty_string_test_only())
-                .collect::<Vec<_>>(),
-            vec!["[LOG] 'I am very sleepy. I am going to take a nap.'".to_owned()]
-        );
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_partial_escape_sequence_result(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:partialEscapeSequence".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let err = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            empty_source_maps_callback(),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(err.short_msg(), "FunctionReturnInvalidJson");
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_process_timeout(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:workHardForAnHour".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let (response, _log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            empty_source_maps_callback(),
-        )
-        .await?;
-        // Since this is a busy loop, we should be hitting the process timeout.
-        assert_eq!(
-            &response.result.unwrap_err().message[..],
-            "Function execution unexpectedly timed out. Check your function for infinite loops or \
-             other long-running operations."
-        );
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_deadlock(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-        let path_and_args = ValidatedPathAndArgs::new_for_tests(
-            "node_actions.js:deadlock".parse()?,
-            SerializedArgs::from_args(vec![])?,
-            VERSION.clone(),
-        );
-        let (response, _log_lines) = execute(
-            &actions,
-            execute_request(path_and_args, source_package),
-            empty_source_maps_callback(),
-        )
-        .await?;
-        assert_eq!(
-            &response.result.unwrap_err().message[..],
-            "Action `deadlock` execution timed out (maximum duration 2s)"
-        );
-
-        Ok(())
-    }
-
-    // We analyze static source since maintaining the test is hard if source
-    // passes via esbuild
-    const MODULE_ANALYZE: &str = r#"
-async function invokeAction(func, requestId, argsStr) {
-  throw new Error("unimplemented");
-}
-var actionGeneric = (func) => {
-  const q = func;
-  if (q.isRegistered) {
-    throw new Error("Function registered twice " + func);
-  }
-  q.isRegistered = true;
-  q.isAction = true;
-  q.isPublic = true;
-  q.invokeAction = (requestId, argsStr) => invokeAction(func, requestId, argsStr);
-  q.exportArgs = () => `{ "type": "any" }`;
-  q.exportReturns = () => `null`;
-  return q;
-};
-var internalActionGeneric = (func) => {
-  const q = func;
-  if (q.isRegistered) {
-    throw new Error("Function registered twice " + func);
-  }
-  q.isRegistered = true;
-  q.isAction = true;
-  q.isInternal = true;
-  q.invokeAction = (requestId, argsStr) => invokeAction(func, requestId, argsStr);
-  q.exportArgs = () => `{ "type": "any" }`;
-  q.exportReturns = () => `null`;
-  return q;
-};
-var actionWithStringArgNamedAAndStringReturnValue = (func) => {
-  const q = actionGeneric(func);
-  q.exportArgs = () => `{"type": "object", "value": {"a": {"fieldType": {"type": "string"}, "optional": false}}}`;
-  q.exportReturns = () => `{"type": "string"}`;
-  return q;
-};
-var action = actionGeneric;
-var internalAction = internalActionGeneric;
-var hello = action(async ({}) => {
-  console.log("analyze me pls");
-});
-var internalHello = internalAction(async ({}) => {
-  console.log("analyze me pls");
-});
-var argsAndReturns = actionWithStringArgNamedAAndStringReturnValue(async ({}, { a }) => {
-  console.log("analyze me pls");
-  return a;
-});
-export {
-  argsAndReturns,
-  hello,
-  internalHello
-};
-"#;
-
-    // Generated via `npx esbuild static_node_source.js --bundle --format=esm
-    // --target=esnext --sourcemap=linked --outfile=out.js`
-    const SOURCE_MAP: &str = r#"
-{
-  "version": 3,
-  "sources": ["static_node_source.js"],
-  "sourcesContent": ["async function invokeAction(func, requestId, argsStr) {\n  throw new Error(\"unimplemented\");\n}\nvar actionGeneric = func => {\n  const q = func;\n  if (q.isRegistered) {\n    throw new Error(\"Function registered twice \" + func);\n  }\n  q.isRegistered = true;\n  q.isAction = true;\n  q.isPublic = true;\n  q.invokeAction = (requestId, argsStr) => invokeAction(func, requestId, argsStr);\n  q.exportArgs =  () => `{ \"type\": \"any\" }`\n  q.exportReturns =  () => `null`\n  return q;\n};\nvar internalActionGeneric = func => {\n  const q = func;\n  if (q.isRegistered) {\n    throw new Error(\"Function registered twice \" + func);\n  }\n  q.isRegistered = true;\n  q.isAction = true;\n  q.isInternal = true;\n  q.invokeAction = (requestId, argsStr) => invokeAction(func, requestId, argsStr);\n  q.exportArgs =  () => `{ \"type\": \"any\" }`\n  q.exportReturns =  () => `null`\n  return q;\n};\nvar actionWithStringArgNamedAAndStringReturnValue = func => {\n  const q = actionGeneric(func);\n  q.exportArgs = () => `{\"type\": \"object\", \"value\": {\"a\": {\"fieldType\": {\"type\": \"string\"}, \"optional\": false}}}`\n  q.exportReturns = () => `{\"type\": \"string\"}`\n  return q;\n}\nvar action = actionGeneric;\nvar internalAction = internalActionGeneric;\nvar hello = action(async ({}) => {\n  console.log(\"analyze me pls\");\n});\nvar internalHello = internalAction(async ({}) => {\n  console.log(\"analyze me pls\");\n});\nconst argsAndReturns = actionWithStringArgNamedAAndStringReturnValue(async ({}, {a}) => {\n  console.log(\"analyze me pls\");\n  return a;\n});\nexport { argsAndReturns, hello, internalHello };\n"],
-  "mappings": ";AAAA,eAAe,aAAa,MAAM,WAAW,SAAS;AACpD,QAAM,IAAI,MAAM,eAAe;AACjC;AACA,IAAI,gBAAgB,UAAQ;AAC1B,QAAM,IAAI;AACV,MAAI,EAAE,cAAc;AAClB,UAAM,IAAI,MAAM,+BAA+B,IAAI;AAAA,EACrD;AACA,IAAE,eAAe;AACjB,IAAE,WAAW;AACb,IAAE,WAAW;AACb,IAAE,eAAe,CAAC,WAAW,YAAY,aAAa,MAAM,WAAW,OAAO;AAC9E,IAAE,aAAc,MAAM;AACtB,IAAE,gBAAiB,MAAM;AACzB,SAAO;AACT;AACA,IAAI,wBAAwB,UAAQ;AAClC,QAAM,IAAI;AACV,MAAI,EAAE,cAAc;AAClB,UAAM,IAAI,MAAM,+BAA+B,IAAI;AAAA,EACrD;AACA,IAAE,eAAe;AACjB,IAAE,WAAW;AACb,IAAE,aAAa;AACf,IAAE,eAAe,CAAC,WAAW,YAAY,aAAa,MAAM,WAAW,OAAO;AAC9E,IAAE,aAAc,MAAM;AACtB,IAAE,gBAAiB,MAAM;AACzB,SAAO;AACT;AACA,IAAI,gDAAgD,UAAQ;AAC1D,QAAM,IAAI,cAAc,IAAI;AAC5B,IAAE,aAAa,MAAM;AACrB,IAAE,gBAAgB,MAAM;AACxB,SAAO;AACT;AACA,IAAI,SAAS;AACb,IAAI,iBAAiB;AACrB,IAAI,QAAQ,OAAO,OAAO,CAAC,MAAM;AAC/B,UAAQ,IAAI,gBAAgB;AAC9B,CAAC;AACD,IAAI,gBAAgB,eAAe,OAAO,CAAC,MAAM;AAC/C,UAAQ,IAAI,gBAAgB;AAC9B,CAAC;AACD,IAAM,iBAAiB,8CAA8C,OAAO,CAAC,GAAG,EAAC,EAAC,MAAM;AACtF,UAAQ,IAAI,gBAAgB;AAC5B,SAAO;AACT,CAAC;",
-  "names": []
-}
-"#;
-
-    #[convex_macro::prod_rt_test]
-    async fn test_analyze(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let path: ModulePath = "static_node_source.js".parse()?;
-        let source_package = upload_modules(
-            storage.clone(),
-            vec![ModuleConfig {
-                path: path.clone(),
-                source: MODULE_ANALYZE.into(),
-                source_map: Some(SOURCE_MAP.to_string()),
-                environment: ModuleEnvironment::Node,
-            }],
-        )
-        .await?;
-        let mut source_maps = BTreeMap::new();
-        let path: CanonicalizedModulePath = "static_node_source.js".parse()?;
-        source_maps.insert(path.clone(), SOURCE_MAP.to_string());
-        let modules = actions
-            .analyze(
-                AnalyzeRequest {
-                    source_package,
-                    environment_variables: BTreeMap::new(),
-                },
-                &source_maps,
-            )
-            .await??;
-
-        assert_eq!(
-            Vec::from(modules[&path].functions.clone()),
-            &[
-                AnalyzedFunction::new(
-                    "hello".parse()?,
-                    Some(AnalyzedSourcePosition {
-                        path: "static_node_source.js".parse()?,
-                        start_lineno: 38,
-                        start_col: modules[&path].functions[0].pos.as_ref().unwrap().start_col,
-                    }),
-                    UdfType::Action,
-                    Some(Visibility::Public),
-                    ArgsValidator::Unvalidated,
-                    ReturnsValidator::Unvalidated,
-                )?,
-                AnalyzedFunction::new(
-                    "internalHello".parse()?,
-                    Some(AnalyzedSourcePosition {
-                        path: "static_node_source.js".parse()?,
-                        start_lineno: 41,
-                        start_col: modules[&path].functions[1].pos.as_ref().unwrap().start_col,
-                    }),
-                    UdfType::Action,
-                    Some(Visibility::Internal),
-                    ArgsValidator::Unvalidated,
-                    ReturnsValidator::Unvalidated,
-                )?,
-                AnalyzedFunction::new(
-                    "argsAndReturns".parse()?,
-                    Some(AnalyzedSourcePosition {
-                        path: "static_node_source.js".parse()?,
-                        start_lineno: 44,
-                        start_col: modules[&path].functions[2].pos.as_ref().unwrap().start_col,
-                    }),
-                    UdfType::Action,
-                    Some(Visibility::Public),
-                    ArgsValidator::json_deserialize_value(
-                        json!({"type": "object", "value": {"a": {"fieldType": {"type": "string"}, "optional": false}}})
-                    ).unwrap(),
-                    ReturnsValidator::json_deserialize_value(json!({"type": "string"})).unwrap()
-                )?,
-            ]
-        );
-        Ok(())
-    }
-
-    const MODULE_ANALYZE_QUERY: &str = r#"
-async function invokeQuery(func, requestId, argsStr) {
-    throw new Error("unimplemented");
-}
-
-var queryGeneric = func => {
-    const q = func;
-    if (q.isRegistered) {
-      throw new Error("Function registered twice " + func);
-    }
-    q.isRegistered = true;
-    q.isQuery = true;
-    q.isPublic = true;
-    q.invokeQuery = (requestId, argsStr) => invokeQuery(func, requestId, argsStr);
-    return q;
-  };
-
-var query = queryGeneric;
-
-var hello = query(async ({}) => {
-  console.log("analyze me pls");
-});
-
-export { hello };
-"#;
-
-    #[convex_macro::prod_rt_test]
-    async fn test_analyze_query(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(
-            storage.clone(),
-            vec![ModuleConfig {
-                path: "actions/test.js".parse()?,
-                source: MODULE_ANALYZE_QUERY.into(),
-                source_map: None,
-                environment: ModuleEnvironment::Node,
-            }],
-        )
-        .await?;
-        let source_maps = BTreeMap::new();
-        let err = actions
-            .analyze(
-                AnalyzeRequest {
-                    source_package,
-                    environment_variables: BTreeMap::new(),
-                },
-                &source_maps,
-            )
-            .await?
-            .unwrap_err();
-        assert_eq!(
-            &err.message[..],
-            "`hello` defined in `actions/test.js` is a Query function. Only actions can be defined in Node.js. See https://docs.convex.dev/functions/actions for more details."
-        );
-        Ok(())
-    }
-
-    const MODULE_ANALYZE_INVALID: &str = r#"
-export const test = {
-    isAction: true,
-    isPublic: true,
-    invokeAction: (requestId, argsStr) => {
-        throw new Error("unimplemented");
-    },
-    exportArgs: () => `{ "type": "any" }`,
-    exportReturns: () => `{ "type": "object", "value": { "@invalidKey": { "fieldType": { "type": "number" }, "optional": false } } }`,
-};
-    "#;
-
-    #[convex_macro::prod_rt_test]
-    async fn test_analyze_invalid(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(
-            storage.clone(),
-            vec![ModuleConfig {
-                path: "actions/test.js".parse()?,
-                source: MODULE_ANALYZE_INVALID.into(),
-                source_map: None,
-                environment: ModuleEnvironment::Node,
-            }],
-        )
-        .await?;
-        let source_maps = BTreeMap::new();
-        let err = actions
-            .analyze(
-                AnalyzeRequest {
-                    source_package,
-                    environment_variables: BTreeMap::new(),
-                },
-                &source_maps,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(err.short_msg(), "InvalidNodeActionReturnsValidator");
-        Ok(())
-    }
-
-    const MODULE_ANALYZE_CRASH: &str = r#"
-// Crash the Node executor process at analyze time in a controlled way.
-process.kill(process.pid, "SIGKILL");
-
-export const test = {
-    isAction: true,
-    isPublic: true,
-    invokeAction: (requestId, argsStr) => {
-        throw new Error("unimplemented");
-    },
-    exportArgs: () => `{ "type": "any" }`,
-};
-    "#;
-
-    #[convex_macro::prod_rt_test]
-    async fn test_analyze_recover_after_crash(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-
-        // Crash Node during analyze by uploading a module that terminates the process.
-        {
-            let source_package = upload_modules(
-                storage.clone(),
-                vec![ModuleConfig {
-                    path: "actions/test.js".parse()?,
-                    source: MODULE_ANALYZE_CRASH.into(),
-                    source_map: None,
-                    environment: ModuleEnvironment::Node,
-                }],
-            )
-            .await?;
-            let source_maps = BTreeMap::new();
-            let result = actions
-                .analyze(
-                    AnalyzeRequest {
-                        source_package,
-                        environment_variables: BTreeMap::new(),
-                    },
-                    &source_maps,
-                )
-                .await;
-            match result {
-                // Node crashed hard enough that the request itself failed.
-                Err(e) => {
-                    // Ensure we're failing because the Node server crashed and the request failed,
-                    // not due to an unrelated timeout or structured JS failure.
-                    let top_context = e.chain().next().map(|c| c.to_string()).unwrap_or_default();
-                    assert_eq!(top_context, "Node server request failed");
-                },
-                // Node returned a structured error response (e.g. process died in a worker).
-                Ok(Err(e)) => {
-                    assert_eq!(e.message, INTERNAL_SERVER_ERROR_MSG);
-                },
-                Ok(Ok(_)) => anyhow::bail!("Expected analyze to fail after crashing Node"),
-            }
-        }
-
-        // After the OOM, we should be able to analyze correct modules
-        {
-            let source_package = upload_modules(
-                storage.clone(),
-                vec![ModuleConfig {
-                    path: "actions/test.js".parse()?,
-                    source: MODULE_ANALYZE.into(),
-                    source_map: None,
-                    environment: ModuleEnvironment::Node,
-                }],
-            )
-            .await?;
-            let source_maps = BTreeMap::new();
-            let modules = actions
-                .analyze(
-                    AnalyzeRequest {
-                        source_package,
-                        environment_variables: BTreeMap::new(),
-                    },
-                    &source_maps,
-                )
-                .await??;
-            assert_eq!(modules.len(), 1);
-        }
-
-        Ok(())
-    }
-
-    #[convex_macro::prod_rt_test]
-    async fn test_syscall_trace(rt: ProdRuntime) -> anyhow::Result<()> {
-        let storage = Arc::new(LocalDirStorage::new(rt.clone())?);
-        let actions = create_actions(rt).await;
-        let source_package = upload_modules(storage.clone(), TEST_SOURCE.clone()).await?;
-
-        // First, try to execute an action with a syscall that fails. In this case,
-        // we'll call into a query where the backend isn't actually running.
-        let args = create_args(assert_obj!("name" =>  "getCounter.js"))?;
-        let (response, _log_lines) = execute(
-            &actions,
-            execute_request(
-                ValidatedPathAndArgs::new_for_tests(
-                    "node_actions.js:runQuery".parse()?,
-                    args.into_serialized_args()?,
-                    VERSION.clone(),
-                ),
-                source_package.clone(),
-            ),
-            empty_source_maps_callback(),
-        )
-        .await?;
-        let syscall_trace = response.syscall_trace;
-
-        assert_eq!(syscall_trace.async_syscalls.len(), 1);
-        assert_eq!(
-            syscall_trace.async_syscalls["1.0/actions/query"].invocations,
-            1
-        );
-        assert_eq!(syscall_trace.async_syscalls["1.0/actions/query"].errors, 1);
-
-        // Second, execute an action with a successful syscall.
-        let (response, _log_lines) = execute(
-            &actions,
-            execute_request(
-                ValidatedPathAndArgs::new_for_tests(
-                    "node_actions.js:getUserIdentity".parse()?,
-                    SerializedArgs::from_args(vec![])?,
-                    VERSION.clone(),
-                ),
-                source_package,
-            ),
-            empty_source_maps_callback(),
-        )
-        .await?;
-        let syscall_trace = response.syscall_trace;
-
-        assert_eq!(syscall_trace.async_syscalls.len(), 1);
-        assert_eq!(
-            syscall_trace.async_syscalls["1.0/getUserIdentity"].invocations,
-            1
-        );
-        assert_eq!(
-            syscall_trace.async_syscalls["1.0/getUserIdentity"].errors,
-            0
-        );
-
-        Ok(())
-    }
 }

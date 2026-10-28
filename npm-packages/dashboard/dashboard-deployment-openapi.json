@@ -16,6 +16,26 @@
     }
   ],
   "paths": {
+    "/check_admin_key": {
+      "get": {
+        "tags": [
+          "public_api"
+        ],
+        "summary": "Check admin key validity",
+        "description": "This endpoint checks if the admin key included in the header is valid for\nthis instance. Returns the allowed operations and read-only status for the\nkey so the dashboard can show appropriate disabled states.",
+        "operationId": "check_admin_key",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/shapes2": {
       "get": {
         "summary": "Get table shapes",
@@ -118,45 +138,6 @@
         }
       }
     },
-    "/get_source_code": {
-      "get": {
-        "summary": "Get source code",
-        "description": "Returns the source code for the specified module path.",
-        "operationId": "get_source_code",
-        "parameters": [
-          {
-            "name": "path",
-            "in": "query",
-            "description": "Module path to get source code for",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "component",
-            "in": "query",
-            "description": "Component ID",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/delete_scheduled_functions_table": {
       "post": {
         "operationId": "delete_scheduled_functions_table",
@@ -173,26 +154,6 @@
         "responses": {
           "200": {
             "description": ""
-          }
-        }
-      }
-    },
-    "/check_admin_key": {
-      "get": {
-        "tags": [
-          "public_api"
-        ],
-        "summary": "Check admin key validity",
-        "description": "This endpoint checks if the admin key included in the header is valid for\nthis instance and validates that the provided admin key has write access.",
-        "operationId": "check_admin_key",
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
           }
         }
       }
@@ -228,17 +189,17 @@
           "tableNames"
         ],
         "properties": {
-          "componentId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "tableNames": {
             "type": "array",
             "items": {
               "type": "string"
             }
+          },
+          "componentId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

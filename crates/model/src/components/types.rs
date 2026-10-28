@@ -50,6 +50,15 @@ pub struct ProjectConfig {
 
     // Version of Node.js to use in the node executor.
     pub node_version: Option<NodeVersion>,
+
+    pub dry_run: bool,
+
+    /// When true, relax typechecks that don't affect the codegen output. The
+    /// CLI sets this for standalone component codegen (`convex codegen
+    /// --component-dir ...`), where it wraps the target component in a
+    /// synthetic root app that can't provide bindings for the child's required
+    /// env vars.
+    pub for_codegen: bool,
 }
 
 #[derive(Debug)]

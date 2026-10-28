@@ -17,14 +17,11 @@ use common::{
 use value::{
     ConvexObject,
     JsonPackedValue,
+    PendingValue,
 };
 
 /// Identifier for a single request in a session
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(proptest_derive::Arbitrary, PartialEq)
-)]
 pub struct SessionRequestIdentifier {
     pub session_id: SessionId,
     pub request_id: SessionRequestSeqNumber,
@@ -35,10 +32,6 @@ pub struct SessionRequestIdentifier {
 /// This is used to determine whether a session request has already been
 /// processed.
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(PartialEq, proptest_derive::Arbitrary)
-)]
 pub struct SessionRequestRecord {
     pub session_id: SessionId,
     pub request_id: SessionRequestSeqNumber,
@@ -96,15 +89,11 @@ impl TryFrom<ConvexObject> for SessionRequestRecord {
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(
-    any(test, feature = "testing"),
-    derive(PartialEq, proptest_derive::Arbitrary)
-)]
 pub enum SessionRequestOutcome {
     // In case of mutation, the session request is recorded atomically with
     // performing the mutation. There are no record for incomplete mutations.
     Mutation {
-        result: JsonPackedValue,
+        result: JsonPackedValue<PendingValue>,
         log_lines: LogLines,
     },
 }
@@ -174,25 +163,5 @@ impl TryFrom<ConvexObject> for SessionRequestOutcome {
         };
 
         Ok(outcome)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use cmd_util::env::env_config;
-    use common::testing::assert_roundtrips;
-    use proptest::prelude::*;
-    use value::ConvexObject;
-
-    use super::SessionRequestRecord;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { cases: 256 * env_config("CONVEX_PROPTEST_MULTIPLIER", 1), failure_persistence: None, ..ProptestConfig::default() }
-        )]
-        #[test]
-        fn test_session_request_roundtrips(v in any::<SessionRequestRecord>()) {
-            assert_roundtrips::<SessionRequestRecord, ConvexObject>(v);
-        }
     }
 }

@@ -9,6 +9,8 @@ use common::{
     runtime::Runtime,
 };
 use errors::ErrorMetadata;
+use keybroker::DeploymentOp;
+use roles::RequireDeploymentOp;
 use value::{
     ConvexObject,
     ConvexValue,
@@ -64,17 +66,13 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         anyhow::ensure!(
             bootstrap_system_tables()
                 .iter()
-                .all(|t| t.table_name() != table_name),
+                .all(|t| t.table_name() != *table_name),
             "Cannot import into bootstrap system table {table_name}"
         );
-        if !(self.tx.identity.is_admin() || self.tx.identity.is_system()) {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "UnauthorizedImport",
-                "Import requires admin auth"
-            ));
-        }
+        self.tx
+            .identity
+            .require_operation(DeploymentOp::ImportBackups)?;
 
-        self.tx.retention_validator.fail_if_falling_behind()?;
         let id_field = FieldName::from(ID_FIELD.clone());
         let internal_id = if let Some(ConvexValue::String(s)) = value.get(&id_field) {
             let id_v6 = DeveloperDocumentId::decode(s).context(ErrorMetadata::bad_request(
@@ -114,13 +112,11 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         };
 
         let document = ResolvedDocument::new(id, creation_time, value)?;
-        if !table_name.is_system() {
-            document.check_user_size()?;
-        }
         SchemaModel::new(self.tx, namespace)
             .enforce_with_table_mapping(&document, &table_mapping_for_schema.namespace(namespace))
             .await?;
-        self.tx.apply_validated_write(id, None, Some(document))?;
+        self.tx
+            .apply_validated_write(id, None, Some(document.into()))?;
 
         Ok(id.into())
     }
@@ -146,15 +142,12 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         anyhow::ensure!(
             bootstrap_system_tables()
                 .iter()
-                .all(|t| t.table_name() != table_name),
+                .all(|t| t.table_name() != *table_name),
             "Cannot import into bootstrap system table {table_name}"
         );
-        if !(self.tx.identity.is_admin() || self.tx.identity.is_system()) {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "UnauthorizedImport",
-                "Import requires admin auth"
-            ));
-        }
+        self.tx
+            .identity
+            .require_operation(DeploymentOp::ImportBackups)?;
 
         let id_field = FieldName::from(ID_FIELD.clone());
         let developer_id = if let Some(ConvexValue::String(s)) = value.get(&id_field) {
@@ -192,14 +185,11 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         };
 
         let document = ResolvedDocument::new(id, creation_time, value)?;
-        if !table_name.is_system() {
-            document.check_user_size()?;
-        }
         SchemaModel::new(self.tx, namespace)
             .enforce_with_table_mapping(&document, &table_mapping_for_schema.namespace(namespace))
             .await?;
         self.tx
-            .apply_validated_write(id, existing_doc, Some(document))?;
+            .apply_validated_write(id, existing_doc, Some(document.into()))?;
 
         Ok(id.into())
     }
@@ -223,15 +213,12 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         anyhow::ensure!(
             bootstrap_system_tables()
                 .iter()
-                .all(|t| t.table_name() != table_name),
+                .all(|t| t.table_name() != *table_name),
             "Cannot import into bootstrap system table {table_name}"
         );
-        if !(self.tx.identity.is_admin() || self.tx.identity.is_system()) {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "UnauthorizedImport",
-                "Import requires admin auth"
-            ));
-        }
+        self.tx
+            .identity
+            .require_operation(DeploymentOp::ImportBackups)?;
 
         let id = ResolvedDocumentId::new(table_id.tablet_id, developer_id);
         let existing_doc = self.tx.get_with_ts(id).await?;

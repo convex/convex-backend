@@ -4,8 +4,9 @@ sidebar_label: "TanStack Start"
 description: "How Convex works with TanStack Start"
 ---
 
-[TanStack Start](https://tanstack.com/start/latest) is a new React web framework
-with best-in-class typesafe routing.
+[TanStack Start](https://tanstack.com/start/latest) is a full-stack React
+framework powered by TanStack Router. It provides full-document SSR, streaming,
+server functions, bundling, and more.
 
 When used with Convex, TanStack Start provides
 
@@ -23,9 +24,12 @@ without React Query, as do the
 [React Query hooks](/client/tanstack/tanstack-query/index.mdx) without TanStack
 Start! But using all three is a sweet spot.
 
-<Admonition type="caution" title="TanStack Start is in Beta">
-  TanStack Start is a new React framework currently in beta. You can use it
-  today but there may be breaking changes made to it before a stable release.
+<Admonition type="caution" title="TanStack Start is in Release Candidate">
+
+[TanStack Start](https://tanstack.com/start/latest) is a new React framework
+currently in the Release Candidate stage. You can use it today but there may be
+bugs or breaking changes before a stable release.
+
 </Admonition>
 
 ## Getting started
@@ -50,9 +54,13 @@ This is useful to know when debugging why a query result is already loaded: for
 client side navigations, whether a subscription is already active can depend on
 what pages were previously visited in a session.
 
+Open the
+[React Query Devtools](https://tanstack.com/query/latest/docs/framework/react/devtools)
+to observe subscriptions staying active as you navigate.
+
 ### Using Convex React hooks
 
-[Convex React](/client/react.mdx) hooks like
+[Convex React](/client/react/overview.mdx) hooks like
 [`usePaginatedQuery`](/api/modules/react#usepaginatedquery) can be used
 alongside TanStack hooks. These hooks reference the same Convex Client so
 there's still just one set of consistent query results in your app when these
@@ -65,11 +73,17 @@ live-update Convex queries on the client while also
 [server-rendering](https://tanstack.com/query/v5/docs/framework/react/guides/ssr)
 them.
 [`useSuspenseQuery()`](https://tanstack.com/query/latest/docs/framework/react/reference/useSuspenseQuery)
-is the simplest way to do this:
+kicks off data fetching during the initial SSR pass on the server, while
+`useQuery()` does not. This makes `useSuspenseQuery` the simplest way to
+server-render Convex data:
 
 ```ts
 const { data } = useSuspenseQuery(convexQuery(api.messages.list, {}));
 ```
+
+After server-rendering query results, the Convex client in the browser resumes
+live subscriptions from where SSR left off, so there's no flash of loading state
+or redundant data fetching.
 
 ### Consistent client views
 
@@ -87,28 +101,90 @@ each query: Convex uses the same timestamp for all queries.
 
 ### Loaders
 
-To make client-side navigations faster you can add a
+TanStack Start routes can have isomorphic
 [loader](https://tanstack.com/router/latest/docs/framework/react/guide/external-data-loading#using-loaders-to-ensure-data-is-loaded)
-to a route. By default, loaders will run when mousing over a link to that page.
+functions that run on the server for the initial page load and on the client for
+subsequent client-side navigations. With `defaultPreload: "intent"`, as
+configured in the quickstart, loaders also run when hovering over a link to a
+page, enabling prefetching.
+
+Adding queries to loaders moves away from the convenience of co-locating data
+fetching in components with `useSuspenseQuery` in favor of faster page loads.
+Consider whether a given route benefits from this trade-off.
+
+The examples below require `@tanstack/react-query` v5.102.0 or later.
+
+Await a `query` to block rendering until data is available. This is a good fit
+when the component requires the data to render. Set `staleTime: "static"` to
+reuse cached data even if it has been invalidated, matching `ensureQueryData`.
+If no data is cached, the query fetches it. This setting applies to the loader's
+cache read; Convex subscriptions still update the cached data:
 
 ```ts
 export const Route = createFileRoute('/posts')({
   loader: async (opts) => {
-    await opts.context.queryClient.ensureQueryData(
-      convexQuery(api.messages.list, {}),
-    );
-  };
+    await opts.context.queryClient.query({
+      ...convexQuery(api.messages.list, {}),
+      staleTime: "static",
+    });
+  },
   component: () => {
     const { data } = useSuspenseQuery(convexQuery(api.messages.list, {}));
     return (
       <div>
-	{data.map((message) => (
-	  <Message key={message.id} post={message} />
-	))}
+        {data.map((message) => (
+          <Message key={message._id} post={message} />
+        ))}
       </div>
     );
   },
 })
+```
+
+You can also start the request without blocking rendering. This is a good fit
+when data would be nice to have early but the component can handle a loading
+state:
+
+```ts
+import { noop } from "@tanstack/react-query";
+
+export const Route = createFileRoute('/posts')({
+  loader: async (opts) => {
+    // Swallow prefetch errors so they do not become unhandled promise rejections.
+    void opts.context.queryClient.query(
+      convexQuery(api.messages.list, {}),
+    ).catch(noop);
+  },
+  component: () => {
+    const { data, isPending, error } = useQuery(convexQuery(api.messages.list, {}));
+    if (isPending) return <p>Loading...</p>;
+    if (error) return <p>Could not load messages: {error.message}</p>;
+    return (
+      <div>
+        {data.map((message) => (
+          <Message key={message._id} post={message} />
+        ))}
+      </div>
+    );
+  },
+})
+```
+
+You can use `loaderDeps` to pass search parameters into the loader, which causes
+the loader to re-run when those parameters change. Include the parameters in
+`convexQuery` so each set of arguments has its own cache entry:
+
+```ts
+export const Route = createFileRoute("/posts")({
+  validateSearch: (search) => ({ channel: String(search.channel ?? "") }),
+  loaderDeps: ({ search: { channel } }) => ({ channel }),
+  loader: async (opts) => {
+    await opts.context.queryClient.query({
+      ...convexQuery(api.messages.list, { channel: opts.deps.channel }),
+      staleTime: "static",
+    });
+  },
+});
 ```
 
 ## Authentication
@@ -117,7 +193,7 @@ Client-side authentication in Start works the way
 [client-side authentication with Convex](https://docs.convex.dev/auth) generally
 works in React because TanStack Start works well as a client-side framework.
 
-To use Clerk auth to make authenticated Convex calls on the server as well see
-the [TanStack Start + Clerk guide](/client/tanstack/tanstack-start/clerk.mdx).
+To make authenticated Convex calls on the server as well see our setup guides:
 
-Clerk is an official partner of TanStack, see our setup guide.
+- [TanStack Start + Clerk](/client/tanstack/tanstack-start/clerk.mdx)
+- [TanStack Start + WorkOS AuthKit](/auth/authkit/add-to-app)

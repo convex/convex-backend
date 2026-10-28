@@ -1,4 +1,4 @@
-import { SignOutButton, useAuth } from "@clerk/clerk-react";
+import { SignOutButton, useAuth } from "@clerk/react";
 import { useMutation, useQuery } from "convex/react";
 import { FormEvent, useState } from "react";
 import { api } from "../convex/_generated/api";

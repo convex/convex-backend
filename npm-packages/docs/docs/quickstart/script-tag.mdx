@@ -7,7 +7,7 @@ sidebar_position: 450
 ---
 
 import sampleData from "!!raw-loader!@site/../private-demos/quickstarts/nodejs/sampleData.jsonl";
-import tasks from "!!raw-loader!@site/../private-demos/quickstarts/nodejs/convex/tasks.js";
+import tasks from "!!raw-loader!@site/../private-demos/quickstarts/nodejs/convex/tasks.ts";
 import html from "!!raw-loader!@site/../demos/html/simple.html";
 
 Learn how to query data from Convex from script tags in HTML.
@@ -64,14 +64,14 @@ Learn how to query data from Convex from script tags in HTML.
     with the sample data into your Convex database with
     the `import` command.
 
-    ```
+    ```sh
     npx convex import --table tasks sampleData.jsonl
     ```
 
   </Step>
 
   <Step title="Expose a database query">
-    Add a new file `tasks.js` in the `convex/` folder
+    Add a new file `tasks.ts` in the `convex/` folder
     with a query function that loads the data.
 
     Exporting a query function from this file
@@ -80,7 +80,7 @@ Learn how to query data from Convex from script tags in HTML.
 
     <Snippet
       source={tasks}
-      title="convex/tasks.js"
+      title="convex/tasks.ts"
     />
 
   </Step>

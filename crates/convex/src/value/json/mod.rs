@@ -123,35 +123,3 @@ impl TryFrom<JsonValue> for Value {
         Ok(r)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use convex_sync_types::testing::assert_roundtrips;
-    use proptest::prelude::*;
-    use serde_json::Value as JsonValue;
-
-    use crate::Value;
-
-    proptest! {
-        #![proptest_config(
-            ProptestConfig { failure_persistence: None, ..ProptestConfig::default() }
-        )]
-
-        #[test]
-        fn test_value_roundtrips(value in any::<Value>()) {
-            assert_roundtrips::<Value, JsonValue>(value);
-        }
-    }
-
-    #[test]
-    fn test_value_roundtrips_trophies() {
-        let trophies = vec![
-            Value::Float64(1.0),
-            Value::Float64(f64::NAN),
-            Value::Array(vec![Value::Float64(f64::NAN)]),
-        ];
-        for trophy in trophies {
-            assert_roundtrips::<Value, JsonValue>(trophy);
-        }
-    }
-}

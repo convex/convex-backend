@@ -10,25 +10,27 @@ import SchedulingDemo from "!!raw-loader!@site/../demos/convex-test/convex/sched
 import ChainedSchedulingDemo from "!!raw-loader!@site/../demos/convex-test/convex/chainedScheduling.test.ts";
 import AuthDemo from "!!raw-loader!@site/../demos/convex-test/convex/auth.test.ts";
 import MockingFetchDemo from "!!raw-loader!@site/../demos/convex-test/convex/mockingFetch.test.ts";
+import GlobalsDemo from "!!raw-loader!@site/../demos/convex-test/convex/globals.test.ts";
 import ErrorDemo from "!!raw-loader!@site/../demos/convex-test/convex/error.test.ts";
 import HttpDemo from "!!raw-loader!@site/../demos/convex-test/convex/http.test.ts";
 import RunDemo from "!!raw-loader!@site/../demos/convex-test/convex/run.test.ts";
+import DefineTestAppDemo from "!!raw-loader!@site/../demos/convex-test/convex/defineTestApp.test.ts";
+import RequestMetadataDemo from "!!raw-loader!@site/../demos/convex-test/convex/requestMetadata.test.ts";
 
 The [`convex-test`](https://www.npmjs.com/package/convex-test) library provides
 a mock implementation of the Convex backend in JavaScript. It enables fast
-automated testing of the logic in your [functions](/functions.mdx).
+automated testing of the logic in your [functions](/functions/overview.mdx).
 
 ## Example
 
-<TSAndJSSnippet
+<Snippet
   title="convex/posts.test.ts"
-  sourceTS={Demo}
-  sourceJS={Demo}
-  highlightPatterns={["t.query", "t.mutation", "convexTest(schema)"]}
+  source={Demo}
+  highlightPatterns={["t.query", "t.mutation", "convexTest\\(schema"]}
 />
 
 You can see more examples in the
-[test suite](https://github.com/get-convex/convex-test/tree/main/convex) of the
+[test suite](https://github.com/convex/convex-test/tree/main/convex) of the
 convex-test library.
 
 ## Get started
@@ -61,12 +63,12 @@ convex-test library.
 
   <Step title="Configure Vitest">
 
-    Add <JSDialectFileName name="vitest.config.ts" /> file to configure the test
+    Add `vitest.config.ts` file to configure the test
     environment to better match the Convex runtime.
 
     <Details summary={<>If your Convex functions are in a directory other than <code>convex</code></>}>
       If your project has a
-      [different name or location configured](/production/project-configuration.mdx#changing-the-convex-folder-name-or-location)
+      [different name or location configured](/config/convex-json.mdx#changing-the-convex-folder-name-or-location)
       for the `convex/` folder in `convex.json`, you need to call
       [`import.meta.glob`](https://vitejs.dev/guide/features#glob-import) and pass the
       result as the second argument to `convexTest`.
@@ -170,7 +172,7 @@ convex-test library.
 
   <Step title="Add a test file">
 
-    In your `convex` folder add a file ending in <JSDialectFileName name=".test.ts" />
+    In your `convex` folder add a file ending in `.test.ts`
 
     The example test calls the `api.messages.send` mutation twice
     and then asserts that the `api.messages.list` query returns
@@ -237,14 +239,14 @@ test("some behavior", async () => {
 
 Passing in the schema is required for the tests to correctly implement schema
 validation and for correct typing of
-[`t.run`](#setting-up-and-inspecting-data-and-storage-with-trun).
+[`t.run`](#modify-data-outside-of-functions).
 
 If you don't have a schema, call `convexTest()` with no argument.
 
 ### Call functions
 
-Your test can call public and internal Convex [functions](/functions.mdx) in
-your project:
+Your test can call public and internal Convex
+[functions](/functions/overview.mdx) in your project:
 
 ```ts title="convex/myFunctions.test.ts"
 import { convexTest } from "convex-test";
@@ -265,15 +267,14 @@ test("functions", async () => {
 ### Modify data outside of functions
 
 Sometimes you might want to directly [write](/database/writing-data.mdx) to the
-mock database or [file storage](/file-storage.mdx) from your test, without
-needing a declared function in your project. You can use the `t.run` method
-which takes a handler that is given a `ctx` that allows reading from and writing
-to the mock backend:
+mock database or [file storage](/file-storage/overview.mdx) from your test,
+without needing a declared function in your project. You can use the `t.run`
+method which takes a handler that is given a `ctx` that allows reading from and
+writing to the mock backend:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.test.ts"
-  sourceTS={RunDemo}
-  sourceJS={RunDemo}
+  source={RunDemo}
   highlightPatterns={["t.run"]}
 />
 
@@ -307,10 +308,9 @@ test("helper functions", async () => {
 Your test can call [HTTP actions](/functions/http-actions.mdx) registered by
 your router:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/http.test.ts"
-  sourceTS={HttpDemo}
-  sourceJS={HttpDemo}
+  source={HttpDemo}
   highlightPatterns={["t.fetch"]}
 />
 
@@ -326,10 +326,9 @@ implementations relying on
 [Vitest's fake timers](https://vitest.dev/guide/mocking.html#timers) in
 combination with `t.finishInProgressScheduledFunctions`:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/scheduling.test.ts"
-  sourceTS={SchedulingDemo}
-  sourceJS={SchedulingDemo}
+  source={SchedulingDemo}
   highlightPatterns={[]}
 />
 
@@ -338,30 +337,86 @@ schedules an action that schedules another action, you can use
 `t.finishAllScheduledFunctions` to wait for all scheduled functions, including
 recursively scheduled functions, to finish:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/chainedScheduling.test.ts"
-  sourceTS={ChainedSchedulingDemo}
-  sourceJS={ChainedSchedulingDemo}
+  source={ChainedSchedulingDemo}
   highlightPatterns={["finishAllScheduledFunctions"]}
 />
 
 Check out more examples in
-[this file](https://github.com/get-convex/convex-test/blob/main/convex/scheduler.test.ts).
+[this file](https://github.com/convex/convex-test/blob/main/convex/scheduler.test.ts).
 
 ### Authentication
 
-To test functions which depend on the current [authenticated](/auth.mdx) user
-identity you can create a version of the `t` accessor with given
+To test functions which depend on the current
+[authenticated](/auth/overview.mdx) user identity you can create a version of
+the `t` accessor with given
 [user identity attributes](/api/interfaces/server.UserIdentity). If you don't
 provide them, `issuer`, `subject` and `tokenIdentifier` will be generated
 automatically:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/tasks.test.ts"
-  sourceTS={AuthDemo}
-  sourceJS={AuthDemo}
+  source={AuthDemo}
   highlightPatterns={["withIdentity"]}
 />
+
+### Request metadata
+
+Mutations, actions, and HTTP actions can read details about the request that
+triggered them with `ctx.meta.getRequestMetadata()`. To test functions that
+depend on the client's IP address or user agent, create a version of the `t`
+accessor with `t.withRequestMetadata` (version `0.0.59` and later):
+
+<Snippet
+  title="convex/requestMetadata.test.ts"
+  source={RequestMetadataDemo}
+  highlightPatterns={["withRequestMetadata"]}
+/>
+
+### Define a test application
+
+Use `defineTestApp` to define a small application in your tests, such as a host
+app for a component or library. It provides schema-bound function builders and
+typed function references without needing to export test functions from files.
+
+<Snippet
+  title="convex/defineTestApp.test.ts"
+  source={DefineTestAppDemo}
+  highlightPatterns={["defineTestApp", "app.defineModules", "createTest"]}
+/>
+
+The app provides builders for `query`, `mutation`, `action`, and their
+`internal*` variants with the same syntax as `convex/_generated/server`.
+Register functions with `app.defineModules`, which takes an object mapping
+module paths (such as `"test/callbacks"`) to objects of function exports. It
+returns public references in `api` and internal references in `internal`.
+
+We recommend explicitly annotating return types for handlers that reference this
+API to break TypeScript inference cycles.
+
+Call `createTest()` inside each test for fresh database, scheduler, and
+component registration state. You can also pass options such as
+`createTest({ transactionLimits: true })`.
+
+`defineTestApp` also returns a typed `components` object. Pass component testing
+helpers in its `components` option; each helper's `register` function runs on
+every `createTest()` call. The object keys specify component instance names,
+such as `myWorkpool` above.
+
+To infer the type of `app.components.myWorkpool`, the helper's `register`
+function must return the component's `ComponentApi`. Some existing helpers
+return `void` instead. For those helpers, supply the API type by configuring the
+component as
+`myWorkpool: { register: workpoolTest.register as ComponentRegistration<ComponentApi> }`.
+
+Import `ComponentRegistration` from `convex-test` and `ComponentApi` from the
+component package's `/_generated/component.js` entrypoint.
+
+Additional components can be registered with `t.registerComponent`.
+
+Note: `defineTestApp` does not load `convex.config.ts`. See the
+[component client testing example](/components/authoring.mdx#testing-the-api-and-client-code).
 
 ## Vitest tips
 
@@ -378,10 +433,9 @@ every object field.
 To assert that a function throws, use
 [`.rejects.toThrowError()`](https://vitest.dev/api/expect.html#tothrowerror):
 
-<TSAndJSSnippet
+<Snippet
   title="convex/messages.test.ts"
-  sourceTS={ErrorDemo}
-  sourceJS={ErrorDemo}
+  source={ErrorDemo}
   highlightPatterns={["toThrowError"]}
 />
 
@@ -390,12 +444,64 @@ To assert that a function throws, use
 You can use Vitest's
 [vi.stubGlobal](https://vitest.dev/guide/mocking.html#globals) method:
 
-<TSAndJSSnippet
+<Snippet
   title="convex/ai.test.ts"
-  sourceTS={MockingFetchDemo}
-  sourceJS={MockingFetchDemo}
+  source={MockingFetchDemo}
   highlightPatterns={["stubGlobal"]}
 />
+
+### Overriding globals inside functions
+
+Some libraries override runtime globals such as `fetch`, `Math`, `Date`,
+`console`, `process`, or `crypto` while a Convex function runs. `convex-test`
+scopes those overrides to a single function invocation, so they don't leak into
+other functions or into your test.
+
+Override a global by assigning a replacement object to it:
+
+<Snippet
+  title="convex/globals.test.ts"
+  source={GlobalsDemo}
+  snippet="overrideMath"
+  highlightPatterns={["globalThis.Math = replacement"]}
+/>
+
+The override is visible to the handler and everything it calls directly,
+including after `await`. Nested calls through `ctx.runQuery`, `ctx.runMutation`,
+or `ctx.runAction` start from the test's globals and do not inherit it.
+
+#### Assign to the global; don't mutate or redefine it
+
+Isolation works by intercepting assignments to the global itself, so only
+assignment is scoped to the invocation:
+
+- ✅ `globalThis.Math = replacement`
+- ❌ `Math.random = () => 0.5` — mutates the object shared with the rest of the
+  test. Build a replacement object instead, as shown above.
+- ❌ `Object.defineProperty(globalThis, "Math", { value: replacement })` —
+  replaces the property rather than assigning through it. `vi.stubGlobal` does
+  this, so avoid it while running queries/mutations/actions.
+- ❌ `delete globalThis.crypto` — removes the property. Assign `undefined`
+  instead:
+
+<Snippet
+  title="convex/globals.test.ts"
+  source={GlobalsDemo}
+  snippet="unsetCrypto"
+  highlightPatterns={["crypto = undefined"]}
+/>
+
+The property still exists, so `typeof crypto === "undefined"` checks pass, but
+this doesn't simulate deleting the property.
+
+The ❌ forms change the global for the whole test process, and they also disable
+the restrictions `convex-test` applies inside queries and mutations, even when
+used in test setup.
+
+Isolation covers the supported globals that exist and are configurable in your
+test environment; it doesn't cover custom globals. Overrides made outside a
+handler are shared test setup — restore them yourself, for example in a
+`finally` block.
 
 ### Measuring test coverage
 
@@ -443,9 +549,9 @@ Some of the ways the mock differs:
   runtime. You should always test new code manually to make sure it doesn't use
   built-ins not available in the Convex runtime.
 - Some features have only simplified semantics, namely:
-  - [Text search](/search.mdx) returns all documents that include a word for
-    which at least one word in the searched string is a prefix. It does not sort
-    the results by relevance.
+  - [Text search](/search/overview.mdx) returns all documents that include a
+    word for which at least one word in the searched string is a prefix. It does
+    not sort the results by relevance.
   - [Vector search](/search/vector-search.mdx) returns results sorted by cosine
     similarity, but doesn't use an efficient vector index in its implementation.
   - There is no support for [cron jobs](/scheduling/cron-jobs.mdx), you should

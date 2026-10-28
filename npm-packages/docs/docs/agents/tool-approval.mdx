@@ -1,0 +1,255 @@
+---
+title: Tool Approval
+sidebar_label: "Tool Approval"
+sidebar_position: 510
+description: "Human-in-the-loop tool approval for the Agent component"
+---
+
+Tool approval lets you require human confirmation before a tool call is
+executed. This is useful for dangerous or irreversible operations — deleting
+data, spending money, sending emails — where you want a person to review the
+action before it happens.
+
+## Defining tools with approval
+
+Add `needsApproval` to any tool created with `createTool`. It can be a boolean
+or an async function that receives the tool context and input:
+
+```ts
+import { createTool } from "@convex-dev/agent";
+import { z } from "zod/v4";
+
+// Always requires approval
+const deleteFileTool = createTool({
+  description: "Delete a file from the system",
+  inputSchema: z.object({
+    filename: z.string().describe("The name of the file to delete"),
+  }),
+  needsApproval: () => true,
+  execute: async (_ctx, input) => {
+    return `Deleted file: ${input.filename}`;
+  },
+});
+
+// Conditionally requires approval (only for large amounts)
+const transferMoneyTool = createTool({
+  description: "Transfer money to an account",
+  inputSchema: z.object({
+    amount: z.number().describe("The amount to transfer"),
+    toAccount: z.string().describe("The destination account"),
+  }),
+  needsApproval: async (_ctx, input) => {
+    return input.amount > 100;
+  },
+  execute: async (_ctx, input) => {
+    return `Transferred $${input.amount} to ${input.toAccount}`;
+  },
+});
+```
+
+Tools without `needsApproval` (or with `needsApproval` returning `false`)
+execute immediately as usual.
+
+## Server-side flow
+
+The typical approval flow involves four server functions:
+
+1. **Save the user's message** and schedule generation.
+2. **Generate a response.** If the model calls a tool that needs approval,
+   generation pauses and the `tool-approval-request` is persisted in the thread.
+3. **Submit an approval or denial** for each pending tool call.
+   `approveToolCall` and `denyToolCall` work from both mutations and actions.
+4. **Continue generation** from the returned message ID.
+
+```ts
+import { approvalAgent } from "../agents/approval";
+
+// 1. Save message and schedule generation
+export const sendMessage = mutation({
+  args: { prompt: v.string(), threadId: v.string() },
+  handler: async (ctx, { prompt, threadId }) => {
+    const { messageId } = await approvalAgent.saveMessage(ctx, {
+      threadId,
+      prompt,
+    });
+    await ctx.scheduler.runAfter(0, internal.chat.approval.generateResponse, {
+      threadId,
+      promptMessageId: messageId,
+    });
+    return { messageId };
+  },
+});
+
+// 2. Generate (stops if approval is needed)
+export const generateResponse = internalAction({
+  args: { promptMessageId: v.string(), threadId: v.string() },
+  handler: async (ctx, { promptMessageId, threadId }) => {
+    const result = await approvalAgent.streamText(
+      ctx,
+      { threadId },
+      { promptMessageId },
+    );
+    await result.consumeStream();
+  },
+});
+
+// 3. Submit an approval decision (can be a mutation or action)
+export const submitApproval = mutation({
+  args: {
+    threadId: v.string(),
+    approvalId: v.string(),
+    approved: v.boolean(),
+    reason: v.optional(v.string()),
+  },
+  returns: v.object({ messageId: v.string() }),
+  handler: async (ctx, { threadId, approvalId, approved, reason }) => {
+    const { messageId } = approved
+      ? await approvalAgent.approveToolCall(ctx, {
+          threadId,
+          approvalId,
+          reason,
+        })
+      : await approvalAgent.denyToolCall(ctx, {
+          threadId,
+          approvalId,
+          reason,
+        });
+    return { messageId };
+  },
+});
+
+// 4. Continue generation from the saved approval decision.
+//    Pass the last approval message ID as promptMessageId so the agent
+//    resumes generation from where the approval was issued.
+export const continueAfterApprovals = internalAction({
+  args: { threadId: v.string(), lastApprovalMessageId: v.string() },
+  handler: async (ctx, { threadId, lastApprovalMessageId }) => {
+    const result = await approvalAgent.streamText(
+      ctx,
+      { threadId },
+      { promptMessageId: lastApprovalMessageId },
+    );
+    await result.consumeStream();
+  },
+});
+```
+
+<Admonition type="tip">
+
+You can approve a tool call and continue generation in the same server function.
+For example, an action can call `approveToolCall` and then immediately call
+`streamText` to resume — no separate scheduling step needed.
+
+</Admonition>
+
+## Handling multiple tool calls
+
+When the model calls several tools in a single step, some or all of them may
+require approval. Submit decisions from the same assistant request together with
+`respondToToolCallApprovals`. The batch uses one bounded lookup and one write,
+and either every decision is saved or none are.
+
+```ts
+const { messageId } = await approvalAgent.respondToToolCallApprovals(ctx, {
+  threadId,
+  decisions: [
+    { approvalId: "delete-file", approved: true },
+    {
+      approvalId: "send-email",
+      approved: false,
+      reason: "Wrong recipient",
+    },
+  ],
+});
+```
+
+You may also submit and resume a subset. Sibling approvals that have not been
+decided remain pending and can be resumed later. `approveToolCall` and
+`denyToolCall` remain available for single decisions and use the same atomic
+path. For multiple decisions, use the batch method instead of looping over the
+single-decision helpers so the request history is read only once.
+
+If a partial continuation requests another approval, that newer request also
+remains pending while you resume an earlier sibling.
+
+If an unrelated generation starts while approvals are still unresolved, they are
+**automatically denied** with the reason
+`"auto-denied: new generation started"`. This prevents broken message histories
+where tool calls lack results. These denials are synthetic and only added to the
+model's context for that request; they are not saved, so the approvals remain
+pending in storage.
+
+This does not apply when resuming approvals: on that continuation, earlier
+approvals that were not part of the resume are omitted from that model request.
+No response is written for them, so they remain pending in storage.
+
+## Client-side flow
+
+On the client, use `useUIMessages` to detect pending approvals and show
+Approve/Deny buttons. Tool parts with `state === "approval-requested"` are
+waiting for a decision.
+
+```tsx
+import { useEffect, useRef } from "react";
+import { useMutation } from "convex/react";
+import { useUIMessages, type UIMessage } from "@convex-dev/agent/react";
+import type { ToolUIPart } from "ai";
+
+function Chat({ threadId }: { threadId: string }) {
+  const lastApprovalMessageIdRef = useRef<string | null>(null);
+
+  const { results: messages } = useUIMessages(
+    api.chat.approval.listThreadMessages,
+    { threadId },
+    { initialNumItems: 10, stream: true },
+  );
+
+  const submitApproval = useMutation(api.chat.approval.submitApproval);
+  const triggerContinuation = useMutation(
+    api.chat.approval.triggerContinuation,
+  );
+
+  const hasPendingApprovals = messages.some((m) =>
+    m.parts.some(
+      (p) =>
+        p.type.startsWith("tool-") &&
+        (p as ToolUIPart).state === "approval-requested",
+    ),
+  );
+
+  // When all approvals are resolved, trigger continuation
+  useEffect(() => {
+    if (!hasPendingApprovals && lastApprovalMessageIdRef.current) {
+      void triggerContinuation({
+        threadId,
+        lastApprovalMessageId: lastApprovalMessageIdRef.current,
+      });
+      lastApprovalMessageIdRef.current = null;
+    }
+  }, [hasPendingApprovals, threadId, triggerContinuation]);
+
+  // Render approval buttons for tool parts with state "approval-requested"
+  // ...
+}
+```
+
+The `ToolUIPart` states relevant to approval are:
+
+| State                | Meaning                                              |
+| -------------------- | ---------------------------------------------------- |
+| `approval-requested` | Waiting for the user to approve or deny              |
+| `approval-responded` | User responded; tool is being executed (if approved) |
+| `output-available`   | Tool executed successfully                           |
+| `output-denied`      | Tool was denied                                      |
+| `output-error`       | Tool execution failed                                |
+
+## Example files
+
+For a complete working example, see:
+
+- **Agent definition:**
+  [`example/convex/agents/approval.ts`](https://github.com/convex/agent/blob/main/example/convex/agents/approval.ts)
+- **Server functions:**
+  [`example/convex/chat/approval.ts`](https://github.com/convex/agent/blob/main/example/convex/chat/approval.ts)
+- **React UI:**
+  [`example/ui/chat/ChatApproval.tsx`](https://github.com/convex/agent/blob/main/example/ui/chat/ChatApproval.tsx)

@@ -1,0 +1,686 @@
+---
+title: "Custom Roles"
+slug: "custom-roles"
+sidebar_position: 3
+sidebar_class_name: "convex-sidebar-beta-badge"
+description:
+  "Define fine-grained permission policies for your Convex team using custom
+  roles."
+---
+
+<Admonition type="info">
+
+Custom Roles are available in beta on the Convex Business and Enterprise plans.
+
+</Admonition>
+
+Custom roles let you define permission policies that go beyond the built-in
+[Admin and Developer roles](/dashboard/teams/teams.mdx#team-roles). A custom
+role contains a list of statements that grant or deny specific actions on
+specific resources.
+
+A team member is assigned _either_ a built-in team role (Admin or Developer)
+_or_ one or more custom roles. Built-in roles and custom roles are mutually
+exclusive at the team-role level. The
+[Project Admin role](/dashboard/teams/teams.mdx#project-admins) is independent
+of both: a member can hold Project Admin on specific projects regardless of
+their team-level role, and it grants full access to those projects on top of
+whatever access the team role provides.
+
+Custom roles are managed on the **Team Settings > Custom Roles** page in the
+Convex dashboard. The Convex dashboard offers a number of templates to get you
+started. We recommend starting with the template that fits your use case best
+and making edits to meet your needs.
+
+## How custom roles are evaluated
+
+When Convex checks whether a member with custom roles can perform an action on a
+resource, it evaluates each of the member's custom roles independently and
+combines the results:
+
+1. **Default deny.** If no statement in any role matches the action and
+   resource, access is denied. Custom roles only ever grant access; they never
+   start from "everything is allowed."
+2. **Within a role, deny overrides allow.** When a role has both an `allow` and
+   a `deny` statement that match the same action and resource, the role
+   evaluates to denied. Because evaluation short-circuits as soon as a deny is
+   found, **the order of allow and deny statements within a role does not
+   matter**. The result is the same regardless of how the statements are
+   arranged.
+3. **Across roles, allows are combined.** The action is allowed if _any_ of the
+   member's roles evaluates to allowed for it. A `deny` in one role does **not**
+   override an `allow` in another role.
+
+Project Admin permissions are layered on independently. Even with a restrictive
+set of custom roles, a member who is a Project Admin on a given project still
+has full access to that project.
+
+## Grammar
+
+A custom role is a list of **statements**. Each statement is a JSON object with
+three fields:
+
+```json
+{
+  "effect": "allow",
+  "actions": ["deployment:view", "deployment:logs:view"],
+  "resource": "project:*:deployment:type=prod"
+}
+```
+
+### Statements
+
+A statement grants or denies a set of actions on a set of resources. A custom
+role must have at least one statement. Each statement is evaluated independently
+against the action being checked.
+
+### Effects
+
+The `effect` field is one of:
+
+- `"allow"` grants the listed actions on the matching resources.
+- `"deny"` within the same role, blocks the listed actions on the matching
+  resources, overriding any `allow` statement in that role.
+
+### Actions
+
+The `actions` field of a statement is either:
+
+- The string `"*"`, matching every action that targets the same
+  [resource kind](#resource-specifiers) as the statement's resource, or
+- An array of specific action names.
+
+All actions in a single statement must apply to the same top-level
+[resource kind](#resource-specifiers) as the **leaf segment** of the statement's
+resource path. For example, you cannot mix `project:view` (a project action)
+with `deployment:view` (a deployment action) in the same statement.
+
+For the full list of action names see
+[Role Actions](/team-management/role-actions.mdx).
+
+### Resource specifiers
+
+A resource specifier is a colon-separated path that describes which resources a
+statement applies to. The path has two kinds of pieces:
+
+- **Resource kinds**: `team`, `project`, `deployment`, `member`, `customRole`,
+  `billing`, `oauthApplication`, `sso`, `integration`,
+  `defaultEnvironmentVariable`, or `token`.
+- **Selectors:** filters that follow a kind and narrow which resources of that
+  kind match. Selectors use `attribute=value` syntax, like `slug=my-app` or
+  `type=prod`.
+
+The leaf (rightmost) kind of the path determines which actions are valid in the
+statement.
+
+#### Symbols
+
+- `:` separates pieces of the path. For example, `project:*:deployment:*` means
+  "any deployment in any project."
+- `*` is a wildcard, matching all resources of the given kind. `project:*`
+  matches every project.
+- `=` binds a selector attribute to a value, like `id=42`. Project, deployment,
+  and member IDs can be looked up through the
+  [Platform API](/platform-apis/overview.mdx).
+- `,` separates multiple selectors on the same kind. **Multiple selectors are
+  OR'd**: `deployment:type=prod,creator=5` matches any deployment that is either
+  a production deployment _or_ created by member 5.
+
+#### Selectors by kind
+
+<Admonition type="info">
+  Selector support is limited while custom roles is in beta. More selectors will
+  be supported in the future.
+</Admonition>
+
+| Kind                                                                                                              | Selectors                                                                           |
+| ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `project`                                                                                                         | `*`, `id=<project-id>`, `slug=<project-slug>`                                       |
+| `deployment`                                                                                                      | `*`, `id=<deployment-id>`, `type=prod\|dev\|preview\|custom`, `creator=<member-id>` |
+| `token`                                                                                                           | `*`, `creator=<member-id>`                                                          |
+| `team`, `member`, `customRole`, `billing`, `oauthApplication`, `sso`, `integration`, `defaultEnvironmentVariable` | `*` only: these resources do not currently support any selectors.                   |
+
+#### Nesting
+
+Most resource kinds appear at the top level of a path. A few must be nested:
+
+- `deployment` must appear under a project, e.g. `project:*:deployment:*`.
+- `defaultEnvironmentVariable` must appear under a project, e.g.
+  `project:*:defaultEnvironmentVariable:*`.
+- `token` must appear under its owning resource (a team, project, or
+  deployment), e.g. `team:*:token:*`, `project:*:token:*`, or
+  `project:*:deployment:*:token:*`.
+
+#### Example specifiers
+
+| Specifier                                 | Matches                                              |
+| ----------------------------------------- | ---------------------------------------------------- |
+| `team:*`                                  | The team itself.                                     |
+| `billing:*`                               | The team's billing settings.                         |
+| `sso:*`                                   | The team's SSO configuration.                        |
+| `member:*`                                | All team members.                                    |
+| `project:*`                               | All projects in the team.                            |
+| `project:slug=my-app`                     | The project whose slug is `my-app`.                  |
+| `project:*:deployment:*`                  | All deployments in any project.                      |
+| `project:*:deployment:type=prod`          | All production deployments.                          |
+| `project:*:deployment:type=dev,creator=5` | Dev deployments OR deployments created by member 5.  |
+| `project:*:defaultEnvironmentVariable:*`  | Default project environment variables.               |
+| `team:*:token:*`                          | All team-scoped access tokens.                       |
+| `project:*:deployment:*:token:creator=7`  | Deployment-scoped access tokens created by member 7. |
+
+#### Scoping access token actions
+
+There is currently no Platform API for one team member to list team access
+tokens created by another member, so granting `team:token:view` on
+`team:*:token:*` effectively only surfaces the holder's own tokens. The API may
+broaden in the future, however, so we recommend scoping token-management actions
+to the holder's own tokens by using `creator=self` . For example, a role that
+lets a member manage only their own team tokens would use a resource like
+`team:*:token:creator=7` rather than `team:*:token:*`.
+
+## Privilege escalation
+
+<Admonition type="caution">
+
+A few actions effectively grant the ability to escalate privileges, and should
+be treated as equivalent to full team admin access when included in a custom
+role.
+
+</Admonition>
+
+Be especially careful when granting these actions. Each one can be used to gain
+permissions the holder doesn't otherwise have, so granting any of them can be
+effectively the same as granting all Team-Admin or Project-Admin permissions.
+Only include them in custom roles assigned to people you would otherwise trust
+at that level.
+
+**Membership and roles:**
+
+- **`member:invite`** lets the holder invite any email address to the team,
+  including at the built-in Admin role. A member with this permission can invite
+  themselves at a different email address as a team Admin and gain full team
+  access that way.
+- **`member:role:update`** lets the holder change any other member's team role,
+  including promoting another member (or themselves, indirectly via a second
+  account) to Admin.
+- **`project:updateMemberRole`** lets the holder assign Project Admin on a
+  project. Granting this allows the holder to promote themselves to Project
+  Admin, which provides full access to every deployment in that project,
+  including production.
+
+**Resource scoping:** The built-in roles use a resource's team, project, and
+deployment type to decide what a member can do (for example, Developer can
+manage non-prod deployments via team membership, but production deployments
+require Team Admin or Project Admin). Any action that changes those bindings is
+a privilege escalation:
+
+- **`project:update`** lets the holder rename a project's slug. Custom-role
+  resource specifiers that match by `slug=<project-slug>` are evaluated against
+  the project's current slug, so renaming a project can move it into or out of
+  an `allow` or `deny` rule. A holder could rename a project to match a more
+  permissive `allow` selector, or away from a `deny` selector, to gain access
+  the role would otherwise withhold. Selectors that use `id=<project-id>` are
+  not affected, since project IDs are immutable.
+- **`deployment:updateType`** lets the holder change a deployment's type. A
+  holder who can manage non-prod deployments could create one, then promote it
+  to `type=prod`, or downgrade an existing prod deployment to a less protected
+  type to operate on it without prod gating.
+- **`deployment:transfer`** moves a deployment into another project. If the
+  holder has Project Admin or a more permissive custom role on the destination
+  project, they get that broader access on the transferred deployment.
+- **`project:transfer`** moves a project (and all its deployments) into another
+  team. If the holder has Admin or a more permissive custom role on the
+  destination team, they gain that broader access on the transferred project.
+
+**Authentication:**
+
+- **`sso:update`** lets the holder change the team's SSO configuration. The
+  holder could point SSO at an identity provider they control and impersonate
+  other team members at sign-in.
+- **`sso:disable`** turns off SSO. Members with alternative sign-in paths could
+  then bypass IdP-enforced policies such as MFA or session controls.
+
+The `customRole:create`, `customRole:update`, and `customRole:delete` actions
+have no equivalent in custom-role statements at all: they cannot be granted even
+with a wildcard `"*"`, and remain reserved for the built-in Admin role. This
+prevents a custom role from defining or escalating itself.
+
+## Note on custom role visibility
+
+Listing every custom role on the team requires the `customRole:view` permission.
+However, the Convex dashboard loads a team member's own custom role definitions
+regardless of whether they hold `customRole:view`.
+
+Treat custom role definitions as visible to the members of the team that hold
+them, and avoid encoding sensitive information in role names or descriptions.
+For example, if you'd prefer to not disclose a project's slug in the deny rule
+of a custom role definition, use that project's ID instead.
+
+## JSON Schema
+
+The following [JSON Schema](https://json-schema.org/) represents the shape of
+valid Custom Roles.
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Custom Role Statements",
+  "type": "array",
+  "items": { "$ref": "#/definitions/statement" },
+  "definitions": {
+    "statement": {
+      "type": "object",
+      "required": ["effect", "actions", "resource"],
+      "additionalProperties": false,
+      "properties": {
+        "effect": { "enum": ["allow", "deny"] },
+        "actions": { "$ref": "#/definitions/actionPattern" },
+        "resource": { "$ref": "#/definitions/resourceSpecifier" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": { "resource": { "pattern": "^team:[^:]+$" } }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "team:update",
+                      "team:delete",
+                      "team:auditLog:view",
+                      "team:usage:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": { "resource": { "pattern": "^project:[^:]+$" } }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "project:create",
+                      "project:transfer",
+                      "project:receive",
+                      "project:update",
+                      "project:delete",
+                      "project:view",
+                      "project:updateMemberRole"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": {
+              "resource": { "pattern": "^project:[^:]+:deployment:[^:]+$" }
+            }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "deployment:create",
+                      "deployment:receive",
+                      "deployment:transfer",
+                      "deployment:delete",
+                      "deployment:view",
+                      "deployment:updateReference",
+                      "deployment:updateDashboardEditConfirmation",
+                      "deployment:updateExpiresAt",
+                      "deployment:updateSendLogsToClient",
+                      "deployment:updateClass",
+                      "deployment:updateIsDefault",
+                      "deployment:updateType",
+                      "deployment:integrations:view",
+                      "deployment:integrations:write",
+                      "deployment:customDomain:create",
+                      "deployment:customDomain:delete",
+                      "deployment:customDomain:view",
+                      "deployment:insights:view",
+                      "deployment:backups:create",
+                      "deployment:backups:import",
+                      "deployment:backups:configurePeriodic",
+                      "deployment:backups:disablePeriodic",
+                      "deployment:backups:delete",
+                      "deployment:backups:view",
+                      "deployment:backups:download",
+                      "deployment:deploy",
+                      "deployment:pause",
+                      "deployment:unpause",
+                      "deployment:env:view",
+                      "deployment:env:write",
+                      "deployment:logs:view",
+                      "deployment:metrics:view",
+                      "deployment:auditLog:view",
+                      "deployment:data:view",
+                      "deployment:data:write",
+                      "deployment:functions:actAsUser",
+                      "deployment:functions:runInternalQueries",
+                      "deployment:functions:runInternalMutations",
+                      "deployment:functions:runInternalActions",
+                      "deployment:functions:runTestQuery"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": { "resource": { "pattern": "^member:[^:]+$" } }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "member:invite",
+                      "member:cancelInvitation",
+                      "member:remove",
+                      "member:updateRole",
+                      "member:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": {
+              "resource": { "pattern": "^team:[^:]+:token:[^:]+$" }
+            }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "team:token:create",
+                      "team:token:update",
+                      "team:token:delete",
+                      "team:token:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": {
+              "resource": { "pattern": "^project:[^:]+:token:[^:]+$" }
+            }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "project:token:create",
+                      "project:token:update",
+                      "project:token:delete",
+                      "project:token:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": {
+              "resource": {
+                "pattern": "^project:[^:]+:deployment:[^:]+:token:[^:]+$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "deployment:token:create",
+                      "deployment:token:update",
+                      "deployment:token:delete",
+                      "deployment:token:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": { "resource": { "pattern": "^customRole:[^:]+$" } }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": { "type": "string", "enum": ["customRole:view"] }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": { "resource": { "pattern": "^billing:[^:]+$" } }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "billing:paymentMethod:update",
+                      "billing:contact:update",
+                      "billing:address:update",
+                      "billing:subscription:changePlan",
+                      "billing:spendingLimit:update",
+                      "billing:view",
+                      "billing:invoices:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": {
+              "resource": { "pattern": "^oauthApplication:[^:]+$" }
+            }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "oauthApplication:create",
+                      "oauthApplication:update",
+                      "oauthApplication:delete",
+                      "oauthApplication:view",
+                      "oauthApplication:generateClientSecret"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": { "resource": { "pattern": "^sso:[^:]+$" } }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "sso:enable",
+                      "sso:disable",
+                      "sso:update",
+                      "sso:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": { "resource": { "pattern": "^integration:[^:]+$" } }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "integration:view",
+                      "integration:create",
+                      "integration:update",
+                      "integration:delete",
+                      "team:auditLog:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["resource"],
+            "properties": {
+              "resource": {
+                "pattern": "^project:[^:]+:defaultEnvironmentVariable:[^:]+$"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "actions": {
+                "if": { "type": "array" },
+                "then": {
+                  "minItems": 1,
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "defaultEnvironmentVariable:create",
+                      "defaultEnvironmentVariable:update",
+                      "defaultEnvironmentVariable:delete",
+                      "defaultEnvironmentVariable:view"
+                    ]
+                  }
+                },
+                "else": { "const": "*" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "actionPattern": {
+      "if": { "type": "array" },
+      "then": { "minItems": 1, "items": { "type": "string" } },
+      "else": { "const": "*" }
+    },
+    "resourceSpecifier": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(team:\\*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*)?|project:(\\*|id=[^,:]+|slug=[^,:]+)(,(\\*|id=[^,:]+|slug=[^,:]+))*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*|:deployment:(\\*|id=[^,:]+|type=[^,:]+|creator=(self|[0-9]+))(,(\\*|id=[^,:]+|type=[^,:]+|creator=(self|[0-9]+)))*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*)?|:defaultEnvironmentVariable:\\*)?|member:\\*|customRole:\\*|billing:\\*|oauthApplication:\\*|sso:\\*|integration:\\*)$"
+    }
+  }
+}
+```
