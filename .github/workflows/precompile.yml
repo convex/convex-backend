@@ -63,7 +63,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             binutils build-essential ca-certificates cmake curl g++-12 gcc-12 \
             git libclang-dev libsnappy-dev libsodium-dev libssl-dev pkg-config \
-            python3 sudo unzip xz-utils zip
+            python3 sudo unzip xz-utils zip wget
           # ada-url needs C++20 support beyond jammy's default gcc 11.
           echo "CC=gcc-12" >> "$GITHUB_ENV"
           echo "CXX=g++-12" >> "$GITHUB_ENV"
