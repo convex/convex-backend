@@ -18,15 +18,13 @@ use value::{
 pub mod types;
 use types::LogSinksRow;
 
-pub static LOG_SINKS_TABLE: TableName = TableName::const_new("_log_sinks");
+pub const LOG_SINKS_TABLE: TableName = TableName::const_new("_log_sinks");
 
 pub struct LogSinksTable;
 impl SystemTable for LogSinksTable {
     type Metadata = LogSinksRow;
 
-    fn table_name() -> &'static TableName {
-        &LOG_SINKS_TABLE
-    }
+    const TABLE_NAME: TableName = LOG_SINKS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]

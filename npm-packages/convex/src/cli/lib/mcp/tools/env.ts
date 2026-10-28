@@ -12,13 +12,22 @@ const envListInputSchema = z.object({
     .describe(
       "Deployment selector (from the status tool) to list environment variables from.",
     ),
+  includeValues: z
+    .boolean()
+    .optional()
+    .describe(
+      "Also return each variable's value. Values are often secrets like API keys, so leave this off unless you need every value, and use envGet to read a single variable instead.",
+    ),
 });
 
 const envListOutputSchema = z.object({
   variables: z.array(
     z.object({
       name: z.string(),
-      value: z.string(),
+      value: z
+        .string()
+        .optional()
+        .describe("Only present when includeValues is true."),
     }),
   ),
 });
@@ -28,7 +37,8 @@ export const EnvListTool: ConvexTool<
   typeof envListOutputSchema
 > = {
   name: "envList",
-  description: "List all environment variables in your Convex deployment.",
+  description:
+    "List the names of all environment variables in your Convex deployment. Values are left out unless includeValues is true.",
   inputSchema: envListInputSchema,
   outputSchema: envListOutputSchema,
   handler: async (ctx, args) => {
@@ -51,7 +61,11 @@ export const EnvListTool: ConvexTool<
       componentPath: undefined,
       args: {},
     })) as EnvVar[];
-    return { variables };
+    return {
+      variables: variables.map(({ name, value }) =>
+        args.includeValues ? { name, value } : { name },
+      ),
+    };
   },
 };
 

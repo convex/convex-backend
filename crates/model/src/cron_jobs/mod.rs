@@ -1,6 +1,9 @@
 use std::{
     collections::BTreeMap,
-    sync::LazyLock,
+    sync::{
+        Arc,
+        LazyLock,
+    },
 };
 
 use anyhow::Context;
@@ -60,7 +63,7 @@ use crate::{
 pub mod next_ts;
 pub mod types;
 
-pub static CRON_JOBS_TABLE: TableName = TableName::const_new("_cron_jobs");
+pub const CRON_JOBS_TABLE: TableName = TableName::const_new("_cron_jobs");
 
 // Used to find cron job by name
 pub static CRON_JOBS_INDEX_BY_NAME: LazyLock<SystemIndex<CronJobsTable>> =
@@ -68,7 +71,7 @@ pub static CRON_JOBS_INDEX_BY_NAME: LazyLock<SystemIndex<CronJobsTable>> =
 static CRON_JOBS_NAME_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "name".parse().expect("invalid name field"));
 
-pub static CRON_JOB_LOGS_TABLE: TableName = TableName::const_new("_cron_job_logs");
+pub const CRON_JOB_LOGS_TABLE: TableName = TableName::const_new("_cron_job_logs");
 
 pub static CRON_JOB_LOGS_INDEX_BY_NAME_TS: LazyLock<SystemIndex<CronJobLogsTable>> =
     LazyLock::new(|| {
@@ -83,7 +86,7 @@ pub static CRON_JOB_LOGS_NAME_FIELD: LazyLock<FieldPath> =
 static CRON_JOB_LOGS_TS_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "ts".parse().expect("invalid ts field"));
 
-pub static CRON_NEXT_RUN_TABLE: TableName = TableName::const_new("_cron_next_run");
+pub const CRON_NEXT_RUN_TABLE: TableName = TableName::const_new("_cron_next_run");
 
 pub static CRON_NEXT_RUN_INDEX_BY_NEXT_TS: LazyLock<SystemIndex<CronNextRunTable>> =
     LazyLock::new(|| SystemIndex::new("by_next_ts", [&CRON_NEXT_RUN_NEXT_TS_FIELD]).unwrap());
@@ -100,9 +103,7 @@ pub struct CronJobsTable;
 impl SystemTable for CronJobsTable {
     type Metadata = CronJobMetadata;
 
-    fn table_name() -> &'static TableName {
-        &CRON_JOBS_TABLE
-    }
+    const TABLE_NAME: TableName = CRON_JOBS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![CRON_JOBS_INDEX_BY_NAME.clone()]
@@ -113,9 +114,7 @@ pub struct CronJobLogsTable;
 impl SystemTable for CronJobLogsTable {
     type Metadata = CronJobLog;
 
-    fn table_name() -> &'static TableName {
-        &CRON_JOB_LOGS_TABLE
-    }
+    const TABLE_NAME: TableName = CRON_JOB_LOGS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![CRON_JOB_LOGS_INDEX_BY_NAME_TS.clone()]
@@ -126,9 +125,7 @@ pub struct CronNextRunTable;
 impl SystemTable for CronNextRunTable {
     type Metadata = CronNextRun;
 
-    fn table_name() -> &'static TableName {
-        &CRON_NEXT_RUN_TABLE
-    }
+    const TABLE_NAME: TableName = CRON_NEXT_RUN_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![
@@ -203,7 +200,7 @@ impl<'a, RT: Runtime> CronModel<'a, RT> {
         cron_spec: CronSpec,
     ) -> anyhow::Result<()> {
         let now = self.runtime().generate_timestamp()?;
-        let next_ts = compute_next_ts(&cron_spec, None, now)?;
+        let next_ts = compute_next_ts(&cron_spec, None, now, &mut self.runtime().rng())?;
         let cron = CronJobMetadata { name, cron_spec };
 
         let cron_job_id = SystemMetadataModel::new(self.tx, self.component.into())
@@ -257,8 +254,14 @@ impl<'a, RT: Runtime> CronModel<'a, RT> {
             // logic to the async worker, but quickfix for now is to skip the
             // `update_job_state`.
             let now = self.runtime().generate_timestamp()?;
-            let next_ts = compute_next_ts(&cron_job.cron_spec, None, now)?;
-            let next_next_run = compute_next_ts(&cron_job.cron_spec, Some(next_ts), next_ts)?;
+            let next_ts =
+                compute_next_ts(&cron_job.cron_spec, None, now, &mut self.runtime().rng())?;
+            let next_next_run = compute_next_ts(
+                &cron_job.cron_spec,
+                Some(next_ts),
+                next_ts,
+                &mut self.runtime().rng(),
+            )?;
             if next_next_run.secs_since_f64(now) > 30.0 {
                 // Read in next-run to the readset and update it.
                 let mut next_run = self
@@ -269,7 +272,8 @@ impl<'a, RT: Runtime> CronModel<'a, RT> {
 
                 // Recalculate on the new schedule.
                 let now = self.runtime().generate_timestamp()?;
-                next_run.next_ts = compute_next_ts(&new_cron_spec, next_run.prev_ts, now)?;
+                next_run.next_ts =
+                    compute_next_ts(&new_cron_spec, None, now, &mut self.runtime().rng())?;
                 self.update_job_state(next_run).await?;
             }
         }
@@ -332,8 +336,11 @@ impl<'a, RT: Runtime> CronModel<'a, RT> {
             log_lines,
             execution_time,
         };
+        // A mutation's result may contain unresolved commit timestamps; the
+        // log is written in the mutation's own transaction, so the committer
+        // resolves them right alongside the mutation's writes.
         SystemMetadataModel::new(self.tx, self.component.into())
-            .insert_metadata(&CRON_JOB_LOGS_TABLE, cron_job_log.try_into()?)
+            .insert_metadata_pending(&CRON_JOB_LOGS_TABLE, cron_job_log.try_into()?)
             .await?;
         self.apply_job_log_retention(&job.name, MAX_LOGS_PER_CRON)
             .await?;
@@ -439,17 +446,22 @@ pub async fn stream_cron_jobs_to_run<'a, RT: Runtime>(tx: &'a mut Transaction<RT
     // Value is (job, query) where job is the job to run and query will get
     // the next job to run in that namespace.
     let mut queries = BTreeMap::new();
-    let cron_from_doc =
-        async |namespace: TableNamespace, doc: ResolvedDocument, tx: &mut Transaction<RT>| {
-            let next_run: ParsedDocument<CronNextRun> = doc.parse()?;
-            let cron_job_id = tx.resolve_developer_id(&next_run.cron_job_id, namespace)?;
-            let job: ParsedDocument<CronJobMetadata> = tx
-                .get(cron_job_id)
-                .await?
-                .context("No cron job found")?
-                .parse()?;
-            Ok::<_, anyhow::Error>(CronJob::new(job, namespace.into(), next_run.into_value()))
-        };
+    async fn cron_from_doc<RT: Runtime>(
+        namespace: TableNamespace,
+        doc: ResolvedDocument,
+        tx: &mut Transaction<RT>,
+    ) -> anyhow::Result<CronJob> {
+        let next_run: ParsedDocument<CronNextRun> = doc.parse()?;
+        let job = tx
+            .get_system::<CronJobsTable>(namespace, next_run.cron_job_id)
+            .await?
+            .context("No cron job found")?;
+        Ok(CronJob::new(
+            Arc::unwrap_or_clone(job),
+            namespace.into(),
+            next_run.into_value(),
+        ))
+    }
 
     // Initialize streaming query for each namespace
     for namespace in namespaces {

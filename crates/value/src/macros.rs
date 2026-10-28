@@ -251,3 +251,15 @@ macro_rules! obj {
         $crate::ConvexObject::try_from(object)
     });
 }
+
+#[macro_export]
+macro_rules! pending_obj {
+    ( $($key:expr => $value:expr),* $(,)? ) => ({
+        let mut fields =
+            std::collections::BTreeMap::<$crate::FieldName, $crate::PendingValue>::new();
+        $(
+            fields.insert($key.parse()?, $crate::PendingValue::try_from($value)?);
+        )*
+        $crate::PendingValue::object(fields)
+    });
+}

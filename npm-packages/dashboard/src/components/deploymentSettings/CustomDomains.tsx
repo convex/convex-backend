@@ -26,9 +26,11 @@ import {
 import { useDeployments } from "api/deployments";
 import { useCurrentProject } from "api/projects";
 import { deploymentResource } from "lib/permissions";
+import { useIsOperationAllowed } from "hooks/useDeploymentPermissions";
+import { NoPermissionMessage } from "elements/NoPermissionMessage";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { Link } from "@ui/Link";
-import { useState, useMemo, ReactNode } from "react";
+import { Fragment, useState, useMemo, ReactNode } from "react";
 import {
   PlatformDeploymentResponse,
   PlatformCustomDomainResponse,
@@ -45,6 +47,53 @@ import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { useUpdateCanonicalUrl } from "hooks/deploymentApi";
 import { Loading } from "@ui/Loading";
+import { CopyButton } from "@common/elements/CopyButton";
+
+const CLOUD_SUFFIX = ".convex.cloud";
+const SITE_SUFFIX = ".convex.site";
+
+// `*.<region>.convex.cloud` and `*.<region>.convex.site` are provisioned as a
+// pair, so the site host is the cloud host with the suffix swapped.
+export function defaultSiteUrl(deploymentUrl: string): string | null {
+  const url = new URL(deploymentUrl);
+  if (!url.hostname.endsWith(CLOUD_SUFFIX)) {
+    return null;
+  }
+  url.hostname = `${url.hostname.slice(0, -CLOUD_SUFFIX.length)}${SITE_SUFFIX}`;
+  return url.origin;
+}
+
+const VERIFICATION_DELAY_NOTE =
+  "It may take up to 30 minutes to verify your domain and start serving traffic.";
+
+function dnsRecords(vanityDomain: PlatformCustomDomainResponse) {
+  return [
+    { type: "CNAME", name: vanityDomain.domain, value: "convex.domains" },
+    {
+      type: "TXT",
+      name: `_convex_domains.${vanityDomain.domain}`,
+      value: vanityDomain.deploymentName,
+    },
+  ];
+}
+
+// Plain text so the instructions can be pasted into a chat, a ticket, or an
+// agent prompt by someone who doesn't have access to the dashboard.
+export function dnsInstructionsText(
+  vanityDomain: PlatformCustomDomainResponse,
+): string {
+  return [
+    `To verify the custom domain ${vanityDomain.domain}, set the following records on your DNS provider:`,
+    ...dnsRecords(vanityDomain).map(
+      (r) => `Type: ${r.type}\nName: ${r.name}\nValue: ${r.value}`,
+    ),
+    VERIFICATION_DELAY_NOTE,
+  ].join("\n\n");
+}
+
+function withHost(label: string, url: string | null): string {
+  return url === null ? label : `${label} (${new URL(url).host})`;
+}
 
 export function CustomDomains({
   team,
@@ -61,6 +110,8 @@ export function CustomDomains({
     hasEntitlement ? deployment.name : undefined,
   );
 
+  const canViewData = useIsOperationAllowed("ViewData");
+
   return (
     <div className="flex flex-col gap-4">
       <CustomDomainsForm
@@ -70,10 +121,16 @@ export function CustomDomains({
         hasEntitlement={hasEntitlement}
       />
 
-      <CanonicalDomainForm
-        deploymentName={deployment.name}
-        vanityDomains={vanityDomains}
-      />
+      {canViewData === false ? (
+        <Sheet>
+          <NoPermissionMessage
+            message="You do not have permission to view canonical URL overrides."
+            missingPermission="deployment:data:view"
+          />
+        </Sheet>
+      ) : (
+        <CanonicalDomainForm vanityDomains={vanityDomains} />
+      )}
     </div>
   );
 }
@@ -177,7 +234,7 @@ export function CustomDomainsForm({
               <LocalDevCallout
                 className="flex-col"
                 tipText="Tip: Run this to enable custom domains locally:"
-                command={`just big-brain-tool-dev entitlement grant --team-entitlement custom_domains_enabled --team-id ${team.id} --reason "local" true --for-real`}
+                command={`just big-brain-tool-dev entitlement grant add --team-entitlement custom_domains_enabled --team-id ${team.id} --reason "local" true --for-real && just big-brain-tool-dev entitlement grant add --team-entitlement max_custom_domains --team-id ${team.id} --reason "local" 100 --for-real`}
               />
             </>
           )}
@@ -193,6 +250,9 @@ export function CustomDomainsForm({
                   )
             }
             deploymentName={deployment.name}
+            deploymentUrl={
+              deployment.kind === "cloud" ? deployment.deploymentUrl : null
+            }
           />
           {vanityDomains && vanityDomains.length > 0 && (
             <>
@@ -238,13 +298,12 @@ export function CustomDomainsForm({
 }
 
 export function CanonicalDomainForm({
-  deploymentName,
   vanityDomains,
 }: {
-  deploymentName: string;
   vanityDomains?: PlatformCustomDomainResponse[];
 }) {
   const deploymentUrl = useDeploymentUrl();
+  const siteUrl = defaultSiteUrl(deploymentUrl);
   const canonicalCloudUrl = useQuery(udfs.convexCloudUrl.default);
   const canonicalSiteUrl = useQuery(udfs.convexSiteUrl.default);
 
@@ -280,12 +339,9 @@ export function CanonicalDomainForm({
             </span>
           }
           defaultUrl={
-            deploymentUrl === `https://${deploymentName}.convex.cloud`
-              ? {
-                  kind: "default",
-                  url: `https://${deploymentName}.convex.site`,
-                }
-              : { kind: "unknownDefault" }
+            siteUrl === null
+              ? { kind: "unknownDefault" }
+              : { kind: "default", url: siteUrl }
           }
           canonicalUrl={
             canonicalSiteUrl === undefined
@@ -467,14 +523,17 @@ export function CanonicalUrlCombobox({
 
 function VanityDomainForm({
   deploymentName,
+  deploymentUrl,
   disabled,
   disabledTip,
 }: {
   deploymentName: string;
+  deploymentUrl: string | null;
   disabled?: boolean;
   disabledTip?: ReactNode;
 }) {
   const createVanityDomain = useCreateVanityDomain(deploymentName);
+  const siteUrl = deploymentUrl === null ? null : defaultSiteUrl(deploymentUrl);
   const formState = useFormik<PlatformDeleteCustomDomainArgs>({
     validateOnChange: true,
     initialValues: {
@@ -543,11 +602,11 @@ function VanityDomainForm({
             label="Request Destination"
             options={[
               {
-                label: `HTTP Actions (${deploymentName}.convex.site)`,
+                label: withHost("HTTP Actions", siteUrl),
                 value: "convexSite",
               },
               {
-                label: `Convex API (${deploymentName}.convex.cloud)`,
+                label: withHost("Convex API", deploymentUrl),
                 value: "convexCloud",
               },
             ]}
@@ -605,7 +664,7 @@ export function DisplayVanityDomain({
         <div
           className={`flex flex-col gap-1 ${ENVIRONMENT_VARIABLE_NAME_COLUMN}`}
         >
-          <div className="flex h-[2.375rem] items-center truncate text-content-primary md:col-span-1">
+          <div className="flex h-9.5 items-center truncate text-content-primary md:col-span-1">
             {vanityDomain.domain}
             {vanityDomain.verificationTime && (
               <Tooltip
@@ -618,7 +677,7 @@ export function DisplayVanityDomain({
           </div>
         </div>
 
-        <div className="flex h-[2.375rem] items-center gap-1">
+        <div className="flex h-9.5 items-center gap-1">
           <span className="truncate text-content-primary">
             {vanityDomain.requestDestination === "convexCloud"
               ? "Convex API"
@@ -659,9 +718,15 @@ export function DisplayVanityDomain({
               </span>
             </div>
           </Callout>
-          <span className="mb-4 font-semibold">
-            Set the following records on your DNS provider:
-          </span>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold">
+              Set the following records on your DNS provider:
+            </span>
+            <CopyButton
+              text={dnsInstructionsText(vanityDomain)}
+              label="Copy instructions"
+            />
+          </div>
           <div className="rounded-sm border p-2">
             <div className="grid grid-cols-1 p-2 md:grid md:grid-cols-[2fr_6fr_3fr] md:gap-2">
               {["Type", "Name", "Value"].map((header) => (
@@ -673,29 +738,22 @@ export function DisplayVanityDomain({
                 </div>
               ))}
 
-              <code className="truncate font-bold break-words md:font-normal">
-                CNAME
-              </code>
-              <code className="truncate break-words">
-                {vanityDomain.domain}
-              </code>
-              <code className="truncate break-words">convex.domains</code>
-
-              <code className="truncate font-bold break-words md:font-normal">
-                TXT
-              </code>
-              <code className="truncate break-words">
-                _convex_domains.{vanityDomain.domain}
-              </code>
-              <code className="truncate break-words">
-                {vanityDomain.deploymentName}
-              </code>
+              {dnsRecords(vanityDomain).map((record) => (
+                <Fragment key={record.type}>
+                  <code className="truncate font-bold wrap-break-word md:font-normal">
+                    {record.type}
+                  </code>
+                  <code className="truncate wrap-break-word">
+                    {record.name}
+                  </code>
+                  <code className="truncate wrap-break-word">
+                    {record.value}
+                  </code>
+                </Fragment>
+              ))}
             </div>
           </div>
-          <span className="my-4 font-light">
-            It may take up to 30 minutes to verify your domain and start serving
-            traffic.
-          </span>
+          <span className="my-4 font-light">{VERIFICATION_DELAY_NOTE}</span>
         </>
       )}
     </div>

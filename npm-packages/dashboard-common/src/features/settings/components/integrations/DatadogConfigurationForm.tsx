@@ -7,10 +7,13 @@ import { useContext, useState } from "react";
 import { TextInput } from "@ui/TextInput";
 import { Button } from "@ui/Button";
 import { Combobox, Option } from "@ui/Combobox";
+import type { LogTopic } from "@convex-dev/platform/deploymentApi";
 import {
   integrationUsingLegacyFormat,
   LogIntegration,
+  topicsValidationSchema,
 } from "@common/lib/integrationHelpers";
+import { LogTopicsSelector } from "./LogTopicsSelector";
 import {
   useCreateLogStream,
   useUpdateLogStream,
@@ -32,6 +35,7 @@ const datadogValidationSchema = Yup.object().shape({
   siteLocation: Yup.string().required("Site location is required"),
   ddApiKey: Yup.string().required("API key is required"),
   ddTags: Yup.string(),
+  topics: topicsValidationSchema,
 });
 
 export function DatadogConfigurationForm({
@@ -63,6 +67,7 @@ export function DatadogConfigurationForm({
     ddTags: string;
     service: string | null;
     version: "1" | "2";
+    topics: LogTopic[] | null;
   }>({
     initialValues: {
       siteLocation: existingConfig?.siteLocation ?? "US1",
@@ -71,6 +76,7 @@ export function DatadogConfigurationForm({
       service:
         (existingConfig ? existingConfig.service : project?.name) ?? null,
       version: existingConfig !== null ? (existingConfig.version ?? "1") : "2",
+      topics: existingConfig?.topics ?? null,
     },
     onSubmit: async (values, helpers) => {
       helpers.setStatus(undefined);
@@ -90,6 +96,7 @@ export function DatadogConfigurationForm({
             ddApiKey: values.ddApiKey,
             ddTags,
             service: values.service,
+            topics: values.topics ?? undefined,
           });
           onAddedIntegration?.();
           toast(
@@ -106,6 +113,7 @@ export function DatadogConfigurationForm({
             ddApiKey: values.ddApiKey,
             ddTags,
             service: values.service,
+            topics: values.topics,
           });
           toast("success", "Updated Datadog integration");
         }
@@ -119,105 +127,124 @@ export function DatadogConfigurationForm({
     validationSchema: datadogValidationSchema,
   });
   return (
-    <form onSubmit={formState.handleSubmit} className="flex flex-col gap-3">
-      {isUsingLegacyFormat && (
-        <>
-          <div className="flex flex-col gap-1">
-            Event Format
-            <div className="text-xs text-content-secondary">
-              Format for events sent in this stream.{" "}
-              <Link
-                href="https://docs.convex.dev/production/integrations/log-streams/legacy-event-schema"
-                target="_blank"
-              >
-                Learn more
-              </Link>
+    <form
+      onSubmit={formState.handleSubmit}
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      <div className="scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 pb-4">
+        {isUsingLegacyFormat && (
+          <>
+            <div className="flex flex-col gap-1">
+              Event Format
+              <div className="text-xs text-content-secondary">
+                Format for events sent in this stream.{" "}
+                <Link
+                  href="https://docs.convex.dev/production/integrations/log-streams/legacy-event-schema"
+                  target="_blank"
+                >
+                  Learn more
+                </Link>
+              </div>
             </div>
-          </div>
+            <Combobox
+              label="Select event format"
+              options={[
+                { value: "1", label: "Legacy" },
+                { value: "2", label: "Current" },
+              ]}
+              selectedOption={formState.values.version}
+              setSelectedOption={async (v) => {
+                await formState.setFieldValue("version", v);
+              }}
+              allowCustomValue={false}
+              buttonClasses="w-full bg-inherit"
+            />
+          </>
+        )}
+        <div className="flex flex-col gap-1">
           <Combobox
-            label="Select event format"
-            options={[
-              { value: "1", label: "Legacy" },
-              { value: "2", label: "Current" },
-            ]}
-            selectedOption={formState.values.version}
-            setSelectedOption={async (v) => {
-              await formState.setFieldValue("version", v);
+            label="Site Location"
+            labelHidden={false}
+            options={siteLocationOptions}
+            selectedOption={formState.values.siteLocation}
+            setSelectedOption={async (loc) => {
+              await formState.setFieldValue("siteLocation", loc);
             }}
             allowCustomValue={false}
             buttonClasses="w-full bg-inherit"
           />
-        </>
-      )}
-      <div className="flex flex-col gap-1">
-        <Combobox
-          label="Site Location"
-          labelHidden={false}
-          options={siteLocationOptions}
-          selectedOption={formState.values.siteLocation}
-          setSelectedOption={async (loc) => {
-            await formState.setFieldValue("siteLocation", loc);
-          }}
-          allowCustomValue={false}
-          buttonClasses="w-full bg-inherit"
-        />
-        <div className="max-w-prose text-xs text-content-secondary">
-          Location of your Datadog deployment.{" "}
-          <Link
-            href="https://docs.datadoghq.com/getting_started/site/"
-            target="_blank"
-          >
-            Learn more
-          </Link>
-        </div>
-      </div>
-      <TextInput
-        label="API Key"
-        value={formState.values.ddApiKey}
-        type={showApiKey ? "text" : "password"}
-        onChange={formState.handleChange}
-        id="ddApiKey"
-        className="max-w-full"
-        placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-        action={() => setShowApiKey(!showApiKey)}
-        Icon={showApiKey ? EyeNoneIcon : EyeOpenIcon}
-        error={formState.errors.ddApiKey}
-        description="API key is used to authenticate with Datadog."
-      />
-      <TextInput
-        value={formState.values.service || undefined}
-        onChange={formState.handleChange}
-        placeholder={project?.name}
-        label="Service"
-        id="service"
-        error={formState.errors.service}
-        description="Service name used as a special tag in Datadog."
-      />
-      <TextInput
-        value={formState.values.ddTags}
-        onChange={formState.handleChange}
-        id="ddTags"
-        label="Tags"
-        error={formState.errors.ddTags}
-        description={
-          <div className="text-xs text-content-secondary">
-            Optional comma-separated list of tags. These are sent to Datadog in
-            each log event via the <code>ddtags</code> field.{" "}
+          <div className="max-w-prose text-xs text-content-secondary">
+            Location of your Datadog deployment.{" "}
             <Link
-              href="https://docs.datadoghq.com/getting_started/tagging/"
+              href="https://docs.datadoghq.com/getting_started/site/"
               target="_blank"
             >
               Learn more
             </Link>
           </div>
-        }
-      />
-      <div className="flex items-center justify-end gap-3">
+        </div>
+        <TextInput
+          label="API Key"
+          value={formState.values.ddApiKey}
+          type={showApiKey ? "text" : "password"}
+          onChange={formState.handleChange}
+          id="ddApiKey"
+          className="max-w-full"
+          placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          action={() => setShowApiKey(!showApiKey)}
+          Icon={showApiKey ? EyeNoneIcon : EyeOpenIcon}
+          error={formState.errors.ddApiKey}
+          description="API key is used to authenticate with Datadog."
+        />
+        <TextInput
+          value={formState.values.service || undefined}
+          onChange={formState.handleChange}
+          placeholder={project?.name}
+          label="Service"
+          id="service"
+          error={formState.errors.service}
+          description="Service name used as a special tag in Datadog."
+        />
+        <TextInput
+          value={formState.values.ddTags}
+          onChange={formState.handleChange}
+          id="ddTags"
+          label="Tags"
+          error={formState.errors.ddTags}
+          description={
+            <div className="text-xs text-content-secondary">
+              Optional comma-separated list of tags. These are sent to Datadog
+              in each log event via the <code>ddtags</code> field.{" "}
+              <Link
+                href="https://docs.datadoghq.com/getting_started/tagging/"
+                target="_blank"
+              >
+                Learn more
+              </Link>
+            </div>
+          }
+        />
+        <LogTopicsSelector
+          value={formState.values.topics}
+          onChange={async (topics) => {
+            await formState.setFieldValue("topics", topics);
+          }}
+          error={formState.errors.topics as string | undefined}
+        />
+      </div>
+      <div className="flex items-center justify-end gap-2 px-6 py-4">
         {formState.status?.error && (
           <p className="text-sm text-content-errorSecondary" role="alert">
             {formState.status.error}
           </p>
         )}
+        <Button
+          variant="neutral"
+          onClick={onClose}
+          disabled={formState.isSubmitting}
+        >
+          Cancel
+        </Button>
         <Button
           variant="primary"
           type="submit"

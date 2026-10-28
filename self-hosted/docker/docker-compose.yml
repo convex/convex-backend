@@ -1,7 +1,7 @@
 services:
   backend:
     # Change this to :${REV} if you want to pin to a specific version
-    image: ghcr.io/get-convex/convex-backend:latest
+    image: ghcr.io/convex/convex-backend:latest
     stop_grace_period: 10s
     stop_signal: SIGINT
     ports:
@@ -10,7 +10,8 @@ services:
     volumes:
       - data:/convex/data
     environment:
-      - ACTIONS_USER_TIMEOUT_SECS
+      - V8_ACTION_USER_TIMEOUT_SECS
+      - NODE_ACTION_USER_TIMEOUT_SECS
       - APPLICATION_MAX_CONCURRENT_MUTATIONS=${APPLICATION_MAX_CONCURRENT_MUTATIONS:-16}
       - APPLICATION_MAX_CONCURRENT_NODE_ACTIONS=${APPLICATION_MAX_CONCURRENT_NODE_ACTIONS:-16}
       - APPLICATION_MAX_CONCURRENT_QUERIES=${APPLICATION_MAX_CONCURRENT_QUERIES:-16}
@@ -52,7 +53,7 @@ services:
 
   dashboard:
     # Change this to :${REV} if you want to pin to a specific version
-    image: ghcr.io/get-convex/convex-dashboard:latest
+    image: ghcr.io/convex/convex-dashboard:latest
     stop_grace_period: 10s
     stop_signal: SIGINT
     ports:

@@ -1,7 +1,6 @@
 import {
   ArrowDownIcon,
   CaretDownIcon,
-  HamburgerMenuIcon,
   QuestionMarkCircledIcon,
 } from "@radix-ui/react-icons";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -171,14 +170,10 @@ export function LogList({
   );
 
   return (
-    <Sheet
-      className="h-full w-full overflow-hidden"
-      padding={false}
-      ref={sheetRef}
-    >
+    <Sheet className="size-full overflow-hidden" padding={false} ref={sheetRef}>
       <PanelGroup
         direction="horizontal"
-        className="flex h-full w-full flex-auto overflow-hidden"
+        className="flex size-full flex-auto overflow-hidden"
         autoSaveId="logs-content"
       >
         <Panel
@@ -277,8 +272,8 @@ function WindowedLogList({
   setManuallyPaused(paused: boolean): void;
   shownLog?: InterleavedLog;
   hitBoundary: "top" | "bottom" | null;
-  listRef: React.RefObject<FixedSizeList>;
-  outerRef: React.RefObject<HTMLDivElement>;
+  listRef: React.RefObject<FixedSizeList | null>;
+  outerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
     <div className="scrollbar flex h-full min-w-0 flex-col overflow-x-auto overflow-y-hidden">
@@ -336,23 +331,6 @@ function WindowedLogList({
         )}
       </div>
     </div>
-  );
-}
-
-export function LogsMenuButton({ open }: { open: boolean }) {
-  return (
-    <Button
-      inline
-      focused={open}
-      variant="neutral"
-      size="sm"
-      className="-ml-2.5"
-    >
-      <h3 className="flex items-center gap-2 font-mono">
-        <HamburgerMenuIcon className="mt-0.5" />
-        Logs
-      </h3>
-    </Button>
   );
 }
 
@@ -499,8 +477,8 @@ function LogListHeader({
   hasLogOpen: boolean;
   paused: boolean;
   setManuallyPaused(paused: boolean): void;
-  listRef: React.RefObject<FixedSizeList>;
-  outerRef: React.RefObject<HTMLDivElement>;
+  listRef: React.RefObject<FixedSizeList | null>;
+  outerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   return (
     <div className="flex w-full items-center gap-4 border-b p-1 pl-2.5 text-xs text-content-secondary">
@@ -548,7 +526,7 @@ function LogListHeader({
 
 function TimestampColumn() {
   return (
-    <div className="flex min-w-[9.25rem] items-center gap-1">
+    <div className="flex min-w-37 items-center gap-1">
       Timestamp
       <Tooltip tip="Logs are sorted by timestamp, with the most recent logs appearing first.">
         <CaretDownIcon />
@@ -561,5 +539,5 @@ function FunctionColumn() {
 }
 
 function StatusColumn() {
-  return <div className="min-w-[7rem]">Status</div>;
+  return <div className="min-w-28">Status</div>;
 }

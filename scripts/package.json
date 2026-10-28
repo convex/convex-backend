@@ -1,10 +1,13 @@
 {
   "name": "convex",
   "private": true,
+  "engines": {
+    "npm": "11.11.0"
+  },
   "devDependencies": {
-    "@microsoft/rush": "5.175.1",
-    "dprint": "0.52.0",
-    "pnpm": "10.33.0"
+    "dprint": "0.57.0",
+    "pnpm": "11.15.1",
+    "turbo": "2.10.5"
   },
   "overrides": {
     "js-yaml@>=4.0.0 <4.1.1": "4.1.1",

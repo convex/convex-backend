@@ -6,7 +6,10 @@ use application::snapshot_import::{
     do_import,
 };
 use axum::{
-    body::Body,
+    body::{
+        to_bytes,
+        Body,
+    },
     response::IntoResponse,
 };
 use common::{
@@ -19,6 +22,7 @@ use common::{
         },
         HttpResponseError,
     },
+    knobs::MAX_IMPORT_UPLOAD_PART_BYTES,
 };
 use errors::ErrorMetadata;
 use futures::{
@@ -29,6 +33,7 @@ use model::snapshot_imports::types::{
     ImportFormat,
     ImportMode,
 };
+use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
     Serialize,
@@ -182,22 +187,31 @@ pub async fn import_upload_part(
     }): Query<ImportUploadPartArgs>,
     body_stream: Body,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let body_bytes = body_stream
-        .into_data_stream()
-        .map_ok(|chunk| chunk.to_vec())
-        .try_concat()
+    identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
+    let body_bytes = to_bytes(body_stream, *MAX_IMPORT_UPLOAD_PART_BYTES)
         .await
-        .context(ErrorMetadata::bad_request(
-            "ImportFailed",
-            "failed to read request body",
-        ))?;
+        .map_err(|error| {
+            let error = anyhow::Error::from(error);
+            let metadata = if error.root_cause().is::<http_body_util::LengthLimitError>() {
+                ErrorMetadata::bad_request(
+                    "ImportPartTooLarge",
+                    format!(
+                        "Import upload parts must be at most {} bytes.",
+                        *MAX_IMPORT_UPLOAD_PART_BYTES,
+                    ),
+                )
+            } else {
+                ErrorMetadata::bad_request("ImportFailed", "failed to read request body")
+            };
+            error.context(metadata)
+        })?;
     let token = st
         .application
         .upload_part_for_snapshot_import(
             identity,
             ClientDrivenUploadToken(upload_token),
             part_number,
-            body_bytes.into(),
+            body_bytes,
         )
         .await?;
     Ok(Json(token.0))

@@ -55,6 +55,9 @@ use imbl_slab::{
 };
 use serde::Deserialize;
 
+mod seedable;
+pub use seedable::SeedableCounterStore;
+
 type BucketKey = SlabKey;
 type MetricKey = SlabKey;
 

@@ -4,12 +4,14 @@ use std::{
 };
 
 use common::document::ParsedDocument;
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use value::{
+    codegen_convex_serialization,
     id_v6::DeveloperDocumentId,
-    obj,
     sha256::Sha256Digest,
-    ConvexObject,
-    ConvexValue,
     FieldName,
 };
 
@@ -34,6 +36,14 @@ pub struct AwsLambdaConfig {
     pub ipv6_enabled: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AwsLambdaCodeStorage {
+    #[serde(rename = "s3Bucket")]
+    pub s3_bucket: String,
+    #[serde(rename = "s3Key")]
+    pub s3_key: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AwsLambdaVersion {
     pub lambda_name: String,
@@ -41,6 +51,10 @@ pub struct AwsLambdaVersion {
     pub node_executor_sha256: Sha256Digest, // hash of our node-executor code
     pub lambda_config: AwsLambdaConfig,
     pub package_desc: AwsLambdaPackageDesc,
+    /// Static Lambdas store the S3 bucket/key of the code object they reference
+    /// (Lambda REFERENCE mode). Dynamic Lambdas execute inline code and keep
+    /// this unset, as do static Lambdas deployed before this field existed.
+    pub code_storage: Option<AwsLambdaCodeStorage>,
 }
 
 /// Stores the configuration information for the Lambda relevant to the type
@@ -85,6 +99,15 @@ impl AwsLambdaType {
     }
 }
 
+impl AwsLambdaVersion {
+    pub fn static_code_storage(&self) -> Option<&AwsLambdaCodeStorage> {
+        match self.package_desc {
+            AwsLambdaPackageDesc::Static { .. } => self.code_storage.as_ref(),
+            AwsLambdaPackageDesc::Dynamic { .. } => None,
+        }
+    }
+}
+
 impl std::fmt::Display for AwsLambdaType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -113,73 +136,93 @@ impl AwsLambdaPackageDesc {
     }
 }
 
-impl TryFrom<AwsLambdaPackageDesc> for ConvexObject {
-    type Error = anyhow::Error;
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SerializedAwsLambdaPackageDesc {
+    pub r#type: String,
+    #[serde(rename = "sourcePackageId")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, with = "::serde_with::rust::double_option")]
+    pub source_package_id: Option<Option<String>>,
+    #[serde(rename = "externalDepsPackageId")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, with = "::serde_with::rust::double_option")]
+    pub external_deps_package_id: Option<Option<String>>,
+}
 
-    fn try_from(value: AwsLambdaPackageDesc) -> Result<Self, Self::Error> {
+impl From<AwsLambdaPackageDesc> for SerializedAwsLambdaPackageDesc {
+    fn from(value: AwsLambdaPackageDesc) -> Self {
         match value {
-            AwsLambdaPackageDesc::Static { source_package_id } => {
-                obj!(
-                    "type" => "static",
-                    "sourcePackageId" => match source_package_id {
-                        None => ConvexValue::Null,
-                        Some(source_package_id) => source_package_id.into(),
-                    }
-                )
+            AwsLambdaPackageDesc::Static { source_package_id } => SerializedAwsLambdaPackageDesc {
+                r#type: "static".into(),
+                source_package_id: Some(match source_package_id {
+                    None => None,
+                    Some(source_package_id) => Some(source_package_id.into()),
+                }),
+                external_deps_package_id: None,
             },
             AwsLambdaPackageDesc::Dynamic {
                 external_deps_package_id,
-            } => {
-                obj!(
-                    "type" => "dynamic",
-                    "externalDepsPackageId" => match external_deps_package_id {
-                        None => ConvexValue::Null,
-                        Some(external_deps_package_id) => external_deps_package_id.into(),
-                    }
-                )
+            } => SerializedAwsLambdaPackageDesc {
+                r#type: "dynamic".into(),
+                external_deps_package_id: Some(match external_deps_package_id {
+                    None => None,
+                    Some(external_deps_package_id) => Some(external_deps_package_id.into()),
+                }),
+                source_package_id: None,
             },
         }
     }
 }
 
-impl TryFrom<ConvexObject> for AwsLambdaPackageDesc {
+impl TryFrom<SerializedAwsLambdaPackageDesc> for AwsLambdaPackageDesc {
     type Error = anyhow::Error;
 
-    fn try_from(obj: ConvexObject) -> Result<Self, Self::Error> {
-        let mut fields = BTreeMap::from(obj);
-
-        let lambda_type: String = match fields.remove("type") {
-            Some(ConvexValue::String(s)) => s.into(),
-            _ => anyhow::bail!("Missing or invalid 'type' field in AwsLambdaType: {fields:?}"),
-        };
-
-        match lambda_type.as_str() {
+    fn try_from(obj: SerializedAwsLambdaPackageDesc) -> Result<Self, Self::Error> {
+        match obj.r#type.as_str() {
             "static" => {
-                let source_package_id: Option<SourcePackageId> =
-                    match fields.remove("sourcePackageId") {
-                        Some(ConvexValue::Null) => None,
-                        Some(value) => Some(value.try_into()?),
-                        None => anyhow::bail!("Missing 'sourcePackageId' in {fields:?}"),
-                    };
+                let source_package_id: Option<SourcePackageId> = match obj.source_package_id {
+                    Some(None) => None,
+                    Some(Some(value)) => Some(value.try_into()?),
+                    None => anyhow::bail!("Missing 'sourcePackageId' in {obj:?}"),
+                };
                 Ok(AwsLambdaPackageDesc::Static { source_package_id })
             },
             "dynamic" => {
                 let external_deps_package_id: Option<ExternalDepsPackageId> =
-                    match fields.remove("externalDepsPackageId") {
-                        Some(ConvexValue::Null) => None,
-                        Some(value) => Some(value.try_into()?),
-                        None => anyhow::bail!("Missing 'externalDepsPackageId' in {fields:?}"),
+                    match obj.external_deps_package_id {
+                        Some(None) => None,
+                        Some(Some(value)) => Some(value.try_into()?),
+                        None => anyhow::bail!("Missing 'externalDepsPackageId' in {obj:?}"),
                     };
                 Ok(AwsLambdaPackageDesc::Dynamic {
                     external_deps_package_id,
                 })
             },
-            _ => anyhow::bail!("Unknown AwsLambdaType {lambda_type:}: {fields:?}"),
+            lambda_type => anyhow::bail!("Unknown AwsLambdaType {lambda_type:}: {obj:?}"),
         }
     }
 }
 
-impl TryFrom<AwsLambdaConfig> for ConvexObject {
+#[derive(Serialize, Deserialize)]
+pub struct SerializedAwsLambdaConfig {
+    pub env: BTreeMap<String, String>,
+    pub runtime: String,
+    pub handler: String,
+    #[serde(rename = "memorySizeMb")]
+    pub memory_size_mb: i64,
+    #[serde(rename = "diskSizeMb")]
+    pub disk_size_mb: Option<i64>,
+    #[serde(rename = "timeoutSec")]
+    pub timeout_sec: i64,
+    #[serde(rename = "subnetIds")]
+    pub vpc_subnet_ids: Option<Vec<String>>,
+    #[serde(rename = "securityGroupIds")]
+    pub vpc_security_group_ids: Option<Vec<String>>,
+    #[serde(rename = "ipv6Enabled")]
+    pub ipv6_enabled: Option<bool>,
+}
+
+impl TryFrom<AwsLambdaConfig> for SerializedAwsLambdaConfig {
     type Error = anyhow::Error;
 
     fn try_from(
@@ -195,33 +238,42 @@ impl TryFrom<AwsLambdaConfig> for ConvexObject {
             ipv6_enabled,
         }: AwsLambdaConfig,
     ) -> Result<Self, Self::Error> {
-        let env: anyhow::Result<BTreeMap<FieldName, ConvexValue>> = env
-            .into_iter()
-            .map(|(k, v)| Ok((k, v.try_into()?)))
-            .collect();
-        let vpc_subnet_ids = vpc_subnet_ids
-            .into_iter()
-            .map(ConvexValue::try_from)
-            .collect::<Result<Vec<ConvexValue>, _>>()?;
-        let vpc_security_group_ids = vpc_security_group_ids
-            .into_iter()
-            .map(ConvexValue::try_from)
-            .collect::<Result<Vec<ConvexValue>, _>>()?;
-        obj!(
-            "env" => env?,
-            "runtime" => runtime,
-            "handler" => handler,
-            "memorySizeMb" => (memory_size_mb as i64),
-            "diskSizeMb" => (disk_size_mb as i64),
-            "timeoutSec" => (timeout_sec as i64),
-            "subnetIds" => vpc_subnet_ids,
-            "securityGroupIds" => vpc_security_group_ids,
-            "ipv6Enabled" => ipv6_enabled,
-        )
+        let env = env.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        Ok(SerializedAwsLambdaConfig {
+            env,
+            runtime,
+            handler,
+            memory_size_mb: memory_size_mb as i64,
+            disk_size_mb: Some(disk_size_mb as i64),
+            timeout_sec: timeout_sec as i64,
+            vpc_subnet_ids: Some(vpc_subnet_ids),
+            vpc_security_group_ids: Some(vpc_security_group_ids),
+            ipv6_enabled: Some(ipv6_enabled),
+        })
     }
 }
 
-impl TryFrom<AwsLambdaVersion> for ConvexObject {
+#[derive(Serialize, Deserialize)]
+pub struct SerializedAwsLambdaVersion {
+    #[serde(rename = "lambdaName")]
+    pub lambda_name: String,
+    #[serde(rename = "lambdaVersion")]
+    pub lambda_version: String,
+    #[serde(rename = "sourcePackageId")]
+    pub source_package_id: Option<String>,
+    #[serde(rename = "nodeExecutorSha256")]
+    pub node_executor_sha256: serde_bytes::ByteBuf,
+    #[serde(rename = "lambdaConfig")]
+    pub lambda_config: SerializedAwsLambdaConfig,
+    #[serde(rename = "typeConfig")]
+    pub package_desc: Option<SerializedAwsLambdaPackageDesc>,
+    #[serde(rename = "codeStorage")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_storage: Option<AwsLambdaCodeStorage>,
+}
+
+impl TryFrom<AwsLambdaVersion> for SerializedAwsLambdaVersion {
     type Error = anyhow::Error;
 
     fn try_from(
@@ -231,82 +283,50 @@ impl TryFrom<AwsLambdaVersion> for ConvexObject {
             node_executor_sha256,
             lambda_config,
             package_desc,
+            code_storage,
         }: AwsLambdaVersion,
     ) -> Result<Self, Self::Error> {
-        obj!(
-            "lambdaName" => lambda_name,
-            "lambdaVersion" => lambda_version,
+        Ok(SerializedAwsLambdaVersion {
+            lambda_name,
+            lambda_version,
             // Double-write this field for backwards compatability
-            "sourcePackageId" => match &package_desc {
+            source_package_id: match &package_desc {
                 AwsLambdaPackageDesc::Static {
-                    source_package_id: Some(id)
-                } => (*id).into(),
-                _ => ConvexValue::Null,
+                    source_package_id: Some(id),
+                } => Some((*id).into()),
+                _ => None,
             },
-            "nodeExecutorSha256" => node_executor_sha256,
-            "lambdaConfig" => ConvexValue::Object(lambda_config.try_into()?),
-            "typeConfig" => ConvexValue::Object(package_desc.try_into()?),
-        )
+            node_executor_sha256: serde_bytes::ByteBuf::from(node_executor_sha256.to_vec()),
+            lambda_config: lambda_config.try_into()?,
+            package_desc: Some(package_desc.into()),
+            code_storage,
+        })
     }
 }
 
-impl TryFrom<ConvexObject> for AwsLambdaConfig {
+impl TryFrom<SerializedAwsLambdaConfig> for AwsLambdaConfig {
     type Error = anyhow::Error;
 
-    fn try_from(value: ConvexObject) -> Result<Self, Self::Error> {
-        let mut object_fields: BTreeMap<_, _> = value.into();
-        let env: anyhow::Result<_> = match object_fields.remove("env") {
-            Some(ConvexValue::Object(env)) => env
-                .into_iter()
-                .map(|(k, v)| Ok((k, v.try_into()?)))
-                .collect(),
-            _ => anyhow::bail!("Missing 'env' in {object_fields:?}"),
-        };
-        let runtime = match object_fields.remove("runtime") {
-            Some(runtime) => runtime.try_into()?,
-            _ => anyhow::bail!("Missing 'runtime' in {object_fields:?}"),
-        };
-        let handler = match object_fields.remove("handler") {
-            Some(handler) => handler.try_into()?,
-            _ => anyhow::bail!("Missing 'handler' in {object_fields:?}"),
-        };
-        let memory_size_mb = match object_fields.remove("memorySizeMb") {
-            Some(ConvexValue::Int64(memory_size_mb)) => memory_size_mb.try_into()?,
-            _ => anyhow::bail!("Missing 'memorySizeMb' in {object_fields:?}"),
-        };
-        let disk_size_mb = match object_fields.remove("diskSizeMb") {
-            Some(ConvexValue::Int64(disk_size_mb)) => disk_size_mb.try_into()?,
+    fn try_from(value: SerializedAwsLambdaConfig) -> Result<Self, Self::Error> {
+        let env = value
+            .env
+            .into_iter()
+            .map(|(k, v)| Ok((k.try_into()?, v)))
+            .collect::<anyhow::Result<_>>()?;
+        let runtime = value.runtime;
+        let handler = value.handler;
+        let memory_size_mb = value.memory_size_mb.try_into()?;
+        let disk_size_mb = match value.disk_size_mb {
+            Some(disk_size_mb) => disk_size_mb.try_into()?,
             // Old AwsLambdaConfigs do not have this so just use a sensible default of 512 MB
             None => 512i32,
-            _ => anyhow::bail!("Invalid 'diskSizeMb' in {object_fields:?}"),
         };
-        let timeout_sec = match object_fields.remove("timeoutSec") {
-            Some(ConvexValue::Int64(timeout_sec)) => timeout_sec.try_into()?,
-            _ => anyhow::bail!("Missing 'timeoutSec' in {object_fields:?}"),
-        };
-        let vpc_subnet_ids = match object_fields.remove("subnetIds") {
-            Some(ConvexValue::Array(arr)) => arr
-                .into_iter()
-                .map(String::try_from)
-                .collect::<Result<Vec<String>, _>>()?,
-            None => vec![],
-            _ => anyhow::bail!("Invalid 'subnetIds' in {object_fields:?}"),
-        };
-        let vpc_security_group_ids = match object_fields.remove("securityGroupIds") {
-            Some(ConvexValue::Array(arr)) => arr
-                .into_iter()
-                .map(String::try_from)
-                .collect::<Result<Vec<String>, _>>()?,
-            None => vec![],
-            _ => anyhow::bail!("Invalid 'securityGroupIds' in {object_fields:?}"),
-        };
-        let ipv6_enabled = match object_fields.remove("ipv6Enabled") {
-            Some(ConvexValue::Boolean(b)) => b,
-            None => false,
-            r => anyhow::bail!("Invalid 'ipv6Enabled': {r:?}"),
-        };
+        let timeout_sec = value.timeout_sec.try_into()?;
+        let vpc_subnet_ids = value.vpc_subnet_ids.unwrap_or_default();
+        let vpc_security_group_ids = value.vpc_security_group_ids.unwrap_or_default();
+        let ipv6_enabled = value.ipv6_enabled.unwrap_or(false);
         Ok(Self {
-            env: env?,
+            env,
             runtime,
             handler,
             memory_size_mb,
@@ -319,41 +339,27 @@ impl TryFrom<ConvexObject> for AwsLambdaConfig {
     }
 }
 
-impl TryFrom<ConvexObject> for AwsLambdaVersion {
+impl TryFrom<SerializedAwsLambdaVersion> for AwsLambdaVersion {
     type Error = anyhow::Error;
 
-    fn try_from(value: ConvexObject) -> Result<Self, Self::Error> {
-        let mut object_fields: BTreeMap<_, _> = value.into();
-        let lambda_name = match object_fields.remove("lambdaName") {
-            Some(ConvexValue::String(key)) => key.into(),
-            _ => anyhow::bail!("Missing 'lambdaName' in {object_fields:?}"),
-        };
-        let lambda_version = match object_fields.remove("lambdaVersion") {
-            Some(lambda_version) => lambda_version.try_into()?,
-            _ => anyhow::bail!("Missing 'lambdaVersion' in {object_fields:?}"),
-        };
-        let node_executor_sha256 = match object_fields.remove("nodeExecutorSha256") {
-            Some(node_executor_sha256) => node_executor_sha256.try_into()?,
-            _ => anyhow::bail!("Missing 'nodeExecutorSha256' in {object_fields:?}"),
-        };
-        let lambda_config = match object_fields.remove("lambdaConfig") {
-            Some(ConvexValue::Object(lambda_config)) => lambda_config.try_into()?,
-            _ => anyhow::bail!("Missing 'lambdaConfig' in {object_fields:?}"),
-        };
-
+    fn try_from(value: SerializedAwsLambdaVersion) -> Result<Self, Self::Error> {
+        let lambda_name = value.lambda_name;
+        let lambda_version = value.lambda_version;
+        let node_executor_sha256 = value.node_executor_sha256.into_vec().try_into()?;
+        let lambda_config = value.lambda_config.try_into()?;
         // Deprecated, reading this field for now to populate package_desc on old lambda
         // versions
-        let source_package_id = match object_fields.remove("sourcePackageId") {
-            None | Some(ConvexValue::Null) => None,
+        let source_package_id = match value.source_package_id {
+            None => None,
             Some(value) => Some(value.try_into()?),
         };
-        let package_desc = match object_fields.remove("typeConfig") {
-            Some(ConvexValue::Object(package_desc)) => package_desc.try_into()?,
+        let package_desc = match value.package_desc {
+            Some(package_desc) => package_desc.try_into()?,
             // This must be an old-style Lambda so this must be a static lambda and we should read
             // the sourcePackageId field above.
             None => AwsLambdaPackageDesc::Static { source_package_id },
-            _ => anyhow::bail!("Invalid 'typeConfig' in {object_fields:?}"),
         };
+        let code_storage = value.code_storage;
 
         Ok(Self {
             lambda_name,
@@ -361,6 +367,9 @@ impl TryFrom<ConvexObject> for AwsLambdaVersion {
             node_executor_sha256,
             lambda_config,
             package_desc,
+            code_storage,
         })
     }
 }
+
+codegen_convex_serialization!(AwsLambdaVersion, SerializedAwsLambdaVersion);

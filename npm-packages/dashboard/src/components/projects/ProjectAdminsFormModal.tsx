@@ -2,7 +2,8 @@ import { Button } from "@ui/Button";
 import { Checkbox } from "@ui/Checkbox";
 import { Modal } from "@ui/Modal";
 import { TeamMemberLink } from "elements/TeamMemberLink";
-import { ProjectMemberRoleResponse, TeamMember } from "generatedApi";
+import { ProjectMemberRoleResponse } from "generatedApi";
+import { TeamMember } from "@convex-dev/platform/managementApi";
 import difference from "lodash/difference";
 import sortBy from "lodash/sortBy";
 import { Link } from "@ui/Link";
@@ -41,7 +42,6 @@ export function ProjectAdminFormModal({
 
   const closeWithConfirmation = () => {
     if (addedAdmins.length > 0 || removedAdmins.length > 0) {
-      // eslint-disable-next-line no-alert
       const shouldClose = window.confirm(
         "Closing the popup will clear your unsaved changes. Are you sure you want to continue?",
       );

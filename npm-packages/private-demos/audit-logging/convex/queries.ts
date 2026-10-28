@@ -15,6 +15,16 @@ export const loggedQuery = query({
   },
 });
 
+export const loggedQueryWithConvexActor = query({
+  args: {},
+  handler: async (_ctx) => {
+    await log.audit({
+      source: "loggedQueryWithConvexActor",
+      convexActor: log.vars.convexActor,
+    });
+  },
+});
+
 export const loggedQueryInComponent = query({
   args: {},
   handler: async (ctx) => {

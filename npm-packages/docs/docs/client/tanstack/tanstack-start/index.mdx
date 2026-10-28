@@ -60,7 +60,7 @@ to observe subscriptions staying active as you navigate.
 
 ### Using Convex React hooks
 
-[Convex React](/client/react.mdx) hooks like
+[Convex React](/client/react/overview.mdx) hooks like
 [`usePaginatedQuery`](/api/modules/react#usepaginatedquery) can be used
 alongside TanStack hooks. These hooks reference the same Convex Client so
 there's still just one set of consistent query results in your app when these
@@ -104,29 +104,36 @@ each query: Convex uses the same timestamp for all queries.
 TanStack Start routes can have isomorphic
 [loader](https://tanstack.com/router/latest/docs/framework/react/guide/external-data-loading#using-loaders-to-ensure-data-is-loaded)
 functions that run on the server for the initial page load and on the client for
-subsequent client-side navigations. By default, loaders will also run when
-mousing over a link to a page, enabling prefetching.
+subsequent client-side navigations. With `defaultPreload: "intent"`, as
+configured in the quickstart, loaders also run when hovering over a link to a
+page, enabling prefetching.
 
 Adding queries to loaders moves away from the convenience of co-locating data
 fetching in components with `useSuspenseQuery` in favor of faster page loads.
 Consider whether a given route benefits from this trade-off.
 
-Use `ensureQueryData` to block rendering until data is available. This is a good
-fit when the component requires the data to render:
+The examples below require `@tanstack/react-query` v5.102.0 or later.
+
+Await a `query` to block rendering until data is available. This is a good fit
+when the component requires the data to render. Set `staleTime: "static"` to
+reuse cached data even if it has been invalidated, matching `ensureQueryData`.
+If no data is cached, the query fetches it. This setting applies to the loader's
+cache read; Convex subscriptions still update the cached data:
 
 ```ts
 export const Route = createFileRoute('/posts')({
   loader: async (opts) => {
-    await opts.context.queryClient.ensureQueryData(
-      convexQuery(api.messages.list, {}),
-    );
+    await opts.context.queryClient.query({
+      ...convexQuery(api.messages.list, {}),
+      staleTime: "static",
+    });
   },
   component: () => {
     const { data } = useSuspenseQuery(convexQuery(api.messages.list, {}));
     return (
       <div>
         {data.map((message) => (
-          <Message key={message.id} post={message} />
+          <Message key={message._id} post={message} />
         ))}
       </div>
     );
@@ -134,25 +141,28 @@ export const Route = createFileRoute('/posts')({
 })
 ```
 
-Use `prefetchQuery` to start the request without blocking rendering. This is a
-good fit when data would be nice to have early but the component can handle a
-loading state:
+You can also start the request without blocking rendering. This is a good fit
+when data would be nice to have early but the component can handle a loading
+state:
 
 ```ts
+import { noop } from "@tanstack/react-query";
+
 export const Route = createFileRoute('/posts')({
   loader: async (opts) => {
-    opts.context.queryClient.prefetchQuery(
+    // Swallow prefetch errors so they do not become unhandled promise rejections.
+    void opts.context.queryClient.query(
       convexQuery(api.messages.list, {}),
-    );
-    // no await — rendering is not blocked
+    ).catch(noop);
   },
   component: () => {
-    const { data } = useQuery(convexQuery(api.messages.list, {}));
-    if (!data) return <p>Loading...</p>;
+    const { data, isPending, error } = useQuery(convexQuery(api.messages.list, {}));
+    if (isPending) return <p>Loading...</p>;
+    if (error) return <p>Could not load messages: {error.message}</p>;
     return (
       <div>
         {data.map((message) => (
-          <Message key={message.id} post={message} />
+          <Message key={message._id} post={message} />
         ))}
       </div>
     );
@@ -161,16 +171,18 @@ export const Route = createFileRoute('/posts')({
 ```
 
 You can use `loaderDeps` to pass search parameters into the loader, which causes
-the loader to re-run and cache-bust when those parameters change:
+the loader to re-run when those parameters change. Include the parameters in
+`convexQuery` so each set of arguments has its own cache entry:
 
 ```ts
 export const Route = createFileRoute("/posts")({
   validateSearch: (search) => ({ channel: String(search.channel ?? "") }),
   loaderDeps: ({ search: { channel } }) => ({ channel }),
   loader: async (opts) => {
-    await opts.context.queryClient.ensureQueryData(
-      convexQuery(api.messages.list, { channel: opts.deps.channel }),
-    );
+    await opts.context.queryClient.query({
+      ...convexQuery(api.messages.list, { channel: opts.deps.channel }),
+      staleTime: "static",
+    });
   },
 });
 ```

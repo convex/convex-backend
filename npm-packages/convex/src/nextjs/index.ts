@@ -48,9 +48,10 @@ import { validateDeploymentUrl } from "../common/index.js";
 import { Preloaded } from "../react/index.js";
 import {
   ArgsAndOptions,
-  FunctionReference,
   FunctionReturnType,
   getFunctionName,
+  FunctionReference,
+  FunctionReference_future,
 } from "../server/index.js";
 import { convexToJson, jsonToConvex } from "../values/index.js";
 
@@ -98,7 +99,9 @@ export type NextjsOptions = {
  * @param options -  A {@link NextjsOptions} options object for the query.
  * @returns A promise of the `Preloaded` payload.
  */
-export async function preloadQuery<Query extends FunctionReference<"query">>(
+export async function preloadQuery<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+>(
   query: Query,
   ...args: ArgsAndOptions<Query, NextjsOptions>
 ): Promise<Preloaded<Query>> {
@@ -117,9 +120,9 @@ export async function preloadQuery<Query extends FunctionReference<"query">>(
  * @param preloaded - The `Preloaded` payload returned by {@link preloadQuery}.
  * @returns The query result.
  */
-export function preloadedQueryResult<Query extends FunctionReference<"query">>(
-  preloaded: Preloaded<Query>,
-): FunctionReturnType<Query> {
+export function preloadedQueryResult<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+>(preloaded: Preloaded<Query>): FunctionReturnType<Query> {
   return jsonToConvex(preloaded._valueJSON);
 }
 
@@ -133,7 +136,9 @@ export function preloadedQueryResult<Query extends FunctionReference<"query">>(
  * @param options -  A {@link NextjsOptions} options object for the query.
  * @returns A promise of the query's result.
  */
-export async function fetchQuery<Query extends FunctionReference<"query">>(
+export async function fetchQuery<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+>(
   query: Query,
   ...args: ArgsAndOptions<Query, NextjsOptions>
 ): Promise<FunctionReturnType<Query>> {
@@ -153,7 +158,9 @@ export async function fetchQuery<Query extends FunctionReference<"query">>(
  * @returns A promise of the mutation's result.
  */
 export async function fetchMutation<
-  Mutation extends FunctionReference<"mutation">,
+  Mutation extends
+    | FunctionReference<"mutation">
+    | FunctionReference_future<"mutation">,
 >(
   mutation: Mutation,
   ...args: ArgsAndOptions<Mutation, NextjsOptions>
@@ -173,7 +180,11 @@ export async function fetchMutation<
  * @param options -  A {@link NextjsOptions} options object for the action.
  * @returns A promise of the action's result.
  */
-export async function fetchAction<Action extends FunctionReference<"action">>(
+export async function fetchAction<
+  Action extends
+    | FunctionReference<"action">
+    | FunctionReference_future<"action">,
+>(
   action: Action,
   ...args: ArgsAndOptions<Action, NextjsOptions>
 ): Promise<FunctionReturnType<Action>> {

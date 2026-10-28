@@ -4,7 +4,7 @@ import {
   CancelInvitationArgs,
   CreateInvitationArgs,
   InvitationResponse,
-} from "generatedApi";
+} from "@convex-dev/platform/managementApi";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { RoleDisplay } from "./RoleDisplay";
 

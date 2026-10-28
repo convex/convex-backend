@@ -1,7 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { Authenticated, Unauthenticated, useMutation } from 'convex/react';
 import { useAuth } from '@workos/authkit-tanstack-react-start/client';
-import { getAuth, getSignInUrl, getSignUpUrl } from '@workos/authkit-tanstack-react-start';
+import { getAuth } from '@workos/authkit-tanstack-react-start';
 import { convexQuery } from '@convex-dev/react-query';
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { api } from '../../convex/_generated/api';
@@ -11,19 +11,16 @@ export const Route = createFileRoute('/')({
   component: Home,
   loader: async () => {
     const { user } = await getAuth();
-    const signInUrl = await getSignInUrl();
-    const signUpUrl = await getSignUpUrl();
-
-    return { user, signInUrl, signUpUrl };
+    return { user };
   },
 });
 
 function Home() {
-  const { user, signInUrl, signUpUrl } = Route.useLoaderData();
-  return <HomeContent user={user} signInUrl={signInUrl} signUpUrl={signUpUrl} />;
+  const { user } = Route.useLoaderData();
+  return <HomeContent user={user} />;
 }
 
-function HomeContent({ user, signInUrl, signUpUrl }: { user: User | null; signInUrl: string; signUpUrl: string }) {
+function HomeContent({ user }: { user: User | null }) {
   return (
     <>
       <header className="sticky top-0 z-10 bg-background p-4 border-b-2 border-slate-200 dark:border-slate-800 flex flex-row justify-between items-center">
@@ -36,21 +33,21 @@ function HomeContent({ user, signInUrl, signUpUrl }: { user: User | null; signIn
           <Content />
         </Authenticated>
         <Unauthenticated>
-          <SignInForm signInUrl={signInUrl} signUpUrl={signUpUrl} />
+          <SignInForm />
         </Unauthenticated>
       </main>
     </>
   );
 }
 
-function SignInForm({ signInUrl, signUpUrl }: { signInUrl: string; signUpUrl: string }) {
+function SignInForm() {
   return (
     <div className="flex flex-col gap-8 w-96 mx-auto">
       <p>Log in to see the numbers</p>
-      <a href={signInUrl}>
+      <a href="/sign-in">
         <button className="bg-foreground text-background px-4 py-2 rounded-md">Sign in</button>
       </a>
-      <a href={signUpUrl}>
+      <a href="/sign-up">
         <button className="bg-foreground text-background px-4 py-2 rounded-md">Sign up</button>
       </a>
     </div>

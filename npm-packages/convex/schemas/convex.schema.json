@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "Configuration schema for Convex project settings.\n\nDocumentation: https://docs.convex.dev/production/project-configuration#convexjson",
+  "description": "Configuration schema for Convex project settings.\n\nDocumentation: https://docs.convex.dev/config/convex.json",
   "type": "object",
   "definitions": {
     "authKitConfigureSettings": {
@@ -123,8 +123,7 @@
         },
         "nodeVersion": {
           "type": "string",
-          "description": "The Node.js version to use for Node.js actions. The currently supported values are '20', '22', and '24'.\n\nDocumentation: https://docs.convex.dev/production/project-configuration#configuring-the-nodejs-version",
-          "default": "20"
+          "description": "The Node.js version to use for Node.js actions. The currently supported values are '22' and '24'.\n\nAfter you push a new Node.js version, your functions may keep running on the previous version for a few minutes.\n\nDocumentation: https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version"
         }
       }
     },
@@ -135,7 +134,7 @@
     },
     "functions": {
       "type": "string",
-      "description": "Path to the directory containing Convex functions. You can customize this to use a different location than the default 'convex/' directory.\n\nDocumentation: https://docs.convex.dev/production/project-configuration#changing-the-convex-folder-name-or-location",
+      "description": "Path to the directory containing Convex functions. You can customize this to use a different location than the default 'convex/' directory.\n\nDocumentation: https://docs.convex.dev/config/convex.json#changing-the-convex-folder-name-or-location",
       "default": "convex/"
     },
     "codegen": {
@@ -155,12 +154,12 @@
         },
         "staticApi": {
           "type": "boolean",
-          "description": "When true, generates static `api.d.ts` files, which improves autocomplete and incremental typechecking performance in large codebases.\n\nDocumentation: https://docs.convex.dev/production/project-configuration#using-static-code-generation-beta",
+          "description": "When true, generates static `api.d.ts` files, which improves autocomplete and incremental typechecking performance in large codebases.\n\nDocumentation: https://docs.convex.dev/config/convex.json#using-static-code-generation-beta",
           "default": false
         },
         "staticDataModel": {
           "type": "boolean",
-          "description": "When true, generates static `dataModel.d.ts` files, which improves autocomplete and incremental typechecking performance in large codebases.\n\nDocumentation: https://docs.convex.dev/production/project-configuration#using-static-code-generation-beta",
+          "description": "When true, generates static `dataModel.d.ts` files, which improves autocomplete and incremental typechecking performance in large codebases.\n\nDocumentation: https://docs.convex.dev/config/convex.json#using-static-code-generation-beta",
           "default": false
         }
       }
@@ -180,7 +179,8 @@
     "typescriptCompiler": {
       "type": "string",
       "enum": ["tsc", "tsgo"],
-      "description": "TypeScript compiler to use for typechecking (`@typescript/native-preview` must be installed to use `tsgo`)"
+      "description": "Deprecated. Set to `tsgo` to use the TypeScript Native Preview compiler (`@typescript/native-preview`). TypeScript 7 uses the native compiler without needing this setting to be set.",
+      "deprecated": true
     },
     "authKit": {
       "$ref": "#/definitions/authKitConfig"

@@ -12,11 +12,14 @@ export default queryPrivateSystem("ViewData")({
     const tableMapping: Record<number, string> =
       await performOp("getTableMapping");
     return Object.fromEntries(
-      Object.entries(tableMapping).filter(
-        ([, name]) =>
-          !name.startsWith("_") ||
-          ["_scheduled_jobs", "_file_storage"].includes(name),
-      ),
+      Object.entries(tableMapping)
+        .filter(
+          ([, name]) =>
+            !name.startsWith("_") ||
+            ["_scheduled_jobs", "_file_storage"].includes(name),
+          //
+        )
+        .slice(0, 1000),
     );
   },
 });

@@ -11,7 +11,7 @@ import HttpAction from "!!raw-loader!@site/../demos/file-storage-with-http/conve
 import HttpUpload from "!!raw-loader!@site/../demos/file-storage-with-http/src/_simpleApp.tsx";
 
 Upload files to Convex by
-[generated upload urls](#uploading-files-via-upload-urls), or via an
+[generated upload urls](#uploading-files-via-upload-urls), or via a
 [custom HTTP Action](#uploading-files-via-an-http-action).
 
 ## Uploading files via upload URLs
@@ -29,7 +29,7 @@ In the first mutation that generates the upload URL you can control who can
 upload files to your Convex storage.
 
 **Example**:
-[File Storage with Queries and Mutations](https://github.com/get-convex/convex-demos/tree/main/file-storage)
+[File Storage with Queries and Mutations](https://github.com/convex/convex-demos/tree/main/file-storage)
 
 ### Calling the upload APIs from a web page
 
@@ -80,7 +80,6 @@ persist it in the database via another mutation:
   source={Messages}
   prefix={`import { mutation } from "./_generated/server";\n`}
   snippet="saveStorageId"
-  highlightPatterns={["storage.generateUploadUrl"]}
 />
 
 ### Limits
@@ -94,13 +93,10 @@ The file upload process can be more tightly controlled by leveraging
 using a single request, but requiring correct CORS headers configuration.
 
 The custom upload HTTP action can control who can upload files to your Convex
-storage. But note that the HTTP action request size is
-[currently limited](/functions/http-actions.mdx#limits) to 20MB. For larger
-files you need to use upload URLs as described
-[above](#uploading-files-via-upload-urls).
+storage.
 
 **Example:**
-[File Storage with HTTP Actions](https://github.com/get-convex/convex-demos/tree/main/file-storage-with-http)
+[File Storage with HTTP Actions](https://github.com/convex/convex-demos/tree/main/file-storage-with-http)
 
 ### Calling the upload HTTP action from a web page
 
@@ -119,12 +115,15 @@ The highlighted lines make the actual request to the HTTP action:
 ### Defining the upload HTTP action
 
 A file sent in the HTTP request body can be stored using the
-[`storage.store`](/api/interfaces/server.StorageActionWriter#store) function of
-the [`ActionCtx`](/api/interfaces/server.GenericActionCtx) object. This function
+[`storage.store`](/api/interfaces/server.StorageWriter#store) function of the
+[`ActionCtx`](/api/interfaces/server.GenericActionCtx) object. This function
 returns an `Id<"_storage">` of the stored file.
 
 From the HTTP action you can call a mutation to write the storage ID to a
-document in your database.
+document in your database. For files that fit within the
+[mutation limits](/production/state/limits.mdx#transactions), you can instead
+[store the file in a mutation](/file-storage/store-files.mdx#storing-files-in-mutations)
+and write the storage ID in the same transaction.
 
 To confirm success back to your hosted website, you will need to set the right
 [CORS headers](/functions/http-actions.mdx#cors):
@@ -138,9 +137,4 @@ To confirm success back to your hosted website, you will need to set the right
 
 You also need to handle the pre-flight `OPTIONS` request:
 
-<Snippet
-  title="convex/http.ts"
-  source={HttpAction}
-  snippet="preflight"
-  highlightPatterns={["storage.store"]}
-/>
+<Snippet title="convex/http.ts" source={HttpAction} snippet="preflight" />

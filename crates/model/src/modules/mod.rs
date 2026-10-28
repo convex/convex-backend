@@ -29,7 +29,7 @@ use database::{
     Transaction,
 };
 use errors::ErrorMetadata;
-use metrics::get_module_metadata_timer;
+use storage::Storage;
 use sync_types::CanonicalizedModulePath;
 use value::{
     sha256::{
@@ -54,38 +54,33 @@ use self::{
     },
 };
 use crate::{
-    config::{
-        module_loader::ModuleLoader,
-        types::{
-            ModuleConfig,
-            ModuleDiff,
-        },
+    config::types::{
+        ModuleConfig,
+        ModuleDiff,
     },
-    source_packages::types::SourcePackageId,
+    source_packages::{
+        types::SourcePackageId,
+        upload_download::download_package,
+        SourcePackageModel,
+    },
     SystemIndex,
     SystemTable,
 };
 
 pub mod function_validators;
-mod metrics;
 pub mod module_versions;
 pub mod types;
 pub mod user_error;
 
 /// Table name for user modules.
-pub static MODULES_TABLE: TableName = TableName::const_new("_modules");
+pub const MODULES_TABLE: TableName = TableName::const_new("_modules");
 
 /// Field for a module's path in `ModuleMetadata`.
 static PATH_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "path".parse().expect("Invalid built-in field"));
-/// Field for a module's deleted flag in `ModuleMetadata`.
-static DELETED_FIELD: LazyLock<FieldPath> =
-    LazyLock::new(|| "deleted".parse().expect("Invalid built-in field"));
 
 pub static MODULE_INDEX_BY_PATH: LazyLock<SystemIndex<ModulesTable>> =
     LazyLock::new(|| SystemIndex::new("by_path", [&PATH_FIELD]).unwrap());
-pub static MODULE_INDEX_BY_DELETED: LazyLock<SystemIndex<ModulesTable>> =
-    LazyLock::new(|| SystemIndex::new("by_deleted", [&DELETED_FIELD, &PATH_FIELD]).unwrap());
 
 pub static HTTP_MODULE_PATH: LazyLock<CanonicalizedModulePath> =
     LazyLock::new(|| "http.js".parse().unwrap());
@@ -94,15 +89,10 @@ pub struct ModulesTable;
 impl SystemTable for ModulesTable {
     type Metadata = ModuleMetadata;
 
-    fn table_name() -> &'static TableName {
-        &MODULES_TABLE
-    }
+    const TABLE_NAME: TableName = MODULES_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
-        vec![
-            MODULE_INDEX_BY_PATH.clone(),
-            MODULE_INDEX_BY_DELETED.clone(),
-        ]
+        vec![MODULE_INDEX_BY_PATH.clone()]
     }
 }
 
@@ -181,7 +171,7 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
     pub async fn get_all_metadata(
         &mut self,
         component: ComponentId,
-    ) -> anyhow::Result<Vec<ParsedDocument<ModuleMetadata>>> {
+    ) -> anyhow::Result<Vec<Arc<ParsedDocument<ModuleMetadata>>>> {
         // Hacky: It's important that we scan the _by_id index instead of the
         // _by_creation_time index (which is used by `Query::full_table_scan`).
         // This prevents creating too many read ranges in the transaction later
@@ -191,14 +181,13 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
             .query_system(component.into(), &SystemIndex::<ModulesTable>::by_id())?
             .all()
             .await?;
-        // TODO: thread Arc out of this function
-        Ok(modules.into_iter().map(Arc::unwrap_or_clone).collect())
+        Ok(modules)
     }
 
     pub async fn get_application_metadata(
         &mut self,
         component: ComponentId,
-    ) -> anyhow::Result<Vec<ParsedDocument<ModuleMetadata>>> {
+    ) -> anyhow::Result<Vec<Arc<ParsedDocument<ModuleMetadata>>>> {
         let modules = self
             .get_all_metadata(component)
             .await?
@@ -212,32 +201,35 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
     pub async fn get_application_modules(
         &mut self,
         component: ComponentId,
-        module_loader: &dyn ModuleLoader<RT>,
+        modules_storage: &Arc<dyn Storage>,
     ) -> anyhow::Result<BTreeMap<CanonicalizedModulePath, ModuleConfig>> {
+        let metadata = self.get_application_metadata(component).await?;
+        if metadata.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+
+        // Every active module is present in the latest source package, so one
+        // download serves all of them.
+        let source_package = SourcePackageModel::new(self.tx, component.into())
+            .get_latest()
+            .await?
+            .context("No source package for existing modules")?;
+        let mut package = download_package(modules_storage.clone(), &source_package).await?;
+
         let mut modules = BTreeMap::new();
-        for metadata in self.get_all_metadata(component).await? {
+        for metadata in metadata {
             let path = metadata.path.clone();
-            if !path.is_system() {
-                let environment = metadata.environment;
-                let full_source = module_loader
-                    .get_module(
-                        self.tx,
-                        CanonicalizedComponentModulePath {
-                            component,
-                            module_path: metadata.path.clone(),
-                        },
-                    )
-                    .await?
-                    .context("Module source does not exist")?;
-                let module_config = ModuleConfig {
-                    path: path.clone().into(),
-                    source: full_source.source.clone(),
-                    source_map: full_source.source_map.clone(),
-                    environment,
-                };
-                if modules.insert(path.clone(), module_config).is_some() {
-                    panic!("Duplicate application module at {path:?}");
-                }
+            let source = package
+                .remove(&path)
+                .context("Module source does not exist")?;
+            let module_config = ModuleConfig {
+                path: path.clone().into(),
+                source: source.source,
+                source_map: source.source_map,
+                environment: metadata.environment,
+            };
+            if modules.insert(path.clone(), module_config).is_some() {
+                panic!("Duplicate application module at {path:?}");
             }
         }
         Ok(modules)
@@ -269,18 +261,11 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
         &mut self,
         path: CanonicalizedComponentModulePath,
     ) -> anyhow::Result<Option<Arc<ParsedDocument<ModuleMetadata>>>> {
-        let timer = get_module_metadata_timer();
-
         let is_system = path.module_path.is_system();
         if is_system && !(self.tx.identity().is_admin() || self.tx.identity().is_system()) {
             anyhow::bail!(unauthorized_error("get_module"))
         }
-        let module_metadata = match self.module_metadata(path).await? {
-            Some(r) => r,
-            None => return Ok(None),
-        };
-        timer.finish();
-        Ok(Some(module_metadata))
+        self.module_metadata(path).await
     }
 
     /// Put a module's source at a given path.
@@ -336,6 +321,32 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
         };
         let module_id = match module_id {
             Some(module_id) => {
+                let current = self
+                    .tx
+                    .get_system::<ModulesTable>(path.component.into(), module_id.developer_id)
+                    .await?;
+
+                // Doesn't change the source package id if the contents are identical to what is
+                // already deployed
+                if let Some(metadata) = current
+                    && metadata.matches_module_contents(&new_metadata)
+                {
+                    let current_src_pkg = SourcePackageModel::new(self.tx, path.component.into())
+                        .get(metadata.source_package_id)
+                        .await?;
+                    let new_src_pkg = SourcePackageModel::new(self.tx, path.component.into())
+                        .get(new_metadata.source_package_id)
+                        .await?;
+
+                    // Checking the timestamp maintains the invariant that the source package id
+                    // with the highest creation time is valid to read all
+                    // modules at
+                    if new_src_pkg.creation_time() > current_src_pkg.creation_time()
+                        && current_src_pkg.metadata_matches(&new_src_pkg)
+                    {
+                        return Ok(module_id);
+                    }
+                }
                 SystemMetadataModel::new(self.tx, path.component.into())
                     .replace(module_id, new_metadata.try_into()?)
                     .await?;
@@ -420,45 +431,6 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
         .into()))
     }
 
-    // Helper method that returns the AnalyzedFunction for the specified path.
-    // It returns a user error if the module or function does not exist.
-    // Note that using this method will error if AnalyzedResult is not backfilled,
-    pub async fn get_analyzed_function_by_id(
-        &mut self,
-        path: &ResolvedComponentFunctionPath,
-    ) -> anyhow::Result<anyhow::Result<AnalyzedFunction>> {
-        let udf_path = &path.udf_path;
-        let Some(module) = self.get_metadata_for_function_by_id(path).await? else {
-            let err = ModuleNotFoundError::new(udf_path.module().as_str());
-            return Ok(Err(ErrorMetadata::bad_request(
-                "ModuleNotFound",
-                err.to_string(),
-            )
-            .into()));
-        };
-
-        // Dependency modules don't have AnalyzedModule.
-        if !udf_path.module().is_deps() {
-            let analyzed_module = module
-                .analyze_result
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("Expected analyze result for {udf_path:?}"))?;
-
-            for function in &analyzed_module.functions {
-                if &function.name == udf_path.function_name() {
-                    return Ok(Ok(function.clone()));
-                }
-            }
-        }
-
-        Ok(Err(ErrorMetadata::bad_request(
-            "FunctionNotFound",
-            FunctionNotFoundError::new(udf_path.function_name(), udf_path.module().as_str())
-                .to_string(),
-        )
-        .into()))
-    }
-
     pub async fn get_http(
         &mut self,
         component: ComponentId,
@@ -473,12 +445,26 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
     pub async fn has_http(&mut self, component: ComponentId) -> anyhow::Result<bool> {
         Ok(self.get_http(component).await?.is_some())
     }
+
+    pub fn has_pending_module(&mut self, component: ComponentId) -> bool {
+        self.tx
+            .table_mapping()
+            .namespace(component.into())
+            .id_if_exists(&MODULES_TABLE)
+            .is_some_and(|tablet_id| self.tx.has_pending_write(tablet_id))
+    }
 }
 
 /// Hash a module's source and source map. This same hash is also computed in
 /// the CLI to determine if a module has changed. Therefore this algorithm
 /// can never be changed (if you want a new algorithm, we need a new API
 /// endpoint and a new CLI version to call it).
+///
+/// NOTE: the original algorithm is not sound because there is no delimiter or
+/// length marker to distinguish the end of `source` from the beginning of
+/// `source_map`. As such the final hash should be treated with suspicion for
+/// any security-relevant purpose. In practice a collision should never happen
+/// for a well-behaving client.
 pub fn hash_module_source(source: &ModuleSource, source_map: Option<&SourceMap>) -> Sha256Digest {
     let mut hasher = Sha256::new();
     hasher.update(source.as_bytes());

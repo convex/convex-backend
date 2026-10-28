@@ -1,6 +1,6 @@
 version = 1
-revision = 2
-requires-python = ">=3.13.0, <3.14"
+revision = 3
+requires-python = "==3.14.*"
 
 [[package]]
 name = "convex"

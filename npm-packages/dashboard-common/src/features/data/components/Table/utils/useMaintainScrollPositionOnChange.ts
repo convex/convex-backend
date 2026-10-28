@@ -12,7 +12,7 @@ import { RefObject, useCallback, useEffect, useRef } from "react";
  */
 export function useMaintainScrollPositionOnChange<T>(
   data: T[],
-  scrollRef: RefObject<HTMLElement>,
+  scrollRef: RefObject<HTMLElement | null>,
   getRowId: (row: T) => string,
   rowHeight: number,
   onRowChangeAbove: () => void,
@@ -25,17 +25,27 @@ export function useMaintainScrollPositionOnChange<T>(
   }, [data, getRowId, rowHeight, scrollRef]);
 
   const topmostRowId = useRef<string | null>(null);
-  const ignoreScrollEvent = useRef(false);
+  // The scrollTop we last set ourselves. The scroll event it triggers should
+  // not be treated as the user scrolling. We match on the value rather than a
+  // simple "ignore next event" boolean: that boolean got stuck whenever our
+  // write was a no-op (no event to clear it) or coalesced with a real user
+  // scroll, which then swallowed the user's scroll and bounced the view back.
+  const programmaticScrollTop = useRef<number | null>(null);
 
   // Remember the topmost row
   useEffect(() => {
     const onScroll = () => {
-      if (ignoreScrollEvent.current) {
-        // Ignore the scroll events fired when setting scrollTop (https://stackoverflow.com/a/1386750)
-        ignoreScrollEvent.current = false;
+      if (
+        programmaticScrollTop.current !== null &&
+        scrollRef.current?.scrollTop === programmaticScrollTop.current
+      ) {
+        // This is the scroll event from our own scrollTop write; ignore it.
+        programmaticScrollTop.current = null;
         return;
       }
 
+      // Any other scroll position means the user (or the scrollbar) scrolled.
+      programmaticScrollTop.current = null;
       topmostRowId.current = computeTopmostRowId();
     };
 
@@ -69,12 +79,17 @@ export function useMaintainScrollPositionOnChange<T>(
       return;
     }
 
-    ignoreScrollEvent.current = true;
-    // eslint-disable-next-line no-param-reassign
-    scrollRef.current.scrollTop =
+    const newScrollTop =
       newTopmostRowIndex * rowHeight +
       (scrollRef.current.scrollTop % rowHeight);
-    onRowChangeAbove();
+
+    // Only write when the position actually changes, so we never record a
+    // programmatic scrollTop that won't produce a scroll event.
+    if (newScrollTop !== scrollRef.current.scrollTop) {
+      programmaticScrollTop.current = newScrollTop;
+      scrollRef.current.scrollTop = newScrollTop;
+      onRowChangeAbove();
+    }
   }, [
     computeTopmostRowId,
     data,

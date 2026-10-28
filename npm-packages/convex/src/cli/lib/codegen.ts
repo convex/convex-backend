@@ -4,6 +4,7 @@ import { withTmpDir, TempDir } from "../../bundler/fs.js";
 import { entryPoints } from "../../bundler/index.js";
 import { apiCodegen } from "../codegen_templates/api.js";
 import { apiCjsCodegen } from "../codegen_templates/api_cjs.js";
+import { compareModulePaths } from "../codegen_templates/common.js";
 import {
   dynamicDataModelDTS,
   dynamicDataModelTS,
@@ -45,7 +46,6 @@ import {
   rootComponentApiCJS,
 } from "../codegen_templates/component_api.js";
 import { functionsDir } from "./utils/utils.js";
-import { LargeIndexDeletionCheck } from "./indexes.js";
 
 const PRESERVED_GENERATED_ENTRIES = new Set(["ai"]);
 
@@ -80,7 +80,6 @@ export type CodegenOptions = {
   liveComponentSources: boolean;
   debugNodeApis: boolean;
   systemUdfs: boolean;
-  largeIndexDeletionCheck: LargeIndexDeletionCheck;
   codegenOnlyThisComponent?: string | undefined;
 };
 
@@ -846,7 +845,7 @@ async function doApiCodegen(
   const absModulePaths = await entryPoints(ctx, functionsDir);
   const modulePaths = absModulePaths
     .map((p) => path.relative(functionsDir, p))
-    .sort();
+    .sort(compareModulePaths);
 
   const writtenFiles: string[] = [];
 

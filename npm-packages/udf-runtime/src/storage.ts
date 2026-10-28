@@ -1,7 +1,5 @@
 import { constructStreamId, extractStream } from "./06_streams.js";
 import { performAsyncOp } from "./syscall.js";
-import { Request } from "./23_request.js";
-import { Response } from "./23_response.js";
 import { Blob } from "./09_file.js";
 
 export const storeBlob = async ({
@@ -57,27 +55,4 @@ export const getBlob = async ({ storageId }: { storageId: string }) => {
     size,
     contentType,
   );
-};
-
-// Deprecated API, used prior to Convex 0.13.0
-export const storeRequest = async ({ request }: { request: Request }) => {
-  const digest = request.headers.get("digest");
-  const options = digest !== null ? { sha256: digest } : undefined;
-  return await storeBlob({ blob: await request.blob(), options });
-};
-
-// Deprecated API, used prior to Convex 0.13.0
-export const getResponse = async ({ storageId }: { storageId: string }) => {
-  const responseBlob = await getBlob({ storageId });
-  if (responseBlob === null) {
-    return null;
-  }
-  const headers = new Headers();
-  if (responseBlob.type.length > 0) {
-    headers.set("content-type", responseBlob.type);
-  }
-  headers.set("content-length", String(responseBlob.size));
-  return new Response(responseBlob, {
-    headers,
-  });
 };

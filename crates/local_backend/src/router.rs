@@ -46,7 +46,6 @@ use tower_http::{
     },
     decompression::RequestDecompressionLayer,
 };
-use udf::HTTP_ACTION_BODY_LIMIT;
 use utoipa::{
     openapi::security::{
         ApiKey,
@@ -83,6 +82,7 @@ use crate::{
         push_config,
     },
     deploy_config2,
+    deployment_jwks::deployment_jwks,
     environment_variables::{
         list_environment_variables,
         platform_router,
@@ -98,6 +98,8 @@ use crate::{
         audit_log,
         cancel_developer_job,
         create_function_handle,
+        create_service_token,
+        get_service_url,
         internal_action_post,
         internal_mutation_post,
         internal_query_post,
@@ -121,6 +123,7 @@ use crate::{
         cancel_export,
         get_zip_export,
         request_zip_export,
+        request_zip_export_token,
         set_export_expiration,
     },
     snapshot_import::{
@@ -136,10 +139,10 @@ use crate::{
         storage_upload,
     },
     streaming_export::{
+        data_sync_cursor_from_deltas,
         document_deltas_get,
         document_deltas_post,
         get_table_column_names,
-        get_tables_and_columns,
         json_schemas,
         list_snapshot_get,
         list_snapshot_post,
@@ -233,6 +236,15 @@ impl Modify for SecurityAddon {
 #[derive(OpenApi)]
 #[openapi(
     modifiers(&SecurityAddon),
+    // The data sync selection tree must be registered explicitly: these types
+    // are referenced only from flattened maps' `additionalProperties`, which
+    // utoipa's derived `schemas()` fails to register
+    // (https://github.com/juhaku/utoipa/issues/1330).
+    components(schemas(
+        common::types::streaming_export::selection::ComponentSelection,
+        common::types::streaming_export::selection::TableSelection,
+        common::types::streaming_export::selection::ColumnSelection,
+    )),
     info(
         title = "Convex Deployment API",
         version = "1.0.0",
@@ -314,6 +326,10 @@ pub fn router(st: LocalAppState) -> Router {
             "/deploy2/evaluate_push",
             post(deploy_config2::evaluate_push),
         )
+        .route(
+            "/deploy2/evaluate_schema",
+            post(deploy_config2::evaluate_schema),
+        )
         .route("/run_test_function", post(run_test_function))
         .route(
             "/deploy2/wait_for_schema",
@@ -343,16 +359,21 @@ pub fn router(st: LocalAppState) -> Router {
     let snapshot_export_routes = Router::new()
         .route("/request/zip", post(request_zip_export))
         .route("/zip/{id}", get(get_zip_export))
+        .route("/zip/{id}/token", post(request_zip_export_token))
         .route("/set_expiration/{snapshot_id}", post(set_export_expiration))
         .route("/cancel/{snapshot_id}", post(cancel_export));
 
     let (platform_routes, platform_openapi) =
         OpenApiRouter::with_openapi(PlatformApiDoc::openapi())
             .merge(platform_router())
+            .merge(crate::deployment_audit_log::platform_router())
             .merge(crate::deployment_info::platform_router())
+            .merge(crate::usage_limits::platform_router())
             .merge(crate::canonical_urls::platform_router())
             .merge(crate::log_sinks::platform_router())
             .merge(crate::deployment_state::platform_router())
+            // Streaming export ("data sync") API at /api/v1/data/sync.
+            .merge(crate::streaming_export::platform_router())
             .split_for_parts();
     let platform_openapi_spec = platform_openapi.to_pretty_json().unwrap();
     let platform_routes = Router::new().merge(platform_routes).route(
@@ -397,6 +418,7 @@ pub fn router(st: LocalAppState) -> Router {
         .with_state(RouterState {
             api: Arc::new(st.application.clone()),
             runtime: st.application.runtime(),
+            subscription_reconnect_rate_limiter: None,
         });
 
     let version = SERVER_VERSION_STR.to_string();
@@ -404,6 +426,7 @@ pub fn router(st: LocalAppState) -> Router {
     Router::new()
         .nest("/api", api_routes)
         .merge(health_check_routes(version))
+        .route("/.well-known/jwks.json", get(deployment_jwks))
         .layer(cors())
         .with_state(st)
         .merge(migrated)
@@ -438,6 +461,8 @@ where
         .route("/query", post(internal_query_post))
         .route("/mutation", post(internal_mutation_post))
         .route("/action", post(internal_action_post))
+        .route("/create_service_token", post(create_service_token))
+        .route("/get_service_url", post(get_service_url))
         .route("/schedule_job", post(schedule_job))
         .route("/vector_search", post(vector_search))
         .route("/cancel_job", post(cancel_developer_job))
@@ -471,7 +496,6 @@ pub fn http_action_routes() -> Router<RouterState> {
     Router::new()
         .route("/{*rest}", http_action_handler())
         .route("/", http_action_handler())
-        .layer(DefaultBodyLimit::max(HTTP_ACTION_BODY_LIMIT))
 }
 
 pub fn app_metrics_routes<S>() -> Router<S>
@@ -586,8 +610,11 @@ where
             "/test_streaming_export_connection",
             get(test_streaming_export_connection),
         )
-        .route("/get_tables_and_columns", get(get_tables_and_columns))
         .route("/get_table_column_names", get(get_table_column_names))
+        .route(
+            "/data_sync_cursor_from_deltas",
+            post(data_sync_cursor_from_deltas),
+        )
 }
 
 pub fn cors() -> CorsLayer {

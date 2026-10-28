@@ -16,6 +16,10 @@ export const QUERY_TIMEOUT = 2000;
 export const MUTATION_TIMEOUT = 2000;
 // Export should take less than 2 hours with our 500MB db limit
 export const EXPORT_TIMEOUT = 2 * 60 * 60 * 1000;
+// `ConvexClient.close()` resolves only when the WebSocket `onclose` event
+// fires, which can hang indefinitely on a half-open / wedged connection. Bound
+// it so a stuck close can't block the scenario loop forever.
+export const CLOSE_TIMEOUT = 10000;
 
 export const UNDEFINED_UPDATE_MSG =
   "Client unexpectedly called onUpdate when query result was undefined.";

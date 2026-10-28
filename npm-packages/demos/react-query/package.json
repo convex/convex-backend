@@ -10,7 +10,6 @@
     "convex": "workspace:*",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "prettier": "3.8.1",
     "@convex-dev/react-query": "workspace:*",
     "@tanstack/react-query": "^5.100.11",
     "@tanstack/react-query-devtools": "^5.100.11"
@@ -22,6 +21,6 @@
     "@types/react-dom": "^18.0.0",
     "@vitejs/plugin-react": "^4.2.1",
     "typescript": "~5.0.3",
-    "vite": "^6.4.2"
+    "vite": "^6.4.4"
   }
 }

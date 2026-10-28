@@ -22,8 +22,6 @@ use crate::{
         CompiledQuery,
         RevisionWithKeys,
     },
-    scoring::Bm25StatisticsDiff,
-    tantivy_query::SearchQueryResult,
     SearchFileType,
     TantivyDocument,
     TantivySearchIndexSchema,
@@ -204,139 +202,19 @@ pub fn log_search_token_limit_exceeded() {
     log_counter(&SEARCH_EXCEEDED_TOKEN_LIMIT_TOTAL, 1)
 }
 
-register_convex_histogram!(
-    SEARCH_BM25_STATISTICS_DIFF_SECONDS,
-    "Time to compute a BM25 diff",
-    &STATUS_LABEL
-);
-pub fn bm25_statistics_diff_timer() -> StatusTimer {
-    StatusTimer::new(&SEARCH_BM25_STATISTICS_DIFF_SECONDS)
-}
 register_convex_counter!(
-    SEARCH_BM25_TERM_DOC_FREQ_DIFF_TOTAL,
-    "Number of documents with a BM25 term diff"
+    SEARCH_TERM_MATCHES_TOTAL,
+    "Number of index terms scored by text search queries, labeled by whether the term matched the \
+     final query term as a prefix rather than exactly",
+    &["prefix"]
 );
 
-register_convex_counter!(
-    SEARCH_BM25_NUM_DOCS_DIFF_TOTAL,
-    "Total number of documents in the BM25 diff"
-);
-register_convex_counter!(
-    SEARCH_BM25_NUM_SEARCH_TERMS_DIFF_TOTAL,
-    "Total number of tokens in the BM25 diff"
-);
-pub fn log_bm25_statistics_diff(timer: StatusTimer, diff: &Bm25StatisticsDiff) {
-    for num_docs_with_term_diff in diff.term_statistics.values() {
-        log_counter(
-            &SEARCH_BM25_TERM_DOC_FREQ_DIFF_TOTAL,
-            *num_docs_with_term_diff as u64,
-        );
-    }
-    log_counter(
-        &SEARCH_BM25_NUM_DOCS_DIFF_TOTAL,
-        diff.num_documents_diff as u64,
-    );
-    log_counter(
-        &SEARCH_BM25_NUM_SEARCH_TERMS_DIFF_TOTAL,
-        diff.num_search_tokens_diff as u64,
-    );
-    timer.finish();
-}
-
-register_convex_histogram!(
-    SEARCH_TOTAL_NUM_DOCUMENTS_AND_TOKENS_SECONDS,
-    "Time to compute the total number of documents and tokens in memory"
-);
-pub fn total_num_documents_and_tokens_timer() -> Timer<VMHistogram> {
-    Timer::new(&SEARCH_TOTAL_NUM_DOCUMENTS_AND_TOKENS_SECONDS)
-}
-
-register_convex_histogram!(
-    SEARCH_NUM_DOCUMENTS_WITH_TERM_SECONDS,
-    "Time to compute the number of documents containing a term"
-);
-pub fn num_documents_with_term_timer() -> Timer<VMHistogram> {
-    Timer::new(&SEARCH_NUM_DOCUMENTS_WITH_TERM_SECONDS)
-}
-
-register_convex_histogram!(
-    SEARCH_SEARCHLIGHT_OVERFETCH_DELTA_TOTAL,
-    "Size of the searchlight overfetch delta"
-);
-pub fn log_searchlight_overfetch_delta(overfetch_delta: usize) {
-    log_distribution(
-        &SEARCH_SEARCHLIGHT_OVERFETCH_DELTA_TOTAL,
-        overfetch_delta as f64,
-    );
-}
-
-register_convex_histogram!(
-    SEARCH_NUM_DISCARDED_REVISIONS_TOTAL,
-    "Number of discarded revisions"
-);
-pub fn log_num_discarded_revisions(discarded_revisions: usize) {
-    log_distribution(
-        &SEARCH_NUM_DISCARDED_REVISIONS_TOTAL,
-        discarded_revisions as f64,
-    );
-}
-
-register_convex_counter!(
-    SEARCH_SEARCH_TERM_EDIT_DISTANCE_TOTAL,
-    "Number of times a search term was edited",
-    &["distance", "prefix"]
-);
-
-pub fn log_search_term_edit_distance(distance: u32, prefix: bool) {
+pub fn log_search_term_match(prefix: bool) {
     log_counter_with_labels(
-        &SEARCH_SEARCH_TERM_EDIT_DISTANCE_TOTAL,
+        &SEARCH_TERM_MATCHES_TOTAL,
         1,
-        vec![
-            StaticMetricLabel::new("distance", distance.to_string()),
-            StaticMetricLabel::new("prefix", prefix.to_string()),
-        ],
+        vec![StaticMetricLabel::new("prefix", prefix.as_label())],
     );
-}
-
-register_convex_histogram!(
-    SEARCH_SEARCHLIGHT_CLIENT_RESULTS_TOTAL,
-    "Number of results from Searchlight"
-);
-pub fn finish_searchlight_client_execute(timer: StatusTimer, result: &SearchQueryResult) {
-    log_distribution(
-        &SEARCH_SEARCHLIGHT_CLIENT_RESULTS_TOTAL,
-        result.results.len() as f64,
-    );
-    timer.finish();
-}
-
-register_convex_histogram!(
-    SEARCH_MEMORY_QUERY_SECONDS,
-    "Time to execute a search query against the memory index",
-    &STATUS_LABEL
-);
-pub fn memory_query_timer() -> StatusTimer {
-    StatusTimer::new(&SEARCH_MEMORY_QUERY_SECONDS)
-}
-
-register_convex_histogram!(
-    SEARCH_INDEX_MEMORY_QUERY_RESULTS_TOTAL,
-    "Number of results from querying the in-memory search index"
-);
-pub fn finish_memory_query(timer: StatusTimer, revisions_len: usize) {
-    log_distribution(
-        &SEARCH_INDEX_MEMORY_QUERY_RESULTS_TOTAL,
-        revisions_len as f64,
-    );
-    timer.finish();
-}
-register_convex_histogram!(
-    SEARCH_MEMORY_UPDATED_MATCHES_SECONDS,
-    "Time to update matches in the memory search index",
-    &STATUS_LABEL
-);
-pub fn updated_matches_timer() -> StatusTimer {
-    StatusTimer::new(&SEARCH_MEMORY_UPDATED_MATCHES_SECONDS)
 }
 
 register_convex_histogram!(
@@ -346,59 +224,6 @@ register_convex_histogram!(
 );
 pub fn index_reader_for_directory_timer() -> StatusTimer {
     StatusTimer::new(&SEARCH_INDEX_READER_FOR_DIRECTORY_SECONDS)
-}
-
-register_convex_histogram!(
-    SEARCH_QUERY_TANTIVY_SECONDS,
-    "Total time to execute a query against Tantivy",
-    &STATUS_LABEL
-);
-pub fn query_tantivy_timer() -> StatusTimer {
-    StatusTimer::new(&SEARCH_QUERY_TANTIVY_SECONDS)
-}
-
-register_convex_histogram!(
-    SEARCH_QUERY_TANTIVY_SEGMENTS_TOTAL,
-    "Number of segments in the Tantivy index"
-);
-pub fn log_num_segments(num_segments: usize) {
-    log_distribution(&SEARCH_QUERY_TANTIVY_SEGMENTS_TOTAL, num_segments as f64);
-}
-
-register_convex_histogram!(
-    SEARCH_QUERY_TANTIVY_RESULTS_TOTAL,
-    "Number of results from Tantivy"
-);
-pub fn finish_query_tantivy(timer: StatusTimer, revisions_len: usize) {
-    log_distribution(&SEARCH_QUERY_TANTIVY_RESULTS_TOTAL, revisions_len as f64);
-    timer.finish();
-}
-
-register_convex_histogram!(
-    SEARCH_QUERY_TANTIVY_STATISTICS_SECONDS,
-    "Time to query Tantivy statistics",
-    &STATUS_LABEL
-);
-pub fn query_tantivy_statistics_timer() -> StatusTimer {
-    StatusTimer::new(&SEARCH_QUERY_TANTIVY_STATISTICS_SECONDS)
-}
-
-register_convex_histogram!(
-    SEARCH_QUERY_TANTIVY_SEARCH_SECONDS,
-    "Time to collect Tantivy search results",
-    &STATUS_LABEL
-);
-pub fn query_tantivy_search_timer() -> StatusTimer {
-    StatusTimer::new(&SEARCH_QUERY_TANTIVY_SEARCH_SECONDS)
-}
-
-register_convex_histogram!(
-    SEARCH_QUERY_TANTIVY_FAST_FIELD_SECONDS,
-    "Time to query Tantivy fast fields",
-    &STATUS_LABEL
-);
-pub fn query_tantivy_fast_field_timer() -> StatusTimer {
-    StatusTimer::new(&SEARCH_QUERY_TANTIVY_FAST_FIELD_SECONDS)
 }
 
 register_convex_histogram!(
@@ -644,12 +469,34 @@ pub fn log_num_segments_searched_total(num_segments: usize) {
 }
 
 register_convex_counter!(
-    SEARCH_MISSING_INDEX_KEY_TOTAL,
-    "Number of times an index was not found in DocumentIndexKeys"
+    TEXT_SEARCH_BYTES_SEARCHED_TOTAL,
+    "Text index bytes attributed to searches. `attribution` is `index_size` for the whole index \
+     per search or `filter_weighted` for segment sizes scaled by the share of documents matching \
+     the search's filter conditions",
+    &["attribution", "filtered"]
 );
-pub fn log_missing_index_key() {
-    // See the comment in log_missing_index_key_staleness (database::metrics)
-    log_counter(&SEARCH_MISSING_INDEX_KEY_TOTAL, 1);
+pub fn log_text_search_bytes(
+    total_size_bytes: u64,
+    filtered_bytes_searched: u64,
+    has_filter_conditions: bool,
+) {
+    let filtered_label = StaticMetricLabel::new("filtered", has_filter_conditions.to_string());
+    log_counter_with_labels(
+        &TEXT_SEARCH_BYTES_SEARCHED_TOTAL,
+        total_size_bytes,
+        vec![
+            StaticMetricLabel::new("attribution", "index_size"),
+            filtered_label.clone(),
+        ],
+    );
+    log_counter_with_labels(
+        &TEXT_SEARCH_BYTES_SEARCHED_TOTAL,
+        filtered_bytes_searched,
+        vec![
+            StaticMetricLabel::new("attribution", "filter_weighted"),
+            filtered_label,
+        ],
+    );
 }
 
 register_convex_counter!(

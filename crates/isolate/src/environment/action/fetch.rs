@@ -6,6 +6,7 @@ use std::{
 use ::metrics::StatusTimer;
 use common::{
     http::{
+        fetch::FetchAborted,
         HttpRequestStream,
         HttpResponseStream,
     },
@@ -15,6 +16,10 @@ use errors::ErrorMetadata;
 
 use super::task_executor::TaskExecutor;
 use crate::{
+    convert_v8::{
+        DOMException,
+        DOMExceptionName,
+    },
     environment::action::task::{
         TaskId,
         TaskResponse,
@@ -45,15 +50,18 @@ impl<RT: Runtime> TaskExecutor<RT> {
         }) {
             Ok(parts) => parts,
             Err(e) => {
-                // All fetch errors are treated as developer errors since we have little
-                // control of what they request.
-                _ =
-                    self.task_retval_sender.send(TaskResponse::TaskDone {
-                        task_id,
-                        variant: Err(
-                            ErrorMetadata::bad_request("FetchFailed", format!("{e:#}")).into()
-                        ),
-                    });
+                let error = match e.downcast::<FetchAborted>() {
+                    Ok(aborted) => {
+                        DOMException::new(aborted.to_string(), DOMExceptionName::AbortError).into()
+                    },
+                    // Other fetch errors are treated as developer errors since we have little
+                    // control of what they request.
+                    Err(e) => ErrorMetadata::bad_request("FetchFailed", format!("{e:#}")).into(),
+                };
+                _ = self.task_retval_sender.send(TaskResponse::TaskDone {
+                    task_id,
+                    variant: Err(error),
+                });
                 self.log_fetch_request(t, origin, Err(()), initial_response_time, 0);
                 return;
             },

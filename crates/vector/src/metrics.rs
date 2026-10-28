@@ -213,6 +213,16 @@ pub fn log_index_backfilled() {
 }
 
 register_convex_counter!(
+    VECTOR_COMPACTION_DEDUPED_DOCUMENTS_TOTAL,
+    "Number of duplicate vector documents resolved during compaction by deleting the older copy. \
+     A non-zero value indicates segments that were poisoned by a past flusher bug are being \
+     healed; a sustained non-zero rate indicates a regression that is re-introducing duplicates."
+);
+pub fn log_compaction_deduped_documents(count: usize) {
+    log_counter(&VECTOR_COMPACTION_DEDUPED_DOCUMENTS_TOTAL, count as u64);
+}
+
+register_convex_counter!(
     VECTOR_UPDATE_INDEX_ADVANCED_TOTAL,
     "Number of vector indexes advanced in time"
 );

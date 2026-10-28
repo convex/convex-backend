@@ -127,8 +127,7 @@ export interface ConvexQueryClientOnlyOptions {
 }
 
 export interface ConvexQueryClientOptions
-  extends ConvexQueryClientOnlyOptions,
-    ConvexReactClientOptions {}
+  extends ConvexQueryClientOnlyOptions, ConvexReactClientOptions {}
 
 /**
  * Subscribes to events from a TanStack Query QueryClient and populates query

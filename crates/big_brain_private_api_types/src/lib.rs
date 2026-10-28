@@ -1,10 +1,10 @@
-#![feature(impl_trait_in_assoc_type)]
 use std::{
     fmt::Display,
     str::FromStr,
 };
 
 use common::types::{
+    AccessTokenId,
     DeploymentClass,
     DeploymentId,
     DeploymentType,
@@ -22,16 +22,24 @@ use serde::{
 use utoipa::ToSchema;
 
 use crate::types::AccessToken;
-pub use crate::types::{
-    CloudBackupId,
-    PartitionId,
-    PlanId,
-    ProjectName,
-    ProjectSlug,
-    SubscriptionId,
-    TeamName,
-    TeamSlug,
+pub use crate::{
+    slugs::{
+        validate_slug,
+        validate_team_slug,
+    },
+    types::{
+        CloudBackupId,
+        PartitionId,
+        PlanId,
+        ProjectName,
+        ProjectSlug,
+        SubscriptionId,
+        TeamName,
+        TeamSlug,
+    },
 };
+
+pub mod slugs;
 
 pub mod types;
 
@@ -121,6 +129,22 @@ pub struct AccessTokenDeploymentAuthResponse {
     pub is_read_only: Option<bool>,
     #[serde(default)]
     pub allowed_ops: Option<Vec<DeploymentOp>>,
+    #[serde(default)]
+    pub token_id: Option<AccessTokenId>,
+    #[serde(default)]
+    pub app_client_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MintLocalAiGatewayJwtArgs {
+    pub attribution: common::types::AttributionClaims,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MintLocalAiGatewayJwtResponse {
+    pub token: String,
 }
 
 #[derive(Deserialize, Serialize, ToSchema)]

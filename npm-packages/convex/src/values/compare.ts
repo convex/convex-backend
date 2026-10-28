@@ -1,4 +1,4 @@
-import { Value } from "./value.js";
+import { CommitTsPlaceholder, MAX_INT64, Value } from "./value.js";
 import { compareUTF8 } from "./compare_utf8.js";
 
 export function compareValues(k1: Value | undefined, k2: Value | undefined) {
@@ -122,6 +122,9 @@ function makeComparable(v: Value | undefined): [number, any] {
   if (typeof v === "bigint") {
     return [2, v];
   }
+  if (v instanceof CommitTsPlaceholder) {
+    return [2, MAX_INT64];
+  }
   if (typeof v === "number") {
     return [3, v];
   }
@@ -140,5 +143,5 @@ function makeComparable(v: Value | undefined): [number, any] {
   // Otherwise, it's an POJO.
   const keys = Object.keys(v).sort();
   const pojo: Value[] = keys.map((k) => [k, v[k]!]);
-  return [8, pojo.map(makeComparable)];
+  return [9, pojo.map(makeComparable)];
 }

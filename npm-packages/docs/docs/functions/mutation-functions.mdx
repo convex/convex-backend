@@ -76,8 +76,9 @@ mutation returns `undefined` **it is translated to `null`** on the client.
 ### Mutation context
 
 The `mutation` constructor enables writing data to the database, and other
-Convex features by passing a [MutationCtx](/generated-api/server.md#mutationctx)
-object to the handler function as the first parameter:
+Convex features by passing a
+[MutationCtx](/generated-api/server.mdx#mutationctx) object to the handler
+function as the first parameter:
 
 <Snippet source={Context} title="convex/myFunctions.ts" />
 
@@ -92,10 +93,10 @@ to do:
 
   Read on about [Writing Data](/database/writing-data.mdx).
 
-- To generate upload URLs for storing files use the `storage` field. Read on
-  about [File Storage](/file-storage.mdx).
+- To generate upload URLs and to store, read, and delete files, use the
+  `storage` field. Read on about [File Storage](/file-storage/overview.mdx).
 - To check user authentication use the `auth` field. Read on about
-  [Authentication](/auth.mdx).
+  [Authentication](/auth/overview.mdx).
 - To schedule functions to run in the future, use the `scheduler` field. Read on
   about [Scheduled Functions](/scheduling/scheduled-functions.mdx).
 
@@ -110,7 +111,7 @@ to do:
 <Snippet source={Helper} title="convex/myFunctions.ts" />
 
 Mutations can call helpers that take a
-[QueryCtx](/generated-api/server.md#queryctx) as argument, since the mutation
+[QueryCtx](/generated-api/server.mdx#queryctx) as argument, since the mutation
 context can do everything query context can.
 
 You can `export` helpers to use them across multiple files. They will not be
@@ -134,17 +135,17 @@ npm install @faker-js/faker
 
 ## Calling mutations from clients
 
-To call a mutation from [React](/client/react.mdx) use the
-[`useMutation`](/client/react.mdx#editing-data) hook along with the generated
-[`api`](/generated-api/api) object.
+To call a mutation from [React](/client/react/overview.mdx) use the
+[`useMutation`](/client/react/overview.mdx#editing-data) hook along with the
+generated [`api`](/generated-api/api) object.
 
 <Snippet source={Call} title="src/myApp.tsx" />
 
-See the [React](/client/react.mdx) client documentation for all the ways queries
-can be called.
+See the [React](/client/react/overview.mdx) client documentation for all the
+ways queries can be called.
 
-When mutations are called from the [React](/client/react.mdx) or
-[Rust](/client/rust.md) clients, they are executed one at a time in a single,
+When mutations are called from the [React](/client/react/overview.mdx) or
+[Rust](/client/rust.mdx) clients, they are executed one at a time in a single,
 ordered queue. You don't have to worry about mutations editing the database in a
 different order than they were triggered.
 
@@ -168,5 +169,11 @@ cannot call third party APIs. To call third party APIs, use
 Mutations have a limit to the amount of data they can read and write at once to
 guarantee good performance. Learn more in
 [Read/write limit errors](/functions/error-handling/error-handling.mdx#readwrite-limit-errors).
+
+See
+[Write performance and limits](/database/writing-data#write-performance-and-limits)
+for tools to stay within these limits: measuring document sizes, checking
+headroom via `ctx.meta.getTransactionMetrics()`, and bounding nested calls
+(`ctx.runQuery`, `ctx.runMutation`) with a `transactionLimits` option.
 
 For information on other limits, see [Limits](/production/state/limits.mdx).

@@ -164,56 +164,52 @@ impl<RT: Runtime> Scheduler<RT> {
     }
 
     async fn dispatch(mut self, mut receiver: CoDelQueueReceiver<RT, Request>) {
+        let mut expired_receiver = receiver.expired_receiver();
         let (in_progress_tx, mut in_progress_rx) = mpsc::channel(self.config.max_exec_threads);
         loop {
-            // Drain as many requests from the in_progress channel before blocking. Since
-            // `self.available_workers` is LIFO, it's important we drain this channel so
-            // we reuse the most recent completed request.
-            while let Ok(w) = in_progress_rx.try_recv() {
-                self.available_workers.push(w);
-            }
-            // Reserve ourselves an available worker before popping from the request queue:
-            // This lets the request queue back up and express backpressure if
-            // all of the workers are busy.
-            let next_worker = match self.available_workers.pop() {
-                Some(w) => w,
-                // No available worker, create a new one if under the limit
-                None if self.worker_senders.len() < self.config.max_exec_threads => {
-                    self.create_worker()
-                },
-                // Otherwise, wait for an in-progress request to complete.
-                None => {
-                    let Some(w) = in_progress_rx.recv().await else {
-                        tracing::warn!(
-                            "Worker shut down. Shutting down {} scheduler.",
-                            self.config.name
-                        );
+            let can_accept = !self.available_workers.is_empty()
+                || self.worker_senders.len() < self.config.max_exec_threads;
+
+            tokio::select! {
+                biased;
+                // Prioritize draining requests from the in_progress channel.
+                Some(w) = in_progress_rx.recv() => {
+                    self.available_workers.push(w);
+                }
+                r = expired_receiver.next(), if !can_accept => {
+                    let Some((req, expired)) = r else {
                         return;
                     };
-                    w
-                },
-            };
-            // Wait for some work.
-            let req = loop {
-                match receiver.next().await {
-                    Some((req, None)) => break req,
-                    Some((req, Some(expired))) => req.expire(expired).await,
-                    // Request queue closed, shutting down.
-                    None => return,
+                    req.expire(expired).await;
+                }
+                r = receiver.next(), if can_accept => {
+                    let Some((req, expired)) = r else {
+                        // Request queue closed, shutting down.
+                        return;
+                    };
+                    if let Some(expired) = expired {
+                        req.expire(expired).await;
+                    } else {
+                        // `can_accept` implies that if `self.available_workers`
+                        // is empty, we can still create more workers
+                        let next_worker = self.available_workers
+                            .pop()
+                            .unwrap_or_else(|| self.create_worker());
+                        if self.worker_senders[next_worker]
+                            .try_send((req, in_progress_tx.clone(), next_worker))
+                            .is_err()
+                        {
+                            // Available worker should have an empty channel, so if we fail
+                            // here it must be shut down. We should shut down too.
+                            tracing::warn!(
+                                "Worker sender dropped. Shutting down {} scheduler.",
+                                self.config.name
+                            );
+                            return;
+                        }
+                    }
                 }
             };
-            if self.worker_senders[next_worker]
-                .try_send((req, in_progress_tx.clone(), next_worker))
-                .is_err()
-            {
-                // Available worker should have an empty channel, so if we fail
-                // here it must be shut down. We should shut down too.
-                tracing::warn!(
-                    "Worker sender dropped. Shutting down {} scheduler.",
-                    self.config.name
-                );
-                return;
-            }
         }
     }
 }

@@ -76,6 +76,38 @@ function fletcher16(buf: Uint8Array): number {
   return (c1 << 8) | c0;
 }
 
+function encodeBase32(buf: Uint8Array): string {
+  let out = "";
+  for (let i = 0; i < buf.length; i += 5) {
+    const b = [0, 1, 2, 3, 4].map((j) => buf[i + j] ?? 0);
+    const indexes = [
+      b[0] >> 3,
+      ((b[0] & 0x07) << 2) | (b[1] >> 6),
+      (b[1] >> 1) & 0x1f,
+      ((b[1] & 0x01) << 4) | (b[2] >> 4),
+      ((b[2] & 0x0f) << 1) | (b[3] >> 7),
+      (b[3] >> 2) & 0x1f,
+      ((b[3] & 0x03) << 3) | (b[4] >> 5),
+      b[4] & 0x1f,
+    ];
+    out += indexes.map((index) => alphabet[index]).join("");
+  }
+  // Trailing characters past the input's bits are padding; the decoder sizes
+  // its output from the string length.
+  return out.slice(0, Math.ceil((buf.length * 8) / 5));
+}
+
+function vintEncode(n: number): number[] {
+  const bytes = [];
+  let rest = n >>> 0;
+  while (rest >= 0x80) {
+    bytes.push((rest & 0x7f) | 0x80);
+    rest >>>= 7;
+  }
+  bytes.push(rest);
+  return bytes;
+}
+
 type DecodedId = { tableNumber: number; internalId: Uint8Array };
 
 const MIN_BASE32_LEN = 31;
@@ -103,6 +135,29 @@ export function decodeId(s: string): DecodedId {
     throw new InvalidIdError("Invalid version");
   }
   return { tableNumber, internalId };
+}
+
+/// The inverse of `decodeId`: the document ID for `internalId` in the table
+/// numbered `tableNumber`.
+export function encodeId(tableNumber: number, internalId: Uint8Array): string {
+  if (internalId.length !== 16) {
+    throw new InvalidIdError(
+      `Internal ID must be 16 bytes, got ${internalId.length}`,
+    );
+  }
+  if (
+    !Number.isInteger(tableNumber) ||
+    tableNumber <= 0 ||
+    tableNumber > 0xffffffff
+  ) {
+    throw new InvalidIdError(`Invalid table number ${tableNumber}`);
+  }
+  const body = new Uint8Array([...vintEncode(tableNumber), ...internalId]);
+  const footer = fletcher16(body) ^ version;
+  const buf = new Uint8Array(body.length + 2);
+  buf.set(body);
+  new DataView(buf.buffer).setUint16(body.length, footer, true);
+  return encodeBase32(buf);
 }
 
 export function isId(s: string): boolean {

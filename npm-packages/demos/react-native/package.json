@@ -11,16 +11,17 @@
   },
   "dependencies": {
     "convex": "workspace:*",
-    "expo": "^55.0.18",
-    "expo-status-bar": "^55.0.5",
+    "expo": "^56.0.12",
+    "expo-splash-screen": "^56.0.10",
+    "expo-status-bar": "^56.0.4",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-native": "0.83.6",
+    "react-native": "0.85.3",
     "react-native-dotenv": "^3.4.11",
     "react-native-get-random-values": "~1.11.0"
   },
   "devDependencies": {
-    "@babel/core": "^7.27.1"
+    "@babel/core": "^7.29.6"
   },
   "private": true
 }

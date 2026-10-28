@@ -184,6 +184,8 @@ fn usage_stats_to_json(
         database_io_read_bytes: stats.database_io_read_bytes,
         database_io_write_bytes: stats.database_io_write_bytes,
         database_read_documents: stats.database_read_documents,
+        database_write_documents: stats.database_write_documents,
+        database_write_index_rows: stats.database_write_index_rows,
         storage_read_bytes: stats.storage_read_bytes,
         storage_write_bytes: stats.storage_write_bytes,
         vector_index_read_bytes: stats.vector_index_read_bytes,

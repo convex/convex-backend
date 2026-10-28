@@ -1,0 +1,129 @@
+---
+title: "Why server-side rendering with Convex?"
+sidebar_label: "Why server rendering?"
+sidebar_position: 40
+description:
+  "Why server-side rendering shows Convex data sooner on the first page load,
+  and how to run your server close to Convex."
+pagination_next: client/svelte/troubleshooting
+---
+
+The browser opens a WebSocket to Convex and gets live updates either way, so is
+server-side rendering (SSR) worth it? On the first page load, SSR shows data
+sooner in almost every setup. This page explains why. For the setup, see
+[SvelteKit Server Rendering](/client/svelte/sveltekit-server-rendering.mdx).
+
+## The client-side waterfall
+
+Without SSR, every first page load hits a sequential waterfall:
+
+```
+1. Client → Framework server: request page
+2. Framework server → Client: HTML shell (empty)        ← skeleton visible
+3. Browser parses HTML, discovers <script> tags
+4. Browser downloads JavaScript bundle(s)
+5. Browser parses + executes JavaScript                  ← 50-200ms on mobile
+6. Framework boots, component mounts, useQuery() fires
+7. Client → Convex: subscribe to query
+8. Convex → Client: data                                ← content visible
+```
+
+During steps 3–6 the user sees a skeleton: the browser has to download and run
+the JavaScript before it can start talking to Convex.
+
+## With SSR
+
+With SSR, your framework server fetches data from Convex while rendering the
+page. The client receives complete HTML with data in a single response:
+
+```
+1. Client → Framework server: request page
+2. Server → Convex: fetch data                           ← ~1-5ms if co-located
+3. Server renders HTML with data
+4. Framework server → Client: complete HTML + data       ← content visible
+5. Browser hydrates (attaches event listeners)
+6. Client → Convex: WebSocket for live updates           ← background, non-blocking
+```
+
+The server queries Convex while the browser waits for the HTML anyway, so steps
+2 and 3 are part of the server's response time instead of coming after it.
+
+## How much faster?
+
+The difference depends on three factors:
+
+**Device speed** varies the most. On a mid-range phone, parsing and running the
+JavaScript (steps 3–6 of the waterfall) takes 100–300 ms, on a desktop 30–80 ms.
+SSR doesn't wait for it.
+
+**Server-to-Convex distance:** if your framework server runs in the same cloud
+region as Convex, a query from the server takes about 1–5 ms. See
+[Regions](/production/regions.mdx) for the regions Convex offers.
+
+**Client-to-server distance:** both approaches need at least one round trip to
+the framework server. SSR sends the data in that response; client-side rendering
+adds a second round trip to Convex after the JavaScript runs.
+
+A realistic example (user in Germany, framework server in EU, Convex in
+Ireland):
+
+|                               | SSR                 | Client-side    |
+| ----------------------------- | ------------------- | -------------- |
+| Skeleton/shell visible        | with the content    | ~20ms          |
+| **Content with data visible** | **~70ms**           | **~200–400ms** |
+| Live updates active           | ~150ms (background) | ~200–400ms     |
+
+## Co-locate your server with Convex
+
+Deploying your framework server in the same region as your Convex deployment has
+the largest effect on SSR speed.
+
+| Platform       | How to co-locate with Convex                                                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Vercel**     | Set the function region closest to your Convex region in the project settings, for example `iad1` (US East) or `dub1` (Ireland). The default is `iad1`   |
+| **Cloudflare** | Enable [Smart Placement](https://developers.cloudflare.com/workers/configuration/smart-placement/) or set explicit placement to match your Convex region |
+| **Netlify**    | Use [region selection](https://www.netlify.com/blog/netlify-functions-region-selection/) to match your Convex region                                     |
+
+In the same region, a query from the server takes about 1–5 ms, and SSR shows
+data sooner than client-side rendering.
+
+## SSR with convexLoad
+
+With [`convexLoad()`](/client/svelte/sveltekit-server-rendering.mdx#load-data),
+SSR takes little code: query in the load function and use the result in the
+template, without `initialData`. It needs the hooks from
+[Setup](/client/svelte/sveltekit-server-rendering.mdx#setup).
+
+```ts title="src/routes/+page.ts"
+export const load = async ({ fetch }) => ({
+  tasks: await convexLoad(api.tasks.get, {}, { fetch }),
+});
+```
+
+The result is rendered on the server and updates live after hydration, without
+`useQuery()` in the component.
+
+## When is client-side rendering acceptable?
+
+Client-side rendering shows a skeleton sooner, but the data later. Skipping SSR
+can still make sense for:
+
+- App-like UIs behind a login, such as dashboards and admin panels. Sessions are
+  long, so the slower first load matters less, and search engines don't index
+  them.
+- Prototypes, where you add SSR later.
+
+SSR would still show the first page sooner in these cases. What you save is
+development effort.
+
+After the first page load, SvelteKit navigates in the browser either way.
+Universal loads (`+page.ts`) and `useQuery()` then use the open WebSocket
+without a round trip to your server. Server loads (`+page.server.ts`) still
+request your server.
+
+<Admonition type="tip" title="Recommendation">
+
+Default to SSR. It shows data sooner in almost every deployment, and with
+`convexLoad()` it takes little code. Skip it only for a specific reason.
+
+</Admonition>

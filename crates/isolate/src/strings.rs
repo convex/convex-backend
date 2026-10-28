@@ -66,6 +66,7 @@ declare_strings!(
     DOMException,
     dynamic_import_unsupported => "dynamic module import unsupported",
     empty => "",
+    experimental_reuseContext,
     export,
     exportArgs,
     exportReturns,
@@ -87,8 +88,10 @@ declare_strings!(
     runRequest,
     setContinuationPreservedEmbedderData,
     setup,
+    setupTemporal,
     stack,
     syscall,
+    TextDecoder,
 
     // crypto
     CryptoKey,

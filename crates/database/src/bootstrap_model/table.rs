@@ -54,6 +54,7 @@ use crate::{
     BootstrapComponentsModel,
     IndexModel,
     SchemaModel,
+    SchemaValidationModel,
     SystemMetadataModel,
     Transaction,
 };
@@ -80,9 +81,7 @@ pub struct TablesTable;
 impl SystemTable for TablesTable {
     type Metadata = TableMetadata;
 
-    fn table_name() -> &'static TableName {
-        &TABLES_TABLE
-    }
+    const TABLE_NAME: TableName = TABLES_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![TABLES_BY_NAME_INDEX.clone()]
@@ -240,6 +239,20 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
         &mut self,
         tablet_id: TabletId,
     ) -> anyhow::Result<TableNumber> {
+        let table_metadata = self.get_table_metadata(tablet_id).await?;
+        let table_doc_id = table_metadata.id();
+        let table_metadata = table_metadata.into_value();
+        if table_metadata.state == TableState::Active {
+            let referenced_name = self
+                .tx
+                .virtual_system_mapping()
+                .associated_virtual_table_name(&table_metadata.name)
+                .unwrap_or(&table_metadata.name)
+                .clone();
+            SchemaValidationModel::new(self.tx, table_metadata.namespace)
+                .invalidate_table_references(&referenced_name)
+                .await?;
+        }
         for index in IndexModel::new(self.tx)
             .all_indexes_on_table(tablet_id)
             .await?
@@ -249,9 +262,6 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
                 .delete(index_id)
                 .await?;
         }
-        let table_metadata = self.get_table_metadata(tablet_id).await?;
-        let table_doc_id = table_metadata.id();
-        let table_metadata = table_metadata.into_value();
         let updated_table_metadata = TableMetadata {
             name: table_metadata.name,
             number: table_metadata.number,
@@ -264,19 +274,26 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
         Ok(table_metadata.number)
     }
 
-    /// This method should only be called after all documents in the tablet have
-    /// been deleted by retention
+    /// Removes a `Deleting` tablet's `_tables` document, finalizing the drop.
+    /// Only call this once document retention has emptied the tablet.
+    ///
+    /// `Deleting` tablets are absent from the table mapping, so the document is
+    /// resolved by id. A missing document means the drop is already finalized
+    /// and the call is a no-op, making it safe to retry.
     pub async fn hard_delete_tablet_document(&mut self, tablet_id: TabletId) -> anyhow::Result<()> {
-        if self.tx.table_mapping().tablet_id_exists(tablet_id) {
-            let doc = self.get_table_metadata(tablet_id).await?;
-            anyhow::ensure!(
-                doc.state == TableState::Deleting,
-                "Cannot delete a tablet that is not in deleting state"
-            );
-            SystemMetadataModel::new(self.tx, TableNamespace::Global)
-                .delete(doc.id())
-                .await?;
-        }
+        let table_doc_id = self.tx.bootstrap_tables().table_resolved_doc_id(tablet_id);
+        let Some(doc) = self.tx.get(table_doc_id).await? else {
+            return Ok(());
+        };
+        let doc: ParsedDocument<TableMetadata> = doc.parse()?;
+        anyhow::ensure!(
+            doc.state == TableState::Deleting,
+            "Cannot hard-delete tablet {tablet_id} in state {:?}, expected Deleting",
+            doc.state,
+        );
+        SystemMetadataModel::new(self.tx, TableNamespace::Global)
+            .delete(doc.id())
+            .await?;
         Ok(())
     }
 
@@ -473,27 +490,26 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
             .tx
             .table_mapping()
             .namespace(namespace)
-            .name_to_tablet()(S::table_name().clone())?;
+            .name_to_tablet()(S::TABLE_NAME)?;
 
         let table_number = self
             .delete_table_by_id_bypassing_schema_enforcement(tablet_id)
             .await?;
         self._insert_table_metadata(
             namespace,
-            S::table_name(),
+            &S::TABLE_NAME,
             Some(table_number),
             TableState::Active,
         )
         .await?;
-        let mut index_model = IndexModel::new(self.tx);
         for index in S::indexes() {
             let index_metadata = IndexMetadata::new_enabled(
                 index
                     .name
-                    .map_table(&|_| anyhow::Ok(S::table_name().clone()))?,
+                    .map_table(&|_| anyhow::Ok(S::TABLE_NAME.clone()))?,
                 index.fields,
             );
-            index_model
+            IndexModel::new(self.tx)
                 .add_system_index(namespace, index_metadata)
                 .await?;
         }
@@ -509,7 +525,7 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
         anyhow::ensure!(
             bootstrap_system_tables()
                 .iter()
-                .all(|t| t.table_name() != table),
+                .all(|t| t.table_name() != *table),
             "Conflict with bootstrap system table {table}",
         );
         self._insert_table_metadata(namespace, table, table_number, TableState::Hidden)
@@ -560,17 +576,14 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
 
             // Add the system defined indexes for the newly created table. Since the newly
             // created table is empty, we can start these indexes as `Enabled`.
-            let metadata = IndexMetadata::new_enabled(
-                GenericIndexName::by_id(tablet_id),
-                IndexedFields::by_id(),
-            );
+            let by_id = GenericIndexName::by_id(tablet_id);
+            let metadata = IndexMetadata::new_enabled(by_id, IndexedFields::by_id());
             SystemMetadataModel::new_global(self.tx)
                 .insert_metadata(&INDEX_TABLE, metadata.try_into()?)
                 .await?;
-            let metadata = IndexMetadata::new_enabled(
-                GenericIndexName::by_creation_time(tablet_id),
-                IndexedFields::creation_time(),
-            );
+            let by_creation_time = GenericIndexName::by_creation_time(tablet_id);
+            let metadata =
+                IndexMetadata::new_enabled(by_creation_time, IndexedFields::creation_time());
             SystemMetadataModel::new_global(self.tx)
                 .insert_metadata(&INDEX_TABLE, metadata.try_into()?)
                 .await?;

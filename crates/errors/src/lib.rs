@@ -1,4 +1,3 @@
-#![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 use std::borrow::Cow;
 
@@ -82,6 +81,13 @@ pub struct OccInfo {
     pub write_source: Option<String>,
     pub component_path: Option<String>,
     pub retry_count: Option<u64>,
+}
+
+struct SampledClientErrorFamily {
+    /// `family` label on `SAMPLED_CLIENT_ERROR_TOTAL`; must stay a small fixed
+    /// set, never derived from tenant data.
+    label: &'static str,
+    sample_rate: f64,
 }
 
 impl ErrorMetadata {
@@ -222,7 +228,7 @@ impl ErrorMetadata {
         Self {
             code: ErrorCode::MisdirectedRequest,
             short_msg: "MisdirectedRequest".into(),
-            msg: "Instance not served by this Conductor".into(),
+            msg: "Service temporarily unavailable".into(),
             source: None,
         }
     }
@@ -379,15 +385,6 @@ impl ErrorMetadata {
         }
     }
 
-    pub fn service_unavailable() -> Self {
-        Self {
-            code: ErrorCode::Overloaded,
-            short_msg: "ServiceUnavailable".into(),
-            msg: "Service temporarily unavailable".into(),
-            source: None,
-        }
-    }
-
     /// Responds with HTTP 425 Too Early.
     /// Not intended to be user-facing, but is used to indicate to the
     /// consistency checker that it should skip this unloaded instance rather
@@ -396,7 +393,7 @@ impl ErrorMetadata {
         Self {
             code: ErrorCode::TooEarly,
             short_msg: "TooEarly".into(),
-            msg: "Instance is not loaded yet, try again later".into(),
+            msg: "Deployment is not loaded yet, try again later".into(),
             source: None,
         }
     }
@@ -490,6 +487,10 @@ impl ErrorMetadata {
         self.code == ErrorCode::RejectedBeforeExecution
     }
 
+    pub fn is_feature_temporarily_unavailable(&self) -> bool {
+        self.code == ErrorCode::FeatureTemporarilyUnavailable
+    }
+
     pub fn is_forbidden(&self) -> bool {
         self.code == ErrorCode::Forbidden
     }
@@ -531,6 +532,32 @@ impl ErrorMetadata {
         }
     }
 
+    /// Single source of truth for a family's sample rate and counter label, so
+    /// the two cannot drift apart.
+    fn sampled_client_error_family(&self) -> Option<SampledClientErrorFamily> {
+        let family = match (&self.code, &*self.short_msg) {
+            (ErrorCode::Forbidden, "Unauthorized") => SampledClientErrorFamily {
+                label: "forbidden_unauthorized",
+                sample_rate: 0.001,
+            },
+            (ErrorCode::Forbidden, "OperationNotPermitted") => SampledClientErrorFamily {
+                label: "operation_not_permitted",
+                sample_rate: 0.01,
+            },
+            _ => return None,
+        };
+        Some(family)
+    }
+
+    /// Must run before the Sentry sampling gate: sampled counts hide
+    /// regressions that fan out across many small tenants instead of spiking on
+    /// one.
+    pub fn log_sampled_client_error(&self) {
+        if let Some(family) = self.sampled_client_error_family() {
+            crate::metrics::log_sampled_client_error(family.label);
+        }
+    }
+
     /// Returns the level at which the given error should report to sentry
     /// INFO -> it's a client-at-fault error
     /// WARNING -> it's a server-at-fault error that is expected
@@ -543,6 +570,12 @@ impl ErrorMetadata {
         // Sentry considers errors invalid if this field is empty.
         if self.short_msg.is_empty() {
             return None;
+        }
+
+        // Ahead of the match so a family's rate wins over the catch-all arm for
+        // its `ErrorCode`.
+        if let Some(family) = self.sampled_client_error_family() {
+            return Some((sentry::Level::Info, Some(family.sample_rate)));
         }
 
         match self.code {
@@ -566,11 +599,10 @@ impl ErrorMetadata {
             | ErrorCode::PaginationLimit => Some((sentry::Level::Info, Some(0.001))),
 
             // Sample operational errors - since they only matter at high volume
-            ErrorCode::OutOfRetention
-            | ErrorCode::RejectedBeforeExecution
-            | ErrorCode::OperationalInternalServerError => {
+            ErrorCode::OutOfRetention | ErrorCode::OperationalInternalServerError => {
                 Some((sentry::Level::Warning, Some(0.1)))
             },
+            ErrorCode::RejectedBeforeExecution => Some((sentry::Level::Warning, Some(0.01))),
 
             // Sampling for OCC/Overloaded/RateLimited, since we only really care about the
             // details if they happen at high volume.
@@ -753,6 +785,7 @@ pub trait ErrorMetadataAnyhowExt {
     fn is_rate_limited(&self) -> bool;
     fn is_operational_internal_server_error(&self) -> bool;
     fn is_rejected_before_execution(&self) -> bool;
+    fn is_feature_temporarily_unavailable(&self) -> bool;
     fn is_forbidden(&self) -> bool;
     fn is_too_early(&self) -> bool;
     fn should_report_to_sentry(&self) -> Option<(sentry::Level, Option<f64>)>;
@@ -888,6 +921,14 @@ impl ErrorMetadataAnyhowExt for anyhow::Error {
     fn is_rejected_before_execution(&self) -> bool {
         if let Some(e) = self.downcast_ref::<ErrorMetadata>() {
             return e.is_rejected_before_execution();
+        }
+        false
+    }
+
+    /// Returns true if error is tagged as FeatureTemporarilyUnavailable
+    fn is_feature_temporarily_unavailable(&self) -> bool {
+        if let Some(e) = self.downcast_ref::<ErrorMetadata>() {
+            return e.is_feature_temporarily_unavailable();
         }
         false
     }

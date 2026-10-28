@@ -1,11 +1,20 @@
+use std::{
+    collections::BTreeMap,
+    time::Duration,
+};
+
 use ::search::metrics::{
     SearchType,
     SEARCH_TYPE_LABEL,
 };
 use common::{
     identity::IDENTITY_LABEL,
+    persistence::PersistenceIndexEntry,
     runtime::Runtime,
-    types::Timestamp,
+    types::{
+        IndexWriteMode,
+        Timestamp,
+    },
 };
 use errors::ErrorMetadata;
 use keybroker::Identity;
@@ -32,6 +41,7 @@ use prometheus::{
 
 use crate::{
     transaction::FinalTransaction,
+    IndexRetentionSource,
     RetentionType,
     Transaction,
 };
@@ -50,6 +60,55 @@ register_convex_int_gauge!(
 );
 pub fn user_documents_size_subgauge() -> Subgauge {
     Subgauge::new(USER_DOCUMENTS_SIZE_BYTES.clone())
+}
+
+register_convex_int_gauge!(
+    COMMITTER_CONCURRENT_COMMITS,
+    "Number of commits the committer has admitted but not yet published: awaiting pre-validation, \
+     pre-validating, or writing to persistence. This is the quantity compared against \
+     COMMITTER_MAX_CONCURRENT_COMMITS to pause admission. An in-flight max_repeatable_ts bump \
+     also counts as one"
+);
+pub fn concurrent_commits_subgauge() -> Subgauge {
+    Subgauge::new(COMMITTER_CONCURRENT_COMMITS.clone())
+}
+
+register_convex_int_gauge!(
+    COMMITTER_AWAITING_PRE_VALIDATION_COMMITS,
+    "Number of admitted commits waiting for a free pre-validation lane"
+);
+pub fn awaiting_pre_validation_commits_subgauge() -> Subgauge {
+    Subgauge::new(COMMITTER_AWAITING_PRE_VALIDATION_COMMITS.clone())
+}
+
+register_convex_int_gauge!(
+    COMMITTER_PRE_VALIDATING_COMMITS,
+    "Number of commits in in-flight pre-validation batches"
+);
+pub fn pre_validating_commits_subgauge() -> Subgauge {
+    Subgauge::new(COMMITTER_PRE_VALIDATING_COMMITS.clone())
+}
+
+register_convex_histogram!(
+    DATABASE_COMMIT_ADMISSION_PAUSE_SECONDS,
+    "How long the committer went without accepting new messages because commits in flight were at \
+     COMMITTER_MAX_CONCURRENT_COMMITS. One observation per contiguous pause"
+);
+pub fn log_commit_admission_pause(pause: Duration) {
+    log_distribution(
+        &DATABASE_COMMIT_ADMISSION_PAUSE_SECONDS,
+        pause.as_secs_f64(),
+    );
+}
+
+register_convex_histogram!(
+    DATABASE_COMMIT_VALIDATION_WINDOW_SECONDS,
+    "Width of the (validated_through, commit_ts] range the committer conflict-checks on its own \
+     thread. Pre-validation exists to keep this narrow, so the full (begin_ts, commit_ts] width \
+     shows up here whenever pre-validation could not narrow the range"
+);
+pub fn log_commit_validation_window(window_seconds: f64) {
+    log_distribution(&DATABASE_COMMIT_VALIDATION_WINDOW_SECONDS, window_seconds);
 }
 
 register_convex_histogram!(DOCUMENTS_KEYS_TOTAL, "Total number of document keys");
@@ -151,7 +210,7 @@ pub fn log_write_tx(tx: &FinalTransaction) {
     );
     log_distribution(
         &DATABASE_SYSTEM_WRITE_TX_NUM_WRITES_TOTAL,
-        user_size.num_writes as f64,
+        system_size.num_writes as f64,
     );
 }
 
@@ -210,6 +269,15 @@ pub fn bootstrap_table_summaries_timer() -> Timer<VMHistogram> {
     Timer::new(&DATABASE_BOOTSTRAP_SHAPES_SECONDS)
 }
 
+register_convex_histogram!(
+    TABLE_SUMMARY_UPDATE_SECONDS,
+    "Time taken to update the table summary (shape inference + counts) for a single document \
+     update on the commit path"
+);
+pub fn table_summary_update_timer() -> Timer<VMHistogram> {
+    Timer::new(&TABLE_SUMMARY_UPDATE_SECONDS)
+}
+
 register_convex_histogram!(DATABASE_LOAD_SECONDS, "Time to load the database");
 pub fn load_database_timer() -> Timer<VMHistogram> {
     Timer::new(&DATABASE_LOAD_SECONDS)
@@ -259,9 +327,13 @@ pub fn commit_client_timer(identity: &Identity) -> Timer<VMHistogramVec> {
     timer
 }
 
-register_convex_histogram!(DATABASE_COMMIT_QUEUE_SECONDS, "Time a commit is queued");
-pub fn commit_queue_timer() -> Timer<VMHistogram> {
-    Timer::new(&DATABASE_COMMIT_QUEUE_SECONDS)
+register_convex_histogram!(
+    DATABASE_COMMIT_QUEUE_SECONDS,
+    "Time from enqueueing a commit to it reaching the committer thread: the committer queue wait, \
+     plus the wait for a pre-validation lane and the off-thread conflict check itself"
+);
+pub fn log_commit_dequeued(time_in_queue: Duration) {
+    log_distribution(&DATABASE_COMMIT_QUEUE_SECONDS, time_in_queue.as_secs_f64());
 }
 
 register_convex_histogram!(
@@ -271,6 +343,15 @@ register_convex_histogram!(
 );
 pub fn commit_timer() -> StatusTimer {
     StatusTimer::new(&DATABASE_COMMIT_SECONDS)
+}
+
+register_convex_histogram!(
+    DATABASE_COMMIT_PERSISTED_SECONDS,
+    "Time from a commit's submission until persistence acknowledges its write. Excludes time \
+     waiting for the committed timestamp to become repeatable."
+);
+pub fn log_commit_persisted(elapsed: Duration) {
+    log_distribution(&DATABASE_COMMIT_PERSISTED_SECONDS, elapsed.as_secs_f64());
 }
 
 register_convex_histogram!(
@@ -292,6 +373,23 @@ pub fn commit_is_stale_timer() -> StatusTimer {
 }
 
 register_convex_histogram!(
+    DATABASE_COMMIT_PRE_VALIDATE_SECONDS,
+    "Time spent conflict-checking a batch of staged commits against the write log, off the \
+     committer thread"
+);
+pub fn commit_pre_validate_timer() -> Timer<VMHistogram> {
+    Timer::new(&DATABASE_COMMIT_PRE_VALIDATE_SECONDS)
+}
+
+register_convex_histogram!(
+    DATABASE_COMMIT_PRE_VALIDATE_BATCH_TOTAL,
+    "Number of commits pre-validated together in one batch"
+);
+pub fn log_commit_pre_validate_batch_size(size: usize) {
+    log_distribution(&DATABASE_COMMIT_PRE_VALIDATE_BATCH_TOTAL, size as f64);
+}
+
+register_convex_histogram!(
     DATABASE_COMMIT_PREPARE_WRITES_SECONDS,
     "Time to prepare writes",
     &STATUS_LABEL
@@ -302,11 +400,30 @@ pub fn commit_prepare_writes_timer() -> StatusTimer {
 
 register_convex_histogram!(
     DATABASE_COMMIT_PERSISTENCE_WRITE_SECONDS,
-    "Time to commit a persistence write",
+    "Time to write one batch of commits to persistence. Sampled once per batch, so a batch \
+     carrying several commits contributes a single observation",
     &STATUS_LABEL
 );
 pub fn commit_persistence_write_timer() -> StatusTimer {
     StatusTimer::new(&DATABASE_COMMIT_PERSISTENCE_WRITE_SECONDS)
+}
+
+register_convex_histogram!(
+    DATABASE_WRITE_BATCH_COMMITS,
+    "Number of commits combined into one batched persistence write"
+);
+register_convex_histogram!(
+    DATABASE_WRITE_BATCH_DOCUMENTS,
+    "Number of document rows in one batched persistence write"
+);
+register_convex_histogram!(
+    DATABASE_WRITE_BATCH_BYTES,
+    "Serialized size of one batched persistence write"
+);
+pub fn log_write_batch(num_commits: usize, num_documents: usize, size_bytes: u64) {
+    log_distribution(&DATABASE_WRITE_BATCH_COMMITS, num_commits as f64);
+    log_distribution(&DATABASE_WRITE_BATCH_DOCUMENTS, num_documents as f64);
+    log_distribution(&DATABASE_WRITE_BATCH_BYTES, size_bytes as f64);
 }
 
 register_convex_histogram!(
@@ -355,6 +472,95 @@ pub fn commit_rows(num_rows: u64) {
     log_counter(&DATABASE_COMMIT_ROWS, num_rows);
 }
 
+register_convex_counter!(
+    DATABASE_COMMIT_INDEX_ROWS,
+    "Number of index rows written to persistence"
+);
+pub fn commit_index_rows(num_rows: u64) {
+    log_counter(&DATABASE_COMMIT_INDEX_ROWS, num_rows);
+}
+
+register_convex_counter!(
+    DATABASE_COMMIT_INDEX_ENTRIES_TOTAL,
+    "Logical index entries in commits acknowledged by persistence",
+    &["operation", "is_system_index", "mode"]
+);
+register_convex_counter!(
+    DATABASE_COMMIT_INDEX_BYTES_TOTAL,
+    "Logical index bytes in commits acknowledged by persistence, measured with \
+     PersistenceIndexEntry::size",
+    &["operation", "is_system_index", "mode"]
+);
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
+enum IndexWriteOperation {
+    #[strum(serialize = "unchanged_key")]
+    Unchanged,
+    #[strum(serialize = "new_key")]
+    New,
+    #[strum(serialize = "removed_key")]
+    Removed,
+}
+
+impl From<&PersistenceIndexEntry> for IndexWriteOperation {
+    fn from(entry: &PersistenceIndexEntry) -> Self {
+        match (entry.value, entry.prev) {
+            (Some(_), Some(_)) => Self::Unchanged,
+            (Some(_), None) => Self::New,
+            (None, _) => Self::Removed,
+        }
+    }
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+struct IndexWriteLabels {
+    operation: IndexWriteOperation,
+    is_system_index: bool,
+    mode: IndexWriteMode,
+}
+
+#[derive(Default)]
+struct IndexWriteTotals {
+    entries: u64,
+    bytes: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct CommitIndexWriteMetrics {
+    totals: BTreeMap<IndexWriteLabels, IndexWriteTotals>,
+}
+
+impl CommitIndexWriteMetrics {
+    pub(crate) fn record(&mut self, entry: &PersistenceIndexEntry, is_system_index: bool) {
+        let totals = self
+            .totals
+            .entry(IndexWriteLabels {
+                operation: entry.into(),
+                is_system_index,
+                mode: entry.mode,
+            })
+            .or_default();
+        totals.entries += 1;
+        totals.bytes += entry.size();
+    }
+
+    pub(crate) fn log(self) {
+        for (key, totals) in self.totals {
+            let labels = vec![
+                StaticMetricLabel::new("operation", <&'static str>::from(key.operation)),
+                StaticMetricLabel::new("is_system_index", key.is_system_index.as_label()),
+                StaticMetricLabel::new("mode", <&'static str>::from(key.mode)),
+            ];
+            log_counter_with_labels(
+                &DATABASE_COMMIT_INDEX_ENTRIES_TOTAL,
+                totals.entries,
+                labels.clone(),
+            );
+            log_counter_with_labels(&DATABASE_COMMIT_INDEX_BYTES_TOTAL, totals.bytes, labels);
+        }
+    }
+}
+
 register_convex_histogram!(
     DATABASE_SUBSCRIPTIONS_UPDATE_SECONDS,
     "Time to advance the SubscriptionManager's log"
@@ -370,8 +576,8 @@ pub fn committer_full_error() -> ErrorMetadata {
 
     ErrorMetadata::overloaded(
         "CommitterFullError",
-        "Too many concurrent commits in a short period of time. Spread your writes out over time \
-         or throttle them to avoid errors.",
+        "Too many writes in a short period of time. Reduce your writes, spread your writes out \
+         over time or remove unused indexes to reduce load and avoid errors.",
     )
 }
 
@@ -449,14 +655,6 @@ pub fn retention_delete_documents_timer() -> Timer<VMHistogram> {
 }
 
 register_convex_histogram!(
-    INDEX_RETENTION_DELETE_CHUNK_SECONDS,
-    "Time for index retention to delete one chunk"
-);
-pub fn index_retention_delete_chunk_timer() -> Timer<VMHistogram> {
-    Timer::new(&INDEX_RETENTION_DELETE_CHUNK_SECONDS)
-}
-
-register_convex_histogram!(
     RETENTION_DELETE_DOCUMENT_CHUNK_SECONDS,
     "Time for document retention to delete one chunk"
 );
@@ -513,36 +711,6 @@ pub fn log_document_retention_no_cursor() {
 }
 
 register_convex_counter!(
-    INDEX_RETENTION_SCANNED_DOCUMENT_TOTAL,
-    "Count of documents scanned by index retention",
-    &["tombstone", "prev_rev"]
-);
-pub fn log_index_retention_scanned_document(is_tombstone: bool, has_prev_rev: bool) {
-    log_counter_with_labels(
-        &INDEX_RETENTION_SCANNED_DOCUMENT_TOTAL,
-        1,
-        vec![
-            StaticMetricLabel::new(
-                "tombstone",
-                if is_tombstone {
-                    "is_tombstone"
-                } else {
-                    "is_document"
-                },
-            ),
-            StaticMetricLabel::new(
-                "prev_rev",
-                if has_prev_rev {
-                    "has_prev_rev"
-                } else {
-                    "no_prev_rev"
-                },
-            ),
-        ],
-    )
-}
-
-register_convex_counter!(
     DOCUMENT_RETENTION_SCANNED_DOCUMENT_TOTAL,
     "Count of documents scanned by retention",
     &["tombstone", "prev_rev"]
@@ -573,44 +741,62 @@ pub fn log_document_retention_scanned_document(is_tombstone: bool, has_prev_rev:
 }
 
 register_convex_counter!(
-    RETENTION_EXPIRED_INDEX_ENTRY_TOTAL,
-    "Number of index entries expired by retention",
-    &["reason"]
-);
-pub fn log_retention_expired_index_entry(is_tombstone: bool, is_key_change_tombstone: bool) {
-    log_counter_with_labels(
-        &RETENTION_EXPIRED_INDEX_ENTRY_TOTAL,
-        1,
-        vec![StaticMetricLabel::new(
-            "reason",
-            if is_tombstone {
-                if is_key_change_tombstone {
-                    "key_change_tombstone"
-                } else {
-                    "tombstone"
-                }
-            } else {
-                "overwritten"
-            },
-        )],
-    )
-}
-register_convex_counter!(
-    RETENTION_INDEX_ENTRIES_DELETED_TOTAL,
-    "The total number of index entries persistence returns as having been actually deleted by \
-     retention."
-);
-pub fn log_retention_index_entries_deleted(deleted_rows: usize) {
-    log_counter(&RETENTION_INDEX_ENTRIES_DELETED_TOTAL, deleted_rows as u64)
-}
-
-register_convex_counter!(
     RETENTION_DOCUMENTS_DELETED_TOTAL,
     "The total number of documents persistence returns as having been actually deleted by \
      retention."
 );
 pub fn log_retention_documents_deleted(deleted_rows: usize) {
     log_counter(&RETENTION_DOCUMENTS_DELETED_TOTAL, deleted_rows as u64)
+}
+
+register_convex_counter!(
+    RETENTION_INDEX_ENTRIES_DELETED_TOTAL,
+    "The total number of index entries persistence returns as having been actually deleted by \
+     retention.",
+    &["source"]
+);
+pub fn log_retention_index_entries_deleted(deleted_rows: usize, source: IndexRetentionSource) {
+    log_counter_with_labels(
+        &RETENTION_INDEX_ENTRIES_DELETED_TOTAL,
+        deleted_rows as u64,
+        vec![StaticMetricLabel::new(
+            "source",
+            <&'static str>::from(source),
+        )],
+    )
+}
+
+register_convex_histogram!(
+    RETENTION_UNIQUE_INDEXES_TOTAL,
+    "Number of distinct indexes a retention pass found expired entries for",
+    &["source"]
+);
+pub fn log_retention_unique_indexes(unique_indexes: usize, source: IndexRetentionSource) {
+    log_distribution_with_labels(
+        &RETENTION_UNIQUE_INDEXES_TOTAL,
+        unique_indexes as f64,
+        vec![StaticMetricLabel::new(
+            "source",
+            <&'static str>::from(source),
+        )],
+    )
+}
+
+register_convex_histogram!(
+    INDEX_BACKFILL_MARKER_CLEANUP_SECONDS,
+    "Time for one index backfill marker cleanup pass",
+    &STATUS_LABEL
+);
+pub fn index_backfill_marker_cleanup_timer() -> StatusTimer {
+    StatusTimer::new(&INDEX_BACKFILL_MARKER_CLEANUP_SECONDS)
+}
+
+register_convex_counter!(
+    INDEX_BACKFILL_MARKERS_DELETED_TOTAL,
+    "The total number of index backfill markers persistence returns as having been deleted"
+);
+pub fn log_index_backfill_markers_deleted(deleted_rows: u64) {
+    log_counter(&INDEX_BACKFILL_MARKERS_DELETED_TOTAL, deleted_rows)
 }
 
 register_convex_counter!(
@@ -788,234 +974,6 @@ pub fn finish_bootstrap(num_revisions: usize, bytes: usize, timer: StatusTimer) 
     );
     log_counter(&SEARCH_AND_VECTOR_BOOTSTRAP_REVISIONS_BYTES, bytes as u64);
     timer.finish();
-}
-
-pub enum SearchWriterLockWaiter {
-    Compactor,
-    Flusher,
-}
-
-const SEARCH_WRITER_WAITER_LABEL: &str = "waiter";
-
-impl SearchWriterLockWaiter {
-    fn tag(&self) -> StaticMetricLabel {
-        let label = match self {
-            SearchWriterLockWaiter::Compactor => "compactor",
-            SearchWriterLockWaiter::Flusher => "flusher",
-        };
-        StaticMetricLabel::new(SEARCH_WRITER_WAITER_LABEL, label)
-    }
-}
-
-register_convex_histogram!(
-    SEARCH_WRITER_LOCK_WAIT_SECONDS,
-    "The amount of time spent waiting for the writer lock to commit a vector/text index metadata \
-     change",
-    &[SEARCH_TYPE_LABEL, SEARCH_WRITER_WAITER_LABEL]
-);
-pub fn search_writer_lock_wait_timer(
-    waiter: SearchWriterLockWaiter,
-    search_type: SearchType,
-) -> Timer<VMHistogramVec> {
-    let mut timer = Timer::new_with_labels(&SEARCH_WRITER_LOCK_WAIT_SECONDS);
-    timer.add_label(search_type.tag());
-    timer.add_label(waiter.tag());
-    timer
-}
-
-const MERGE_LABEL: &str = "merge_required";
-
-pub enum SearchIndexMergeType {
-    Unknown,
-    Required,
-    NotRequired,
-}
-
-impl SearchIndexMergeType {
-    fn metric_label(&self) -> StaticMetricLabel {
-        let label = match self {
-            SearchIndexMergeType::Unknown => "unknown",
-            SearchIndexMergeType::Required => "required",
-            SearchIndexMergeType::NotRequired => "not_required",
-        };
-        StaticMetricLabel::new(MERGE_LABEL, label)
-    }
-}
-
-register_convex_histogram!(
-    SEARCH_COMPACTION_MERGE_COMMIT_SECONDS,
-    "Time to merge deletes and commit after compaction",
-    &[STATUS_LABEL[0], SEARCH_TYPE_LABEL, MERGE_LABEL],
-);
-pub fn search_compaction_merge_commit_timer(search_type: SearchType) -> StatusTimer {
-    let mut timer = StatusTimer::new(&SEARCH_COMPACTION_MERGE_COMMIT_SECONDS);
-    timer.add_label(search_type.tag());
-    timer.add_label(SearchIndexMergeType::Unknown.metric_label());
-    timer
-}
-
-register_convex_histogram!(
-    SEARCH_FLUSH_MERGE_COMMIT_SECONDS,
-    "Time to merge deletes and commit after flushing",
-    &[STATUS_LABEL[0], SEARCH_TYPE_LABEL, MERGE_LABEL],
-);
-pub fn search_flush_merge_commit_timer(search_type: SearchType) -> StatusTimer {
-    let mut timer = StatusTimer::new(&SEARCH_FLUSH_MERGE_COMMIT_SECONDS);
-    timer.add_label(search_type.tag());
-    timer.add_label(SearchIndexMergeType::Unknown.metric_label());
-    timer
-}
-
-pub fn finish_search_index_merge_timer(mut timer: StatusTimer, merge_type: SearchIndexMergeType) {
-    timer.replace_label(
-        SearchIndexMergeType::Unknown.metric_label(),
-        merge_type.metric_label(),
-    );
-    timer.finish();
-}
-
-register_convex_histogram!(
-    DOCUMENTS_PER_NEW_SEARCH_SEGMENT_TOTAL,
-    "Total number of documents in a newly built search index segment.",
-    &[SEARCH_TYPE_LABEL],
-);
-pub fn log_documents_per_new_search_segment(count: u64, search_type: SearchType) {
-    log_distribution_with_labels(
-        &DOCUMENTS_PER_NEW_SEARCH_SEGMENT_TOTAL,
-        count as f64,
-        vec![search_type.tag()],
-    );
-}
-
-register_convex_histogram!(
-    DOCUMENTS_PER_SEARCH_SEGMENT_TOTAL,
-    "Total number of documents in a specific search segment, including documents that were added \
-     to the segment but are deleted and excluded from any search results",
-    &[SEARCH_TYPE_LABEL],
-);
-pub fn log_documents_per_search_segment(count: u64, search_type: SearchType) {
-    log_distribution_with_labels(
-        &DOCUMENTS_PER_SEARCH_SEGMENT_TOTAL,
-        count as f64,
-        vec![search_type.tag()],
-    );
-}
-
-register_convex_histogram!(
-    NON_DELETED_DOCUMENTS_PER_SEARCH_SEGMENT_TOTAL,
-    "Total number of non-deleted documents in a specific search segment, excluding documents that \
-     were added to the segment but are deleted and excluded from any search results",
-    &[SEARCH_TYPE_LABEL],
-);
-pub fn log_non_deleted_documents_per_search_segment(count: u64, search_type: SearchType) {
-    log_distribution_with_labels(
-        &NON_DELETED_DOCUMENTS_PER_SEARCH_SEGMENT_TOTAL,
-        count as f64,
-        vec![search_type.tag()],
-    );
-}
-
-register_convex_histogram!(
-    DOCUMENTS_PER_SEARCH_INDEX_TOTAL,
-    "Total number of documents across all segments in a search index, including documents that \
-     were added to the index but are deleted and excluded from any search results",
-    &[SEARCH_TYPE_LABEL],
-);
-pub fn log_documents_per_search_index(count: u64, search_type: SearchType) {
-    log_distribution_with_labels(
-        &DOCUMENTS_PER_SEARCH_INDEX_TOTAL,
-        count as f64,
-        vec![search_type.tag()],
-    );
-}
-register_convex_histogram!(
-    NON_DELETED_DOCUMENTS_PER_SEARCH_INDEX_TOTAL,
-    "Total number of non-deleted documents across all segments in a search index segment, \
-     excluding documents that were added to the index but are deleted and excluded from any \
-     search results",
-    &[SEARCH_TYPE_LABEL],
-);
-pub fn log_non_deleted_documents_per_search_index(count: u64, search_type: SearchType) {
-    log_distribution_with_labels(
-        &NON_DELETED_DOCUMENTS_PER_SEARCH_INDEX_TOTAL,
-        count as f64,
-        vec![search_type.tag()],
-    );
-}
-
-const COMPACTION_REASON_LABEL: &str = "compaction_reason";
-
-#[derive(Debug)]
-pub enum CompactionReason {
-    SmallSegments,
-    LargeSegments,
-    Deletes,
-}
-
-impl CompactionReason {
-    fn metric_label(&self) -> StaticMetricLabel {
-        let label = match self {
-            CompactionReason::SmallSegments => "small",
-            CompactionReason::LargeSegments => "large",
-            CompactionReason::Deletes => "deletes",
-        };
-        StaticMetricLabel::new(COMPACTION_REASON_LABEL, label)
-    }
-}
-
-register_convex_histogram!(
-    COMPACTION_BUILD_ONE_SECONDS,
-    "Time to run a single vector/text index compaction",
-    &[STATUS_LABEL[0], COMPACTION_REASON_LABEL, SEARCH_TYPE_LABEL],
-);
-pub fn compaction_build_one_timer(
-    search_type: SearchType,
-    reason: CompactionReason,
-) -> StatusTimer {
-    let mut timer = StatusTimer::new(&COMPACTION_BUILD_ONE_SECONDS);
-    timer.add_label(search_type.tag());
-    timer.add_label(reason.metric_label());
-    timer
-}
-
-register_convex_histogram!(
-    COMPACTION_COMPACTED_SEGMENTS_TOTAL,
-    "Total number of compacted segments",
-    &[SEARCH_TYPE_LABEL],
-);
-pub fn log_compaction_total_segments(total_segments: usize, search_type: SearchType) {
-    log_distribution_with_labels(
-        &COMPACTION_COMPACTED_SEGMENTS_TOTAL,
-        total_segments as f64,
-        vec![search_type.tag()],
-    );
-}
-
-register_convex_histogram!(
-    COMPACTION_COMPACTED_SEGMENT_NUM_DOCUMENTS_TOTAL,
-    "The number of documents in the newly generated compacted segment",
-    &[SEARCH_TYPE_LABEL],
-);
-pub fn log_compaction_compacted_segment_num_documents_total(
-    total_vectors: u64,
-    search_type: SearchType,
-) {
-    log_distribution_with_labels(
-        &COMPACTION_COMPACTED_SEGMENT_NUM_DOCUMENTS_TOTAL,
-        total_vectors as f64,
-        vec![search_type.tag()],
-    );
-}
-
-register_convex_histogram!(
-    DATABASE_SEARCH_INDEX_BUILD_ONE_SECONDS,
-    "Time to build one (multisegment) search index",
-    &[STATUS_LABEL[0], SEARCH_TYPE_LABEL],
-);
-pub fn build_one_search_index_timer(search_type: SearchType) -> StatusTimer {
-    let mut timer = StatusTimer::new(&DATABASE_SEARCH_INDEX_BUILD_ONE_SECONDS);
-    timer.add_label(search_type.tag());
-    timer
 }
 
 register_convex_histogram!(
@@ -1207,11 +1165,18 @@ pub fn log_write_throughput(bytes: u64) {
     log_distribution(&WRITE_THROUGHPUT_BYTES, bytes as f64);
 }
 
-register_convex_histogram!(
-    WRITE_LOG_ITER_WRITES_AFTER_SECONDS,
-    "Time to execute WriteLogReader::iter_writes_after in seconds",
-    &STATUS_LABEL,
+register_convex_counter!(
+    WRITE_THROUGHPUT_ROWS_LIMIT_EXCEEDED_TOTAL,
+    "Total number of times mutation execution was rejected due to the rows written limit"
 );
-pub fn write_log_iter_writes_timer() -> StatusTimer {
-    StatusTimer::new(&WRITE_LOG_ITER_WRITES_AFTER_SECONDS)
+pub fn log_write_throughput_rows_limit_exceeded() {
+    log_counter(&WRITE_THROUGHPUT_ROWS_LIMIT_EXCEEDED_TOTAL, 1);
+}
+
+register_convex_histogram!(
+    WRITE_THROUGHPUT_ROWS,
+    "Document and index rows written within the write throughput window"
+);
+pub fn log_write_throughput_rows(rows: u64) {
+    log_distribution(&WRITE_THROUGHPUT_ROWS, rows as f64);
 }

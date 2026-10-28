@@ -14,8 +14,8 @@
     "convex": "workspace:*",
     "convex-nuxt": "^0.1.5",
     "convex-vue": "^0.1.5",
-    "nuxt": "^4.4.6",
-    "vue": "^3.5.17",
+    "nuxt": "^4.6.2",
+    "vue": "^3.5.42",
     "vue-router": "^4.5.1"
   }
 }

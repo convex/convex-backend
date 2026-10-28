@@ -1,14 +1,7 @@
 //! Common code, types and libraries for interacting with the system.
-#![feature(binary_heap_drain_sorted)]
-#![feature(const_for)]
-#![feature(const_type_name)]
 #![feature(coroutines)]
-#![feature(iter_intersperse)]
-#![feature(nonzero_ops)]
-#![feature(try_blocks)]
+#![feature(exclusive_wrapper)]
 #![feature(try_blocks_heterogeneous)]
-#![feature(type_alias_impl_trait)]
-#![feature(bound_as_ref)]
 #![feature(iter_from_coroutine)]
 #![feature(iterator_try_collect)]
 #![feature(error_iter)]
@@ -28,9 +21,11 @@ pub mod client_pool;
 pub mod codel_queue;
 pub mod comparators;
 pub mod components;
+pub mod coverage;
 pub mod deleted_bitset;
 pub mod document;
 pub mod document_index_keys;
+pub mod erased_slot;
 pub mod errors;
 pub mod execution_context;
 pub mod ext;
@@ -61,6 +56,7 @@ pub mod pii;
 pub mod pool_stats;
 pub mod query;
 pub mod query_journal;
+pub mod read_write_balance;
 pub mod retriable_stream;
 pub mod retry;
 pub mod runtime;

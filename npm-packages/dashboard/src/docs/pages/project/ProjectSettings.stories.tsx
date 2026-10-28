@@ -29,15 +29,42 @@ const mockProjectRoles = [
 ];
 
 const mockDeployKey: PlatformDeployKeyResponse = {
+  id: 1,
   name: "storybook-preview-key",
   creator: 1,
   creationTime: Date.now() - 1000 * 60 * 60,
   lastUsedTime: Date.now() - 1000 * 60 * 30,
+  // Unrestricted keys list every deployment action.
+  allowedActions: [
+    "deployment:deploy",
+    "deployment:env:view",
+    "deployment:env:write",
+    "deployment:pause",
+    "deployment:unpause",
+    "deployment:logs:view",
+    "deployment:metrics:view",
+    "deployment:integrations:view",
+    "deployment:integrations:write",
+    "deployment:data:view",
+    "deployment:data:write",
+    "deployment:backups:view",
+    "deployment:backups:create",
+    "deployment:backups:download",
+    "deployment:backups:delete",
+    "deployment:backups:import",
+    "deployment:functions:actAsUser",
+    "deployment:functions:runInternalQueries",
+    "deployment:functions:runInternalMutations",
+    "deployment:functions:runInternalActions",
+    "deployment:functions:runTestQuery",
+    "deployment:auditLog:view",
+  ],
 };
 
 const mockAppToken: NonNullable<
   ReturnType<typeof useProjectAppAccessTokens>
 >[number] = {
+  id: 2,
   appClientId: "storybook-app-client-id",
   appName: "Storybook OAuth App",
   name: "storybook-preview-key",

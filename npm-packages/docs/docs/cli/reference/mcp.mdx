@@ -1,0 +1,80 @@
+---
+sidebar_position: 18
+title: "npx convex mcp"
+sidebar_label: "npx convex mcp"
+description: "Manage the Model Context Protocol server for Convex [BETA]"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex mcp`
+
+Commands to initialize and run a Model Context Protocol server for Convex that can be used with AI tools.
+This server exposes your Convex codebase to AI tools in a structured way.
+
+## Syntax
+
+```sh
+npx convex mcp [options] [command]
+```
+
+## Subcommands
+
+- [`npx convex mcp start`](#start) — Start the MCP server
+
+## `npx convex mcp start` \{#start}
+
+Start the Model Context Protocol server for Convex that can be used with AI tools.
+
+### Syntax
+
+```sh
+npx convex mcp start [options]
+```
+
+### Options
+
+<dl>
+<dt>`--project-dir <project-dir>`</dt>
+<dd>
+
+Run the MCP server for a single project. By default, the MCP server can run for multiple projects, and each tool call specifies its project directory.
+
+</dd>
+<dt>`--disable-tools <tool-names>`</dt>
+<dd>
+
+Comma separated list of tool names to disable (options: data, envGet, envList, envRemove, envSet, functionSpec, insights, logs, run, runOneoffQuery, status, tables)
+
+</dd>
+<dt>`--cautiously-allow-production-pii`</dt>
+<dd>
+
+Allow read-only tools (data, logs, queries) on production deployments. These tools may expose PII. Defaults to false.
+
+</dd>
+<dt>`--dangerously-enable-production-deployments`</dt>
+<dd>
+
+DANGEROUSLY allow the MCP server to access production deployments, including mutating tools. Defaults to false.
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Run the MCP server on this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Run the MCP server on a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

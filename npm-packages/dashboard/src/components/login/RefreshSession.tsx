@@ -3,12 +3,14 @@ import { useAccessToken } from "hooks/useServerSideData";
 import { useCallback, useEffect, useRef } from "react";
 
 // The auth session is stored in a cookie, and if we don't call the Next.js server
-// it will expire after 7 days.
+// WorkOS ends the session after a few days of inactivity. It also always ends sessions
+// after a fixed duration after the session creation, regardless of activity
+// (the exact limits are set in the WorkOS dashboard, under Applications > [application] > Sessions).
 // By calling the server periodically we get an updated cookie via the Set-Cookie header.
 // We also need to refresh the auth token (which expires after 24 hours).
 export function RefreshSession() {
   const { user } = useWorkOS();
-  const lastRefreshed = useRef<number>();
+  const lastRefreshed = useRef<number | undefined>(undefined);
   const [_, setAuthToken] = useAccessToken();
 
   const refresh = useCallback(

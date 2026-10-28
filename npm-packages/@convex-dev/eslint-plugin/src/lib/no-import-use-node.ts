@@ -1,5 +1,6 @@
 import path from "path";
 import fs from "fs";
+import ts from "typescript";
 import { createRule, isEntryPoint } from "../util.js";
 
 export const noImportUseNode = createRule({
@@ -40,7 +41,7 @@ export const noImportUseNode = createRule({
         } catch {
           return;
         }
-        if (source && source.slice(0, 100).includes("use node")) {
+        if (isUseNodeModule(source)) {
           context.report({
             messageId: "wrong runtime import",
             node: node,
@@ -74,4 +75,27 @@ function resolveFile(filePath: string): string | null {
   }
 
   return null;
+}
+
+// Parsing the directive prologue handles comments and automatic semicolon
+// insertion consistently with the runtime selection in the CLI bundler.
+export function isUseNodeModule(source: string): boolean {
+  // Cheap pre-check: skip parsing for the vast majority of files.
+  if (!source.includes("use node")) return false;
+
+  const sourceFile = ts.createSourceFile(
+    "module.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+  );
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isExpressionStatement(statement) ||
+      !ts.isStringLiteral(statement.expression)
+    ) {
+      return false;
+    }
+    if (statement.expression.text === "use node") return true;
+  }
+  return false;
 }

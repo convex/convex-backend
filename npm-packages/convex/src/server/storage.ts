@@ -1,16 +1,28 @@
 import { GenericId } from "../values/index.js";
 
 /**
- * A reference to a file in storage.
+ * @deprecated This ID format is no longer returned by stable file storage APIs. Use `Id<"_storage">` instead.
  *
- * This is used in the {@link StorageReader} and {@link StorageWriter} which are accessible in
- * Convex queries and mutations via {@link QueryCtx} and {@link MutationCtx} respectively.
+ * The old ID format used by Convex file storage.
+ *
+ * ⚠️ Security warning: Anyone that has knows to this ID can download the underlying file
+ * from `https://<deployment>.convex.cloud/api/storage/<storageId>`.
+ * (Note that it’s safe to share the new ID format, `Id<"_storage">`, to anyone).
  *
  * @public
  */
 export type StorageId = string;
-export type FileStorageId = GenericId<"_storage"> | StorageId;
+
 /**
+ * @deprecated This type is only necessary for backwards compatibility with Convex versions that
+ * pre-date `convex@1.6.0`. Use `Id<"_storage">` instead.
+ */
+export type FileStorageId = GenericId<"_storage"> | StorageId;
+
+/**
+ * @deprecated This type is only returned by {@link StorageReader.getUrl | storage.getUrl}.
+ *   To get the details of a document, use `ctx.db.system.get("_storage", storageId)` instead.
+ *
  * Metadata for a single file as returned by {@link StorageReader.getMetadata | storage.getMetadata}.
  *
  * @public
@@ -18,6 +30,13 @@ export type FileStorageId = GenericId<"_storage"> | StorageId;
 export type FileMetadata = {
   /**
    * ID for referencing the file (eg. via {@link StorageReader.getUrl | storage.getUrl})
+   *
+   * This is an older ID format that is no longer returned by stable file storage APIs.
+   * Consider using `Id<"_storage">` instead.
+   *
+   * ⚠️ Security warning: Anyone that has knows to this ID can download the underlying file
+   * from `https://<deployment>.convex.cloud/api/storage/<storageId>`.
+   * (Note that it’s safe to share the new ID format, `Id<"_storage">`, to anyone).
    */
   storageId: StorageId;
   /**
@@ -114,9 +133,9 @@ export interface StorageReader {
 }
 
 /**
- * An interface to write files to storage within Convex mutation functions.
+ * An interface to read and write files to storage within Convex mutation functions.
  *
- * Available as `ctx.storage` in mutations.
+ * Available as `ctx.storage` in mutations, actions, and HTTP actions.
  *
  * @see https://docs.convex.dev/file-storage
  * @public
@@ -175,30 +194,13 @@ export interface StorageWriter extends StorageReader {
   delete<T extends StorageId>(
     storageId: T extends { __tableName: any } ? never : T,
   ): Promise<void>;
-}
 
-/**
- * An interface to read and write files to storage within Convex actions and HTTP actions.
- *
- * In actions, `ctx.storage` has additional methods not available in mutations:
- * `get()` to download a file as a Blob, and `store()` to upload a Blob directly.
- *
- * @example
- * ```typescript
- * // In an action, download and re-upload a file:
- * const blob = await ctx.storage.get(storageId);
- * if (blob) {
- *   const newStorageId = await ctx.storage.store(blob);
- * }
- * ```
- *
- * @public
- */
-export interface StorageActionWriter extends StorageWriter {
   /**
    * Download a file from storage as a Blob.
    *
-   * Only available in actions and HTTP actions (not in mutations or queries).
+   * In mutations, files read count toward the transaction's `filesRead` and
+   * `fileReadBytes` limits. Use
+   * `ctx.meta.getTransactionMetrics()` to check the remaining headroom.
    *
    * @param storageId - The `Id<"_storage">` of the file.
    * @returns A Blob containing the file contents, or `null` if the file doesn't exist.
@@ -213,16 +215,21 @@ export interface StorageActionWriter extends StorageWriter {
   get<T extends StorageId>(
     storageId: T extends { __tableName: any } ? never : T,
   ): Promise<Blob | null>;
+
   /**
    * Upload a Blob directly to storage.
    *
-   * Only available in actions and HTTP actions. For client-side uploads from
-   * mutations, use `generateUploadUrl()` instead.
+   * To upload files from a client, use {@link StorageWriter.generateUploadUrl}
+   * instead.
+   *
+   * In mutations, files stored count toward the transaction's `filesWritten`
+   * and `fileWriteBytes` limits. Use
+   * `ctx.meta.getTransactionMetrics()` to check the remaining headroom.
    *
    * @example
    * ```typescript
    * const storageId = await ctx.storage.store(blob);
-   * // Save storageId to the database via ctx.runMutation
+   * // If in an action, save storageId to the database via ctx.runMutation
    * ```
    *
    * @param blob - The Blob to store.
@@ -234,3 +241,19 @@ export interface StorageActionWriter extends StorageWriter {
     options?: { sha256?: string },
   ): Promise<GenericId<"_storage">>;
 }
+
+/**
+ * An interface to read and write files to storage within Convex actions and HTTP actions.
+ *
+ * @example
+ * ```typescript
+ * // In an action, download and re-upload a file:
+ * const blob = await ctx.storage.get(storageId);
+ * if (blob) {
+ *   const newStorageId = await ctx.storage.store(blob);
+ * }
+ * ```
+ *
+ * @public
+ */
+export interface StorageActionWriter extends StorageWriter {}

@@ -18,9 +18,9 @@ base-62 = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 compact_str = { workspace = true }
+const-hex = { workspace = true }
 derive_more = { workspace = true }
 errors = { workspace = true }
-hex = { workspace = true }
 humansize = { workspace = true }
 imbl = { workspace = true }
 memchr = { workspace = true }

@@ -26,7 +26,7 @@ around retrying, idempotency, and completing.
 The simplest version of this could be doing a couple pre-defined steps, such as
 first getting the weather forecast, then getting fashion advice based on the
 weather. For a code example, see
-[workflows/chaining.ts](https://github.com/get-convex/agent/blob/main/example/convex/workflows/chaining.ts).
+[workflows/chaining.ts](https://github.com/convex/agent/blob/main/example/convex/workflows/chaining.ts).
 
 ```ts
 export const getAdvice = action({
@@ -98,6 +98,21 @@ of long running functions with retries and delays.
 Each step in the workflow is run, with the result recorded. Even if the server
 fails mid-way, it will resume with the latest incomplete step, with configurable
 retry settings.
+
+## Action time limits
+
+A `generateText` or `streamText` call runs inside a single Convex action,
+including every step of its tool loop. Actions in the Convex runtime can run for
+30 minutes and Node actions (`"use node"`) for 10 minutes; see
+[limits](https://docs.convex.dev/production/state/limits). An agent that runs
+many tool calls for one user message can hit that ceiling.
+
+For longer work, split generation across actions so each call finishes within
+the limit. Completed steps are saved to the thread, and a later call can use
+`promptMessageId` to start from the original prompt's history. That does not
+resume a tool call that timed out or schedule the next action for you. The
+Workflow component below can chain the calls durably; tools run in retried steps
+must be safe to retry.
 
 ## Using the Workflow component for long-lived durable workflows
 
@@ -207,7 +222,7 @@ export const getStructuredSupport = supportAgent.asObjectAction({
 ```
 
 See example code in
-[workflows/chaining.ts](https://github.com/get-convex/agent/blob/main/example/convex/workflows/chaining.ts).
+[workflows/chaining.ts](https://github.com/convex/agent/blob/main/example/convex/workflows/chaining.ts).
 
 ## Complex workflow patterns
 

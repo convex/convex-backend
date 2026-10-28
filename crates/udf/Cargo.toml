@@ -17,6 +17,7 @@ testing = [
     "keybroker/testing",
     "metrics/testing",
     "model/testing",
+    "roles/testing",
     "usage_tracking/testing",
     "vector/testing",
 ]
@@ -42,7 +43,9 @@ proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 proptest-http = { workspace = true, optional = true }
 rand = { workspace = true }
+roles = { workspace = true }
 semver = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sync_types = { workspace = true }
 tokio = { workspace = true }
@@ -55,7 +58,6 @@ vector = { workspace = true }
 [dev-dependencies]
 cmd_util = { workspace = true }
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
 database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }
@@ -64,6 +66,7 @@ model = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
 proptest-http = { workspace = true }
+roles = { workspace = true, features = ["testing"] }
 runtime = { workspace = true, features = ["testing"] }
 sync_types = { workspace = true, features = [
     "testing",

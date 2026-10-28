@@ -31,19 +31,20 @@ pub enum DeploymentClass {
     S16,
     S256,
     D1024,
+    D2048,
 }
 
 impl DeploymentClass {
     pub fn is_big(&self) -> bool {
         match self {
-            DeploymentClass::D1024 => true,
+            DeploymentClass::D1024 | DeploymentClass::D2048 => true,
             DeploymentClass::S16 | DeploymentClass::S256 => false,
         }
     }
 
     pub fn is_dedicated(&self) -> bool {
         match self {
-            DeploymentClass::D1024 => true,
+            DeploymentClass::D1024 | DeploymentClass::D2048 => true,
             DeploymentClass::S16 | DeploymentClass::S256 => false,
         }
     }

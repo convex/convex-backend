@@ -1,4 +1,4 @@
-import React, { useContext } from "react";
+import React, { JSX, useContext } from "react";
 import { cn } from "@ui/cn";
 import { ChevronDownIcon } from "@radix-ui/react-icons";
 import { SchedulerStatus } from "@common/elements/SchedulerStatus";
@@ -66,6 +66,7 @@ export function HealthView({
                     lastBackupTime={lastBackupTime}
                     teamMembers={teamMembers}
                     regions={regions}
+                    showDeployProgress
                   />
                 </DisclosureSection>
               )}
@@ -170,11 +171,16 @@ export function DisclosureSection({
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="flex w-full flex-wrap items-center gap-2 py-3 text-left font-normal"
+          className={cn(
+            "-mx-2 my-1.5 flex flex-wrap items-center gap-2 rounded-full py-1.5 pl-2 text-left font-normal transition-colors hover:bg-background-tertiary",
+            // The smaller closed description reads as cramped against the round
+            // cap with the same padding the title gets.
+            isOpen ? "pr-2" : "pr-3",
+          )}
         >
           <ChevronDownIcon
             className={cn(
-              "h-4 w-4 text-content-secondary transition-transform",
+              "size-4 text-content-secondary transition-transform",
               isOpen && "rotate-180",
             )}
           />

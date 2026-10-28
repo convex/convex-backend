@@ -5,7 +5,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/@convex-dev/codemod"
   },
   "main": "./dist/index.cjs",
@@ -30,7 +30,7 @@
     "@types/progress": "~2.0.7",
     "@types/semver": "^7.3.13",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.0",
     "zshy": "0.7.0"
   },
   "dependencies": {
@@ -45,7 +45,7 @@
     "progress": "~2.0.3",
     "semver": "^7.6.0",
     "ts-morph": "^27.0.0",
-    "tsc-alias": "~1.8.15"
+    "tsc-alias": "~1.9.0"
   },
   "engines": {
     "node": ">=20.0.0"

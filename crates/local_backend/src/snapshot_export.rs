@@ -21,6 +21,7 @@ use common::{
             Path,
             Query,
         },
+        ExtractRequestMetadata,
         HttpResponseError,
     },
     types::SetExportExpirationRequest,
@@ -38,7 +39,11 @@ use model::{
         ExportsModel,
     },
 };
-use serde::Deserialize;
+use roles::RequireDeploymentOp;
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use storage::StorageGetStream;
 use sync_types::Timestamp;
 use value::DeveloperDocumentId;
@@ -52,6 +57,10 @@ use crate::{
 // Export GETs are immutable. Browser can cache for a long time.
 const MAX_CACHE_AGE: Duration = Duration::from_secs(60 * 60 * 24 * 30);
 
+// Export download tokens are minted right before the download starts, so they
+// only need to live long enough to cover the redirect to the download URL.
+const EXPORT_DOWNLOAD_TOKEN_VALIDITY: Duration = Duration::from_secs(5 * 60);
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestZipExport {
@@ -64,6 +73,7 @@ pub struct RequestZipExport {
 pub async fn request_zip_export(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Query(RequestZipExport {
         include_storage,
         component,
@@ -73,6 +83,7 @@ pub async fn request_zip_export(
     st.application
         .request_export(
             identity,
+            request_metadata,
             ExportFormat::Zip { include_storage },
             component,
             ExportRequestor::SnapshotExport,
@@ -88,11 +99,59 @@ pub struct ZipExportRequest {
     id: String,
 }
 
-pub async fn get_zip_export(
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZipExportTokenResponse {
+    token: String,
+}
+
+/// Mints a short-lived token authorizing the download of a single snapshot
+/// export. This lets the dashboard trigger a browser download (an `<a href>`
+/// navigation, which can't carry an `Authorization` header) without putting
+/// the long-lived admin key in the URL.
+#[fastrace::trace]
+pub async fn request_zip_export_token(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
     Path(ZipExportRequest { id }): Path<ZipExportRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
+    identity.require_operation(keybroker::DeploymentOp::DownloadBackups)?;
+    let actor = keybroker::ExportDownloadActor {
+        member_id: identity.member_id(),
+        token_id: identity.token_id(),
+    };
+    let token = st
+        .application
+        .key_broker()
+        .issue_export_download_token(id, actor);
+    Ok(Json(ZipExportTokenResponse { token }))
+}
+
+#[derive(Deserialize)]
+pub struct GetZipExportQueryArgs {
+    token: Option<String>,
+}
+
+pub async fn get_zip_export(
+    MtState(st): MtState<LocalAppState>,
+    ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
+    Path(ZipExportRequest { id }): Path<ZipExportRequest>,
+    Query(GetZipExportQueryArgs { token }): Query<GetZipExportQueryArgs>,
+) -> Result<impl IntoResponse, HttpResponseError> {
+    let identity = match token {
+        Some(token) => {
+            let actor = st.application.key_broker().check_export_download_token(
+                &token,
+                &id,
+                EXPORT_DOWNLOAD_TOKEN_VALIDITY,
+            )?;
+            st.application
+                .export_download_identity(actor, token)
+                .await?
+        },
+        None => identity,
+    };
     identity.require_operation(keybroker::DeploymentOp::DownloadBackups)?;
     let id: Either<DeveloperDocumentId, Timestamp> = match id.parse() {
         Ok(id) => Either::Left(id),
@@ -107,7 +166,10 @@ pub async fn get_zip_export(
             stream,
         },
         filename,
-    ) = st.application.get_zip_export(identity, id).await?;
+    ) = st
+        .application
+        .get_zip_export(identity, request_metadata, id)
+        .await?;
     let content_length = ContentLength(content_length as u64);
     Ok((
         TypedHeader(content_length),
@@ -132,6 +194,7 @@ pub struct SetExportExpirationPathArgs {
 pub async fn set_export_expiration(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Path(SetExportExpirationPathArgs { snapshot_id }): Path<SetExportExpirationPathArgs>,
     Json(SetExportExpirationRequest { expiration_ts_ns }): Json<SetExportExpirationRequest>,
 ) -> Result<StatusCode, HttpResponseError> {
@@ -150,6 +213,7 @@ pub async fn set_export_expiration(
                 id: snapshot_id.encode(),
                 expiration_ts_ms: (expiration_ts_ns / 1_000_000) as i64,
             }],
+            request_metadata,
             "set_export_expiration",
         )
         .await?;
@@ -160,6 +224,7 @@ pub async fn set_export_expiration(
 pub async fn cancel_export(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Path(SetExportExpirationPathArgs { snapshot_id }): Path<SetExportExpirationPathArgs>,
 ) -> Result<StatusCode, HttpResponseError> {
     identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
@@ -174,6 +239,7 @@ pub async fn cancel_export(
             vec![DeploymentAuditLogEvent::CancelExport {
                 id: snapshot_id.encode(),
             }],
+            request_metadata,
             "cancel_export",
         )
         .await?;

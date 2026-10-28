@@ -264,7 +264,7 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
   // Remove elements from editedVars/deletedVars that refer to variables that
   // don’t exist anymore. This can be caused by a realtime update
   // of `environmentVariables` (see CX-5439).
-  const prevEnvironmentVariables = useRef<Array<T>>();
+  const prevEnvironmentVariables = useRef<Array<T> | undefined>(undefined);
   useEffect(() => {
     if (
       !environmentVariables ||
@@ -500,15 +500,35 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
           disabled={formState.isSubmitting || !canEdit}
         />
         <Button
-          tip="Copy Value"
-          aria-label="Copy Value"
+          tip="Copy Name and Value"
+          aria-label="Copy Name and Value"
           type="button"
           onClick={async () => {
-            await copyTextToClipboard(environmentVariable.value);
-            toast(
-              "success",
-              "Environment variable value copied to the clipboard.",
+            const { formatted, warning } = formatEnvValueForDotfile(
+              environmentVariable.value,
             );
+            await copyTextToClipboard(
+              `${environmentVariable.name}=${formatted}`,
+            );
+            if (warning) {
+              toast(
+                "warning",
+                <div className="space-y-1">
+                  <div>
+                    Environment variable copied to the clipboard with the
+                    following warning:
+                  </div>
+                  <div>
+                    <code>{environmentVariable.name}</code>: {warning}
+                  </div>
+                </div>,
+              );
+            } else {
+              toast(
+                "success",
+                "Environment variable name and value copied to the clipboard.",
+              );
+            }
           }}
           variant="neutral"
           icon={<ClipboardCopyIcon />}
@@ -1168,7 +1188,7 @@ function EnvVarValueInput({
       {hint && (
         <p
           className={cn(
-            "mt-1 flex max-w-full animate-fadeInFromLoading gap-1 text-xs break-words",
+            "mt-1 flex max-w-full animate-fadeInFromLoading gap-1 text-xs wrap-break-word",
             hintStyle === "error"
               ? "text-content-errorSecondary"
               : "text-content-warning",

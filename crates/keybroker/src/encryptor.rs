@@ -37,6 +37,9 @@ impl Purpose {
     /// we want them to be deterministic to avoid breaking caching.
     /// These do not need to be secret in the first place - only tamper-proof.
     pub const CURSOR: DeterministicPurpose = Purpose("cursor");
+    /// Cursor for the data sync (streaming export) API.
+    pub const DATA_SYNC_CURSOR: Purpose = Purpose("data sync cursor");
+    pub const EXPORT_DOWNLOAD_TOKEN: Purpose = Purpose("export download token");
     pub const QUERY_JOURNAL: Purpose = Purpose("query journal");
     pub const STORE_FILE_AUTHORIZATION: Purpose = Purpose("store file authorization");
 }
@@ -50,19 +53,19 @@ impl<const DETERMINISTIC: bool> Purpose<DETERMINISTIC> {
 const KDF_ALGORITHM: &kdf::KbkdfCtrHmacAlgorithm =
     kdf::get_kbkdf_ctr_hmac_algorithm(kdf::KbkdfCtrHmacAlgorithmId::Sha256).unwrap();
 
+/// Derives `out.len()` bytes from `secret` for the context `label`. Distinct
+/// labels yield independent keys.
+pub(crate) fn derive_bytes(secret: &Secret, label: &[u8], out: &mut [u8]) -> anyhow::Result<()> {
+    kdf::kbkdf_ctr_hmac(KDF_ALGORITHM, secret.as_bytes(), label, out).context("KBKDF failed")
+}
+
 impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
     pub fn derive_from_secret(
         secret: &Secret,
         purpose: Purpose<DETERMINISTIC>,
     ) -> anyhow::Result<Self> {
         let mut derived_key = [0; KEY_LEN];
-        kdf::kbkdf_ctr_hmac(
-            KDF_ALGORITHM,
-            secret.as_bytes(),
-            purpose.as_bytes(),
-            &mut derived_key,
-        )
-        .context("KBKDF failed")?;
+        derive_bytes(secret, purpose.as_bytes(), &mut derived_key)?;
         Ok(Self { derived_key })
     }
 
@@ -116,7 +119,7 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
         }
         buffer.extend_from_slice(&encoded_message);
         buffer.extend_from_slice(tag.as_ref());
-        hex::encode(buffer)
+        const_hex::encode(buffer)
     }
 
     pub fn decrypt_proto<M: Default + Message>(
@@ -124,7 +127,7 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
         version: u8,
         encoded: &str,
     ) -> anyhow::Result<M> {
-        let mut bytes = hex::decode(encoded)?;
+        let mut bytes = const_hex::decode(encoded)?;
         let mut reader = Cursor::new(&bytes[..]);
         let message_version = reader.read_u8()?;
         if message_version != version {

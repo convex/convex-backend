@@ -17,7 +17,6 @@ import {
   FilterExpression,
   SchemaJson,
 } from "system-udfs/convex/_system/frontend/lib/filters";
-import { Shape } from "shapes";
 import { LoadingLogo, LoadingTransition } from "@ui/Loading";
 import { Sheet } from "@ui/Sheet";
 import { Button } from "@ui/Button";
@@ -25,6 +24,7 @@ import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { useSelectionState } from "@common/features/data/lib/useSelectionState";
 import { useDataToolbarActions } from "@common/features/data/lib/useDataToolbarActions";
 import { useTableFilters } from "@common/features/data/lib/useTableFilters";
+import { FiltersAppliedProperties } from "@common/features/data/lib/filterAnalytics";
 import { useToolPopup } from "@common/features/data/lib/useToolPopup";
 import { useEditsAuthorization } from "@common/features/data/lib/useEditsAuthorization";
 import { usePatchDocumentField } from "@common/features/data/components/Table/utils/usePatchDocumentField";
@@ -44,7 +44,6 @@ import {
 } from "@common/features/data/components/Table/utils/useDataColumns";
 import { useQueryFilteredTable } from "@common/features/data/components/Table/utils/useQueryFilteredTable";
 import { useSingleTableSchemaStatus } from "@common/features/data/components/TableSchema";
-import { DataFilters } from "@common/features/data/components/DataFilters/DataFilters";
 import { RenameDialog } from "@common/features/data/components/RenameDialog";
 import { useTableFields } from "@common/features/data/components/Table/utils/useTableFields";
 import { useDefaultDocument } from "@common/features/data/lib/useDefaultDocument";
@@ -55,32 +54,40 @@ import {
 } from "react-resizable-panels";
 import { cn } from "@ui/cn";
 
-import { getDefaultIndex } from "@common/features/data/components/DataFilters/IndexFilters";
 import { api } from "system-udfs/convex/_generated/api";
 import { useNents } from "@common/lib/useNents";
 import omit from "lodash/omit";
-import { clearFilters } from "./DataFilters/clearFilters";
+import { IndexFilterBar } from "./IndexFilterBar/IndexFilterBar";
+import { clearFilters } from "./IndexFilterBar/clearFilters";
+import {
+  EMPTY_FILTERS,
+  buildIndexDefs,
+  currentOrder,
+  effectiveSortField,
+} from "./IndexFilterBar/filterModel";
+import { useFilterActions } from "./IndexFilterBar/useFilterActions";
 
 export function DataContent({
   tableName,
-  shape,
   componentId,
   activeSchema,
   onDocumentsAdded,
+  onFiltersApplied,
 }: {
   tableName: string;
   componentId: string | null;
-  shape: Shape | null;
   activeSchema: SchemaJson | null;
   onDocumentsAdded?: (count: number) => void;
+  onFiltersApplied?: (properties: FiltersAppliedProperties) => void;
 }) {
   const { filters, applyFiltersWithHistory, hasFilters } = useTableFilters(
     tableName,
-    componentId,
+    onFiltersApplied,
   );
 
-  const [draftFilters, setDraftFilters] = useState(filters);
-  const [showFilters, setShowFilters] = useState(false);
+  const [draftFilters, setDraftFilters] = useState<
+    FilterExpression | undefined
+  >(filters);
   const [renameTarget, setRenameTarget] = useState<{
     mode: "column" | "table";
     currentName: string;
@@ -131,7 +138,7 @@ export function DataContent({
 
   const selectedRows = useSelectionState(allIds, status === "Exhausted");
 
-  const tableFields = useTableFields(tableName, shape, activeSchema, data);
+  const tableFields = useTableFields(tableName, activeSchema, data);
 
   const columns = useDataColumns({
     tableName,
@@ -285,12 +292,20 @@ export function DataContent({
       tableName,
       tableNamespace: selectedNent?.id ?? null,
     }) ?? undefined;
-  const sortField =
-    (
-      indexes?.find((index) => index.name === filters?.index?.name)?.fields as
-        | string[]
-        | undefined
-    )?.[0] || "_creationTime";
+  const indexDefs = useMemo(() => buildIndexDefs(indexes), [indexes]);
+  const appliedFilters = filters ?? EMPTY_FILTERS;
+  const filterActions = useFilterActions({
+    filters,
+    draftFilters,
+    setDraftFilters,
+    applyFilters: applyFiltersWithHistory,
+    indexDefs,
+    defaultDocument,
+  });
+  const sort = {
+    order: currentOrder(appliedFilters),
+    field: effectiveSortField(indexDefs, appliedFilters),
+  };
 
   const { captureMessage } = useContext(DeploymentInfoContext);
   useEffect(() => {
@@ -319,7 +334,7 @@ export function DataContent({
     <PanelGroup
       direction="horizontal"
       className={cn(
-        "scrollbar flex h-full w-full min-w-[20rem] overflow-x-auto pl-6",
+        "scrollbar flex size-full min-w-[20rem] overflow-x-auto pl-6",
         popupEl ? "pr-0" : "pr-6",
       )}
       autoSaveId="data-content"
@@ -351,22 +366,17 @@ export function DataContent({
 
         <div className="flex h-full max-h-full flex-col overflow-y-hidden rounded-b-lg">
           {numRowsInTable !== undefined && numRowsInTable > 0 && (
-            <DataFilters
+            <IndexFilterBar
+              actions={filterActions}
+              indexDefs={indexDefs}
               tableName={tableName}
-              componentId={componentId}
               tableFields={tableFields}
               defaultDocument={defaultDocument}
-              filters={filters}
-              onFiltersChange={applyFiltersWithHistory}
               dataFetchErrors={errors}
-              draftFilters={draftFilters}
-              setDraftFilters={setDraftFilters}
               activeSchema={activeSchema}
               numRows={numRowsInTable}
               numRowsLoaded={data.length}
               hasFilters={hasFiltersAndAtLeastOneDocument}
-              showFilters={showFilters}
-              setShowFilters={setShowFilters}
               allFields={allFields}
               hiddenColumns={hiddenColumns}
               setHiddenColumns={setHiddenColumns}
@@ -401,12 +411,11 @@ export function DataContent({
                     activeSchema={activeSchema}
                     listRef={listRef}
                     loadMore={loadNextPage}
-                    sort={{
-                      order: filters?.order || "desc",
-                      field: sortField,
-                    }}
+                    sort={sort}
+                    getSortOption={filterActions.sortOptionFor}
+                    onSortColumn={filterActions.sortByField}
                     totalRowCount={
-                      router.query.filters
+                      filters
                         ? status === "Exhausted"
                           ? data.length
                           : // If we are filtering, we need to add 1 to the total row count to
@@ -437,20 +446,9 @@ export function DataContent({
                         currentName: columnName,
                       })
                     }
-                    onAddDraftFilter={(filter: Filter) => {
-                      setDraftFilters((prev) =>
-                        prev
-                          ? {
-                              clauses: [...prev.clauses, filter],
-                              index: prev.index ?? getDefaultIndex(),
-                            }
-                          : {
-                              clauses: [filter],
-                              index: getDefaultIndex(),
-                            },
-                      );
-                      setShowFilters(true);
-                    }}
+                    onAddDraftFilter={(filter: Filter) =>
+                      filterActions.addComplete(filter)
+                    }
                   />
                 </Sheet>
               ) : hasFiltersAndAtLeastOneDocument ? (
@@ -465,7 +463,7 @@ export function DataContent({
                     />
                   </Sheet>
                 ) : isEmptySearchFilter(filters) ? (
-                  <div className="flex h-full flex-1 flex-col items-center gap-2 rounded-t-none border bg-background-secondary pt-8">
+                  <div className="flex h-full flex-1 flex-col items-center gap-3 rounded-t-none border bg-background-secondary pt-8">
                     <div className="text-content-secondary">
                       Enter a search term to find matching documents.
                     </div>
@@ -479,7 +477,7 @@ export function DataContent({
                     </Button>
                   </div>
                 ) : (
-                  <div className="flex h-full flex-1 flex-col items-center gap-2 rounded-t-none border bg-background-secondary pt-8">
+                  <div className="flex h-full flex-1 flex-col items-center gap-3 rounded-t-none border bg-background-secondary pt-8">
                     <div className="text-content-secondary">
                       No documents match the selected filters.
                     </div>
@@ -503,6 +501,11 @@ export function DataContent({
                 />
               ))}
           </LoadingTransition>
+          {rowsThatAreSelected.size > 0 && !allRowsSelected && (
+            <p className="flex shrink-0 items-center gap-1 pt-1 text-xs text-content-secondary">
+              Shift-click a checkbox to select a range of documents
+            </p>
+          )}
         </div>
       </Panel>
       {popupEl}

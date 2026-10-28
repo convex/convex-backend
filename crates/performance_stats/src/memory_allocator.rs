@@ -9,10 +9,7 @@ use std::{
 };
 
 use anyhow::Context as _;
-use axum::{
-    debug_handler,
-    http::HeaderMap,
-};
+use axum::debug_handler;
 use common::http::HttpResponseError;
 use serde::Deserialize;
 use tikv_jemalloc_sys::malloc_stats_print;
@@ -102,16 +99,7 @@ async fn collect_profile() -> anyhow::Result<Vec<u8>> {
 }
 
 #[debug_handler]
-pub async fn heap_profile(
-    headers: HeaderMap,
-) -> Result<impl axum::response::IntoResponse, HttpResponseError> {
-    match headers.get("Authorization") {
-        Some(hdr) if hdr == "Bearer MUSTEATALPASTOR" => (),
-        _ => {
-            let err = errors::ErrorMetadata::forbidden("Forbidden", "Unauthorized");
-            return Err(anyhow::Error::new(err).into());
-        },
-    }
+pub async fn heap_profile() -> Result<impl axum::response::IntoResponse, HttpResponseError> {
     Ok(collect_profile().await?)
 }
 

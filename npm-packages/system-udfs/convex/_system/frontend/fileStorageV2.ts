@@ -73,10 +73,11 @@ export const fileMetadata = queryGeneric("ViewData")({
 export const getFile = queryGeneric("ViewData")({
   args: {
     storageId: v.string(),
+    componentId: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (
     { db, storage },
-    { storageId }: { storageId: string },
+    { storageId },
   ): Promise<FileMetadata | null> => {
     const file = await db.system.get(storageId as Id<"_storage">);
     if (!file) {

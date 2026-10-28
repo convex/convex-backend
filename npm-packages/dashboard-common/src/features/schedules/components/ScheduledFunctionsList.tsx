@@ -23,7 +23,7 @@ export function ScheduledFunctionsList({
   hasScheduledJobs: boolean;
   currentOpenFunction: ModuleFunction | undefined;
   jobs: ScheduledJob[];
-  outerRef: React.RefObject<HTMLElement>;
+  outerRef: React.RefObject<HTMLElement | null>;
   status: "LoadingFirstPage" | "LoadingMore" | "Exhausted" | "CanLoadMore";
   loadMore: (numItems: number) => void;
   isPaused: boolean;

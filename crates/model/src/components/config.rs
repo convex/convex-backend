@@ -32,6 +32,7 @@ use database::{
     SchemaDiff,
     SchemaModel,
     SchemaValidationProgressTable,
+    SchemaValidationTable,
     SchemasTable,
     SerializedSchemaDiff,
     SystemMetadataModel,
@@ -149,7 +150,7 @@ impl<'a, RT: Runtime> ComponentDefinitionConfigModel<'a, RT> {
             for (module_path, module) in downloaded_source_package {
                 // NB: The source package here may contain more modules (e.g. `_deps/*`) that
                 // aren't in `new_definition.functions`.
-                if !functions.contains_key(module_path) {
+                if !module_path.is_deps() && !functions.contains_key(module_path) {
                     // TODO: It's a bit kludgy that we're filling in a default value here rather
                     // than earlier in the push pipeline.
                     tracing::warn!("Module not in functions: {:?}", module_path);
@@ -394,6 +395,13 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
             &DEFAULT_TABLE_NUMBERS,
         )
         .await?;
+        initialize_application_system_table(
+            self.tx,
+            &SchemaValidationTable,
+            component_id.into(),
+            &DEFAULT_TABLE_NUMBERS,
+        )
+        .await?;
         for table in component_system_tables() {
             initialize_application_system_table(
                 self.tx,
@@ -498,6 +506,16 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                 },
                 // Update a node.
                 (Some(existing_node), Some(new_metadata)) => {
+                    // A concurrent push created this component with a different namespace
+                    // than our `start_push` allocated.
+                    if let Some(allocated_id) = schema_change.allocated_component_ids.get(&path)
+                        && *allocated_id != existing_node.developer_id()
+                    {
+                        anyhow::bail!(ErrorMetadata::conflict(
+                            "RaceDetected",
+                            format!("Component {path} was created by a concurrent push"),
+                        ));
+                    }
                     let schema_id = self.schema_id_from_schema_change(schema_change, &path)?;
                     self.modify_component(
                         existing_node,

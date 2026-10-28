@@ -8,10 +8,9 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::Context as _;
-
 use crate::path::{
     check_valid_path_component,
+    InvalidPathComponentError,
     PathComponent,
 };
 
@@ -64,19 +63,24 @@ impl ModulePath {
 
     // TODO: it should not be possible for this to return Err,
     // but `"_.js".strip().components()` will do this
-    pub fn components(&self) -> impl Iterator<Item = anyhow::Result<PathComponent>> + '_ {
+    pub fn components(
+        &self,
+    ) -> impl Iterator<Item = Result<PathComponent, InvalidModulePathError>> + '_ {
         self.path.components().map(|component| match component {
             Component::Normal(c) => c
                 .to_str()
-                .with_context(|| format!("Non-unicode data in module path {}", self.as_str()))?
+                .ok_or_else(|| InvalidModulePathError::InvalidUnicode {
+                    module_path: self.path.to_string_lossy().into_owned(),
+                })?
                 .parse()
-                .with_context(|| {
-                    format!("Invalid component {c:?} in module path {}", self.as_str())
+                .map_err(|source| InvalidModulePathError::InvalidComponent {
+                    module_path: self.path.to_string_lossy().into_owned(),
+                    source,
                 }),
-            c => anyhow::bail!(
-                "Unexpected component {c:?} in module path {}",
-                self.as_str()
-            ),
+            c => Err(InvalidModulePathError::InvalidPathComponent {
+                module_path: self.path.to_string_lossy().into_owned(),
+                component: format!("{c:?}"),
+            }),
         })
     }
 
@@ -118,7 +122,7 @@ impl ModulePath {
         }
     }
 
-    pub fn assume_canonicalized(self) -> anyhow::Result<CanonicalizedModulePath> {
+    pub fn assume_canonicalized(self) -> Result<CanonicalizedModulePath, CanonicalModulePathError> {
         let Self {
             path,
             is_system,
@@ -128,8 +132,10 @@ impl ModulePath {
         } = self;
         let ext = path
             .extension()
-            .ok_or_else(|| anyhow::anyhow!("Path {path:?} doesn't have an extension."))?;
-        anyhow::ensure!(ext == "js", "Path {path:?} doesn't have a '.js' extension.");
+            .ok_or_else(|| CanonicalModulePathError::MissingExtension { path: path.clone() })?;
+        if ext != "js" {
+            return Err(CanonicalModulePathError::InvalidExtension { path });
+        }
         Ok(CanonicalizedModulePath {
             path,
             is_system,
@@ -147,34 +153,81 @@ fn canonicalize_path_buf(mut path: PathBuf) -> PathBuf {
     path
 }
 
-/// Parse a module path from a `str`.
+#[derive(Debug, thiserror::Error)]
+pub enum CanonicalModulePathError {
+    #[error("Path {path:?} doesn't have an extension.")]
+    MissingExtension { path: PathBuf },
+    #[error("Path {path:?} doesn't have a '.js' extension.")]
+    InvalidExtension { path: PathBuf },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidModulePathError {
+    #[error("Invalid module path '{module_path}': Module path doesn't have a filename.")]
+    MissingFilename { module_path: String },
+    #[error("Invalid module path '{module_path}': Module path has an extension that isn't 'js'.")]
+    InvalidExtension { module_path: String },
+    // TODO: this case is unreachable; stop using PathBuf
+    #[error("Invalid module path '{module_path}': Path contains an invalid Unicode character.")]
+    InvalidUnicode { module_path: String },
+    #[error("Invalid module path '{module_path}': Module paths must be relative.")]
+    AbsolutePath { module_path: String },
+    #[error("Invalid module path '{module_path}': Invalid path component {component}.")]
+    InvalidPathComponent {
+        module_path: String,
+        component: String,
+    },
+    #[error("Invalid module path '{module_path}': Module paths must be nonempty.")]
+    EmptyPath { module_path: String },
+    #[error("Invalid module path '{module_path}': {source}")]
+    InvalidComponent {
+        module_path: String,
+        #[source]
+        source: InvalidPathComponentError,
+    },
+}
+
 impl FromStr for ModulePath {
-    type Err = anyhow::Error;
+    type Err = InvalidModulePathError;
 
     fn from_str(p: &str) -> Result<Self, Self::Err> {
         let path = PathBuf::from(p);
         if path.file_name().is_none() {
-            anyhow::bail!("Module path {p} doesn't have a filename.");
+            return Err(InvalidModulePathError::MissingFilename {
+                module_path: p.to_owned(),
+            });
         }
         if let Some(ext) = path.extension() {
             if ext != "js" {
-                anyhow::bail!("Module path ({}) has an extension that isn't 'js'.", p);
+                return Err(InvalidModulePathError::InvalidExtension {
+                    module_path: p.to_owned(),
+                });
             }
         }
 
         let components = path
             .components()
             .map(|component| match component {
-                Component::Normal(c) => c.to_str().ok_or_else(|| {
-                    anyhow::anyhow!("Path {p} contains an invalid Unicode character.")
-                }),
-                Component::RootDir => {
-                    anyhow::bail!("Module paths must be relative ({p} is absolute).")
+                Component::Normal(c) => {
+                    c.to_str()
+                        .ok_or_else(|| InvalidModulePathError::InvalidUnicode {
+                            module_path: p.to_owned(),
+                        })
                 },
-                c => anyhow::bail!("Invalid path component {c:?} in {p}."),
+                Component::RootDir => Err(InvalidModulePathError::AbsolutePath {
+                    module_path: p.to_owned(),
+                }),
+                c => Err(InvalidModulePathError::InvalidPathComponent {
+                    module_path: p.to_owned(),
+                    component: format!("{c:?}"),
+                }),
             })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        anyhow::ensure!(!components.is_empty(), "Module paths must be nonempty.");
+            .collect::<Result<Vec<_>, Self::Err>>()?;
+        if components.is_empty() {
+            return Err(InvalidModulePathError::EmptyPath {
+                module_path: p.to_owned(),
+            });
+        }
 
         // Determine the module type based on the first components.
         let is_system = matches!(&components[..], &[SYSTEM_UDF_DIR, ..]);
@@ -188,17 +241,31 @@ impl FromStr for ModulePath {
         let canonicalized = canonicalize_path_buf(path.clone());
         for component in canonicalized.components() {
             let Component::Normal(component) = component else {
-                anyhow::bail!("Invalid path component in {p}");
+                return Err(InvalidModulePathError::InvalidPathComponent {
+                    module_path: p.to_owned(),
+                    component: format!("{component:?}"),
+                });
             };
-            let component = component.to_str().ok_or_else(|| {
-                anyhow::anyhow!("Path {p} contains an invalid Unicode character.")
+            let component =
+                component
+                    .to_str()
+                    .ok_or_else(|| InvalidModulePathError::InvalidUnicode {
+                        module_path: p.to_owned(),
+                    })?;
+            check_valid_path_component(component).map_err(|source| {
+                InvalidModulePathError::InvalidComponent {
+                    module_path: p.to_owned(),
+                    source,
+                }
             })?;
-            check_valid_path_component(component)?;
         }
 
-        let canonicalized_string = canonicalized
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("Path {p} contains an invalid Unicode character."))?;
+        let canonicalized_string =
+            canonicalized
+                .to_str()
+                .ok_or_else(|| InvalidModulePathError::InvalidUnicode {
+                    module_path: p.to_owned(),
+                })?;
         let is_http = canonicalized_string == HTTP_PATH;
         let is_cron = canonicalized_string == CRON_PATH;
 
@@ -325,7 +392,7 @@ impl CanonicalizedModulePath {
 }
 
 impl FromStr for CanonicalizedModulePath {
-    type Err = anyhow::Error;
+    type Err = InvalidModulePathError;
 
     fn from_str(p: &str) -> Result<Self, Self::Err> {
         let path = ModulePath::from_str(p)?;

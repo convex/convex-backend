@@ -12,6 +12,7 @@ export function CopyButton({
   disabled,
   onCopied,
   size = "xs",
+  label = "Copy",
 }: {
   text: string;
   className?: string;
@@ -21,6 +22,7 @@ export function CopyButton({
   disabled?: boolean;
   onCopied?: () => void;
   size?: ButtonSize;
+  label?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -56,7 +58,7 @@ export function CopyButton({
       tipSide={tipSide}
       disabled={disabled}
     >
-      {copied ? "Copied!" : !inline && "Copy"}
+      {copied ? "Copied!" : !inline && label}
     </Button>
   );
 }

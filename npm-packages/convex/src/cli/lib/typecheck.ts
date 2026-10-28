@@ -3,6 +3,7 @@ import path from "path";
 import { performance } from "perf_hooks";
 import { Context } from "../../bundler/context.js";
 import {
+  changeSpinner,
   logError,
   logFailure,
   logMessage,
@@ -13,6 +14,7 @@ import * as semver from "semver";
 import { formatDuration, spawnAsync } from "./utils/utils.js";
 import { readProjectConfig } from "./config.js";
 import { WatchContext } from "./watch.js";
+import { Filesystem } from "../../bundler/fs.js";
 
 export type TypecheckResult = "cantTypeCheck" | "success" | "typecheckFailed";
 
@@ -22,7 +24,7 @@ export type TypescriptCompiler = "tsc" | "tsgo";
 
 const SLOW_TYPECHECK_THRESHOLD_MS = 10_000;
 const SLOW_TYPECHECK_DOCS_URL =
-  "https://docs.convex.dev/production/project-configuration#configuring-the-typescript-compiler";
+  "https://docs.convex.dev/cli/troubleshooting/typecheck-performance";
 
 /**
  * Resolves the TypeScript compiler to use based on CLI flag, config file, and default.
@@ -64,43 +66,48 @@ export async function typeCheckFunctionsInMode(
   }
   const typescriptCompiler = await resolveTypescriptCompiler(ctx);
   const typecheckStart = performance.now();
-  await typeCheckFunctions(
-    ctx,
-    typescriptCompiler,
-    functionsDir,
-    async (result, logSpecificError, runOnError) => {
-      if (
-        (result === "cantTypeCheck" && typeCheckMode === "enable") ||
-        result === "typecheckFailed"
-      ) {
-        logSpecificError?.();
-        logError(
-          chalkStderr.gray(
-            "To ignore failing typecheck, use `--typecheck=disable`.",
-          ),
-        );
-        try {
-          const result = await runOnError?.();
-          // Concurrent change invalidated the error, don't fail
-          if (result === "success") {
-            return;
+  const slowTypecheckTimeout = setTimeout(() => {
+    changeSpinner(
+      `Still running TypeScript... see ${SLOW_TYPECHECK_DOCS_URL} to troubleshoot.`,
+    );
+  }, SLOW_TYPECHECK_THRESHOLD_MS);
+  try {
+    await typeCheckFunctions(
+      ctx,
+      typescriptCompiler,
+      functionsDir,
+      async (result, logSpecificError, runOnError) => {
+        if (
+          (result === "cantTypeCheck" && typeCheckMode === "enable") ||
+          result === "typecheckFailed"
+        ) {
+          logSpecificError?.();
+          logError(
+            chalkStderr.gray(
+              "To ignore failing typecheck, use `--typecheck=disable`.",
+            ),
+          );
+          try {
+            const result = await runOnError?.();
+            // Concurrent change invalidated the error, don't fail
+            if (result === "success") {
+              return;
+            }
+          } catch {
+            // As expected, `runOnError` threw
           }
-        } catch {
-          // As expected, `runOnError` threw
+          await ctx.crash({
+            exitCode: 1,
+            errorType: "invalid filesystem data",
+            printedMessage: null,
+          });
         }
-        await ctx.crash({
-          exitCode: 1,
-          errorType: "invalid filesystem data",
-          printedMessage: null,
-        });
-      }
-    },
-  );
-  maybeLogSlowTypecheckSuggestion(
-    ctx,
-    performance.now() - typecheckStart,
-    typescriptCompiler,
-  );
+      },
+    );
+  } finally {
+    clearTimeout(slowTypecheckTimeout);
+  }
+  maybeLogSlowTypecheckSuggestion(ctx, performance.now() - typecheckStart);
 }
 
 // Runs TypeScript compiler to typecheck Convex query and mutation functions.
@@ -133,18 +140,8 @@ async function runTsc(
   tscArgs: string[],
   handleResult: TypecheckResultHandler,
 ): Promise<void> {
-  // Check if tsc is even installed
-  const tscPath =
-    typescriptCompiler === "tsgo"
-      ? path.join(
-          "node_modules",
-          "@typescript",
-          "native-preview",
-          "bin",
-          "tsgo.js",
-        )
-      : path.join("node_modules", "typescript", "bin", "tsc");
-  if (!ctx.fs.exists(tscPath)) {
+  const compilerPath = findTypeScriptCompilerPath(ctx.fs, typescriptCompiler);
+  if (!compilerPath) {
     return handleResult("cantTypeCheck", () => {
       logError(
         chalkStderr.gray(
@@ -156,14 +153,14 @@ async function runTsc(
 
   // Check the TypeScript version matches the recommendation from Convex
   const versionResult = await spawnAsync(ctx, process.execPath, [
-    tscPath,
+    compilerPath,
     "--version",
   ]);
 
   const version = versionResult.stdout.match(/Version (.*)/)?.[1] ?? null;
   const hasOlderTypeScriptVersion = version && semver.lt(version, "4.8.4");
 
-  await runTscInner(ctx, tscPath, tscArgs, handleResult);
+  await runTscInner(ctx, compilerPath, tscArgs, handleResult);
 
   // Print this warning after any logs from running `tsc`
   if (hasOlderTypeScriptVersion) {
@@ -172,6 +169,37 @@ async function runTsc(
         "Convex works best with TypeScript version 4.8.4 or newer -- npm i --save-dev typescript@latest to update.",
       ),
     );
+  }
+}
+
+export function findTypeScriptCompilerPath(
+  fs: Pick<Filesystem, "exists">,
+  typescriptCompiler: TypescriptCompiler,
+): string | undefined {
+  switch (typescriptCompiler) {
+    case "tsgo": {
+      // @typescript/native-preview@7.0.0-dev.20260626.1 switched to using `bin/tsgo` instead of `bin/tsgo.js`.
+      const tsgoPaths = ["tsgo", "tsgo.js"].map((filename) =>
+        path.join(
+          "node_modules",
+          "@typescript",
+          "native-preview",
+          "bin",
+          filename,
+        ),
+      );
+      return tsgoPaths.find((path) => fs.exists(path));
+    }
+    case "tsc": {
+      const tscPaths = [
+        // TypeScript 7's recommended alias when the TypeScript 6 API is also installed.
+        path.join("node_modules", "@typescript", "native", "bin", "tsc"),
+        path.join("node_modules", "typescript", "bin", "tsc"),
+      ];
+      return tscPaths.find((path) => fs.exists(path));
+    }
+    default:
+      typescriptCompiler satisfies never;
   }
 }
 
@@ -262,18 +290,11 @@ async function runTscInner(
   );
 }
 
-function maybeLogSlowTypecheckSuggestion(
-  ctx: Context,
-  durationMs: number,
-  typescriptCompiler: TypescriptCompiler,
-) {
+function maybeLogSlowTypecheckSuggestion(ctx: Context, durationMs: number) {
   if (!(ctx instanceof WatchContext)) {
     return;
   }
   if (!ctx.isFirstPush) {
-    return;
-  }
-  if (typescriptCompiler === "tsgo") {
     return;
   }
   if (durationMs <= SLOW_TYPECHECK_THRESHOLD_MS) {
@@ -282,7 +303,7 @@ function maybeLogSlowTypecheckSuggestion(
   const formattedDuration = formatDuration(durationMs);
   logMessage(
     chalkStderr.gray(
-      `Typechecking took ${formattedDuration}. For faster iteration, consider enabling the TypeScript 7 compiler (tsgo) in your project configuration: ${SLOW_TYPECHECK_DOCS_URL}`,
+      `Typechecking took ${formattedDuration}. For faster iteration, see ${SLOW_TYPECHECK_DOCS_URL} to troubleshoot typecheck performance.`,
     ),
   );
 }

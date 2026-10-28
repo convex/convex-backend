@@ -18,6 +18,7 @@ export const isValidValue = (
     case "number":
       return typeof value === "number";
     case "bigint":
+    case "commitTs":
       return typeof value === "bigint";
     case "bytes":
       return value instanceof Uint8Array;

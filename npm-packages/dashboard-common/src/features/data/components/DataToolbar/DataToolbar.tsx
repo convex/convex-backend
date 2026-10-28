@@ -221,7 +221,7 @@ export function DataToolbarSkeleton() {
   return (
     <div className="flex items-end justify-between">
       <h3 className="font-mono">{query.table}</h3>
-      <div className="flex h-[2.375rem] gap-2" />
+      <div className="flex h-9.5 gap-2" />
     </div>
   );
 }

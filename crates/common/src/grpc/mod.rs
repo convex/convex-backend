@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use errors::ErrorMetadata;
 use fnv::FnvHashMap;
 use futures::Future;
 use pb::error_metadata::ErrorMetadataStatusExt;
@@ -126,6 +127,50 @@ impl ConvexGrpcService {
 pub fn handle_response<T>(response: Result<Response<T>, Status>) -> anyhow::Result<T> {
     match response {
         Ok(response) => Ok(response.into_inner()),
+        Err(status) => Err(status.into_anyhow()),
+    }
+}
+
+/// Returns true if `status` is a failure to *establish* the connection to the
+/// server (connection refused, host down, connect timeout, …).
+///
+/// Tonic wraps every connection-establishment error in [`tonic::ConnectError`]
+/// and nothing on the request/response data path produces one, so its presence
+/// anywhere in the error's source chain proves the request was never
+/// dispatched — making it safe to retry on another upstream even for
+/// non-idempotent operations. We key on `ConnectError` rather than
+/// [`tonic::Code::Unavailable`] precisely because some mid-flight failures
+/// (e.g. an h2 `REFUSED_STREAM`) also map to `Unavailable` but may have reached
+/// the server.
+pub fn is_connect_error(status: &Status) -> bool {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(status);
+    while let Some(err) = source {
+        if err.is::<tonic::ConnectError>() {
+            return true;
+        }
+        source = err.source();
+    }
+    false
+}
+
+/// Like [`handle_response`], but tags connection-establishment failures as
+/// [`ErrorMetadata::rejected_before_execution`] so callers that fail over to
+/// another upstream retry them (see [`is_connect_error`]). Apply this to the
+/// *initial* response of an RPC, not to errors surfaced while consuming a
+/// response stream — those may be mid-flight and unsafe to retry.
+pub fn handle_response_retry_on_connect<T>(
+    response: Result<Response<T>, Status>,
+) -> anyhow::Result<T> {
+    match response {
+        Ok(response) => Ok(response.into_inner()),
+        Err(status) if is_connect_error(&status) => {
+            Err(status
+                .into_anyhow()
+                .context(ErrorMetadata::rejected_before_execution(
+                    "UpstreamConnectError",
+                    "Failed to connect to upstream",
+                )))
+        },
         Err(status) => Err(status.into_anyhow()),
     }
 }

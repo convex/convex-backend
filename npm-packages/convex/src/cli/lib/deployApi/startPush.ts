@@ -29,7 +29,7 @@ export type StartPushRequest = z.infer<typeof startPushRequest>;
 export const schemaChange = looseObject({
   allocatedComponentIds: z.any(),
   schemaIds: z.any(),
-  indexDiffs: z.record(componentDefinitionPath, indexDiff).optional(),
+  indexDiffs: z.record(componentPath, indexDiff).optional(),
 });
 export type SchemaChange = z.infer<typeof schemaChange>;
 
@@ -47,6 +47,70 @@ export const startPushResponse = looseObject({
   schemaChange,
 });
 export type StartPushResponse = z.infer<typeof startPushResponse>;
+
+// Values this short are rarely secrets, and replacing them everywhere would
+// garble unrelated strings in the output.
+const MIN_SCRUBBED_VALUE_LENGTH = 8;
+
+/**
+ * Replaces every occurrence of an environment variable's value in `node`'s
+ * strings with `<redacted>`. Values reappear in push responses wherever the
+ * code read them, such as auth providers built from `process.env` in
+ * `auth.config.ts`.
+ */
+export function redactEnvironmentVariableValues<T>(
+  node: T,
+  environmentVariables: Record<string, string>,
+): T {
+  const values = Object.values(environmentVariables)
+    .filter((value) => value.length >= MIN_SCRUBBED_VALUE_LENGTH)
+    // Strings that hold JSON, like `authDiff` entries, contain the escaped form.
+    .flatMap((value) => {
+      const escaped = JSON.stringify(value).slice(1, -1);
+      return escaped === value ? [value] : [value, escaped];
+    })
+    .sort((a, b) => b.length - a.length);
+  const scrub = (child: unknown): unknown => {
+    if (typeof child === "string") {
+      return values.reduce(
+        (scrubbed, value) => scrubbed.split(value).join("<redacted>"),
+        child,
+      );
+    }
+    if (Array.isArray(child)) {
+      return child.map(scrub);
+    }
+    if (child !== null && typeof child === "object") {
+      return Object.fromEntries(
+        Object.entries(child).map(([key, grandchild]) => [
+          key,
+          scrub(grandchild),
+        ]),
+      );
+    }
+    return child;
+  };
+  return scrub(node) as T;
+}
+
+/**
+ * A copy of the response that is safe to print. `environmentVariables` holds
+ * every value on the deployment so `finish_push` can detect concurrent changes,
+ * and those values are often secrets.
+ */
+export function startPushResponseForLogging(
+  response: StartPushResponse,
+): StartPushResponse {
+  return {
+    ...redactEnvironmentVariableValues(response, response.environmentVariables),
+    environmentVariables: Object.fromEntries(
+      Object.keys(response.environmentVariables).map((name) => [
+        name,
+        "<redacted>",
+      ]),
+    ),
+  };
+}
 
 export const evaluatePushResponse = looseObject({
   schemaChange,

@@ -90,7 +90,7 @@ provenance for removal.
 Suggested flow in a fresh temp project:
 
 1. Install one Convex skill manually first, for example:
-   `npx skills add get-convex/agent-skills --skill convex-quickstart --agent codex --yes`
+   `npx skills add convex/agent-skills --skill convex-quickstart --agent codex --yes`
 2. Run `npx convex ai-files install`
 3. Inspect `convex/_generated/ai/ai-files.state.json`
 4. Run `npx convex ai-files remove`
@@ -119,7 +119,7 @@ Suggested flow in a fresh temp project:
 
 1. Install a non-Convex skill and a couple of Convex skills, for example:
    `npx skills add vercel-labs/agent-skills --skill web-design-guidelines --agent codex --yes`
-   `npx skills add get-convex/agent-skills --skill convex-quickstart --agent codex --yes`
+   `npx skills add convex/agent-skills --skill convex-quickstart --agent codex --yes`
 2. Write any `convex/_generated/ai/ai-files.state.json` you like, including junk
    fields from older CLIs if you want.
 3. Run `npx convex ai-files remove`

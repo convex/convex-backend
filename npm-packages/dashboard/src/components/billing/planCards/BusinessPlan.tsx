@@ -25,7 +25,7 @@ export function BusinessPlan({
       saleHeader="$2,500 monthly minimum"
       action={
         isCurrentPlan ? (
-          <p className="flex h-[2.125rem] items-center px-2 font-semibold">
+          <p className="flex h-8.5 items-center px-2 font-semibold">
             Current Plan
           </p>
         ) : (

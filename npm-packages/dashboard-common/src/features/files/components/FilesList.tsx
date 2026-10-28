@@ -77,7 +77,7 @@ export function FilesList({
   setSelectedFiles: React.Dispatch<
     React.SetStateAction<Record<Id<"_storage">, boolean>>
   >;
-  containerRef: React.RefObject<HTMLDivElement>;
+  containerRef: React.RefObject<HTMLDivElement | null>;
   totalNumFiles: number | undefined;
   files: FileMetadata[];
   status: "LoadingFirstPage" | "LoadingMore" | "CanLoadMore" | "Exhausted";
@@ -92,7 +92,7 @@ export function FilesList({
   setFilters: (filters: FileFilters) => void;
 }) {
   // Remove the selection of files that no longer exist
-  const prevResults = useRef<FileMetadata[]>();
+  const prevResults = useRef<FileMetadata[] | undefined>(undefined);
   useEffect(() => {
     if (prevResults.current === files) return;
     prevResults.current = files;
@@ -161,7 +161,7 @@ export function FilesList({
 
   return (
     <div
-      className="flex max-w-[60rem] min-w-[37.5rem] grow flex-col gap-4"
+      className="flex max-w-240 min-w-150 grow flex-col gap-4"
       ref={containerRef}
     >
       <Sheet
@@ -182,7 +182,7 @@ export function FilesList({
             setFilters={setFilters}
           />
           {status === "LoadingFirstPage" ? (
-            <Loading className="max-w-[60rem]" />
+            <Loading className="max-w-240" />
           ) : files.length === 0 && status !== "CanLoadMore" ? (
             hasFilters ? (
               <div className="mt-2 flex w-full items-center justify-center text-content-secondary">
@@ -204,7 +204,7 @@ export function FilesList({
           ) : (
             <div className="h-full">
               <InfiniteScrollList
-                className="scrollbar min-w-[36.25rem]"
+                className="scrollbar min-w-145"
                 style={{
                   scrollbarGutter: "stable",
                 }}

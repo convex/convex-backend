@@ -1,4 +1,5 @@
 import classNames from "classnames";
+import { ReactNode } from "react";
 import { Integration } from "system-udfs/convex/_system/frontend/common";
 import { Tooltip } from "@ui/Tooltip";
 
@@ -32,24 +33,41 @@ function statusToColors(
         darkTextColor: "dark:text-slate-200",
       };
     default:
-      // eslint-disable-next-line no-case-declarations
       status satisfies never;
       throw new Error(`Unrecognized health status ${status}`);
   }
 }
 
-export function HealthIndicator({ status }: { status: Integration["status"] }) {
-  const { lightTextColor, darkTextColor } = statusToColors(status.type);
-
+/**
+ * The colored status word an integration card shows above its detail line.
+ * Takes its own `children` so integrations that track something other than a
+ * `_log_sinks` status can still label themselves consistently.
+ */
+export function HealthLabel({
+  type,
+  children,
+}: {
+  type: Integration["status"]["type"];
+  children: ReactNode;
+}) {
+  const { lightTextColor, darkTextColor } = statusToColors(type);
   return (
     <div
       className={classNames("text-xs", `${lightTextColor} ${darkTextColor}`)}
     >
+      {children}
+    </div>
+  );
+}
+
+export function HealthIndicator({ status }: { status: Integration["status"] }) {
+  return (
+    <HealthLabel type={status.type}>
       {status.type === "failed" ? (
         <Tooltip tip={`Reason: ${status.reason}`}>Failed</Tooltip>
       ) : (
         status.type.charAt(0).toUpperCase() + status.type.slice(1)
       )}
-    </div>
+    </HealthLabel>
   );
 }

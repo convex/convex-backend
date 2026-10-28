@@ -30,8 +30,8 @@ use rand::Rng;
 use sync_types::types::SerializedArgs;
 use value::{
     heap_size::HeapSize,
-    ConvexValue,
     JsonPackedValue,
+    PendingValue,
 };
 
 use crate::{
@@ -58,7 +58,10 @@ pub struct UdfOutcome {
 
     // QueryUdfOutcomes are stored in the Udf level cache, which is why we would like
     // them to have more compact representation.
-    pub result: Result<JsonPackedValue, JsError>,
+    //
+    // Mutations and subqueries called by mutations can have unresolved commit_ts, but top-level
+    // queries should be concrete.
+    pub result: Result<JsonPackedValue<PendingValue>, JsError>,
 
     pub syscall_trace: SyscallTrace,
 
@@ -88,7 +91,7 @@ pub struct NestedUdfOutcome {
     pub log_lines: LogLines,
     pub audit_log_lines: AuditLogLines,
     pub journal: QueryJournal,
-    pub result: Result<ConvexValue, JsError>,
+    pub result: Result<PendingValue, JsError>,
     pub syscall_trace: SyscallTrace,
 }
 

@@ -89,3 +89,21 @@ pub const CLUSTER_LABEL: &str = "cluster";
 pub fn cluster_label(cluster: &'static str) -> StaticMetricLabel {
     StaticMetricLabel::new(CLUSTER_LABEL, cluster)
 }
+
+pub const METHOD_LABEL: &str = "method";
+/// Maps an arbitrary (potentially client-controlled) HTTP method to a bounded
+/// set of static label values so metric cardinality can't be inflated by
+/// unusual/custom method tokens.
+pub fn method_label(method: &str) -> StaticMetricLabel {
+    let value = match method {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "PATCH" => "PATCH",
+        "HEAD" => "HEAD",
+        "OPTIONS" => "OPTIONS",
+        _ => "other",
+    };
+    StaticMetricLabel::new(METHOD_LABEL, value)
+}

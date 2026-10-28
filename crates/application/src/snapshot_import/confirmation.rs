@@ -51,12 +51,13 @@ pub async fn info_message_for_import<RT: Runtime>(
     message_lines.extend(content_confirmation_messages);
     // Consider adding confirmation messages about bandwidth usage.
     if !message_lines.is_empty() {
-        message_lines.insert(0, format!("Import change summary:"))
+        message_lines.insert(0, "Import change summary:".to_string())
     }
-    message_lines.push(format!(
+    message_lines.push(
         "Once the import has started, it will run in the background.\nInterrupting `npx convex \
          import` will not cancel it."
-    ));
+            .to_string(),
+    );
     Ok((
         message_lines.join("\n"),
         require_manual_confirmation,
@@ -69,7 +70,9 @@ async fn messages_to_confirm_replace<RT: Runtime>(
     snapshot_import: ParsedDocument<SnapshotImport>,
 ) -> anyhow::Result<(Vec<String>, bool, Vec<ImportTableCheckpoint>)> {
     let mode = snapshot_import.mode;
-    let (_, import) = executor.parse_import(snapshot_import.id()).await?;
+    let (_, import) = executor
+        .parse_import(snapshot_import.developer_id())
+        .await?;
     // Find all tables being written to.
     let mut count_by_table: BTreeMap<(ComponentPath, TableName), u64> = BTreeMap::new();
     let mut tables_missing_id_field: BTreeSet<(ComponentPath, TableName)> = BTreeSet::new();
@@ -136,9 +139,8 @@ async fn messages_to_confirm_replace<RT: Runtime>(
                 } else {
                     table_name
                 };
-                let table_summary =
-                    db_snapshot.must_table_summary(component_id.into(), table_name)?;
-                anyhow::Ok(table_summary.num_values())
+                let table_count = db_snapshot.must_table_count(component_id.into(), table_name)?;
+                anyhow::Ok(table_count.num_values())
             })
             .transpose()?
             .unwrap_or(0);
@@ -226,7 +228,7 @@ async fn messages_to_confirm_replace<RT: Runtime>(
         if !component_path.is_root() {
             message_lines.push(format!("Component {}", String::from(component_path)));
         }
-        message_lines.extend(render_table_changes(table_changes.collect()).into_iter());
+        message_lines.extend(render_table_changes(table_changes.collect()));
     }
     Ok((message_lines, require_manual_confirmation, new_checkpoints))
 }

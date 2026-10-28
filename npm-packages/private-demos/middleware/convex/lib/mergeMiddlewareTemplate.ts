@@ -29,7 +29,7 @@ const myTransformB = async (
   ctx: MyRequiredContextB,
   args: ObjectType<typeof myValidatorB>,
 ): Promise<TransformedContextB> => {
-  const session = await ctx.db.get(args.sessionId);
+  const session = await ctx.db.get("sessions", args.sessionId);
   return { session };
 };
 

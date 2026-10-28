@@ -10,19 +10,18 @@
   },
   "module": "esnext",
   "dependencies": {
-    "adm-zip": "^0.5.10",
+    "adm-zip": "^0.6.1",
     "archiver": "~7.0.0",
     "commander": "^14.0.3",
     "concat-stream": "^2.0.0",
     "convex": "workspace:*",
     "express": "^5.0.0",
-    "prettier": "3.8.1",
+    "jose": "^5.10.0",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.171.0",
     "@sendgrid/mail": "^8.1.5",
-    "@types/adm-zip": "^0.5.7",
     "@types/archiver": "~7.0.0",
     "@types/aws-lambda": "^8.10.106",
     "@types/concat-stream": "^2.0.3",
@@ -35,8 +34,8 @@
     "stripe": "^19.0.0",
     "twilio": "^5.0.0",
     "typescript": "~5.0.3",
-    "undici": "7.24.0",
-    "vitest": "^3.2.4",
+    "undici": "7.29.1",
+    "vitest": "^4.1.0",
     "zod": "^3.24.0",
     "@commander-js/extra-typings": "^14.0.0"
   }

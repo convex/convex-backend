@@ -32,12 +32,14 @@ use common::{
     log_streaming::{
         LogEvent,
         LogSender,
+        LogTopic,
         StructuredLogEvent,
     },
     runtime::{
         shutdown_and_join,
         Runtime,
         SpawnHandle,
+        TimeoutError,
         WithTimeout,
     },
     types::DeploymentType,
@@ -72,6 +74,7 @@ use parking_lot::{
     Mutex,
     RwLock,
 };
+use sentry::TransportFactory;
 use serde::Serialize;
 use sinks::{
     local_sink::LocalSink,
@@ -85,6 +88,10 @@ use usage_tracking::UsageCounter;
 use crate::sinks::{
     axiom::AxiomSink,
     datadog::DatadogSink,
+    failure::{
+        SinkEgressFailure,
+        SinkFailureReporter,
+    },
     utils::EgressCounter,
     webhook::WebhookSink,
 };
@@ -95,7 +102,7 @@ use crate::sinks::{
 #[derive(Clone)]
 pub struct LogManagerClient {
     handle: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
-    event_sender: mpsc::Sender<LogEvent>,
+    event_sender: mpsc::Sender<Arc<LogEvent>>,
     active_sinks_count: Arc<AtomicUsize>,
     entitlement_enabled: Arc<AtomicBool>,
 }
@@ -106,7 +113,7 @@ impl LogManagerClient {
         let mut num_left = logs.len();
         let total = logs.len();
         for log in logs.into_iter() {
-            match self.event_sender.try_send(log) {
+            match self.event_sender.try_send(Arc::new(log)) {
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     dropped += 1;
                 },
@@ -140,7 +147,7 @@ impl LogManagerClient {
         self.active_sinks_count.load(Ordering::Relaxed)
     }
 
-    fn is_entitlement_enabled(&self) -> bool {
+    pub fn is_entitlement_enabled(&self) -> bool {
         self.entitlement_enabled.load(Ordering::Relaxed)
     }
 
@@ -222,11 +229,12 @@ pub struct LogManager<RT: Runtime> {
     runtime: RT,
     database: Database<RT>,
     fetch_client: Arc<dyn FetchClient>,
+    sentry_transport: Arc<dyn TransportFactory>,
     sinks: Arc<RwLock<BTreeMap<SinkType, LogSinkClient>>>,
-    event_receiver: mpsc::Receiver<LogEvent>,
+    event_receiver: mpsc::Receiver<Arc<LogEvent>>,
     /// Cloned sender for feeding log events back into the pipeline (e.g.,
     /// LogStreamEgress events emitted by sinks).
-    event_sender: mpsc::Sender<LogEvent>,
+    event_sender: mpsc::Sender<Arc<LogEvent>>,
     instance_name: String,
     deployment_region: Option<String>,
     /// How many sinks are active right now?
@@ -250,6 +258,7 @@ impl<RT: Runtime> LogManager<RT> {
         runtime: RT,
         database: Database<RT>,
         fetch_client: Arc<dyn FetchClient>,
+        sentry_transport: Arc<dyn TransportFactory>,
         instance_name: String,
         deployment_region: Option<String>,
         entitlement_enabled: bool,
@@ -263,6 +272,7 @@ impl<RT: Runtime> LogManager<RT> {
             runtime: runtime.clone(),
             database,
             fetch_client,
+            sentry_transport,
             // Sinks are populated from the `_log_sinks` system table on startup
             sinks: Arc::new(RwLock::new(BTreeMap::new())),
             event_receiver: req_rx,
@@ -306,6 +316,7 @@ impl<RT: Runtime> LogManager<RT> {
             &self.runtime,
             &self.database,
             self.fetch_client.clone(),
+            self.sentry_transport.clone(),
             &self.sinks,
             self.instance_name.clone(),
             self.deployment_region.clone(),
@@ -352,41 +363,32 @@ impl<RT: Runtime> LogManager<RT> {
     /// This can just as easily be moved to sinks if required.
     async fn log_event_listener(
         runtime: &RT,
-        rx: &mut mpsc::Receiver<LogEvent>,
+        rx: &mut mpsc::Receiver<Arc<LogEvent>>,
         sinks: &Arc<RwLock<BTreeMap<SinkType, LogSinkClient>>>,
     ) -> anyhow::Result<!> {
         loop {
-            // Wait aggregation interval
-            // TODO: look into mpsc implementations that allow us to check if the channel is
-            // full so we don't need to sleep wastefully here.
-            runtime
-                .wait(Duration::from_millis(
-                    *knobs::LOG_MANAGER_AGGREGATION_INTERVAL_MILLIS,
-                ))
-                .await;
-
-            // Drain the receive buffer up until the max buffer size or until buffer is
-            // empty
+            // Accumulate events as they arrive until the batch is full or the
+            // aggregation interval passes, whichever comes first.
+            let mut deadline = runtime.wait(Duration::from_millis(
+                *knobs::LOG_MANAGER_AGGREGATION_INTERVAL_MILLIS,
+            ));
+            let max_batch_size = *knobs::LOG_MANAGER_EVENT_RECV_BUFFER_SIZE;
             let mut drained_events = vec![];
-            let mut disconnected = false;
-
-            let curr_buffer_size = *knobs::LOG_MANAGER_EVENT_RECV_BUFFER_SIZE;
-            while drained_events.len() < curr_buffer_size {
-                match rx.try_recv() {
-                    Err(mpsc::error::TryRecvError::Empty) => break,
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        disconnected = true;
-                        break;
+            while drained_events.len() < max_batch_size {
+                let limit = max_batch_size - drained_events.len();
+                let recv = rx.recv_many(&mut drained_events, limit).fuse();
+                pin_mut!(recv);
+                select_biased! {
+                    num_received = recv => {
+                        if num_received == 0 {
+                            anyhow::bail!("log manager receive channel closed");
+                        }
                     },
-                    Ok(event) => {
-                        drained_events.push(Arc::new(event));
-                    },
+                    _ = deadline => break,
                 }
             }
 
-            if disconnected {
-                anyhow::bail!("log manager receive channel closed");
-            } else if !drained_events.is_empty() {
+            if !drained_events.is_empty() {
                 // Route events to sinks
                 metrics::log_manager_logs_received(drained_events.len());
                 Self::route_event_batch(drained_events, sinks)?;
@@ -439,6 +441,7 @@ impl<RT: Runtime> LogManager<RT> {
         runtime: &RT,
         database: &Database<RT>,
         fetch_client: Arc<dyn FetchClient>,
+        sentry_transport: Arc<dyn TransportFactory>,
         sinks: &Arc<RwLock<BTreeMap<SinkType, LogSinkClient>>>,
         instance_name: String,
         deployment_region: Option<String>,
@@ -475,6 +478,7 @@ impl<RT: Runtime> LogManager<RT> {
                 runtime,
                 database,
                 fetch_client.clone(),
+                sentry_transport.clone(),
                 sink_rows,
                 sinks,
                 active_sinks_count.clone(),
@@ -493,6 +497,7 @@ impl<RT: Runtime> LogManager<RT> {
         runtime: &RT,
         database: &Database<RT>,
         fetch_client: Arc<dyn FetchClient>,
+        sentry_transport: Arc<dyn TransportFactory>,
         sink_rows: Vec<ParsedDocument<LogSinksRow>>,
         sinks: &Arc<RwLock<BTreeMap<SinkType, LogSinkClient>>>,
         active_sinks_count: Arc<AtomicUsize>,
@@ -523,6 +528,10 @@ impl<RT: Runtime> LogManager<RT> {
         };
 
         let mut tx = database.begin(Identity::system()).await?;
+
+        let custom_audit_allowed = BackendInfoModel::new(&mut tx)
+            .is_custom_audit_logs_in_log_streams_allowed()
+            .await?;
 
         // Order is important! Handle any `Tombstoned` rows first in case they were
         // replaced with a new LogSink for the same provider that's in state `Pending`.
@@ -558,8 +567,12 @@ impl<RT: Runtime> LogManager<RT> {
             tracing::info!("Starting log sink {}", row.config);
 
             let sink_type = row.config.sink_type();
-            let sink_id = row.id();
-            let sink_config = row.config.clone();
+            let sink_id = row.developer_id();
+            let mut sink_config = row.config.clone();
+            // Ignore the `custom_audit` topic if the deployment isn't entitled.
+            if !custom_audit_allowed && let Some(Some(topics)) = sink_config.topics_mut() {
+                topics.remove(&LogTopic::CustomAudit);
+            }
             let sink_status = row.status.clone();
             let timed_startup_result = runtime
                 .with_timeout(
@@ -568,6 +581,7 @@ impl<RT: Runtime> LogManager<RT> {
                     Self::config_to_log_sink_client(
                         runtime,
                         fetch_client.clone(),
+                        sentry_transport.clone(),
                         sink_config,
                         metadata.clone(),
                         sink_status,
@@ -578,9 +592,25 @@ impl<RT: Runtime> LogManager<RT> {
 
             match timed_startup_result {
                 Err(mut e) => {
-                    let reason = e.user_facing_message();
+                    // An unreachable or rejecting endpoint is the customer's
+                    // configuration to fix, so it is counted rather than
+                    // reported; anything else is ours and keeps full fidelity.
+                    // `SINK_STARTUP_TIMEOUT` fires as a bare `TimeoutError`, so
+                    // a hung endpoint only lands here.
+                    let reason = if let Some(failure) = e.downcast_ref::<SinkEgressFailure>() {
+                        metrics::log_sink_verification_failure(
+                            sink_type.as_str(),
+                            failure.outcome_label(),
+                        );
+                        format!("{e:#}")
+                    } else if e.downcast_ref::<TimeoutError>().is_some() {
+                        metrics::log_sink_verification_failure(sink_type.as_str(), "transient");
+                        "Timed out verifying the log stream endpoint".to_string()
+                    } else {
+                        report_error(&mut e).await;
+                        e.user_facing_message()
+                    };
                     tracing::error!("Moving sink {sink_type:?} to Failed state. Reason: {reason}");
-                    report_error(&mut e).await;
 
                     model
                         .patch_status(sink_id, SinkState::Failed { reason })
@@ -607,13 +637,16 @@ impl<RT: Runtime> LogManager<RT> {
                  status and restarting: {}",
                 row.config
             );
-            model.patch_status(row.id(), SinkState::Restarting).await?;
+            model
+                .patch_status(row.developer_id(), SinkState::Restarting)
+                .await?;
         }
 
         // Commit
         database
             .commit_with_write_source(tx, "log_sink_worker")
             .await?;
+
         Ok(())
     }
 
@@ -621,6 +654,7 @@ impl<RT: Runtime> LogManager<RT> {
     async fn config_to_log_sink_client(
         runtime: &RT,
         fetch_client: Arc<dyn FetchClient>,
+        sentry_transport: Arc<dyn TransportFactory>,
         config: SinkConfig,
         metadata: Arc<Mutex<LoggingDeploymentMetadata>>,
         status: SinkState,
@@ -628,38 +662,48 @@ impl<RT: Runtime> LogManager<RT> {
     ) -> anyhow::Result<LogSinkClient> {
         // Only verify credentials for sinks in Pending state (not Restarting)
         let should_verify = matches!(status, SinkState::Pending);
+        let failure_reporter = SinkFailureReporter::new(config.sink_type());
 
         match config {
             SinkConfig::Local(path) => LocalSink::start(runtime.clone(), path.parse()?).await,
             SinkConfig::Datadog(config) => {
+                let topics = config.topics.clone();
                 DatadogSink::start(
                     runtime.clone(),
                     fetch_client,
                     config,
+                    topics,
                     metadata,
                     egress_counter.clone(),
+                    failure_reporter,
                     should_verify,
                 )
                 .await
             },
             SinkConfig::Webhook(config) => {
+                let topics = config.topics.clone();
                 WebhookSink::start(
                     runtime.clone(),
                     config,
+                    topics,
                     fetch_client,
                     metadata,
                     egress_counter.clone(),
+                    failure_reporter,
                     should_verify,
                 )
                 .await
             },
             SinkConfig::Axiom(config) => {
+                let topics = config.topics.clone();
                 AxiomSink::start(
                     runtime.clone(),
                     config,
+                    topics,
                     fetch_client,
                     metadata,
                     egress_counter.clone(),
+                    failure_reporter,
                     should_verify,
                 )
                 .await
@@ -668,19 +712,22 @@ impl<RT: Runtime> LogManager<RT> {
                 SentrySink::start(
                     runtime.clone(),
                     config,
-                    None,
+                    sentry_transport,
                     metadata.clone(),
                     should_verify,
                 )
                 .await
             },
             SinkConfig::PostHogLogs(config) => {
+                let topics = config.topics.clone();
                 PostHogLogsSink::start(
                     runtime.clone(),
                     config,
+                    topics,
                     fetch_client,
                     metadata,
                     egress_counter.clone(),
+                    failure_reporter,
                     should_verify,
                 )
                 .await
@@ -692,9 +739,22 @@ impl<RT: Runtime> LogManager<RT> {
                     fetch_client,
                     metadata,
                     egress_counter.clone(),
+                    failure_reporter,
                     should_verify,
                 )
                 .await
+            },
+            SinkConfig::S3Export(_) => {
+                // The application worker advances this export; the log manager
+                // owns the integration's lifecycle in `_log_sinks`.
+                let (events_sender, mut events_receiver) = mpsc::channel(1);
+                let handle = runtime.spawn("analytics_export_sink", async move {
+                    while events_receiver.recv().await.is_some() {}
+                });
+                Ok(LogSinkClient {
+                    _handle: Arc::new(Mutex::new(handle)),
+                    events_sender,
+                })
             },
         }
     }
@@ -703,7 +763,7 @@ impl<RT: Runtime> LogManager<RT> {
     /// `LogStreamEgress` event, and reports billing usage.
     async fn egress_emission_worker(
         runtime: &RT,
-        event_sender: &mpsc::Sender<LogEvent>,
+        event_sender: &mpsc::Sender<Arc<LogEvent>>,
         egress_counter: &EgressCounter,
         usage_counter: &UsageCounter,
     ) -> anyhow::Result<!> {
@@ -712,10 +772,10 @@ impl<RT: Runtime> LogManager<RT> {
             let egress_bytes = egress_counter.swap(0, Ordering::Relaxed);
             if egress_bytes > 0 {
                 // Emit log stream event
-                let _ = event_sender.try_send(LogEvent {
+                let _ = event_sender.try_send(Arc::new(LogEvent {
                     timestamp: runtime.unix_timestamp(),
                     event: StructuredLogEvent::LogStreamEgress { egress_bytes },
-                });
+                }));
 
                 // Report billing usage
                 let usage_tracker = usage_tracking::FunctionUsageTracker::new();

@@ -26,7 +26,15 @@ use headers::{
 use storage::Storage;
 
 mod core;
+mod downloads;
 mod metrics;
+pub use self::downloads::FileDownloads;
+
+pub const UPLOAD_PENDING_FILE: &str = "upload_pending_file";
+pub const DOWNLOAD_FILE: &str = "download_file";
+pub const FILE_UPLOAD_FAILED_SHORT_MSG: &str = "FileUploadFailed";
+pub const FILE_DOWNLOAD_FAILED_SHORT_MSG: &str = "FileDownloadFailed";
+
 pub struct FileStream {
     pub sha256: Option<Sha256Digest>,
     pub content_length: ContentLength,

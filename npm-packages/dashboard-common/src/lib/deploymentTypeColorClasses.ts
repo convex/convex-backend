@@ -1,4 +1,32 @@
-import { DeploymentType } from "@convex-dev/platform/managementApi";
+import {
+  DeploymentType,
+  PlatformDeploymentResponse,
+} from "@convex-dev/platform/managementApi";
+
+export function deploymentIdentityLabel(
+  deployment: PlatformDeploymentResponse,
+): string {
+  return deployment.kind === "cloud" ? deployment.reference : deployment.name;
+}
+
+// The capitalized, human-readable name for a deployment type (e.g.
+// "Production"). Lowercase it for mid-sentence use.
+export function deploymentTypeLabel(deploymentType: DeploymentType): string {
+  switch (deploymentType) {
+    case "prod":
+      return "Production";
+    case "preview":
+      return "Preview";
+    case "dev":
+      return "Development";
+    case "custom":
+      return "Custom";
+    default: {
+      deploymentType satisfies never;
+      return "";
+    }
+  }
+}
 
 export function deploymentTypeColorClasses(
   deploymentType: DeploymentType,

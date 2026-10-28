@@ -1,6 +1,7 @@
+import { env } from './_generated/server';
 import type { AuthConfig } from 'convex/server';
 
-const clientId = process.env.WORKOS_CLIENT_ID;
+const clientId = env.WORKOS_CLIENT_ID;
 
 export default {
   providers: [

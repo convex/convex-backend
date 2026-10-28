@@ -7,7 +7,6 @@ import { UrlObject } from "url";
 import { GenericDocument } from "convex/server";
 import { Value } from "convex/values";
 import { Target } from "@common/features/data/components/ContextMenu";
-import { useContextMenuTrigger } from "@common/features/data/lib/useContextMenuTrigger";
 
 import { useIdReferenceLink } from "@common/features/data/components/Table/DataCell/utils/useIdReferenceLink";
 import { copyTextToClipboard } from "@common/lib/utils";
@@ -17,9 +16,7 @@ import { useNents } from "@common/lib/useNents";
 // Handles most of the logic for interacting with a cell in the table.
 // This includes opening the context menu, copying values, editing values, etc.
 export function useCellActions({
-  cellRef,
   onOpenContextMenu,
-  onCloseContextMenu,
   columnName,
   rowId,
   value,
@@ -34,9 +31,7 @@ export function useCellActions({
   setShowDetail,
   setShowDocumentDetail,
 }: {
-  cellRef: MutableRefObject<HTMLElement | null>;
   onOpenContextMenu: OpenContextMenu;
-  onCloseContextMenu: () => void;
   columnName: string;
   rowId: string | null;
   value: Value;
@@ -108,7 +103,7 @@ export function useCellActions({
       linkUrl.search = new URLSearchParams(
         idReferenceLink.query as Record<string, string>,
       ).toString();
-      window.open(linkUrl.toString(), "_blank");
+      window.open(linkUrl.toString(), "_self");
     }
   }, [idReferenceLink]);
 
@@ -156,8 +151,6 @@ export function useCellActions({
       editDocument,
     ],
   );
-
-  useContextMenuTrigger(cellRef, contextMenuCallback, onCloseContextMenu);
 
   return {
     didJustCopy,

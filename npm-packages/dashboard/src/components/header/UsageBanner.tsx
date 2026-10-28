@@ -88,7 +88,7 @@ export function UsageBanner({
         containerClass,
       )}
     >
-      <Icon className="h-4 w-4" />
+      <Icon className="size-4" />
 
       <div className="flex min-w-[12em] flex-1 items-center gap-1 text-xs">
         {title}

@@ -49,7 +49,7 @@ instructions. Community support for self-hosting is available in the
 - Join our [Discord community](https://discord.gg/convex) for help and
   discussions.
 - Report issues when building and using the open source Convex backend through
-  [GitHub Issues](https://github.com/get-convex/convex-backend/issues)
+  [GitHub Issues](https://github.com/convex/convex-backend/issues)
 - By submitting pull requests, you confirm that Convex can use, modify, copy,
   and redistribute the contribution, under the terms of its choice.
 
@@ -77,7 +77,6 @@ See [BUILD.md](./BUILD.md).
 ## Repository layout
 
 - `crates/` contains Rust code
-
   - Main binary
     - `local_backend/` is an application server on top of the `Runtime`. This is
       the serving edge for the Convex cloud.

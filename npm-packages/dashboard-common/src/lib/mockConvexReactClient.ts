@@ -1,4 +1,3 @@
-/* eslint-disable class-methods-use-this */
 import { ConvexReactClient, Watch } from "convex/react";
 import { getFunctionName, FunctionReference } from "convex/server";
 

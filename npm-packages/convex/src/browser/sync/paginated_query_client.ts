@@ -17,7 +17,7 @@ import {
   serializePaginatedPathAndArgs,
   canonicalizeUdfPath,
 } from "./udf_path_utils.js";
-import { BaseConvexClient, Transition } from "./client.js";
+import { BaseConvexClientInterface, Transition } from "./client.js";
 import {
   PaginatedQueryResult,
   PaginationStatus,
@@ -46,7 +46,7 @@ type LocalPaginatedQuery = {
   // Map page keys to their query subscriptions
   pageKeyToQuery: Map<
     QueryPageKey,
-    { queryToken: QueryToken; unsubscribe: () => void }
+    { queryToken: QueryToken; unsubscribe: () => void; cursor: string | null }
   >;
   ongoingSplits: Map<QueryPageKey, [QueryPageKey, QueryPageKey]>;
   skip: boolean;
@@ -74,6 +74,7 @@ export type ExtendedTransition = Transition & {
   }>;
 };
 
+/** @internal */
 export class PaginatedQueryClient {
   private paginatedQuerySet: Map<PaginatedQueryToken, LocalPaginatedQuery> =
     new Map();
@@ -81,7 +82,7 @@ export class PaginatedQueryClient {
   private lastTransitionTs: TS;
 
   constructor(
-    private client: BaseConvexClient,
+    private client: BaseConvexClientInterface,
     private onTransition: (transition: ExtendedTransition) => void,
   ) {
     // Nonsense initial value to construct synthetic Transitions
@@ -387,8 +388,11 @@ export class PaginatedQueryClient {
           continue; // Already splitting
         }
 
-        const pageToken = pageKeyToQuery.get(pageKey)!.queryToken;
-        const pageResult = getResult(pageToken);
+        const pageEntry = pageKeyToQuery.get(pageKey);
+        if (!pageEntry) {
+          throw new Error(`No page query for active pageKey ${pageKey}`);
+        }
+        const pageResult = getResult(pageEntry.queryToken);
         if (!pageResult) {
           continue;
         }
@@ -406,6 +410,7 @@ export class PaginatedQueryClient {
           this.splitPaginatedQueryPage(
             paginatedQuery,
             pageKey,
+            pageEntry.cursor,
             result.splitCursor!, // we just checked
             result.continueCursor,
           );
@@ -417,31 +422,38 @@ export class PaginatedQueryClient {
   private splitPaginatedQueryPage(
     paginatedQuery: LocalPaginatedQuery,
     pageKey: QueryPageKey,
+    // Where the page being split started.
+    startCursor: string | null,
+    // The split position - will be end of the first split page and the start
+    // of the second.
     splitCursor: string,
+    // Where the page being split ended.
     continueCursor: string | null,
   ): void {
     const splitKey1 = paginatedQuery.nextPageKey++;
     const splitKey2 = paginatedQuery.nextPageKey++;
 
     const paginationOpts: Value = {
-      cursor: continueCursor,
       numItems: paginatedQuery.options.initialNumItems,
       id: paginatedQuery.id,
     };
 
-    // First split page: same cursor as original, but add endCursor at splitCursor
+    // First split page: same cursor as the original page, ending at splitCursor
     const firstSubscription = this.client.subscribe(
       paginatedQuery.canonicalizedUdfPath,
       {
         ...paginatedQuery.args,
         paginationOpts: {
           ...paginationOpts,
-          cursor: null, // Start from beginning for first split
+          cursor: startCursor,
           endCursor: splitCursor,
         },
       },
     );
-    paginatedQuery.pageKeyToQuery.set(splitKey1, firstSubscription);
+    paginatedQuery.pageKeyToQuery.set(splitKey1, {
+      ...firstSubscription,
+      cursor: startCursor,
+    });
 
     // Second split page: cursor starts at splitCursor, endCursor is the original continueCursor
     const secondSubscription = this.client.subscribe(
@@ -455,7 +467,10 @@ export class PaginatedQueryClient {
         },
       },
     );
-    paginatedQuery.pageKeyToQuery.set(splitKey2, secondSubscription);
+    paginatedQuery.pageKeyToQuery.set(splitKey2, {
+      ...secondSubscription,
+      cursor: splitCursor,
+    });
 
     paginatedQuery.ongoingSplits.set(pageKey, [splitKey1, splitKey2]);
   }
@@ -488,7 +503,10 @@ export class PaginatedQueryClient {
     );
 
     paginatedQuery.pageKeys.push(pageKey);
-    paginatedQuery.pageKeyToQuery.set(pageKey, subscription);
+    paginatedQuery.pageKeyToQuery.set(pageKey, {
+      ...subscription,
+      cursor: continueCursor,
+    });
     return subscription;
   }
 

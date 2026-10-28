@@ -25,7 +25,7 @@ calling [queries](/functions/query-functions.mdx) and
 [mutations](/functions/mutation-functions.mdx).
 
 **Example:**
-[GIPHY Action](https://github.com/get-convex/convex-demos/tree/main/giphy-action)
+[GIPHY Action](https://github.com/convex/convex-demos/tree/main/giphy-action)
 
 ## Action names
 
@@ -86,10 +86,10 @@ do:
   same file.
 
 - To generate upload URLs for storing files use the `storage` field. Read on
-  about [File Storage](/file-storage.mdx).
+  about [File Storage](/file-storage/overview.mdx).
 - To check user authentication use the `auth` field. Auth is propagated
   automatically when calling queries and mutations from the action. Read on
-  about [Authentication](/auth.mdx).
+  about [Authentication](/auth/overview.mdx).
 - To schedule functions to run in the future, use the `scheduler` field. Read on
   about [Scheduled Functions](/scheduling/scheduled-functions.mdx).
 - To search a vector index, use the `vectorSearch` field. Read on about
@@ -179,14 +179,14 @@ Learn more about the two [Convex Runtimes](/functions/runtimes.mdx).
   reuse logic across multiple Convex functions.
 
 But note that the [ActionCtx](/api/interfaces/server.GenericActionCtx) only has
-the `auth` field in common with [QueryCtx](/generated-api/server.md#queryctx)
-and [MutationCtx](/generated-api/server.md#mutationctx).
+the `auth` field in common with [QueryCtx](/generated-api/server.mdx#queryctx)
+and [MutationCtx](/generated-api/server.mdx#mutationctx).
 
 </>
 
 ## Calling actions from clients
 
-To call an action from [React](/client/react.mdx) use the
+To call an action from [React](/client/react/overview.mdx) use the
 [`useAction`](/api/modules/react#useaction) hook along with the generated
 [`api`](/generated-api/api) object.
 
@@ -216,7 +216,7 @@ executing the same action twice.
 Actions time out after 10 minutes.
 [Node.js](/functions/runtimes.mdx#nodejs-runtime) and
 [Convex runtime](/functions/runtimes.mdx#default-convex-runtime) have 512MB and
-64MB memory limit respectively. Please [contact us](/production/contact.md) if
+64MB memory limit respectively. Please [contact us](/production/contact.mdx) if
 you have a use case that requires configuring higher limits.
 
 Actions can do up to 1000 concurrent operations, such as executing queries,
@@ -247,13 +247,13 @@ dangling promises might result in errors in subsequent action invocations.
 
 ### `await ctx.runAction` should only be used for crossing JS runtimes
 
-**Why?** `await ctx.runAction` incurs to overhead of another Convex server
+**Why?** `await ctx.runAction` incurs the overhead of another Convex server
 function. It counts as an extra function call, it allocates its own system
 resources, and while you're awaiting this call the parent action call is frozen
-holding all it's resources. If you pile enough of these calls on top of each
+holding all its resources. If you pile enough of these calls on top of each
 other, your app may slow down significantly.
 
-**Fix:** The reason this api exists is to let you run code in the
+**Fix:** The reason this API exists is to let you run code in the
 [Node.js environment](/functions/runtimes.mdx). If you want to call an action
 from another action that's in the same runtime, which is the normal case, the
 best way to do this is to pull the code you want to call into a TypeScript

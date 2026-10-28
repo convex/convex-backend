@@ -66,7 +66,7 @@ impl From<UdfPath> for String {
         if let Some(ref function) = p.function {
             format!("{}:{}", p.module.as_str(), function)
         } else {
-            format!("{}", p.module.as_str())
+            p.module.as_str().to_string()
         }
     }
 }

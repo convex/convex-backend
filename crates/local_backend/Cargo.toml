@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
+[package.metadata.cargo-machete]
+ignored = ["vergen"]
+
 [[bin]]
 name = "convex-local-backend"
 path = "src/main.rs"
@@ -14,16 +17,16 @@ testing = [
     "clusters/testing",
     "database/testing",
     "errors/testing",
-    "fivetran_destination/testing",
     "function_runner/testing",
     "indexing/testing",
-    "isolate/testing",
     "keybroker/testing",
     "metrics/testing",
     "model/testing",
+    "roles/testing",
     "runtime/testing",
     "search/testing",
     "storage/testing",
+    "streaming_export/testing",
     "udf/testing",
     "usage_tracking/testing",
     "value/testing",
@@ -38,13 +41,17 @@ testing = [
 ]
 
 [dependencies]
+ai_gateway_jwt = { workspace = true }
 anyhow = { workspace = true }
 application = { workspace = true }
 async-broadcast = { workspace = true }
+async-trait = { workspace = true }
 authentication = { workspace = true }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 base64 = { workspace = true }
+big_brain_client = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 clusters = { workspace = true }
 cmd_util = { workspace = true }
@@ -57,8 +64,6 @@ events = { workspace = true }
 exports = { workspace = true }
 fastrace = { workspace = true }
 file_storage = { workspace = true }
-fivetran_destination = { workspace = true }
-fivetran_source = { workspace = true }
 function_runner = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
@@ -68,14 +73,15 @@ http-body-util = { workspace = true }
 http_client = { workspace = true }
 hyper-util = { workspace = true }
 indexing = { workspace = true }
-isolate = { workspace = true }
 keybroker = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
 model = { workspace = true }
+moka = { workspace = true }
 node_executor = { workspace = true }
 parking_lot = { workspace = true }
 reqwest = { workspace = true }
+roles = { workspace = true }
 runtime = { workspace = true }
 search = { workspace = true }
 sentry = { workspace = true }
@@ -83,6 +89,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
 storage = { workspace = true }
+streaming_export = { workspace = true }
 sync = { workspace = true }
 sync_types = { workspace = true }
 tempfile = { workspace = true }
@@ -91,11 +98,11 @@ tokio-stream = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tungstenite = { workspace = true }
 udf = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
+usage_limits = { path = "../usage_limits" }
 usage_tracking = { path = "../usage_tracking" }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
@@ -117,20 +124,20 @@ db_connection = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 events = { workspace = true, features = ["testing"] }
 exports = { workspace = true, features = ["testing"] }
-fivetran_destination = { workspace = true, features = ["testing"] }
 function_runner = { workspace = true, features = ["testing"] }
 indexing = { workspace = true, features = ["testing"] }
-isolate = { workspace = true, features = ["testing"] }
 jsonschema = { workspace = true }
 keybroker = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }
 model = { workspace = true, features = ["testing"] }
 node_executor = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
+roles = { workspace = true, features = ["testing"] }
 runtime = { workspace = true, features = ["testing"] }
 search = { workspace = true, features = ["testing"] }
 shape_inference = { workspace = true, features = ["testing"] }
 storage = { workspace = true, features = ["testing"] }
+streaming_export = { workspace = true, features = ["testing"] }
 sync = { workspace = true, features = ["testing"] }
 tokio-tungstenite = { workspace = true }
 udf = { workspace = true, features = ["testing"] }

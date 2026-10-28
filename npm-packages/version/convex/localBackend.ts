@@ -37,13 +37,13 @@ export const save = internalMutation({
     // Delete existing entries
     const existing = await ctx.db.query("localBackendVersion").collect();
     for (const entry of existing) {
-      await ctx.db.delete(entry._id);
+      await ctx.db.delete("localBackendVersion", entry._id);
     }
 
     // Insert new entry
     const doc = await ctx.db.insert("localBackendVersion", {
       version: args.version,
     });
-    return (await ctx.db.get(doc))!;
+    return (await ctx.db.get("localBackendVersion", doc))!;
   },
 });

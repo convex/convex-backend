@@ -1,5 +1,8 @@
 use std::{
-    collections::BTreeMap,
+    collections::{
+        BTreeMap,
+        BTreeSet,
+    },
     sync::{
         atomic::Ordering,
         Arc,
@@ -9,9 +12,7 @@ use std::{
 use bytes::Bytes;
 use common::{
     backoff::Backoff,
-    errors::report_error,
     http::{
-        categorize_http_response_stream,
         fetch::FetchClient,
         HttpRequestStream,
         APPLICATION_JSON_CONTENT_TYPE,
@@ -19,12 +20,9 @@ use common::{
     log_streaming::{
         LogEvent,
         LogEventFormatVersion,
+        LogTopic,
     },
     runtime::Runtime,
-};
-use errors::{
-    ErrorMetadata,
-    ErrorMetadataAnyhowExt,
 };
 use http::{
     header::{
@@ -45,11 +43,18 @@ use tokio::sync::mpsc;
 use crate::{
     consts,
     metrics::axiom_sink_network_egress_bytes,
-    sinks::utils::{
-        self,
-        build_event_batches,
-        default_log_filter,
-        EgressCounter,
+    sinks::{
+        failure::{
+            classify_sink_response,
+            SinkEgressFailure,
+            SinkFailureReporter,
+        },
+        utils::{
+            self,
+            build_event_batches,
+            EgressCounter,
+            SinkFilter,
+        },
     },
     LogSinkClient,
     LoggingDeploymentMetadata,
@@ -93,20 +98,24 @@ pub struct AxiomSink<RT: Runtime> {
     api_key: String,
     attributes: BTreeMap<String, String>,
     log_event_format: LogEventFormatVersion,
+    filter: SinkFilter,
     fetch_client: Arc<dyn FetchClient>,
     events_receiver: mpsc::Receiver<Vec<Arc<LogEvent>>>,
     backoff: Backoff,
     deployment_metadata: Arc<Mutex<LoggingDeploymentMetadata>>,
     egress_counter: EgressCounter,
+    failure_reporter: SinkFailureReporter,
 }
 
 impl<RT: Runtime> AxiomSink<RT> {
     pub async fn start(
         runtime: RT,
         config: AxiomConfig,
+        subscribed_topics: Option<BTreeSet<LogTopic>>,
         fetch_client: Arc<dyn FetchClient>,
         deployment_metadata: Arc<Mutex<LoggingDeploymentMetadata>>,
         egress_counter: EgressCounter,
+        failure_reporter: SinkFailureReporter,
         should_verify: bool,
     ) -> anyhow::Result<LogSinkClient> {
         tracing::info!("Starting AxiomSink");
@@ -137,6 +146,7 @@ impl<RT: Runtime> AxiomSink<RT> {
                 .into_iter()
                 .map(|a| (a.key, a.value))
                 .collect(),
+            filter: SinkFilter::for_version(config.version, subscribed_topics),
             log_event_format: config.version,
             fetch_client,
             events_receiver: rx,
@@ -145,6 +155,7 @@ impl<RT: Runtime> AxiomSink<RT> {
                 consts::AXIOM_SINK_MAX_BACKOFF,
             ),
             egress_counter,
+            failure_reporter,
         };
 
         if should_verify {
@@ -188,17 +199,18 @@ impl<RT: Runtime> AxiomSink<RT> {
                     let batches = build_event_batches(
                         ev,
                         consts::AXIOM_SINK_MAX_LOGS_PER_BATCH,
-                        default_log_filter,
+                        &self.filter,
                     );
 
                     // Process each batch and send to Axiom
                     for batch in batches {
                         let track_egress = utils::batch_has_non_egress_events(&batch);
-                        if let Err(mut e) = self.process_events(batch, track_egress).await {
-                            tracing::error!("Error emitting log event batch in AxiomSink: {e:?}.");
-                            report_error(&mut e).await;
-                        } else {
-                            self.backoff.reset();
+                        match self.process_events(batch, track_egress).await {
+                            Ok(()) => {
+                                self.backoff.reset();
+                                self.failure_reporter.reset();
+                            },
+                            Err(e) => self.failure_reporter.record_failure(e).await,
                         }
                     }
                 },
@@ -222,6 +234,7 @@ impl<RT: Runtime> AxiomSink<RT> {
         let batch_json = Bytes::from(batch_json);
 
         // Make request in a loop that retries on transient errors
+        let mut last_failure = None;
         for _ in 0..consts::AXIOM_SINK_MAX_REQUEST_ATTEMPTS {
             let batch_json = batch_json.clone();
             let response = self
@@ -230,7 +243,7 @@ impl<RT: Runtime> AxiomSink<RT> {
                     url: self.axiom_url.clone(),
                     method: http::Method::POST,
                     headers: header_map.clone(),
-                    body: Box::pin(futures::stream::once(async { Ok(batch_json) })),
+                    body: Some(Box::pin(futures::stream::once(async { Ok(batch_json) }))),
                     signal: Box::pin(futures::future::pending()),
                 })
                 .await;
@@ -247,35 +260,24 @@ impl<RT: Runtime> AxiomSink<RT> {
                 );
             }
 
-            // Retry only on 5xx errors.
-            match response.and_then(categorize_http_response_stream) {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    // Retry on 5xx, uncategorized errors, or any error which is either our or
-                    // Axiom's fault. Short-circuit for 4xx errors which are
-                    // the user's fault.
-                    if e.is_deterministic_user_error() {
-                        anyhow::bail!(e.map_error_metadata(|e| ErrorMetadata {
-                            code: e.code,
-                            short_msg: "AxiomRequestFailed".into(),
-                            msg: e.msg,
-                            source: None,
-                        }));
-                    } else {
-                        let delay = self.backoff.fail(&mut self.runtime.rng());
-                        tracing::warn!(
-                            "Failed to send in Axiom sink: {e}. Waiting {delay:?} before retrying."
-                        );
-                        self.runtime.wait(delay).await;
-                    }
+            match classify_sink_response(response) {
+                Ok(()) => return Ok(()),
+                Err(failure) if failure.is_rejected() => anyhow::bail!(failure),
+                Err(failure) => {
+                    let delay = self.backoff.fail(&mut self.runtime.rng());
+                    tracing::warn!(
+                        "Failed to send in Axiom sink: {failure}. Waiting {delay:?} before \
+                         retrying."
+                    );
+                    last_failure = Some(failure);
+                    self.runtime.wait(delay).await;
                 },
             }
         }
 
-        // If we get here, we've exceed the max number of requests
-        anyhow::bail!(ErrorMetadata::overloaded(
-            "AxiomMaxRetriesExceeded",
-            "Exceeded max number of retry requests to Axiom. Please try again later."
+        anyhow::bail!(SinkEgressFailure::retries_exhausted(
+            consts::AXIOM_SINK_MAX_REQUEST_ATTEMPTS,
+            last_failure,
         ))
     }
 

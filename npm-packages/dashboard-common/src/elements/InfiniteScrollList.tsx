@@ -54,7 +54,7 @@ export function InfiniteScrollList<T, U>({
   // Ref to the list. Can be used to sync a custom scrollbar with the list, or to scroll to a specific location in the list.
   listRef?: MutableRefObject<FixedSizeList | null>;
   // Ref to set on the outer element of the list. Used internally to load more items if the user scrolls deep into the list.
-  outerRef: RefObject<HTMLElement>;
+  outerRef: RefObject<HTMLElement | null>;
   // Hook called when the user scrolls.
   onScroll?: (props: ListOnScrollProps) => void;
   className?: string;
@@ -130,7 +130,6 @@ const List = forwardRef<
         ref(node);
       }
       if (listRef) {
-        // eslint-disable-next-line no-param-reassign
         listRef.current = node;
       }
     },

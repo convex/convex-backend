@@ -10,7 +10,7 @@ use serde::{
 };
 use value::codegen_convex_serialization;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UdfConfig {
     /// What is the version of `convex` in a developer's
     /// "package.json" when they push their UDFs? We currently allow this to

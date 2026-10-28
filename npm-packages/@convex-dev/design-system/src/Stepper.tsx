@@ -45,7 +45,7 @@ function Step({ label, children }: PropsWithChildren<{ label: string }>) {
           disabled={!isCompleted}
           onClick={() => isCompleted && onSelectStep?.(index)}
           className={cn(
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-medium",
+            "flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-medium",
             isCompleted && "cursor-pointer bg-util-accent text-white",
             !isCompleted &&
               isCurrent &&

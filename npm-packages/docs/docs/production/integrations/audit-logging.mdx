@@ -1,0 +1,146 @@
+---
+title: "Audit Logging"
+sidebar_label: "Audit Logging"
+sidebar_position: 5
+description: "Add transactional audit logging to your Convex functions"
+sidebar_class_name: "convex-sidebar-beta-badge"
+---
+
+import getDocumentExample from "!!raw-loader!@site/../private-demos/audit-logging/convex/example.ts";
+import { Screenshot } from "@site/src/components/Screenshot";
+
+Convex offers the ability to emit transactional, durable logs to a S3 bucket in
+your own AWS account. This can be useful for when you need to audit log your
+users' access to sensitive data. Furthermore, audit logging allows you use
+_dynamic log variables_ to log client IP, `User-Agent`, and other metadata that
+is not usually available in a query context.
+
+<Admonition
+  type="info"
+  title={`Audit logging requires a Convex Enterprise plan.`}
+>
+  Audit logging requires a Convex Enterprise plan and is only available for
+  dedicated (D1024 and D2048) deployments. [Learn
+  more](https://www.convex.dev/enterprise/pricing) about our plans or [ask
+  us](https://www.convex.dev/enterprise/contact) about Convex for Enterprise.
+</Admonition>
+
+## API
+
+Use `log.audit(params)` inside your Convex function to emit an audit log.
+`params` can be any JSON-serializable object. `params` may also include dynamic
+log variables as values. Dynamic log variables are JavaScript Symbols that get
+resolved to a value after the function executes. The following dynamic variables
+are currently available:
+
+- `log.vars.ip` - IP of client initiating the request
+- `log.vars.userAgent` - `User-Agent` header of client initiating the request.
+  Note that `User-Agent` headers that are too long (over 512 bytes) may be
+  truncated
+- `log.vars.requestId` - the request ID
+- `log.vars.now` - the timestamp of when the function was run or replayed from
+  the cache, as milliseconds from the Unix epoch
+- `log.vars.convexActor` - information about the admin, if the function was
+  invoked using admin auth (either directly or while acting as an end user, e.g.
+  from the dashboard), otherwise `null`
+
+<Snippet
+  title="convex/getDocument.ts"
+  source={getDocumentExample}
+  highlightPatterns={["log.audit", "log.vars"]}
+/>
+
+The resulting log body will be serialized to JSON, with `log.vars` values
+replaced:
+
+```tsx
+{
+  "action": "document.viewed",
+  "actor": {
+    "userId": "...",
+    "authUserId": "..."
+  },
+  "source": {
+    "ip": "...",
+    // ...
+  },
+  "fields": {
+    // ...
+  }
+}
+```
+
+To automatically include the same metadata fields in the logs, you can wrap
+`ctx` in a [custom function](https://stack.convex.dev/custom-functions) that
+provides a helper function for audit logging.
+
+## Guarantees
+
+Audit logs have stronger guarantees than regular logging with `console.log`.
+Audit logs will be emitted:
+
+- Every time a query result is streamed to any subscriber (including query cache
+  hits)
+  - Cached queries will replay audit logs with updated timestamp, IP, and user
+    agent
+- On mutations, both on success and failure, and possibly on OCC retries
+- Function commit will block on log persistence.
+
+Any queries or mutations called in an action (using `ctx.runMutation` or
+`ctx.runQuery` for example) will emit audit logs according to the guarantees
+above. Calling `log.audit` directly in an action is not yet supported; it will
+throw an error.
+
+## Limits
+
+- Each function execution can log at most 4MB of audit logs, at most 500 audit
+  logs, and at most 1MB per log. Audit logs in nested function calls count
+  towards the parent function's limit. If a function exceeds the limits, it will
+  fail. We suggest keeping audit logs under 10 KB to reduce latency.
+- `ip` and `userAgent` is not available in the audit logs for crons or scheduled
+  functions. However, mutations and actions can access them via
+  `ctx.meta.getRequestMetadata` so they can pass it as an argument to the
+  scheduled function, if desired.
+- Auth identity should be manually specified in your log bodies. Per usual, auth
+  is not accessible in scheduled functions, crons, or in components. This
+  implies passing the actor in as an argument to component functions. We may add
+  auth capabilities for components in the future.
+- The current code version is not directly available. As a workaround, you can
+  update code or set an environment variable with a version identifier, such as
+  a git hash.
+- We may log events when a transaction ends up rolling back due to conflicts, or
+  if the transaction fails otherwise. Delivery is at least once.
+- There will be a delay between when an audit log is emitted and when it is
+  delivered to your destination S3 bucket.
+
+## Billing
+
+The size of each audit log line is rounded up to the nearest 5KB when
+calculating bandwidth for billing. See more information about billing on our
+[pricing page](https://www.convex.dev/enterprise/pricing).
+
+## Development
+
+While developing, you can enable the `custom_audit` topic on a configured
+[log stream](/production/integrations/log-streams/log-streams.mdx) to see your
+audit logs without setting up S3 delivery. To do so, select `custom_audit` in
+the “Topics” section of the log stream configuration.
+
+<Screenshot
+  story="docs/pages/project/deployment/settings/Integrations#Custom Audit Topic"
+  alt="Enabling the custom_audit topic on a log stream"
+/>
+
+The `custom_audit` topic is intended for testing. `custom_audit` logs sent
+through a log stream do not share the same durability guarantees as S3 delivery,
+and are billed the same as other
+[log streams](/production/integrations/log-streams/log-streams.mdx).
+
+## Configuration
+
+Contact Convex Support to configure your S3 bucket for audit logging. Note that
+audit logging is only available for
+[dedicated (D1024 and D2048) deployments](https://docs.convex.dev/production/state/limits#deployment-classes).
+
+If no S3 bucket or log stream is configured, no logs will be emitted, but the
+audit log size limits will still be enforced.

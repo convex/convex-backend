@@ -20,7 +20,11 @@
     "outDir": "./dist",
     "paths": {
       "@common/*": ["*"],
-      "@ui/*": ["../../@convex-dev/design-system/src/*"]
+      "@ui/*": ["../../@convex-dev/design-system/src/*"],
+      "react": ["../node_modules/@types/react"],
+      "react/*": ["../node_modules/@types/react/*"],
+      "react-dom": ["../node_modules/@types/react-dom"],
+      "react-dom/*": ["../node_modules/@types/react-dom/*"]
     }
   },
   "include": ["src/**/*", "src/*", "next-env.d.ts"],

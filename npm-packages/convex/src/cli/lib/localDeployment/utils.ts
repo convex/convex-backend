@@ -1,7 +1,6 @@
 import { Context } from "../../../bundler/context.js";
 import { logMessage } from "../../../bundler/log.js";
 import { detect } from "detect-port";
-import crypto from "crypto";
 import { chalkStderr } from "chalk";
 
 export async function choosePorts(
@@ -80,11 +79,6 @@ export async function chooseLocalBackendPorts(
   return { cloudPort, sitePort };
 }
 
-export async function isOffline(): Promise<boolean> {
-  // TODO(ENG-7080) -- implement this for real
-  return false;
-}
-
 export function printLocalDeploymentWelcomeMessage() {
   logMessage(
     chalkStderr.cyan("You're trying out the beta local deployment feature!"),
@@ -96,9 +90,15 @@ export function printLocalDeploymentWelcomeMessage() {
   );
 }
 
-export function generateInstanceSecret(): string {
-  return crypto.randomBytes(32).toString("hex");
-}
-
 export const LOCAL_BACKEND_INSTANCE_SECRET =
   "4361726e697461732c206c69746572616c6c79206d65616e696e6720226c6974";
+
+// Backend releases are tagged `precompiled-YYYY-MM-DD-<commit>`, so the dates
+// sort lexicographically.
+export function releaseDate(version: string): string | null {
+  return /^precompiled-(\d{4}-\d{2}-\d{2})-/.exec(version)?.[1] ?? null;
+}
+
+export function isValidBackendVersion(version: string): boolean {
+  return /^precompiled-\d{4}-\d{2}-\d{2}-[\w.-]+$/.test(version);
+}

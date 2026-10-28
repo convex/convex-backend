@@ -14,6 +14,3 @@ wrap_comments = true
 normalize_comments = false
 error_on_line_overflow = true
 style_edition = "2021" # in 2024 sort order is now case-insensitive, deferring the mass reformat
-
-# Vendored third-party crates ship as-is; don't reformat them.
-ignore = ["crates_private/thirdparty"]

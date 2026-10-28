@@ -11,7 +11,9 @@ import { useDeepEqualsEffect } from "@common/lib/useDeepEqualsEffect";
 
 const useGlobalReactClientState = createGlobalState<ConvexReactClient>();
 
-export function useGlobalReactClient(identity?: UserIdentityAttributes) {
+export function useGlobalReactClient(
+  identity?: UserIdentityAttributes,
+): [ConvexReactClient, number] {
   const [identityKey, updateIdentityKey] = useReducer((x) => x + 1, 0);
   const [client, setClient] = useGlobalReactClientState();
   const deploymentData = useContext(DeploymentInfoContext);

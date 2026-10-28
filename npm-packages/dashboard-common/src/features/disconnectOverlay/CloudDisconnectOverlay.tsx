@@ -1,4 +1,6 @@
 import { ConnectedDeployment } from "@common/lib/deploymentContext";
+import { ConvexHttpClient } from "convex/browser";
+import udfs from "@common/udfs";
 import { DisconnectedOverlay } from "./DisconnectOverlay";
 import { useCallback, useEffect, useState } from "react";
 import { Callout } from "@ui/Callout";
@@ -22,7 +24,7 @@ export function CloudDisconnectOverlay({
   openSupportForm?: (defaultSubject: string, defaultMessage: string) => void;
   statusWidget?: React.ReactNode;
 }): React.ReactNode {
-  const isReachable = useCanReachDeploymentOverHTTP(deployment.deploymentUrl);
+  const isReachable = useCanReachDeploymentOverHTTP(deployment);
 
   const handleContactSupport = useCallback(() => {
     const defaultMessage = `I'm unable to connect to my deployment "${deploymentName}".
@@ -152,7 +154,10 @@ Please help me troubleshoot this connection issue.`;
   );
 }
 
-function useCanReachDeploymentOverHTTP(deploymentUrl: string): boolean | null {
+function useCanReachDeploymentOverHTTP(
+  deployment: Pick<ConnectedDeployment, "deploymentUrl" | "adminKey">,
+): boolean | null {
+  const { deploymentUrl, adminKey } = deployment;
   const [isReachable, setIsReachable] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -160,10 +165,14 @@ function useCanReachDeploymentOverHTTP(deploymentUrl: string): boolean | null {
 
     const checkReachability = async () => {
       try {
-        await fetch(deploymentUrl, {
-          method: "HEAD",
-          mode: "no-cors",
-        });
+        // Exercise the deployment's HTTP API with an authenticated query
+        // rather than a bare `no-cors` request, which resolves opaquely even
+        // when the backend can't actually serve traffic. `getVersion` is a
+        // cheap, always-available system query, so a successful response
+        // confirms HTTP is genuinely working end to end.
+        const client = new ConvexHttpClient(deploymentUrl);
+        client.setAdminAuth(adminKey);
+        await client.query(udfs.getVersion.default, {});
         if (!canceled) {
           setIsReachable(true);
         }
@@ -179,7 +188,7 @@ function useCanReachDeploymentOverHTTP(deploymentUrl: string): boolean | null {
     return () => {
       canceled = true;
     };
-  }, [deploymentUrl]);
+  }, [deploymentUrl, adminKey]);
 
   return isReachable;
 }

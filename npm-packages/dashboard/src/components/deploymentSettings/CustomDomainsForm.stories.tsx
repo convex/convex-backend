@@ -88,3 +88,25 @@ export const WithValidationError: Story = {
     );
   },
 };
+
+export const UnverifiedDomain: Story = {
+  args: {
+    vanityDomains: [
+      {
+        domain: "rapgenie.net",
+        requestDestination: "convexSite" as const,
+        deploymentName,
+        creationTime: 0,
+      },
+    ],
+  },
+  beforeEach() {
+    mocked(useCreateVanityDomain).mockReturnValue(fn());
+    mocked(useDeleteVanityDomain).mockReturnValue(fn());
+    mocked(useDeployments).mockReturnValue({
+      deployments: [],
+      isLoading: false,
+    });
+    mocked(useHasProjectAdminPermissions).mockReturnValue(true);
+  },
+};

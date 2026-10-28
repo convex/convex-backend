@@ -30,6 +30,9 @@ import {
   syncAuthKitConfigAfterPush,
   ensureAuthKitProvisionedBeforeBuild,
 } from "./workos/workos.js";
+import { handleDashboard } from "./localDeployment/dashboard.js";
+import { loadDeploymentConfig } from "./localDeployment/filePaths.js";
+import { LocalDeploymentError } from "./localDeployment/errors.js";
 
 export async function devAgainstDeployment(
   ctx: OneoffCtx,
@@ -38,6 +41,7 @@ export async function devAgainstDeployment(
     adminKey: string;
     deploymentName: string | null;
     deploymentType?: DeploymentType;
+    backendVersion?: string | undefined;
   },
   devOptions: {
     verbose: boolean;
@@ -56,6 +60,7 @@ export async function devAgainstDeployment(
     debugNodeApis: boolean;
     liveComponentSources: boolean;
     pushAllModules: boolean;
+    allowUnstagingSchema: boolean;
   },
 ) {
   const logManager = new LogManager(devOptions.tailLogs);
@@ -80,6 +85,41 @@ export async function devAgainstDeployment(
         deploymentType,
       );
     }
+  }
+
+  // Anonymous mode starts a local dashboard server alongside long-running `npx convex dev` commands.
+  if (
+    !devOptions.once &&
+    !devOptions.untilSuccess &&
+    credentials.deploymentType === "anonymous" &&
+    credentials.deploymentName !== null
+  ) {
+    const deploymentConfig = loadDeploymentConfig(
+      ctx,
+      "anonymous",
+      credentials.deploymentName,
+    );
+    if (deploymentConfig === null) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: `Could not find local deployment config. This is a bug in Convex.`,
+        errForSentry: new LocalDeploymentError(
+          `Could not find local deployment config to start the anonymous dashboard.`,
+        ),
+      });
+    }
+    await handleDashboard(
+      ctx,
+      {
+        name: credentials.deploymentName,
+        cloudPort: deploymentConfig.ports.cloud,
+        adminKey: deploymentConfig.adminKey,
+      },
+      {
+        backendVersion: credentials.backendVersion,
+      },
+    );
   }
 
   const promises = [];
@@ -109,6 +149,20 @@ export async function devAgainstDeployment(
         pushAllModules: devOptions.pushAllModules,
         logManager, // Pass logManager to control logs during deploy
         largeIndexDeletionCheck: "no verification", // `convex dev` can’t push to prod
+        // `convex dev --prod` pushes straight to production, where an
+        // unstaged index on a large table blocks the push for the whole
+        // backfill; dev deployments are small enough to let it through.
+        largeIndexBackfillCheck:
+          credentials.deploymentType === "prod"
+            ? "ask for confirmation"
+            : "no verification",
+        stagedValidatorDeletionCheck:
+          credentials.deploymentType === "prod"
+            ? devOptions.allowUnstagingSchema
+              ? "has confirmation"
+              : "ask for confirmation"
+            : "no verification",
+        warnOnSlowSchemaValidation: true,
         message: null,
       },
       devOptions,

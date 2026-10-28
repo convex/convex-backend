@@ -89,7 +89,7 @@ function ExecutionTreeNode({
         ref={nodeRef}
         className={cn(
           "flex h-[30px] w-full items-center rounded-md pr-2 pl-4",
-          isCurrent && "-ml-px rounded border bg-background-highlight",
+          isCurrent && "-ml-px rounded-sm border bg-background-highlight",
         )}
       >
         <div className="flex h-full items-center">
@@ -97,7 +97,7 @@ function ExecutionTreeNode({
             Array.from({ length: level }).map((_, index) => (
               <div
                 key={index}
-                className="mr-4 h-full w-[1px] shrink-0 bg-border-transparent"
+                className="mr-4 h-full w-px shrink-0 bg-border-transparent"
               />
             ))}
         </div>

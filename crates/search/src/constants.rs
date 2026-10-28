@@ -23,20 +23,6 @@ pub const MAX_FILTER_CONDITIONS: usize = 8;
 /// Name of the Convex English tokenizer passed to Tantivy.
 pub const CONVEX_EN_TOKENIZER: &str = "convex_en";
 
-/// Max word-length in characters for exact search in typo-tolerance
-pub const EXACT_SEARCH_MAX_WORD_LENGTH: usize = 4;
-
-/// Max word-length in characters for 1-typo search in typo-tolerance
-pub const SINGLE_TYPO_SEARCH_MAX_WORD_LENGTH: usize = 8;
-
-/// The max number of term matches that can occur for each prefix query term
-pub const MAX_PREFIX_MATCHES_PER_QUERY_TERM: usize = 16;
-
-/// The max number of positions we return for each term matched by a query term
-pub const MAX_POSITIONS_PER_MATCHED_TERM: usize = 16;
-
-pub const MAX_EDIT_DISTANCE: u32 = 2;
-
 /// The maximum terms we'll return from QueryTokens. This corresponds to the
 /// maximum number of posting lists we'll want to consider in a single query.
 pub const MAX_UNIQUE_QUERY_TERMS: usize = 64;

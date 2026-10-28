@@ -7,7 +7,10 @@ description: "Backup and restore your Convex data and files"
 Convex supports Backup & Restore of data via the
 [dashboard](https://dashboard.convex.dev/deployment/settings/backups).
 
-![Backups Page](/screenshots/backups.png)
+<Screenshot
+  story="docs/pages/project/deployment/settings/Backups"
+  alt="Backups Page"
+/>
 
 # Backups
 
@@ -70,7 +73,7 @@ You can download your manual and periodic backups from the dashboard via the
 download button in the menu.
 
 Alternatively, you can generate an export in the same format with the
-[command line](/cli.md#export-data-to-a-file):
+[command line](/cli/reference/export.mdx):
 
 ```sh
 npx convex export --path ~/Downloads
@@ -83,9 +86,9 @@ The ZIP file's name has the format `snapshot_{ts}.zip` where `ts` is a UNIX
 timestamp of the snapshot in nanoseconds. The export ZIP file contains documents
 for each table at `<table_name>/documents.jsonl`, with one document per line.
 
-Exported ZIP files that include [file storage](/file-storage) will contain
-storage data in a `_storage` folder, with metadata like IDs and checksums in
-`_storage/documents.jsonl` and each file as `_storage/<id>`.
+Exported ZIP files that include [file storage](/file-storage/overview) will
+contain storage data in a `_storage` folder, with metadata like IDs and
+checksums in `_storage/documents.jsonl` and each file as `_storage/<id>`.
 
 ### Using the downloaded backup
 
@@ -125,12 +128,12 @@ storage. In particular it lacks:
 3. Environment variables. Environment variables can be copied from Settings in
    the Convex dashboard.
 
-### How do backups work on dedicated hardware like D1024?
+### How do backups work on dedicated hardware like D1024 and D2048?
 
-In addition to the downloadable zip backups, dedicated deployments (D1024) have
-physical backups configured automatically for every 24 hours and accessible for
-up to 7 days. Physical backups are faster and cheaper due to the ability to
-leverage the dedicated database hardware, however restores require contacting
-Convex support. Physical backups cannot be downloaded. Cross-deployment restores
-are not supported into D1024s. Physical backups are included in the price of
-dedicated hardware.
+In addition to the downloadable zip backups, dedicated deployments (D1024 and
+D2048) have physical backups configured automatically for every 24 hours and
+accessible for up to 7 days. Physical backups are faster and cheaper due to the
+ability to leverage the dedicated database hardware, however restores require
+contacting Convex support. Physical backups cannot be downloaded.
+Cross-deployment restores are not supported into dedicated deployments. Physical
+backups are included in the price of dedicated hardware.

@@ -6,8 +6,12 @@ use common::{
         ComponentId,
         ComponentPath,
     },
-    execution_context::ExecutionContext,
+    execution_context::{
+        ExecutionContext,
+        RequestId,
+    },
     runtime::UnixTimestamp,
+    types::AttributedCaller,
 };
 use keybroker::Identity;
 use model::file_storage::{
@@ -24,6 +28,19 @@ use crate::FunctionResult;
 
 #[async_trait]
 pub trait ActionCallbacks: Send + Sync {
+    /// Mints an AI gateway token for the calling function. The caller stays
+    /// typed until Conductor builds the claims it signs. Node actions call
+    /// `Application::mint_ai_gateway_jwt` over HTTP instead.
+    ///
+    /// `identity` is the identity the action runs under; it gates the mint on
+    /// `DeploymentOp::UseAiGateway` for deploy keys and dashboard members.
+    async fn create_ai_gateway_token(
+        &self,
+        identity: Identity,
+        caller: AttributedCaller,
+        request_id: RequestId,
+    ) -> anyhow::Result<String>;
+
     // Executing UDFs
     async fn execute_query(
         &self,

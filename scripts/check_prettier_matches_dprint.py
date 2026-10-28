@@ -25,7 +25,7 @@ def is_comment(line: str) -> bool:
 def js_to_json(filename: str) -> str:
     return check_output(
         ["node"],
-        input=f"console.log(JSON.stringify(require({repr(filename)})));",
+        input=f"console.log(JSON.stringify(require({filename!r})));",
         encoding="utf8",
         cwd=script_dir,
     )

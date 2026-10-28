@@ -1,132 +1,88 @@
 import { decode, encodeURI, isValid } from "js-base64";
 import { useRouter } from "next/router";
-import { createGlobalState, usePrevious } from "react-use";
 
-import { useEffect, useContext } from "react";
+import { useMemo } from "react";
 import {
   FilterExpression,
   FilterExpressionSchema,
   isValidFilter,
 } from "system-udfs/convex/_system/frontend/lib/filters";
-import isEqual from "lodash/isEqual";
-import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
-import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { useFilterMap } from "@common/lib/useTableMetadata";
+import {
+  FiltersAppliedProperties,
+  summarizeFilters,
+} from "@common/features/data/lib/filterAnalytics";
 
-// Global state keeping track of filters for all tables.
-export const useFilterMap = createGlobalState(
-  {} as Record<string, FilterExpression | undefined>,
-);
+// An expression with no clauses, no index, and no explicit order carries no
+// selection and reads as "no filters". This mirrors the condition under which
+// `applyFiltersWithHistory` clears the query param. An index selection —
+// including a search index with an empty query string — is a real selection
+// and must be preserved (see `hasValidEnabledFilters`).
+function isEmptyFilterExpression(f: FilterExpression): boolean {
+  return (
+    f.clauses.length === 0 && f.index === undefined && f.order === undefined
+  );
+}
 
-const useInitializeFilters = (
-  tableName: string,
-  componentId: string | null,
-) => {
-  const { query, replace, isReady: isRouterReady } = useRouter();
-  const [filterMap, setFilterMap] = useFilterMap();
-  const prevTableName = usePrevious(tableName);
-  const { appendFilterHistory } = useFilterHistory(tableName, componentId);
+// Decodes the base64-encoded `filters` URL query param into a validated
+// FilterExpression. Returns undefined for a missing, malformed, or empty
+// param, so an invalid URL simply reads as "no filters".
+export function parseFilters(
+  raw: string | undefined,
+): FilterExpression | undefined {
+  if (!raw || !isValid(raw)) {
+    return undefined;
+  }
+  let f: FilterExpression;
+  try {
+    f = JSON.parse(decode(raw));
+    FilterExpressionSchema.parse(f);
+  } catch {
+    return undefined;
+  }
+  return isEmptyFilterExpression(f) ? undefined : f;
+}
 
-  // Effect to initialize filters on mount.
-  useEffect(() => {
-    // This hook should only run if the router is ready or if the selected table changed.
-    if (!isRouterReady || prevTableName === tableName) {
-      return;
-    }
-
-    function deleteQueryFilters() {
-      if (!query.filters) {
-        return;
-      }
-      delete query.filters;
-      void replace({ query }, undefined, {
-        shallow: true,
-      });
-      setFilterMap({ ...filterMap, [tableName]: undefined });
-    }
-
-    function populateQueryFilters(newFilters: FilterExpression) {
-      query.filters = encodeURI(JSON.stringify(newFilters));
-      void replace(
-        {
-          query,
-        },
-        undefined,
-        { shallow: true },
-      );
-    }
-
-    // We're mounting useTableFilters and already have filters from a previous mount.
-    const storedFilters = filterMap[tableName];
-    if (storedFilters && !query.filters) {
-      populateQueryFilters(storedFilters);
-      return;
-    }
-
-    if (!isValid(query.filters as string)) {
-      deleteQueryFilters();
-      return;
-    }
-
-    const decodedFilters = decode(query.filters as string);
-    let f: FilterExpression;
-    try {
-      f = JSON.parse(decodedFilters);
-      FilterExpressionSchema.parse(f);
-    } catch {
-      // The filters decoded from b64, but failed to parse.
-      deleteQueryFilters();
-      return;
-    }
-
-    // No clauses in the filters, lets clear out the query param.
-    if (isFilterDiscardable(f)) {
-      deleteQueryFilters();
-      return;
-    }
-
-    // Found filters in the query, store in global state.
-    appendFilterHistory(f);
-    setFilterMap({ ...filterMap, [tableName]: f });
-  }, [
-    appendFilterHistory,
-    filterMap,
-    isRouterReady,
-    prevTableName,
-    query,
-    replace,
-    setFilterMap,
-    tableName,
-  ]);
-};
+// The `filters` query param as it should be passed to `paginatedTableDocuments`:
+// the raw (base64) string when it's a well-formed expression, otherwise null.
+// The paginated query and its optimistic updates must both key off this exact
+// value — a malformed or empty param (no longer scrubbed from the URL) would
+// otherwise make their query args diverge and drop the optimistic update.
+export function filterParamForQuery(raw: string | null): string | null {
+  return raw && parseFilters(raw) ? raw : null;
+}
 
 export const useTableFilters = (
   tableName: string,
-  componentId: string | null,
+  onFiltersApplied?: (properties: FiltersAppliedProperties) => void,
 ) => {
   const { query, replace } = useRouter();
-  const [filterMap, setFilterMap] = useFilterMap();
-  const { appendFilterHistory } = useFilterHistory(tableName, componentId);
+  const [, setFilterMap] = useFilterMap();
 
-  useInitializeFilters(tableName, componentId);
+  const rawFilters = query.filters as string | undefined;
+  const filters = useMemo(() => parseFilters(rawFilters), [rawFilters]);
 
   return {
-    filters: filterMap[tableName],
-    // Make sure a new object is created so the hook is re-rendered
+    filters,
     applyFiltersWithHistory: async (newFilters?: FilterExpression) => {
       if (newFilters) {
-        const newFilterMap = { ...filterMap, [tableName]: newFilters };
+        onFiltersApplied?.(summarizeFilters(newFilters));
         if (
-          !newFilterMap[tableName] ||
-          (newFilterMap[tableName]?.clauses.length === 0 &&
-            !newFilterMap[tableName]?.index &&
-            newFilterMap[tableName]?.order === undefined)
+          newFilters.clauses.length === 0 &&
+          !newFilters.index &&
+          newFilters.order === undefined
         ) {
           delete query.filters;
         } else {
-          query.filters = encodeURI(JSON.stringify(newFilterMap[tableName]));
+          query.filters = encodeURI(JSON.stringify(newFilters));
         }
-        setFilterMap(newFilterMap);
-        appendFilterHistory(newFilters);
+        // Keep this table's remembered filters in sync on every change so
+        // switching back restores them regardless of how the table is left
+        // (sidebar click, browser back/forward, etc.).
+        setFilterMap((prev) => ({
+          ...prev,
+          [tableName]: query.filters as string | undefined,
+        }));
         await replace(
           {
             query,
@@ -136,7 +92,7 @@ export const useTableFilters = (
         );
       }
     },
-    hasFilters: hasValidEnabledFilters(filterMap[tableName]),
+    hasFilters: hasValidEnabledFilters(filters),
   };
 };
 
@@ -164,65 +120,4 @@ function hasValidEnabledFilters(filters?: FilterExpression) {
   }
 
   return false;
-}
-
-export function areAllFiltersValid(filters?: FilterExpression) {
-  return filters === undefined || filters.clauses.every(isValidFilter);
-}
-
-export function useFilterHistory(
-  tableName: string,
-  componentId: string | null,
-): {
-  filterHistory: FilterExpression[];
-  appendFilterHistory: (value: FilterExpression) => void;
-} {
-  const { useCurrentDeployment } = useContext(DeploymentInfoContext);
-  const deployment = useCurrentDeployment();
-  const [filterHistory, setFilterHistory] = useGlobalLocalStorage(
-    `filterHistory/${deployment?.name}/${componentId ? `${componentId}/` : ""}${tableName}`,
-    [] as FilterExpression[],
-  );
-
-  return {
-    filterHistory,
-    appendFilterHistory: (value) => {
-      setFilterHistory((prev: FilterExpression[]) => {
-        if (
-          // Don’t add a history entry if the new value is the same as the most recent one
-          (prev.length > 0 && isEqual(prev[0], value)) ||
-          // Don’t add filters with no clauses to the history
-          isFilterDiscardable(value)
-        ) {
-          return prev;
-        }
-        const updatedHistory = [value, ...prev];
-        if (updatedHistory.length > 25) {
-          updatedHistory.pop();
-        }
-        return updatedHistory;
-      });
-    },
-  };
-}
-
-/**
- * Determines whether the filter expression is empty,
- * hence it has no meaningful value to the user
- * and can safely be discarded from the history.
- */
-function isFilterDiscardable(f?: FilterExpression) {
-  if (f === undefined) return true;
-
-  if (f.clauses.length > 0) return false;
-
-  if (!f.index) {
-    return true;
-  }
-
-  if ("search" in f.index && f.index.search !== "") {
-    return false;
-  }
-
-  return f.index.clauses.length === 0;
 }

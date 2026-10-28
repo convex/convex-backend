@@ -1,6 +1,9 @@
-use std::time::{
-    Duration,
-    Instant,
+use std::{
+    sync::Arc,
+    time::{
+        Duration,
+        Instant,
+    },
 };
 
 use ::errors::{
@@ -54,6 +57,7 @@ use runtime::prod::ProdRuntime;
 use sentry::SentryFutureExt;
 use serde_json::Value as JsonValue;
 use sync::{
+    subscription_reconnect::SubscriptionReconnectRateLimiter,
     worker::measurable_unbounded_channel,
     ServerMessage,
     SyncWorker,
@@ -346,7 +350,10 @@ async fn run_sync_socket(
     log_websocket_closed(partition_id_label.clone());
 }
 
-fn new_sync_worker_config(client_version: ClientVersion) -> anyhow::Result<SyncWorkerConfig> {
+fn new_sync_worker_config(
+    client_version: ClientVersion,
+    subscription_reconnect_rate_limiter: Option<Arc<SubscriptionReconnectRateLimiter>>,
+) -> anyhow::Result<SyncWorkerConfig> {
     let supports_transition_chunks = match client_version.client() {
         ClientType::NPM => match client_version.version() {
             version::ClientVersionIdent::Semver(v) => {
@@ -359,6 +366,7 @@ fn new_sync_worker_config(client_version: ClientVersion) -> anyhow::Result<SyncW
     Ok(SyncWorkerConfig {
         client_version,
         supports_transition_chunks,
+        subscription_reconnect_rate_limiter,
     })
 }
 
@@ -421,7 +429,10 @@ pub async fn sync_handler(
     ws: WebSocketUpgrade,
     on_connect: Box<dyn FnOnce(SessionId) + Send>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let config = new_sync_worker_config(client_version)?;
+    let config = new_sync_worker_config(
+        client_version,
+        st.subscription_reconnect_rate_limiter.clone(),
+    )?;
     // Make a copy of the Sentry scope, which contains the request metadata.
     let sentry_scope = sentry::configure_scope(move |s| s.clone());
 

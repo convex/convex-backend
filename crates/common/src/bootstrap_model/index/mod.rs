@@ -28,7 +28,7 @@ use crate::{
 };
 
 /// Table name for Index data.
-pub static INDEX_TABLE: TableName = TableName::const_new("_index");
+pub const INDEX_TABLE: TableName = TableName::const_new("_index");
 /// Field for an indexed table's name in `IndexMetadata`.
 pub const TABLE_ID_FIELD_NAME: IdentifierFieldName = IdentifierFieldName::const_new("table_id");
 pub static TABLE_ID_FIELD_PATH: LazyLock<FieldPath> =

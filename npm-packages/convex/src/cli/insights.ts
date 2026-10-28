@@ -88,12 +88,20 @@ function formatInsight(insight: Insight, details: boolean): string {
 export const insights = new Command("insights")
   .summary("Show health insights for your deployment")
   .description(
-    "Show health insights for a Convex deployment over the last 72 hours.\n" +
-      "Displays OCC conflicts and resource limit issues that may indicate performance problems.\n\n" +
-      "Only available for cloud deployments with user-level authentication.",
+    [
+      "Show health insights for a Convex deployment over the last 72 hours.",
+      "Displays OCC conflicts and resource limit issues that may indicate performance problems.",
+      "",
+      "• Show insights: `npx convex insights`",
+      "• Include recent events for each insight: `npx convex insights --details`",
+      "• Check the production deployment: `npx convex insights --prod`",
+      "",
+      "This command is only available for Convex cloud deployments when logged in as a user.",
+    ].join("\n"),
   )
   .allowExcessArguments(false)
   .option("--details", "Show recent events for each insight", false)
+  .option("--json", "Output insights as JSON", false)
   .addDeploymentSelectionOptions(actionDescription("Show insights for"))
   .showHelpAfterError()
   .action(async (cmdOptions) => {
@@ -125,7 +133,7 @@ export const insights = new Command("insights")
         exitCode: 1,
         errorType: "fatal",
         printedMessage:
-          "Insights require user-level authentication. Deploy keys and project keys cannot access team usage data.",
+          "Insights require to be logged in as a user. Deploy keys and project keys cannot access team usage data.",
       });
     }
 
@@ -137,6 +145,17 @@ export const insights = new Command("insights")
       deploymentName,
       "?view=insights",
     );
+
+    if (cmdOptions.json) {
+      logOutput(
+        JSON.stringify(
+          { deploymentName, dashboardUrl, insights: insightsList },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
 
     if (insightsList.length === 0) {
       logOutput(

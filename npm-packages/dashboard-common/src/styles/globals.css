@@ -1,4 +1,5 @@
 @import "../../node_modules/@convex-dev/design-system/src/styles/shared.css";
+@import "../elements/GiftWrap.css";
 @source "../../../@convex-dev/design-system/src/";
 @source "../../../dashboard/src/";
 @source "../"; /* dashboard-common/src */

@@ -1,20 +1,7 @@
 import { DeploymentLabelProvisionDeployment } from "./DeploymentDisplay";
 import { type Meta, type StoryObj } from "@storybook/nextjs";
 import { Sheet } from "@ui/Sheet";
-import {
-  ProjectDetails,
-  TeamResponse,
-  PlatformDeploymentResponse,
-} from "generatedApi";
-
-const mockTeam: TeamResponse = {
-  id: 1,
-  name: "Test Team",
-  creator: 1,
-  slug: "test-team",
-  suspended: false,
-  referralCode: "CODE123",
-};
+import { ProjectDetails } from "generatedApi";
 
 const mockProject: ProjectDetails = {
   id: 1,
@@ -22,17 +9,12 @@ const mockProject: ProjectDetails = {
   slug: "test-project",
   teamId: 1,
   createTime: Date.now(),
-  isDemo: false,
 };
-
-const deployments: PlatformDeploymentResponse[] = [];
 
 const meta = {
   component: DeploymentLabelProvisionDeployment,
   args: {
-    team: mockTeam,
     currentProject: mockProject,
-    deployments,
   },
   decorators: [
     (Story) => (

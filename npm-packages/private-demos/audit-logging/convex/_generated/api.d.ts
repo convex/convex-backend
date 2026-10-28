@@ -10,6 +10,8 @@
 
 import type * as actions from "../actions.js";
 import type * as crons from "../crons.js";
+import type * as example from "../example.js";
+import type * as foo from "../foo.js";
 import type * as mutations from "../mutations.js";
 import type * as nodeActions from "../nodeActions.js";
 import type * as queries from "../queries.js";
@@ -23,6 +25,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   actions: typeof actions;
   crons: typeof crons;
+  example: typeof example;
+  foo: typeof foo;
   mutations: typeof mutations;
   nodeActions: typeof nodeActions;
   queries: typeof queries;

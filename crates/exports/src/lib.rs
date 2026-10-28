@@ -24,7 +24,7 @@ use common::{
     persistence::LatestDocument,
     runtime::Runtime,
     types::{
-        IndexId,
+        IndexRef,
         ObjectKey,
         TableName,
     },
@@ -34,9 +34,10 @@ use database::{
     IndexModel,
     MultiTableIterator,
     SearchNotEnabled,
-    TableSummary,
+    TableCount,
     COMPONENTS_TABLE,
 };
+use errors::ErrorMetadata;
 use fastrace::future::FutureExt;
 use futures::{
     pin_mut,
@@ -45,6 +46,10 @@ use futures::{
     Future,
     StreamExt,
     TryStreamExt,
+};
+use humansize::{
+    FormatSize,
+    BINARY,
 };
 use itertools::Itertools;
 use keybroker::Identity;
@@ -89,6 +94,26 @@ pub use crate::{
     zip_uploader::README_MD_CONTENTS,
 };
 
+pub const MAX_FILE_STORAGE_EXPORT_SIZE_BYTES: u64 = 1 << 40;
+pub const FILE_STORAGE_EXPORT_TOO_LARGE_SHORT_MSG: &str = "ExportFileStorageTooLarge";
+
+pub fn ensure_file_storage_export_size(size: u64) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        size <= MAX_FILE_STORAGE_EXPORT_SIZE_BYTES,
+        ErrorMetadata::bad_request(
+            FILE_STORAGE_EXPORT_TOO_LARGE_SHORT_MSG,
+            format!(
+                "File storage is too large to include in this backup ({} > maximum size {}). You \
+                 can still create a tables-only backup. Restoring it replaces table data while \
+                 leaving the target deployment's current file storage unchanged.",
+                size.format_size(BINARY),
+                MAX_FILE_STORAGE_EXPORT_SIZE_BYTES.format_size(BINARY),
+            ),
+        )
+    );
+    Ok(())
+}
+
 pub struct ExportComponents<RT: Runtime> {
     pub runtime: RT,
     pub database: DatabaseSnapshot<RT>,
@@ -123,11 +148,11 @@ where
         let by_id_indexes = IndexModel::new(&mut tx).by_id_indexes().await?;
         drop(tx);
         let mut database = components.database.clone();
-        if database.snapshot.table_summaries.is_none() {
+        if database.snapshot.table_counts.is_none() {
             database.load_table_summaries().await?;
         }
         let snapshot = &database.snapshot;
-        let table_summaries = snapshot.must_table_summaries()?;
+        let table_counts = snapshot.must_table_counts()?;
         let tables: BTreeMap<_, _> = snapshot
             .table_registry
             .iter_active_user_tables()
@@ -138,7 +163,7 @@ where
                         table_namespace,
                         table_number,
                         table_name.clone(),
-                        table_summaries.tablet_summary(&tablet_id),
+                        table_counts.tablet_count(&tablet_id),
                     ),
                 )
             })
@@ -152,7 +177,7 @@ where
         let storage_table_counts: BTreeMap<TableNamespace, u64> = system_tables
             .iter()
             .filter(|((_, name), _)| *name == FILE_STORAGE_TABLE)
-            .map(|((ns, _), id)| (*ns, table_summaries.tablet_summary(id).num_values()))
+            .map(|((ns, _), id)| (*ns, table_counts.tablet_count(id).num_values()))
             .collect();
         (
             tables,
@@ -215,7 +240,7 @@ async fn write_tables_table<'a, 'b: 'a>(
     path_prefix: &str,
     zip_snapshot_upload: &'a mut ZipSnapshotUpload<'b>,
     namespace: TableNamespace,
-    tables: &'a BTreeMap<TabletId, (TableNamespace, TableNumber, TableName, TableSummary)>,
+    tables: &'a BTreeMap<TabletId, (TableNamespace, TableNumber, TableName, TableCount)>,
 ) -> anyhow::Result<()> {
     // _tables
     let mut table_upload = zip_snapshot_upload
@@ -249,7 +274,7 @@ pub async fn write_table<'a, 'b: 'a, F, Fut, RT: Runtime>(
     component_path: &ComponentPath,
     tablet_id: &TabletId,
     table_name: TableName,
-    by_id: &IndexId,
+    by_id: &IndexRef,
     usage: &FunctionUsageTracker,
     update_progress: &F,
     table_total_docs: u64,
@@ -272,18 +297,8 @@ where
     let mut last_log_time = Instant::now();
     while let Some(LatestDocument { value: doc, .. }) = stream.try_next().await? {
         let doc_size = doc.size() as u64;
-        usage.track_database_egress(
-            component_path.clone(),
-            table_name.to_string(),
-            doc_size,
-            false,
-        );
-        usage.track_database_egress_v2(
-            component_path.clone(),
-            table_name.to_string(),
-            doc_size,
-            false,
-        );
+        usage.track_database_egress(component_path.clone(), &table_name, doc_size, false);
+        usage.track_database_egress_v2(component_path.clone(), &table_name, doc_size, false);
         table_upload.write(doc).await?;
         num_documents += 1;
         total_bytes += doc_size;
@@ -315,10 +330,10 @@ where
 async fn construct_zip_snapshot<F, Fut, RT: Runtime>(
     components: &ExportComponents<RT>,
     mut writer: ChannelWriter,
-    tables: BTreeMap<TabletId, (TableNamespace, TableNumber, TableName, TableSummary)>,
+    tables: BTreeMap<TabletId, (TableNamespace, TableNumber, TableName, TableCount)>,
     mut table_iterator: MultiTableIterator<RT>,
     component_ids_to_paths: BTreeMap<ComponentId, ComponentPath>,
-    by_id_indexes: BTreeMap<TabletId, IndexId>,
+    by_id_indexes: BTreeMap<TabletId, IndexRef>,
     system_tables: BTreeMap<(TableNamespace, TableName), TabletId>,
     storage_table_counts: BTreeMap<TableNamespace, u64>,
     include_storage: bool,
@@ -362,8 +377,8 @@ where
 
     // sort tables small to large, and write them to the zip.
     let mut sorted_tables: Vec<_> = tables.iter().collect();
-    sorted_tables.sort_by_key(|(_, (_, _, _, table_summary))| table_summary.total_size());
-    for (tablet_id, (namespace, _, table_name, table_summary)) in sorted_tables {
+    sorted_tables.sort_by_key(|(_, (_, _, _, table_count))| table_count.total_size());
+    for (tablet_id, (namespace, _, table_name, table_count)) in sorted_tables {
         let component_id: ComponentId = (*namespace).into();
         let Some(component_path) = component_ids_to_paths.get(&component_id) else {
             tracing::info!(
@@ -401,7 +416,7 @@ where
             by_id,
             &usage,
             &update_progress,
-            table_summary.num_values(),
+            table_count.num_values(),
             &in_component_str,
         )
         .in_span(root)
@@ -412,6 +427,7 @@ where
 
     // Backup the storage tables last - since the upload/download can be slower
     if include_storage {
+        let mut file_storage_size = 0;
         for (component_id, component_path) in component_ids_to_paths {
             let namespace: TableNamespace = component_id.into();
             let path_prefix = get_export_path_prefix(&component_path);
@@ -444,6 +460,7 @@ where
                 &update_progress,
                 &in_component_str,
                 storage_total_entries,
+                &mut file_storage_size,
             )
             .in_span(root)
             .await?;

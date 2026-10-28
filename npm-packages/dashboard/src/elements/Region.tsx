@@ -1,4 +1,3 @@
-import type { RegionName } from "generatedApi";
 import { DeploymentRegionMetadata } from "@convex-dev/platform/managementApi";
 import { Field, Radio, Label } from "@headlessui/react";
 import { cn } from "@ui/cn";
@@ -6,6 +5,7 @@ import { Tooltip } from "@ui/Tooltip";
 import { Link } from "@ui/Link";
 import { Loading } from "@ui/Loading";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
+import { getRegionFlag } from "lib/regions";
 
 export function Region({
   region,
@@ -69,7 +69,7 @@ export function Region({
               <div className="flex flex-col gap-0.5">
                 <Label
                   className={cn(
-                    "text-sm leading-tight font-semibold",
+                    "text-sm/tight font-semibold",
                     disabled
                       ? "text-content-secondary"
                       : "text-content-primary",
@@ -78,7 +78,7 @@ export function Region({
                   {mainName}
                 </Label>
                 {placeName && (
-                  <span className="text-xs leading-tight text-content-secondary">
+                  <span className="text-xs/tight text-content-secondary">
                     {placeName}
                   </span>
                 )}
@@ -140,12 +140,6 @@ export function Region({
   return content;
 }
 
-function getRegionFlag(regionValue: RegionName): string {
-  if (regionValue === "aws-us-east-1") return "🇺🇸";
-  if (regionValue === "aws-eu-west-1") return "🇪🇺";
-  return "🏳️";
-}
-
 function parseRegionLabel(label: string): {
   mainName: string;
   placeName: string;
@@ -155,17 +149,4 @@ function parseRegionLabel(label: string): {
     return { mainName: match[1].trim(), placeName: match[2].trim() };
   }
   return { mainName: label, placeName: "" };
-}
-
-const REGION_ORDER = ["aws-us-east-1", "aws-eu-west-1"];
-
-export function sortRegions<T extends { name: string }>(regions: T[]): T[] {
-  return [...regions].sort((a, b) => {
-    const aIndex = REGION_ORDER.indexOf(a.name);
-    const bIndex = REGION_ORDER.indexOf(b.name);
-    if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-    if (aIndex !== -1) return -1;
-    if (bIndex !== -1) return 1;
-    return 0;
-  });
 }

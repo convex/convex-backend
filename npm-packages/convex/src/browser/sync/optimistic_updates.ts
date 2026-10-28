@@ -1,9 +1,10 @@
 import { Value } from "../../values/index.js";
 import {
   FunctionArgs,
-  FunctionReference,
   FunctionReturnType,
   OptionalRestArgs,
+  FunctionReference,
+  FunctionReference_future,
 } from "../../server/api.js";
 
 /**
@@ -25,7 +26,11 @@ export interface OptimisticLocalStore {
    * @returns The query result or `undefined` if the query is not currently
    * in the client.
    */
-  getQuery<Query extends FunctionReference<"query">>(
+  getQuery<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
     ...args: OptionalRestArgs<Query>
   ): undefined | FunctionReturnType<Query>;
@@ -46,7 +51,11 @@ export interface OptimisticLocalStore {
    *   - `args` - The arguments object for the query.
    *   - `value` The query result or `undefined` if the query is loading.
    */
-  getAllQueries<Query extends FunctionReference<"query">>(
+  getAllQueries<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
   ): {
     args: FunctionArgs<Query>;
@@ -66,7 +75,11 @@ export interface OptimisticLocalStore {
    * @param value - The new value to set the query to or `undefined` to remove
    * it from the client.
    */
-  setQuery<Query extends FunctionReference<"query">>(
+  setQuery<
+    Query extends
+      | FunctionReference<"query">
+      | FunctionReference_future<"query">,
+  >(
     query: Query,
     args: FunctionArgs<Query>,
     value: undefined | FunctionReturnType<Query>,

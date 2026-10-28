@@ -1,6 +1,6 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 
-import { TeamMember } from "generatedApi";
+import { TeamMember } from "@convex-dev/platform/managementApi";
 import { InviteMemberForm } from "./InviteMemberForm";
 
 const meta = { component: InviteMemberForm } satisfies Meta<

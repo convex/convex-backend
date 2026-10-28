@@ -32,12 +32,17 @@ use common::{
         HttpResponseError,
     },
     knobs::MAX_BACKEND_PUBLIC_API_REQUEST_SIZE,
-    types::FunctionCaller,
+    types::{
+        FunctionCaller,
+        QueryInvocation,
+    },
     version::ClientVersion,
     RequestContext,
 };
-use errors::ErrorMetadata;
-use isolate::UdfArgsJson;
+use errors::{
+    ErrorMetadata,
+    ErrorMetadataAnyhowExt,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -47,6 +52,7 @@ use serde_json::{
     Value as JsonValue,
 };
 use sync_types::Timestamp;
+use udf::helpers::UdfArgsJson;
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use value::{
@@ -368,7 +374,10 @@ pub fn export_value(
     if format == ValueFormat::ConvexEncodedJSON {
         value.to_raw_value()
     } else {
-        Ok(serde_json::from_value(value.unpack()?.export(format))?)
+        let unpacked = value.unpack().map_err(|e| {
+            e.wrap_error_message(|msg| format!("Function return value invalid: {msg}"))
+        })?;
+        Ok(serde_json::from_value(unpacked.export(format))?)
     }
 }
 
@@ -418,6 +427,7 @@ pub async fn public_query_get(
             FunctionCaller::HttpApi(client_version.clone()),
             ExecuteQueryTimestamp::Latest,
             journal,
+            Some(QueryInvocation::Fresh),
         )
         .await?;
     let value_format = req.format.as_ref().map(|f| f.parse()).transpose()?;
@@ -474,6 +484,7 @@ pub async fn public_query_post(
             FunctionCaller::HttpApi(client_version.clone()),
             ExecuteQueryTimestamp::Latest,
             journal,
+            Some(QueryInvocation::Fresh),
         )
         .await?;
     let value_format = req.format.as_ref().map(|f| f.parse()).transpose()?;
@@ -550,6 +561,7 @@ pub async fn public_query_at_ts_post(
             FunctionCaller::HttpApi(client_version.clone()),
             ExecuteQueryTimestamp::At(ts),
             journal,
+            Some(QueryInvocation::Fresh),
         )
         .await?;
     let value_format = req.format.as_ref().map(|f| f.parse()).transpose()?;
@@ -616,6 +628,7 @@ pub async fn public_query_batch_post(
                 FunctionCaller::HttpApi(client_version.clone()),
                 ExecuteQueryTimestamp::At(*ts),
                 None,
+                Some(QueryInvocation::Fresh),
             )
             .await?;
         let response = match udf_return.result {

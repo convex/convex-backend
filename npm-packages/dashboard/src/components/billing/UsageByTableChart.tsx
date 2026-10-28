@@ -46,7 +46,7 @@ function TableDisplayName({
 
   if (isLoading) {
     return (
-      <span className="inline-block h-4 w-32 animate-pulse rounded bg-content-tertiary" />
+      <span className="inline-block h-4 w-32 animate-pulse rounded-sm bg-content-tertiary" />
     );
   }
 
@@ -79,7 +79,7 @@ function TableTooltipItem({
 }) {
   return (
     <div className="flex items-center gap-2">
-      <svg className="size-3 flex-shrink-0" viewBox="0 0 50 50" aria-hidden>
+      <svg className="size-3 shrink-0" viewBox="0 0 50 50" aria-hidden>
         <circle cx="25" cy="25" r="25" className={color} />
       </svg>
       <span className="tabular-nums">

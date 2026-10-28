@@ -1,4 +1,3 @@
-#![feature(try_blocks)]
 #![feature(try_blocks_heterogeneous)]
 #![feature(impl_trait_in_fn_trait_return)]
 
@@ -107,6 +106,7 @@ impl CachedHttpClient {
 /// HTTP fetch function that caches responses in memory based on the
 /// `Cache-Control` headers in the response. Also checks for SSRF mitigation
 /// responses from the proxy.
+#[fastrace::trace]
 async fn cached_http_client_inner(
     client: reqwest_middleware::ClientWithMiddleware,
     request: HttpRequest,

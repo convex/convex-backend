@@ -86,7 +86,7 @@ function osc8Link(text: string, url: string): string {
 export type DeploymentAnnouncementHeader =
   | "Developing against deployment:"
   | "Showing logs of deployment:"
-  | "Deploying code on deployment:"
+  | "Deploying code to deployment:"
   | null;
 
 export function formatTargetedDeployment(

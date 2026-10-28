@@ -1,6 +1,5 @@
 #![feature(coroutines)]
 #![feature(proc_macro_hygiene)]
-#![feature(stmt_expr_attributes)]
 #![feature(type_alias_impl_trait)]
 mod connection;
 mod metrics;
@@ -57,11 +56,17 @@ use common::{
         StartIncluded,
     },
     persistence::{
+        row_index_retention::{
+            delete_expired_entries,
+            IndexRowPersistence,
+        },
         ConflictStrategy,
         DocumentLogEntry,
         DocumentPrevTsQuery,
         DocumentRevisionStream,
         DocumentStream,
+        IndexRetentionProgress,
+        IndexRetentionRequest,
         IndexStream,
         LatestDocument,
         Persistence,
@@ -85,6 +90,7 @@ use common::{
     shutdown::ShutdownSignal,
     types::{
         IndexId,
+        IndexRef,
         PersistenceVersion,
         Timestamp,
     },
@@ -290,7 +296,7 @@ impl PostgresPersistence {
         } else {
             SchemaName::new(&get_current_schema(&pool).await?)?
         };
-        let newly_created = {
+        {
             let mut client = pool
                 .get_connection("init_sql", &schema, &options.instance_name)
                 .await?;
@@ -321,12 +327,6 @@ impl PostgresPersistence {
                     Ok(())
                 })
                 .await?;
-            if !options.allow_read_only
-                && Self::is_read_only(&client, options.multitenant, &options.instance_name).await?
-            {
-                return Err(ConnectError::ReadOnly);
-            }
-            Self::check_newly_created(&client, options.multitenant, &options.instance_name).await?
         };
 
         let lease = Lease::acquire(
@@ -334,9 +334,16 @@ impl PostgresPersistence {
             &schema,
             options.instance_name.clone(),
             options.multitenant,
+            options.allow_read_only,
             lease_lost_shutdown,
         )
         .await?;
+        let newly_created = {
+            let client = pool
+                .get_connection("check_newly_created", &schema, &options.instance_name)
+                .await?;
+            Self::check_newly_created(&client, options.multitenant, &options.instance_name).await?
+        };
         Ok(Self {
             newly_created: newly_created.into(),
             lease,
@@ -399,21 +406,6 @@ impl PostgresPersistence {
         })
     }
 
-    async fn is_read_only(
-        client: &PostgresConnection<'_>,
-        multitenant: bool,
-        instance_name: &PgInstanceName,
-    ) -> anyhow::Result<bool> {
-        let mut params = vec![];
-        if multitenant {
-            params.push(&instance_name.raw as &(dyn ToSql + Sync));
-        }
-        Ok(client
-            .query_opt(sql::check_is_read_only(multitenant), &params)
-            .await?
-            .is_some())
-    }
-
     pub fn create_pool(pg_config: tokio_postgres::Config) -> anyhow::Result<Arc<ConvexPgPool>> {
         let mut roots = RootCertStore::empty();
         let native_certs = rustls_native_certs::load_native_certs();
@@ -462,6 +454,44 @@ impl PostgresPersistence {
             .query_opt(sql::check_newly_created(multitenant), &params)
             .await?
             .is_none())
+    }
+}
+
+#[async_trait]
+impl IndexRowPersistence for PostgresPersistence {
+    async fn delete_index_rows(&self, expired_entries: Vec<IndexEntry>) -> anyhow::Result<usize> {
+        let multitenant = self.multitenant;
+        let instance_name = self.instance_name.clone();
+        self.lease
+            .transact(async move |tx| {
+                let mut deleted_count = 0;
+                let mut expired_chunks = expired_entries.chunks_exact(CHUNK_SIZE);
+                for chunk in &mut expired_chunks {
+                    let delete_chunk = tx
+                        .prepare_cached(sql::delete_index_chunk(multitenant))
+                        .await?;
+                    let mut params = chunk
+                        .iter()
+                        .map(|index_entry| PostgresReader::_index_cursor_params(Some(index_entry)))
+                        .flatten_ok()
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    if multitenant {
+                        params.push(Param::Text(instance_name.to_string()));
+                    }
+                    deleted_count += tx.execute_raw(&delete_chunk, params).await?;
+                }
+                for index_entry in expired_chunks.remainder() {
+                    let delete_index = tx.prepare_cached(sql::delete_index(multitenant)).await?;
+                    let mut params =
+                        PostgresReader::_index_cursor_params(Some(index_entry))?.to_vec();
+                    if multitenant {
+                        params.push(Param::Text(instance_name.to_string()));
+                    }
+                    deleted_count += tx.execute_raw(&delete_index, params).await?;
+                }
+                Ok(deleted_count as usize)
+            })
+            .await
     }
 }
 
@@ -615,18 +645,12 @@ impl Persistence for PostgresPersistence {
         Ok(())
     }
 
-    async fn load_index_chunk(
-        &self,
-        cursor: Option<IndexEntry>,
-        chunk_size: usize,
-    ) -> anyhow::Result<Vec<IndexEntry>> {
+    async fn has_index_entries(&self) -> anyhow::Result<bool> {
         let mut client = self
             .read_pool
-            .get_connection("load_index_chunk", &self.schema, &self.instance_name)
+            .get_connection("has_index_entries", &self.schema, &self.instance_name)
             .await?;
-        let mut params = PostgresReader::_index_cursor_params(cursor.as_ref())?;
-        let limit = chunk_size as i64;
-        params.push(Param::Limit(limit));
+        let mut params = vec![];
         if self.multitenant {
             params.push(Param::Text(self.instance_name.to_string()));
         }
@@ -634,52 +658,20 @@ impl Persistence for PostgresPersistence {
         let row_stream = client
             .with_retry(async move |client| {
                 let stmt = client
-                    .prepare_cached(sql::load_indexes_page(multitenant))
+                    .prepare_cached(sql::has_index_entries(multitenant))
                     .await?;
                 client.query_raw(&stmt, &params).await
             })
             .await?;
-
-        let parsed = row_stream.map(|row| parse_row(&row?));
-        parsed.try_collect().await
+        futures::pin_mut!(row_stream);
+        Ok(row_stream.try_next().await?.is_some())
     }
 
-    async fn delete_index_entries(
+    async fn reclaim_index_history(
         &self,
-        expired_entries: Vec<IndexEntry>,
-    ) -> anyhow::Result<usize> {
-        let multitenant = self.multitenant;
-        let instance_name = self.instance_name.clone();
-        self.lease
-            .transact(async move |tx| {
-                let mut deleted_count = 0;
-                let mut expired_chunks = expired_entries.chunks_exact(CHUNK_SIZE);
-                for chunk in &mut expired_chunks {
-                    let delete_chunk = tx
-                        .prepare_cached(sql::delete_index_chunk(multitenant))
-                        .await?;
-                    let mut params = chunk
-                        .iter()
-                        .map(|index_entry| PostgresReader::_index_cursor_params(Some(index_entry)))
-                        .flatten_ok()
-                        .collect::<anyhow::Result<Vec<_>>>()?;
-                    if multitenant {
-                        params.push(Param::Text(instance_name.to_string()));
-                    }
-                    deleted_count += tx.execute_raw(&delete_chunk, params).await?;
-                }
-                for index_entry in expired_chunks.remainder() {
-                    let delete_index = tx.prepare_cached(sql::delete_index(multitenant)).await?;
-                    let mut params =
-                        PostgresReader::_index_cursor_params(Some(index_entry))?.to_vec();
-                    if multitenant {
-                        params.push(Param::Text(instance_name.to_string()));
-                    }
-                    deleted_count += tx.execute_raw(&delete_index, params).await?;
-                }
-                Ok(deleted_count as usize)
-            })
-            .await
+        request: IndexRetentionRequest<'_>,
+    ) -> anyhow::Result<IndexRetentionProgress> {
+        delete_expired_entries(self, request).await
     }
 
     async fn delete(
@@ -1650,7 +1642,7 @@ impl PersistenceReader for PostgresReader {
 
     fn index_scan(
         &self,
-        index_id: IndexId,
+        index: IndexRef,
         tablet_id: TabletId,
         read_timestamp: Timestamp,
         range: &Interval,
@@ -1659,7 +1651,7 @@ impl PersistenceReader for PostgresReader {
         retention_validator: Arc<dyn RetentionValidator>,
     ) -> IndexStream<'_> {
         self._index_scan(
-            index_id,
+            index.id(),
             tablet_id,
             read_timestamp,
             range.clone(),
@@ -1765,6 +1757,7 @@ impl Lease {
         schema: &SchemaName,
         instance_name: PgInstanceName,
         multitenant: bool,
+        allow_read_only: bool,
         lease_lost_shutdown: ShutdownSignal,
     ) -> anyhow::Result<Self> {
         let timer = metrics::lease_acquire_timer();
@@ -1779,7 +1772,9 @@ impl Lease {
         tracing::info!("attempting to acquire lease");
         let stmt = client
             .with_retry(async move |client| {
-                client.prepare_cached(sql::lease_acquire(multitenant)).await
+                client
+                    .prepare_cached(sql::lease_acquire(multitenant, allow_read_only))
+                    .await
             })
             .await?;
         let mut params = vec![&ts as &(dyn ToSql + Sync)];
@@ -1790,7 +1785,7 @@ impl Lease {
         drop(client);
         anyhow::ensure!(
             rows_modified == 1,
-            "failed to acquire lease: Already acquired with higher timestamp"
+            "failed to acquire lease: already acquired with higher timestamp, or read-only"
         );
         tracing::info!("lease acquired with ts {}", ts);
 
@@ -1934,7 +1929,7 @@ fn index_params(update: &PersistenceIndexEntry) -> [Param; NUM_INDEX_PARAMS] {
         ),
     };
     [
-        internal_id_param(update.index_id.0),
+        internal_id_param(update.index.id().0),
         Param::Ts(i64::from(update.ts)),
         Param::Bytes(key.prefix),
         match key.suffix {

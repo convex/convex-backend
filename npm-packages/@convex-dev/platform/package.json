@@ -1,17 +1,17 @@
 {
   "name": "@convex-dev/platform",
-  "version": "0.1.9",
+  "version": "0.1.11",
   "description": "A client for the Convex Platform APIs",
   "type": "module",
   "homepage": "https://docs.convex.dev/platform-apis",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/@convex-dev/platform"
   },
   "scripts": {
     "build": "npm run generateApiSpec && node version-check.mjs && zshy",
-    "prepare": "npm run build",
+    "prepublishOnly": "npm run build",
     "prepack": "node src/scripts/dont-publish-alpha-as-latest.mjs",
     "test": "echo 0",
     "typecheck": "tsc --noEmit",
@@ -20,9 +20,9 @@
     "generateDeploymentApiSpec": "openapi-typescript ./deployment-openapi.json --output ./src/generatedDeploymentApi.ts --root-types --root-types-no-schema-prefix",
     "generateLogStreamApiSpec": "openapi-typescript ./log-stream-openapi.json --output ./src/generatedLogStreamApi.ts --root-types --root-types-no-schema-prefix",
     "checkApiSpec": "npm run checkManagementApiSpec && npm run checkDeploymentApiSpec && npm run checkLogStreamApiSpec",
-    "checkManagementApiSpec": "openapi-typescript ./management-openapi.json --output ./src/generatedManagementApi.ts --root-types --root-types-no-schema-prefix --check || (echo 'Platform management API spec check failed. Run `npm run generateApiSpec` to fix.'; false)",
-    "checkDeploymentApiSpec": "openapi-typescript ./deployment-openapi.json --output ./src/generatedDeploymentApi.ts --root-types --root-types-no-schema-prefix --check || (echo 'Platform deployment API spec check failed. Run `npm run generateApiSpec` to fix.'; false)",
-    "checkLogStreamApiSpec": "openapi-typescript ./log-stream-openapi.json --output ./src/generatedLogStreamApi.ts --root-types --root-types-no-schema-prefix --check || (echo 'Platform log stream API spec check failed. Run `npm run generateApiSpec` to fix.'; false)"
+    "checkManagementApiSpec": "openapi-typescript ./management-openapi.json --output ./src/generatedManagementApi.ts --root-types --root-types-no-schema-prefix --check || (echo 'Platform management API spec check failed. Run `just generate-api-specs` to fix.'; false)",
+    "checkDeploymentApiSpec": "openapi-typescript ./deployment-openapi.json --output ./src/generatedDeploymentApi.ts --root-types --root-types-no-schema-prefix --check || (echo 'Platform deployment API spec check failed. Run `just generate-api-specs` to fix.'; false)",
+    "checkLogStreamApiSpec": "openapi-typescript ./log-stream-openapi.json --output ./src/generatedLogStreamApi.ts --root-types --root-types-no-schema-prefix --check || (echo 'Platform log stream API spec check failed. Run `just generate-api-specs` to fix.'; false)"
   },
   "keywords": [],
   "author": "Convex, Inc. <no-reply@convex.dev>",

@@ -7,7 +7,7 @@ import { mockDeploymentInfo } from "@common/lib/mockDeploymentInfo";
 import { mockConvexReactClient } from "@common/lib/mockConvexReactClient";
 import udfs from "@common/udfs";
 import { ConvexProvider } from "convex/react";
-import { fn } from "storybook/test";
+import { fn, userEvent, within } from "storybook/test";
 import { DeploymentSettingsPage } from "pages/t/[team]/[project]/[deploymentName]/settings";
 
 const mockTeam = {
@@ -47,6 +47,11 @@ const mockConvexClient = mockConvexReactClient()
   .registerQueryFake(udfs.components.list, () => [])
   .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
   .registerQueryFake(udfs.deploymentEvents.lastPushEvent, () => null)
+  .registerQueryFake(
+    udfs.getSchemas.schemaValidationProgressByTable,
+    () => null,
+  )
+  .registerQueryFake(udfs.indexes.backfilling, () => [])
   .registerQueryFake(
     udfs.convexCloudUrl.default,
     () => mockDeployment.deploymentUrl,
@@ -115,3 +120,26 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {};
+
+/**
+ * The Create Deploy Key panel, opened from the deployment settings page, with
+ * the `deployment:deploy` permission selected — as you would for a CI deploy
+ * key.
+ */
+export const CreateDeployKey: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Create Deploy Key" }),
+    );
+
+    // The Headless UI Dialog renders in a portal at document.body, outside the
+    // story's canvasElement.
+    const body = within(document.body);
+    const nameInput = await body.findByPlaceholderText(
+      "Enter a memorable name for your deploy key",
+    );
+    await userEvent.type(nameInput, "CI Deploy Key");
+    await userEvent.click(await body.findByText("deployment:deploy"));
+  },
+};

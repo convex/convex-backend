@@ -50,7 +50,7 @@ export function ApplicationsLayout({ team }: { team: TeamResponse }) {
         These 3rd-party applications have been authorized to access this team on
         your behalf.
       </p>
-      <div className="mt-2 mb-2 text-sm text-content-primary">
+      <div className="my-2 text-sm text-content-primary">
         <span className="font-semibold">
           What can authorized applications do?
         </span>

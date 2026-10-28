@@ -205,6 +205,7 @@ export async function bundle({
   modules: Bundle[];
   externalDependencies: Map<string, string>;
   bundledModuleNames: Set<string>;
+  metafile: esbuild.Metafile | null;
 }> {
   const availableExternalPackages = await computeExternalPackages(
     ctx,
@@ -264,6 +265,7 @@ export async function bundle({
       result.externalModuleNames,
     ),
     bundledModuleNames: result.bundledModuleNames,
+    metafile: result.metafile ?? null,
   };
 }
 
@@ -321,10 +323,13 @@ export async function bundleSchema(
     platform: "browser",
     extraConditions,
   });
-  return result.modules;
+  return { modules: result.modules, metafile: result.metafile };
 }
 
-export async function bundleAuthConfig(ctx: Context, dir: string) {
+export async function bundleAuthConfig(
+  ctx: Context,
+  dir: string,
+): Promise<{ modules: Bundle[]; metafile: esbuild.Metafile | null }> {
   const authConfigPath = path.resolve(dir, "auth.config.js");
   const authConfigTsPath = path.resolve(dir, "auth.config.ts");
   if (ctx.fs.exists(authConfigPath) && ctx.fs.exists(authConfigTsPath)) {
@@ -343,7 +348,7 @@ export async function bundleAuthConfig(ctx: Context, dir: string) {
         `Found no auth config file at ${authConfigTsPath} or ${authConfigPath} so there are no configured auth providers`,
       ),
     );
-    return [];
+    return { modules: [], metafile: null };
   }
   logVerbose(chalkStderr.yellow(`Bundling auth config found at ${chosenPath}`));
   const result = await bundle({
@@ -355,7 +360,7 @@ export async function bundleAuthConfig(ctx: Context, dir: string) {
     // The auth config must be one module
     splitting: false,
   });
-  return result.modules;
+  return { modules: result.modules, metafile: result.metafile };
 }
 
 export async function doesImportConvexHttpRouter(source: string) {

@@ -144,7 +144,7 @@ class WrapWriter<DataModel extends GenericDataModel> {
         triggers: tableTrigger.triggers,
       });
     } else {
-      await this.ctx.db.patch(id, value);
+      await this.ctx.db.patch(table, id, value);
     }
   }
   async replace<TableName extends string>(
@@ -161,7 +161,7 @@ class WrapWriter<DataModel extends GenericDataModel> {
         triggers: tableTrigger.triggers,
       });
     } else {
-      await this.ctx.db.replace(id, value);
+      await this.ctx.db.replace(table, id, value);
     }
   }
   async delete<TableName extends string>(
@@ -176,11 +176,14 @@ class WrapWriter<DataModel extends GenericDataModel> {
         triggers: tableTrigger.triggers,
       });
     } else {
-      await this.ctx.db.delete(id);
+      await this.ctx.db.delete(table, id);
     }
   }
-  get<TableName extends string>(id: GenericId<TableName>): Promise<any> {
-    return this.ctx.db.get(id);
+  get<TableName extends string>(
+    tableName: TableName,
+    id: GenericId<TableName>,
+  ): Promise<any> {
+    return this.ctx.db.get(tableName, id);
   }
   query<TableName extends string>(tableName: TableName): QueryInitializer<any> {
     return this.ctx.db.query(tableName);

@@ -1,3 +1,20 @@
+# 3.0.0
+
+- Sync using the `/api/v1/data/sync` API instead of `list_snapshot` and
+  `document_deltas`. Existing connections migrate automatically and keep their
+  data — no historical resync is required.
+- Changing the table, schema, or component selection now applies retroactively:
+  newly selected tables are backfilled without a historical resync. Deselected
+  tables keep their synced data in the destination and stop updating. Reselected
+  tables are truncated and backfilled.
+- Requires a Convex backend that serves `/api/v1/data/sync`. Self-hosted
+  deployments older than that must be upgraded.
+
+# 2.0.2
+
+- Report sync errors to Fivetran as tasks instead of gRPC errors, so that error
+  messages are shown to customers on the Fivetran dashboard.
+
 # 2.0.1
 
 - Improve error messages for failed API calls.

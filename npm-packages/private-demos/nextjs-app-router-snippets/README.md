@@ -9,6 +9,6 @@ Actions or Route Handlers (API Routes).
 Run:
 
 ```
-just rush install
+just install-js
 npm run dev
 ```

@@ -1,10 +1,18 @@
-import { PlayIcon } from "@radix-ui/react-icons";
+import {
+  Link2Icon,
+  PlayIcon,
+  QuestionMarkCircledIcon,
+} from "@radix-ui/react-icons";
 import { useQuery } from "convex/react";
-import { useContext, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { Portal } from "@headlessui/react";
 import { lt } from "semver";
 import udfs from "@common/udfs";
 import { UdfType } from "system-udfs/convex/_system/frontend/common";
 import { CopyTextButton } from "@common/elements/CopyTextButton";
+import { CopiedPopper } from "@common/elements/CopiedPopper";
+import { copyTextToClipboard } from "@common/lib/utils";
+import { useHttpActionRoute } from "@common/features/functions/lib/useHttpActionRoute";
 import { FunctionRunnerDisabledWhilePaused } from "@common/features/functions/components/FunctionRunnerDisabledWhilePaused";
 import {
   DeploymentInfoContext,
@@ -15,6 +23,7 @@ import { ModuleFunction } from "@common/lib/functions/types";
 import { Loading } from "@ui/Loading";
 import { AuthorizeEditsConfirmationDialog } from "@common/elements/AuthorizeEditsConfirmationDialog";
 import { Button } from "@ui/Button";
+import { Tooltip } from "@ui/Tooltip";
 import { useEditsAuthorization } from "@common/features/data/lib/useEditsAuthorization";
 
 export function FunctionSummary({
@@ -40,6 +49,19 @@ export function FunctionSummary({
 
   const isInternal = currentOpenFunction.visibility?.kind === "internal";
   const isInComponent = !!currentOpenFunction.componentPath;
+
+  const httpActionRoute = useHttpActionRoute(currentOpenFunction);
+
+  const copyUrlButtonRef = useRef<HTMLElement | null>(null);
+  const [copiedPopperElement, setCopiedPopperElement] =
+    useState<HTMLDivElement | null>(null);
+  const [didJustCopyUrl, setDidJustCopyUrl] = useState(false);
+  useEffect(() => {
+    if (didJustCopyUrl) {
+      const timeout = setTimeout(() => setDidJustCopyUrl(false), 800);
+      return () => clearTimeout(timeout);
+    }
+  }, [didJustCopyUrl]);
 
   const canRunFunction = (() => {
     if (isInternal) {
@@ -95,6 +117,60 @@ export function FunctionSummary({
               className="font-mono"
               text={currentOpenFunction.displayName}
             />
+          )}
+          {httpActionRoute?.status === "unmounted" && (
+            <Tooltip
+              asChild
+              side="bottom"
+              maxWidthClassName="max-w-xs"
+              tip={
+                <div className="text-left text-pretty">
+                  <p className="mb-0.5">
+                    <code>{currentOpenFunction.componentPath}</code> is
+                    installed without an <code>httpPrefix</code>, so its HTTP
+                    routes aren’t served.
+                  </p>
+                  <p>
+                    Set an <code>httpPrefix</code> in{" "}
+                    <code>convex/convex.config.ts</code> to mount the routes.
+                  </p>
+                </div>
+              }
+            >
+              <span className="flex items-center gap-1 rounded-full bg-background-warning px-2 py-1 text-xs text-content-warning">
+                Not mounted
+                <QuestionMarkCircledIcon className="size-3.5 min-w-3.5" />
+              </span>
+            </Tooltip>
+          )}
+          {httpActionRoute?.status === "mounted" && (
+            <>
+              <Button
+                ref={copyUrlButtonRef}
+                variant="neutral"
+                size="xs"
+                inline
+                icon={<Link2Icon />}
+                aria-label="Copy URL"
+                tip="Copy URL"
+                tipSide="bottom"
+                onClick={() => {
+                  void copyTextToClipboard(httpActionRoute.url).then(() =>
+                    setDidJustCopyUrl(true),
+                  );
+                }}
+              />
+              <Portal>
+                <CopiedPopper
+                  referenceElement={copyUrlButtonRef.current}
+                  copiedPopperElement={copiedPopperElement}
+                  setCopiedPopperElement={setCopiedPopperElement}
+                  show={didJustCopyUrl}
+                  message="Copied URL"
+                  placement="bottom"
+                />
+              </Portal>
+            </>
           )}
         </div>
         {
@@ -152,7 +228,6 @@ export const functionTypeLabel = (udfType: UdfType) => {
       text = "HTTP";
       break;
     default:
-      // eslint-disable-next-line no-case-declarations, @typescript-eslint/no-unused-vars
       udfType satisfies never;
       text = "Function";
   }

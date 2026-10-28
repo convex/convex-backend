@@ -45,7 +45,7 @@ export const cronDiff = looseObject({
 });
 export type CronDiff = z.infer<typeof cronDiff>;
 
-const developerIndexConfig = z.intersection(
+export const developerIndexConfig = z.intersection(
   z.discriminatedUnion("type", [
     looseObject({
       name: z.string(),

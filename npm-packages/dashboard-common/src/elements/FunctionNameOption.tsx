@@ -31,7 +31,7 @@ const MAX_CHARS_SHOWN = 36;
 
 export function FunctionNameOption({
   label,
-  oneLine: _oneLine = false,
+  oneLine = false,
   disableTruncation = false,
   maxChars = MAX_CHARS_SHOWN,
   error = false,
@@ -75,11 +75,14 @@ export function FunctionNameOption({
   const content = (
     <div className="flex w-full items-center space-x-1">
       {componentPath && (
-        <Tooltip tip={componentPath}>
+        <Tooltip tip={componentPath} className="shrink-0">
           <PuzzlePieceIcon />
         </Tooltip>
       )}
-      <span aria-label={fullName}>
+      <span
+        aria-label={fullName}
+        className={oneLine ? "min-w-0 truncate" : undefined}
+      >
         <span
           className={error ? "text-content-error" : "text-content-secondary"}
         >

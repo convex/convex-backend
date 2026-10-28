@@ -20,12 +20,9 @@ export function HighlightMatch({
     <>
       {parts.map((part, i) =>
         part.toLowerCase() === query.toLowerCase() ? (
-          <mark
-            key={i}
-            className="bg-yellow-200 text-inherit dark:bg-yellow-900"
-          >
+          <span key={i} className="font-semibold text-content-accent">
             {part}
-          </mark>
+          </span>
         ) : (
           part
         ),

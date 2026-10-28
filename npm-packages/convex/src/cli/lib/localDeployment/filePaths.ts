@@ -6,7 +6,7 @@
     0.0.2
       convex-local-backend[.exe]
   dashboard
-    config.json
+    config.json // `GlobalDashboardConfig`
     out
     // if present, output files from building the self-hosted dashboard which can
     // be served using `npx serve`
@@ -23,6 +23,10 @@ New default (project-local): .convex/local/default/
 Legacy (home directory) - used for backward compatibility if data already exists:
   - For "local" deployments: ~/.convex/convex-backend-state/local-{team}-{project}/
   - For "anonymous" deployments: ~/.convex/anonymous-convex-backend-state/{anonymous-deployment-name}/
+
+For anonymous deployments, the locally running dashboard's `{ port }`
+is stored as `dashboard.json` next to that deployment's `config.json` (see
+`ProjectDashboardConfig`), wherever the deployment lives.
 
 
 ~/.convex
@@ -331,12 +335,19 @@ export function dashboardOutDir() {
   return path.join(dashboardDir(), "out");
 }
 
-export type DashboardConfig = {
-  port: number;
-  apiPort: number;
+/**
+ * Global dashboard config in ~/.cache/convex/dashboard/config.json.
+ */
+export type GlobalDashboardConfig = {
   version: string;
+
+  // Previous versions of the Convex CLI would also store
+  // fields here for ports. They are now in ProjectDashboardConfig.
 };
-export function loadDashboardConfig(ctx: Context) {
+
+export function loadGlobalDashboardConfig(
+  ctx: Context,
+): GlobalDashboardConfig | null {
   const configFile = path.join(dashboardDir(), "config.json");
   if (!ctx.fs.exists(configFile)) {
     return null;
@@ -350,12 +361,61 @@ export function loadDashboardConfig(ctx: Context) {
   }
 }
 
-export function saveDashboardConfig(ctx: Context, config: DashboardConfig) {
+export function saveGlobalDashboardConfig(
+  ctx: Context,
+  config: GlobalDashboardConfig,
+) {
   const configFile = path.join(dashboardDir(), "config.json");
   if (!ctx.fs.exists(dashboardDir())) {
     ctx.fs.mkdir(dashboardDir(), { recursive: true });
   }
   ctx.fs.writeUtf8File(configFile, JSON.stringify(config));
+}
+
+/**
+ * Project-scoped dashboard config (for anonymous dev) in
+ * project/.convex/local/default/dashboard.json
+ * (or legacyDeploymentStateDir/dashboard.json)
+ */
+export type ProjectDashboardConfig = {
+  port: number;
+};
+
+function dashboardConfigPath(ctx: Context, deploymentName: string) {
+  return path.join(
+    deploymentStateDir(ctx, "anonymous", deploymentName),
+    "dashboard.json",
+  );
+}
+
+export function loadProjectDashboardConfig(
+  ctx: Context,
+  deploymentName: string,
+): ProjectDashboardConfig | null {
+  const configFile = dashboardConfigPath(ctx, deploymentName);
+  if (!ctx.fs.exists(configFile)) {
+    return null;
+  }
+  const content = ctx.fs.readUtf8File(configFile);
+  try {
+    return JSON.parse(content);
+  } catch (e) {
+    logVerbose(`Failed to parse project dashboard config: ${e as any}`);
+    return null;
+  }
+}
+
+export function saveProjectDashboardConfig(
+  ctx: Context,
+  deploymentName: string,
+  config: ProjectDashboardConfig,
+) {
+  const configPath = dashboardConfigPath(ctx, deploymentName);
+  const directoryPath = path.dirname(configPath);
+  if (!ctx.fs.exists(directoryPath)) {
+    ctx.fs.mkdir(directoryPath, { recursive: true });
+  }
+  ctx.fs.writeUtf8File(configPath, JSON.stringify(config));
 }
 
 export function loadUuidForAnonymousUser(ctx: Context) {

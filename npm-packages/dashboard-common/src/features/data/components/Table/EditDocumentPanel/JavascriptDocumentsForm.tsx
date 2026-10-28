@@ -130,7 +130,7 @@ export function JavascriptDocumentsForm({
         <div className="float-right flex w-full grow items-center justify-end gap-4 whitespace-pre-line">
           {validationMessage && (
             <p
-              className="mt-1 scrollbar max-h-full overflow-y-auto text-xs break-words text-content-errorSecondary"
+              className="mt-1 scrollbar max-h-full overflow-y-auto text-xs wrap-break-word text-content-errorSecondary"
               role="alert"
             >
               {validationMessage}

@@ -1,10 +1,14 @@
 use std::{
+    collections::BTreeSet,
     fmt,
     str::FromStr,
 };
 
 use common::{
-    log_streaming::LogEventFormatVersion,
+    log_streaming::{
+        LogEventFormatVersion,
+        LogTopic,
+    },
     pii::PII,
 };
 use serde::{
@@ -83,6 +87,9 @@ pub struct DatadogConfig {
     pub dd_tags: Vec<String>,
     pub version: LogEventFormatVersion,
     pub service: Option<String>,
+    /// The set of topics this log stream is subscribed to. `None` means the
+    /// stream is subscribed to all topics, including ones added in the future.
+    pub topics: Option<BTreeSet<LogTopic>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -93,6 +100,8 @@ pub struct SerializedDatadogConfig {
     pub dd_tags: Vec<String>,
     pub version: Option<String>,
     pub service: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topics: Option<Vec<String>>,
 }
 
 impl From<DatadogConfig> for SerializedDatadogConfig {
@@ -103,6 +112,7 @@ impl From<DatadogConfig> for SerializedDatadogConfig {
             dd_tags: value.dd_tags,
             version: Some(value.version.to_string()),
             service: value.service,
+            topics: super::serialize_topics(value.topics),
         }
     }
 }
@@ -125,6 +135,7 @@ impl TryFrom<SerializedDatadogConfig> for DatadogConfig {
             dd_tags: value.dd_tags,
             version,
             service: value.service,
+            topics: super::deserialize_topics(value.topics)?,
         })
     }
 }

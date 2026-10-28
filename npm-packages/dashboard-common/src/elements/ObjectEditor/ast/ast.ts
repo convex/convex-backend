@@ -310,7 +310,6 @@ export class Walker {
     };
   }
 
-  // eslint-disable-next-line class-methods-use-this
   newExpression(n: NewExpressionNode) {
     switch (n.callee.name) {
       case "Id": {
@@ -341,7 +340,6 @@ export class Walker {
     }
   }
 
-  // eslint-disable-next-line class-methods-use-this
   templateLiteral(n: TemplateLiteralNode) {
     if (n.expressions?.length) {
       return {
@@ -452,7 +450,6 @@ export class Walker {
     }
   }
 
-  // eslint-disable-next-line class-methods-use-this
   identifier(n: IdentifierNode) {
     if (n.name === "Infinity") {
       return {

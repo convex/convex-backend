@@ -189,17 +189,17 @@
           "tableNames"
         ],
         "properties": {
-          "componentId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "tableNames": {
             "type": "array",
             "items": {
               "type": "string"
             }
+          },
+          "componentId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

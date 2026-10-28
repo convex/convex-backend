@@ -1,12 +1,12 @@
 {
   "name": "convex",
   "description": "Client for the Convex Cloud",
-  "version": "1.39.1",
+  "version": "1.48.0",
   "author": "Convex, Inc. <no-reply@convex.dev>",
   "homepage": "https://convex.dev",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/convex"
   },
   "main": "./dist/cjs/index.js",
@@ -145,6 +145,9 @@
         "import": "./dist/esm/values/index.js"
       }
     },
+    "./bundle-analyzer-internal": {
+      "convex-internal-types": "./src/bundle-analyzer-internal/index.ts"
+    },
     "./package.json": "./package.json"
   },
   "@comment typesVersions": [
@@ -184,15 +187,13 @@
     "convex-bundled": "bin/main.js"
   },
   "scripts": {
-    "build": "npm run generateApiSpec && python3 scripts/build.py 2>&1",
+    "build": "npm run generateApiSpec && uv run --script scripts/build.py 2>&1",
     "bundle-server": "node scripts/bundle-server.mjs",
     "clean": "shx rm -rf dist tmpDist*",
     "lint": "eslint . --cache",
     "format": "prettier -w . '!CHANGELOG.md' && eslint --fix .",
     "format-check": "prettier -c . '!CHANGELOG.md' && eslint . --cache",
-    "prepare": "npm run build",
-    "prepublishOnly": "node scripts/version-check.mjs",
-    "prepack": "node scripts/prepack.mjs",
+    "prepack": "node scripts/version-check.mjs && npm run build && node scripts/prepack.mjs",
     "postpack": "node scripts/postpack.mjs",
     "test": "vitest --silent",
     "test-not-silent": "vitest",
@@ -243,7 +244,7 @@
   "dependencies": {
     "esbuild": "0.27.0",
     "prettier": "^3.0.0",
-    "ws": "8.20.1"
+    "ws": "8.21.0"
   },
   "peerDependencies": {
     "@auth0/auth0-react": "^2.0.1",
@@ -271,35 +272,37 @@
   ],
   "devDependencies": {
     "@auth0/auth0-react": "2.15.1",
+    "@babel/code-frame": "^7.27.1",
     "@babel/parser": "^7.27.1",
     "@babel/types": "^7.27.1",
     "@clerk/react": "^6.4.3",
     "@commander-js/extra-typings": "^14.0.0",
-    "@convex-dev/platform": "0.1.9",
+    "@convex-dev/platform": "0.1.11",
     "@eslint/compat": "~2.0.0",
     "@eslint/eslintrc": "^3",
     "@eslint/js": "~9.39.0",
-    "@modelcontextprotocol/sdk": "^1.25.2",
-    "@octokit/openapi-types": "~27.0.0",
-    "@sentry/node": "^7.23.0",
-    "@sentry/tracing": "^7.23.0",
-    "@swc/core": "1.15.8",
-    "@testing-library/react": "~16.3.0",
-    "@types/adm-zip": "^0.5.7",
-    "@types/deep-equal": "1.0.4",
     "@inquirer/confirm": "^6.0.4",
     "@inquirer/input": "^5.0.4",
     "@inquirer/search": "^4.1.0",
     "@inquirer/select": "^5.0.4",
     "@inquirer/testing": "^3.3.0",
+    "@modelcontextprotocol/server": "^2.3.0",
+    "@octokit/openapi-types": "~27.0.0",
+    "@sentry/node": "^7.23.0",
+    "@sentry/tracing": "^7.23.0",
+    "@swc/core": "1.15.8",
+    "@testing-library/react": "~16.3.0",
+    "@types/babel__code-frame": "^7.0.6",
+    "@types/deep-equal": "1.0.4",
     "@types/node": "^18.17.0",
-    "@types/react": "^18.0.0",
-    "@types/react-dom": "^18.0.0",
+    "@types/react": "^19.2.4",
+    "@types/react-dom": "^19.2.3",
     "@types/semver": "^7.3.13",
     "@types/serve-handler": "~6.1.4",
     "@types/ws": "^8.5.13",
+    "@vercel/detect-agent": "^1.2.5",
     "@vitest/eslint-plugin": "~1.6.0",
-    "adm-zip": "^0.5.10",
+    "adm-zip": "^0.6.1",
     "bufferutil": "^4.0.7",
     "chalk": "5",
     "chokidar": "3.6.0",
@@ -318,7 +321,7 @@
     "fetch-retry": "~6.0.0",
     "find-up": "^8.0.0",
     "globals": "~17.4.0",
-    "happy-dom": "~20.8.0",
+    "happy-dom": "~20.10.0",
     "jsdom": "~28.1.0",
     "json5": "~2.2.3",
     "knip": "~5.86.0",
@@ -329,26 +332,25 @@
     "openapi-typescript-helpers": "~0.1.0",
     "openid-client": "^5.3.1",
     "ora": "^9.0.0",
-    "prettier": "3.8.1",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "semver": "^7.6.0",
     "serve-handler": "~6.1.6",
     "shx": "~0.4.0",
     "skott": "~0.35.4",
-    "tar": "^7.5.11",
+    "tar": "^7.5.21",
     "tsx": "^4.19.4",
     "typedoc": "^0.24.6",
     "typescript": "~5.0.3",
     "typescript-eslint": "~8.57.0",
-    "vitest": "^3.2.4",
-    "undici": "7.24.0",
+    "undici": "7.29.1",
+    "vitest": "^4.1.0",
     "wait-for-expect": "~4.0.0",
     "zod": "^3.24.0",
     "zod-to-json-schema": "^3.24.0"
   },
   "engines": {
     "npm": ">=7.0.0",
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }

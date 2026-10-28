@@ -7,12 +7,17 @@ description:
 ---
 
 In Convex, your projects are organized by team. Teams are used to share access
-to your projects with other people. You may switch between teams or create a new
-team by clicking on the name of your team located on the top of the Convex
-dashboard. This will open the project selector, where you can switch teams by
-clicking on the team name once again.
+to your projects with other people. To switch between teams or create a new
+team, click your team's name at the top of the Convex dashboard. Inside a
+project, the same menu is behind your team's icon, to the left of the project
+name.
 
-![Team switcher](/screenshots/team_selector.png)
+<Screenshot story="docs/pages/Projects#Team Switcher" alt="Team switcher" />
+
+The menu lists every team you belong to, and typing filters it. Pressing `/` or
+`⌘K` (`Ctrl+K` on Windows and Linux) anywhere in the dashboard opens the command
+palette, which has the same **Switch Team** menu alongside search across your
+projects and deployments.
 
 You may change the name of a team or invite new members to a team by clicking on
 the "Team Settings" button located on the top of the project list page.
@@ -20,7 +25,11 @@ the "Team Settings" button located on the top of the project list page.
 ## General
 
 The [general page](https://dashboard.convex.dev/team/settings) allows changing
-the team name and slug.
+the team name, slug, and the [default region](/production/regions.mdx) for new
+deployments. Each setting can be edited and saved independently.
+
+This page also displays your team ID, which is used to identify your team when
+working with the [Convex Platform APIs](/platform-apis/overview.mdx).
 
 You may also delete the team from this page. You can only delete a team after
 deleting all of it's projects, and removing all other team members from your
@@ -70,7 +79,7 @@ Admins can do everything developers can, as well as:
 - Remove members from the team
 - Change the role of other team members
 - Manage the team's Convex subscription and billing details.
-- Change the team name and slug
+- Change the team name, slug, and default region
 - Team Admins are also implicitly granted project admin access to all projects
   within the team. See [Project Admins](#project-admins) for more information.
 
@@ -157,19 +166,41 @@ All metrics are available in daily breakdowns:
   alt="Team usage page graphs"
 />
 
-## Single Sign-On
+## Referrals
+
+Use the [referrals page](https://dashboard.convex.dev/team/settings/referrals)
+to refer friends to Convex and earn free resources. For each team you refer (up
+to 5), both your team and the referred team receive additional resources on top
+of the [free plan limits](https://www.convex.dev/pricing).
+
+Referral benefits only apply while your team is on the free, though your
+referral link keeps working for the friends you refer. Share the referral link
+found on this page to get started, and you'll also see who referred you and
+which teams you've referred.
+
+## Team Authentication
 
 <Admonition type="info">
 
-Single Sign-On is only available on Convex Business and Enterprise.
+Single Sign-On and Directory Sync are only available on Convex Business and
+Enterprise.
 
 </Admonition>
 
-Configure Single Sign-On (SSO) on the
-[SSO settings page](https://dashboard.convex.dev/team/settings/sso) to allow
-your team members to authenticate through your organization's identity provider.
+The
+[team authentication page](https://dashboard.convex.dev/team/settings/team-authentication)
+is where you verify the email domains your team owns and connect your
+organization's identity provider:
 
-[Learn more about setting up SSO](/team-management/sso.md).
+- **[Single Sign-On (SSO)](/team-management/sso.mdx)** lets team members
+  authenticate through your identity provider.
+- **[Directory Sync (SCIM)](/team-management/directory-sync.mdx)** provisions
+  members and their roles from your identity provider's user directory.
+
+<Screenshot
+  story="docs/pages/TeamAuthentication"
+  alt="Team authentication page"
+/>
 
 ## Audit Log
 
@@ -183,8 +214,37 @@ plans.
 The [audit log page](https://dashboard.convex.dev/team/settings/audit-log) shows
 all the actions taken by members within the team. This includes creating and
 managing projects and deployments, inviting and removing team members, and more.
+If your team has [Single Sign-On](/team-management/sso.mdx#sign-in-audit-logs)
+enabled, the audit log also includes SSO sign-ins to the dashboard and CLI.
 
 <Screenshot story="docs/pages/TeamAuditLog" alt="Team audit log page" />
 
 You may also view a history of deployment-related events on the
 [deployment history page](/dashboard/deployments/history.mdx).
+
+## Access Tokens
+
+Use the
+[access tokens page](https://dashboard.convex.dev/team/settings/access-tokens)
+to create team access tokens for the
+[Convex Platform APIs](/platform-apis/overview.mdx).
+
+A team access token can only perform actions you have access to on the team. If
+you have [custom roles](/team-management/custom-roles.mdx), the token can only
+perform the actions allowed by your roles. You can only see and manage the
+tokens you have created yourself.
+
+## Applications
+
+The [applications page](https://dashboard.convex.dev/team/settings/applications)
+has two tabs:
+
+- **Authorized Applications** lists the third-party applications you have
+  authorized, via OAuth, to access this team on your behalf. You can revoke an
+  application's access here at any time. Like team access tokens, an authorized
+  application can only perform actions you have access to on the team, and you
+  can only see the applications you authorized yourself.
+- **Your OAuth Applications** lets you create and manage OAuth applications so
+  that other Convex users can authorize your product to manage their teams or
+  projects. See [OAuth Applications](/platform-apis/oauth-applications) for
+  details.

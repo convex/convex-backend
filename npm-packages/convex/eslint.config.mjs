@@ -137,7 +137,11 @@ export default [
   },
   {
     name: "CLI-specific",
-    files: ["src/cli/**/*.ts", "src/bundler/**/*.ts"],
+    files: [
+      "src/cli/**/*.ts",
+      "src/bundler/**/*.ts",
+      "src/bundle-analyzer-internal/**/*.ts",
+    ],
     ignores: ["**/*.test.ts"],
     rules: {
       "no-restricted-imports": [

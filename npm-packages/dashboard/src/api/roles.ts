@@ -35,28 +35,6 @@ export function useHasProjectAdminPermissions(projectId?: number): boolean {
   );
 }
 
-export function useHasProjectAdminPermissionsForProject(): (
-  projectId: number,
-) => boolean {
-  const isTeamAdmin = useIsCurrentMemberTeamAdmin();
-  const { projectRoles } = useProjectRoles();
-  const profile = useProfile();
-  if (isTeamAdmin) {
-    return () => true;
-  }
-
-  return (projectId: number) => {
-    const filteredProjectRoles = projectRoles?.filter(
-      (r) => r.projectId === projectId,
-    );
-    return (
-      filteredProjectRoles?.some(
-        (role) => role.role === "admin" && role.memberId === profile?.id,
-      ) ?? false
-    );
-  };
-}
-
 export function useProjectRoles() {
   const team = useCurrentTeam();
   const teamId = team?.id;
@@ -214,6 +192,8 @@ export function useDeleteCustomRole(teamId?: number) {
       team_id: teamId ?? 0,
     },
     successToast: "Custom role deleted.",
+    // The delete confirmation dialog renders the failure inline.
+    toastOnError: false,
   });
 }
 

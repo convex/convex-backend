@@ -28,11 +28,11 @@ aws-lc-rs = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 common = { workspace = true }
+const-hex = { workspace = true }
 convex_macro = { workspace = true }
 database = { workspace = true }
 errors = { workspace = true }
 futures = { workspace = true }
-hex = { workspace = true }
 http = { workspace = true }
 keybroker = { workspace = true }
 maplit = { workspace = true }

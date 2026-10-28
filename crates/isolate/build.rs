@@ -8,17 +8,18 @@ use std::{
         self,
         File,
     },
-    io::{
-        self,
-        Write,
-    },
+    io::Write,
     path::Path,
     process::Command,
-    thread,
-    time::Duration,
 };
 
 use anyhow::Context;
+use js_build::{
+    js_prebuilt,
+    pnpm_install,
+    rerun_if_changed,
+    turbo_build,
+};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use sha2::{
@@ -37,7 +38,13 @@ const NODE_EXECUTOR_DIST_DIR: &str = "../../npm-packages/node-executor/dist";
 const COMPONENT_TESTS_DIR: &str = "../../npm-packages/tests/component-tests";
 /// Exceptions to the rule that all directories in `component-tests` are
 /// components.
-const COMPONENT_TESTS_CHILD_DIR_EXCEPTIONS: &[&str] = &[".rush", "node_modules", "projects"];
+const COMPONENT_TESTS_CHILD_DIR_EXCEPTIONS: &[&str] = &[
+    // stale in pre-migration checkouts
+    ".rush",
+    ".turbo",
+    "node_modules",
+    "projects",
+];
 /// Directory where test projects that use components live.
 const COMPONENT_TESTS_PROJECTS_DIR: &str = "../../npm-packages/tests/component-tests/projects";
 const COMPONENT_TESTS_PROJECTS: &[&str] = &[
@@ -66,10 +73,6 @@ const COMPONENTS: &[&str] = &[
 const ADMIN_KEY: &str = include_str!("../keybroker/dev/admin_key.txt");
 
 #[cfg(not(target_os = "windows"))]
-const RUSH: &str = "../scripts/node_modules/.bin/rush";
-#[cfg(target_os = "windows")]
-const RUSH: &str = "../../scripts/node_modules/.bin/rush.cmd";
-#[cfg(not(target_os = "windows"))]
 const NPM: &str = "npm";
 #[cfg(target_os = "windows")]
 const NPM: &str = "npm.cmd";
@@ -81,18 +84,6 @@ struct Bundle {
     path: String,
     source: String,
     source_map: Option<String>,
-}
-
-// Cargo silently drops paths that don't exist and then reruns the build script
-// on every invocation. This fallback isn't great, since it'll silently degrade
-// build times, so check that the path actually exists with this helper.
-fn rerun_if_changed(path: &str) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        Path::new(path).exists(),
-        "Non-existent dependency path: {path}"
-    );
-    println!("cargo:rerun-if-changed={path}");
-    Ok(())
 }
 
 fn write_bundles(out_dir: &Path, out_name: &str, bundles: Vec<Bundle>) -> anyhow::Result<()> {
@@ -140,13 +131,19 @@ fn main() -> anyhow::Result<()> {
     rerun_if_changed("../../npm-packages/convex/package.json")?;
     rerun_if_changed("../../npm-packages/convex/scripts/build.py")?;
 
+    // Dependency resolution inputs: a dep bump or override change alters the
+    // compiled-in bundles without touching any source watched above.
+    rerun_if_changed("../../npm-packages/pnpm-lock.yaml")?;
+    rerun_if_changed("../../npm-packages/pnpm-workspace.yaml")?;
+    rerun_if_changed("../../npm-packages/turbo.json")?;
+
     rerun_if_changed("../../npm-packages/node-executor/src")?;
     rerun_if_changed("../../npm-packages/node-executor/package.json")?;
 
     rerun_if_changed("../../npm-packages/system-udfs/convex/")?;
 
     // Note that we only include the component directory,`convex` directory, and
-    // package.json so we ignore changes to rush files.
+    // package.json so we ignore changes to other workspace files.
     let has_tests = Path::new("../../npm-packages/tests/udf-tests/convex/").exists();
     if has_tests {
         rerun_if_changed("../../npm-packages/tests/udf-tests/convex/")?;
@@ -154,7 +151,7 @@ fn main() -> anyhow::Result<()> {
         rerun_if_changed("../../npm-packages/tests/udf-tests/package.json")?;
         rerun_if_changed("../../npm-packages/tests/component-tests/package.json")?;
         for component in COMPONENTS {
-            rerun_if_changed(&format!(
+            rerun_if_changed(format!(
                 "../../npm-packages/tests/component-tests/{component}/"
             ))?;
         }
@@ -181,10 +178,10 @@ fn main() -> anyhow::Result<()> {
         rerun_if_changed("../../npm-packages/tests/component-tests/envVars/")?;
         rerun_if_changed("../../npm-packages/tests/component-tests/errors/")?;
         for project in COMPONENT_TESTS_PROJECTS {
-            rerun_if_changed(&format!(
+            rerun_if_changed(format!(
                 "../../npm-packages/tests/component-tests/projects/{project}/convex"
             ))?;
-            rerun_if_changed(&format!(
+            rerun_if_changed(format!(
                 "../../npm-packages/tests/component-tests/projects/{project}/package.json"
             ))?;
         }
@@ -201,37 +198,16 @@ fn main() -> anyhow::Result<()> {
     rerun_if_changed("../../npm-packages/system-udfs/tsconfig.json")?;
 
     // Step 1: Ensure the `server`, `dashboard`, and `cli` deps are installed.
-    for _ in 0..3 {
-        let output = Command::new(RUSH)
-            .current_dir(Path::new(PACKAGES_DIR))
-            .args(["install"])
-            .output()
-            .context("Failed on rush install")?;
-        io::stdout().write_all(&output.stdout).unwrap();
-        io::stderr().write_all(&output.stderr).unwrap();
-        if String::from_utf8_lossy(&output.stdout)
-            .contains("Another Rush command is already running in this repository.")
-        {
-            // Sometimes editors/etc might run another rush install. Just wait a moment and
-            // try again.
-            thread::sleep(Duration::from_secs(1));
-            continue;
+    // Keep the package list in sync with the `Build JS required by Rust` step in
+    // rust.yml, which is what lets the cargo steps there set CONVEX_PREBUILT_JS.
+    if !js_prebuilt() {
+        pnpm_install()?;
+        let mut pkgs = vec!["convex", "node-executor", "system-udfs", "udf-runtime"];
+        if has_tests {
+            pkgs.extend(["simulation", "udf-tests"]);
         }
-        anyhow::ensure!(output.status.success(), "Failed to 'rush install'");
-        break;
+        turbo_build(&pkgs)?;
     }
-    let mut pkgs = vec!["convex", "node-executor", "udf-runtime"];
-    if has_tests {
-        pkgs.extend(["simulation", "udf-tests"]);
-    }
-    let mut cmd = Command::new(RUSH);
-    cmd.current_dir(PACKAGES_DIR).arg("build");
-    for pkg in pkgs {
-        cmd.arg("-t");
-        cmd.arg(pkg);
-    }
-    let status = cmd.status().context("Failed on rush build")?;
-    anyhow::ensure!(status.success(), "Failed to 'rush build'");
     // Step 2: Use `build-server` to package up our builtin `_system` UDFs.
     let output = Command::new(NPM)
         .current_dir(NPM_DIR)
@@ -306,16 +282,13 @@ fn main() -> anyhow::Result<()> {
                 );
                 let out_with_project = out_dir.join(suffix);
                 fs::create_dir_all(&out_with_project)?;
-                write_start_push_request(
-                    &path,
-                    &out_with_project.join(format!("start_push_request")),
-                )?;
+                write_start_push_request(&path, &out_with_project.join("start_push_request"))?;
             }
         }
 
         // Step 7: Record dependencies for the simulation test build. It's a bit of a
-        // hack that it's in this build script, but we can't safely invoke Rush
-        // across two build scripts since it'll fail if called concurrently.
+        // hack that it's in this build script, but it keeps all the JS builds in
+        // one place.
         let metafile = Path::new(PACKAGES_DIR).join("tests/simulation/dist/metafile.json");
         let metafile_contents = fs::read_to_string(metafile).context("Failed to read metafile")?;
         let metafile: Metafile =

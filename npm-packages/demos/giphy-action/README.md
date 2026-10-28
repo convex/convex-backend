@@ -6,21 +6,38 @@ services and how to use environment variables.
 It allows the user to type a chat message, like `/giphy wombat`, query
 [GIPHY](https://giphy.com/) for a wombat GIF, and have an animated GIF of a
 wombat show up in the chat stream. It builds on the Convex
-[tutorial](https://github.com/get-convex/convex/tree/main/npm-packages/demos/tutorial).
+[tutorial](https://github.com/convex/convex/tree/main/npm-packages/demos/tutorial).
 
 ## Running the App
 
-Run:
+### 1. Configure a deployment
 
-```
+```sh
 npm install
+npx convex init
+```
+
+### 2. Set the `GIPHY_KEY` variable
+
+Create a GIPHY [developer account](https://developers.giphy.com) and obtain a
+free API app key on the
+[developer dashboard](https://developers.giphy.com/dashboard/). This app
+declares `GIPHY_KEY` in `convex/convex.config.ts`, so the deployment won't
+accept code until it is set. Run this and paste the key at the prompt, which
+keeps it hidden and out of your shell history:
+
+```sh
+npx convex env set GIPHY_KEY
+```
+
+You can also set it from your [Convex dashboard](https://dashboard.convex.dev/).
+See
+[environment variables](https://docs.convex.dev/using/environment-variables).
+
+### 3. Start dev
+
+```sh
 npm run dev
 ```
-
-Create a GIPHY [developer account](https://developers.giphy.com), obtain a free
-API app key on the
-[developer dashboard](https://developers.giphy.com/dashboard/), and set it as an
-[environment variable](https://docs.convex.dev/using/environment-variables) with
-the name `GIPHY_KEY` via the [Convex dashboard](https://dashboard.convex.dev/).
 
 Then visit [localhost:3000](http://localhost:3000).

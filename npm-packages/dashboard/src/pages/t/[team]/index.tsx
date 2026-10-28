@@ -23,7 +23,11 @@ import { useTeamOrbSubscription } from "api/billing";
 import { useReferralState } from "api/referrals";
 import { ProjectDetails, TeamResponse } from "generatedApi";
 import { ReferralsBanner } from "components/referral/ReferralsBanner";
-import { useCreateProjectModal } from "hooks/useCreateProjectModal";
+import { useCreateProjectModalRequest } from "hooks/useCreateProjectModal";
+import {
+  useCursorPagination,
+  useSnapBackOnEmptyPage,
+} from "hooks/useCursorPagination";
 import { useHasCustomRolePermission } from "api/roles";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { withAuthenticatedPage } from "lib/withAuthenticatedPage";
@@ -162,7 +166,7 @@ function TeamContent({
         </div>
         {!isDeploymentsView && (
           <div className="mt-1 flex items-center gap-2">
-            <div className="min-w-[13rem] shrink-0">
+            <div className="min-w-52 shrink-0">
               <TextInput
                 placeholder="Search projects"
                 value={projectQuery}
@@ -223,7 +227,7 @@ function DeploymentsView({
 }
 
 function ProjectActions({ team }: { team: TeamResponse }) {
-  const [createProjectModal, showCreateProjectModal] = useCreateProjectModal();
+  const [, requestCreateProject] = useCreateProjectModalRequest();
   // Built-in admin/developer members can always create projects; custom-role
   // members need an explicit `project:create` grant.
   const canCreateCustom = useHasCustomRolePermission(
@@ -237,7 +241,7 @@ function ProjectActions({ team }: { team: TeamResponse }) {
     <div className="ml-auto flex items-center gap-2">
       {!team.managedBy && (
         <Button
-          onClick={() => showCreateProjectModal()}
+          onClick={() => requestCreateProject({ team })}
           variant="neutral"
           size="sm"
           icon={<PlusIcon />}
@@ -263,7 +267,6 @@ function ProjectActions({ team }: { team: TeamResponse }) {
       >
         Start Tutorial
       </Button>
-      {createProjectModal}
     </div>
   );
 }
@@ -280,12 +283,14 @@ function ProjectGrid({
   const { pageSize, setPageSize } = useProjectsPageSize();
 
   const debouncedQuery = debouncedProjectQuery;
-  const [currentCursor, setCurrentCursor] = useState<string | undefined>(
-    undefined,
-  );
-  const [cursorHistory, setCursorHistory] = useState<(string | undefined)[]>([
-    undefined,
-  ]);
+  const {
+    currentCursor,
+    currentPage: currentPageNumber,
+    canGoPrevious,
+    onNextPage,
+    onPreviousPage,
+    resetPagination,
+  } = useCursorPagination();
 
   // Fetch paginated projects with debounced query
   const paginatedData = usePaginatedProjects(
@@ -302,37 +307,24 @@ function ProjectGrid({
   const nextCursor = paginatedData?.pagination.nextCursor;
   const isLoading = paginatedData === undefined;
 
-  // Calculate current page range for display
-  const currentPageNumber = cursorHistory.length;
-
-  const handleNextPage = () => {
-    if (nextCursor) {
-      setCursorHistory((prev) => [...prev, nextCursor]);
-      setCurrentCursor(nextCursor);
-    }
-  };
-
-  const handlePrevPage = () => {
-    if (cursorHistory.length > 1) {
-      const newHistory = [...cursorHistory];
-      newHistory.pop();
-      setCursorHistory(newHistory);
-      setCurrentCursor(newHistory[newHistory.length - 1]);
-    }
-  };
+  useSnapBackOnEmptyPage(
+    { canGoPrevious, onPreviousPage },
+    {
+      isLoading: paginatedData?.isLoading ?? true,
+      currentPageItems: paginatedData?.items,
+    },
+  );
 
   const handlePageSizeChange = (newPageSize: number) => {
     setPageSize(newPageSize);
     // Reset to first page when page size changes
-    setCurrentCursor(undefined);
-    setCursorHistory([undefined]);
+    resetPagination();
   };
 
   // Reset cursor when debounced search query changes
   useEffect(() => {
-    setCurrentCursor(undefined);
-    setCursorHistory([undefined]);
-  }, [debouncedQuery]);
+    resetPagination();
+  }, [debouncedQuery, resetPagination]);
 
   return (
     <div className="flex flex-col items-center">
@@ -400,7 +392,7 @@ function ProjectGrid({
 
       {/* Bottom pagination controls */}
       {projects.length > 0 && (
-        <div className="mt-4 mb-4 flex w-full justify-end">
+        <div className="my-4 flex w-full justify-end">
           <PaginationControls
             showPageSize
             isCursorBasedPagination
@@ -408,9 +400,9 @@ function ProjectGrid({
             hasMore={hasMore}
             pageSize={pageSize}
             onPageSizeChange={handlePageSizeChange}
-            onPreviousPage={handlePrevPage}
-            onNextPage={handleNextPage}
-            canGoPrevious={cursorHistory.length > 1}
+            onPreviousPage={onPreviousPage}
+            onNextPage={() => onNextPage(nextCursor)}
+            canGoPrevious={canGoPrevious}
             pageSizeOptions={PROJECT_PAGE_SIZES}
           />
         </div>

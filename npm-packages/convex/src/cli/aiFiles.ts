@@ -34,9 +34,22 @@ const aiInstall = new Command("install")
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir, aiFilesConfig } =
+    const { ctx, projectDir, convexDir, aiFilesConfig } =
       await resolveProjectPaths();
-    await installAiFiles({ projectDir, convexDir, aiFilesConfig });
+
+    const result = await installAiFiles({
+      projectDir,
+      convexDir,
+      aiFilesConfig,
+    });
+
+    if (result.kind === "error") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: result.message,
+      });
+    }
 
     logMessage(`${chalkStderr.green("✔")} Convex AI files installed.`);
   });
@@ -68,13 +81,26 @@ const aiUpdate = new Command("update")
       "  - convex/_generated/ai/guidelines.md\n" +
       "  - AGENTS.md (Convex section only)\n" +
       "  - CLAUDE.md (Convex section only)\n" +
-      "  - Agent skills (installed to each coding agent's native path, configured via convex.json)\n\n",
+      "  - Agent skills (installed to each coding agent's native path, configured via convex.json)",
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir, aiFilesConfig } =
+    const { ctx, projectDir, convexDir, aiFilesConfig } =
       await resolveProjectPaths();
-    await installAiFiles({ projectDir, convexDir, aiFilesConfig });
+
+    const result = await installAiFiles({
+      projectDir,
+      convexDir,
+      aiFilesConfig,
+    });
+
+    if (result.kind === "error") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: result.message,
+      });
+    }
 
     logMessage(`${chalkStderr.green("✔")} Convex AI files updated.`);
   });
@@ -130,7 +156,7 @@ const aiRemove = new Command("remove")
     "Removes the following:\n" +
       "  - convex/_generated/ai/ directory (guidelines.md, ai-files.state.json)\n" +
       "  - Convex sections from AGENTS.md and CLAUDE.md\n" +
-      "  - Agent skills installed by `convex ai-files install`\n\n" +
+      "  - Agent skills installed by `npx convex ai-files install`\n\n" +
       "If removing the managed section leaves AGENTS.md or CLAUDE.md empty, the\n" +
       "empty file is deleted. Otherwise the rest of the file is kept.\n\n" +
       "Skills installed from other sources are not affected.\n\n" +

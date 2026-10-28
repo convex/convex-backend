@@ -114,18 +114,24 @@ impl<'a, RT: Runtime> ComponentsModel<'a, RT> {
                     ComponentId::Child(id) => id,
                 };
                 let parent = (internal_id, child_component.clone());
-                let child_component = m.component_in_parent(Some(parent))?.ok_or_else(|| {
+                let child = m.component_in_parent(Some(parent))?.ok_or_else(|| {
                     ErrorMetadata::bad_request(
                         "InvalidReference",
-                        format!("Child component {child_component:?} not found"),
+                        format!("Child component '{}' not found", **child_component),
                     )
                 })?;
-                let child_id = ComponentId::Child(child_component.id().into());
+                let child_id = ComponentId::Child(child.id().into());
                 let Some(resource) = self.resolve_export(child_id, attributes).await? else {
+                    let export_path = attributes
+                        .iter()
+                        .map(|a| &**a)
+                        .collect::<Vec<_>>()
+                        .join(".");
                     anyhow::bail!(ErrorMetadata::bad_request(
                         "InvalidReference",
                         format!(
-                            "Child component {child_component:?} does not export {attributes:?}"
+                            "Child component '{}' does not export '{export_path}'",
+                            **child_component
                         ),
                     ));
                 };
@@ -169,17 +175,16 @@ impl<'a, RT: Runtime> ComponentsModel<'a, RT> {
         component_id: ComponentId,
     ) -> anyhow::Result<BTreeMap<PathComponent, ComponentExport>> {
         let mut modules = BTreeMap::new();
-        for module in ModuleModel::new(self.tx)
+        let metadata = ModuleModel::new(self.tx)
             .get_all_metadata(component_id)
-            .await?
-        {
-            let module = module.into_value();
-            let Some(analyze_result) = module.analyze_result else {
+            .await?;
+        for module in &metadata {
+            let Some(analyze_result) = &module.analyze_result else {
                 continue;
             };
-            modules.insert(module.path, analyze_result);
+            modules.insert(&module.path, analyze_result);
         }
-        file_based_exports(&modules)
+        file_based_exports(modules)
     }
 
     #[async_recursion]

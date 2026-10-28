@@ -24,6 +24,7 @@ use anyhow::{
     Error,
     Result,
 };
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use crate::{
@@ -101,7 +102,7 @@ pub mod value {
             ConvexValueType::Null => serializer.serialize_unit(),
             ConvexValueType::Int64(n) => {
                 let mut obj = serializer.serialize_map(Some(1))?;
-                obj.serialize_entry("$integer", &JsonInteger::encode(n))?;
+                obj.serialize_entry("$integer", &JsonInteger(n))?;
                 obj.end()
             },
             ConvexValueType::Float64(n) => {
@@ -112,7 +113,7 @@ pub mod value {
                 };
                 if is_special {
                     let mut obj = serializer.serialize_map(Some(1))?;
-                    obj.serialize_entry("$float", &JsonFloat::encode(n))?;
+                    obj.serialize_entry("$float", &JsonFloat(n))?;
                     obj.end()
                 } else {
                     serializer.serialize_f64(n)
@@ -275,12 +276,18 @@ impl From<ConvexValue> for JsonValue {
 
 impl ConvexValue {
     pub fn to_internal_json(&self) -> JsonValue {
-        value::serialize(self, serde_json::value::Serializer)
+        serde_json::to_value(self.to_internal_json_serializable())
             .expect("Failed to serialize to JsonValue")
     }
 
+    pub fn to_internal_json_serializable(&self) -> impl Serialize + '_ {
+        value::SerializeValue::new(self)
+    }
+
     pub fn json_serialize(&self) -> anyhow::Result<String> {
-        Ok(serde_json::to_string(&value::SerializeValue::new(self))?)
+        Ok(serde_json::to_string(
+            &self.to_internal_json_serializable(),
+        )?)
     }
 }
 
@@ -292,33 +299,35 @@ impl From<ConvexObject> for JsonValue {
 
 impl ConvexObject {
     pub fn to_internal_json(&self) -> JsonValue {
-        value::serialize(
-            ConvexValueType::<&ConvexValue>::Object(self),
-            serde_json::value::Serializer,
-        )
-        .expect("Failed to serialize to JsonValue")
+        serde_json::to_value(self.to_internal_json_serializable())
+            .expect("Failed to serialize to JsonValue")
+    }
+
+    pub fn to_internal_json_serializable(&self) -> impl Serialize + '_ {
+        value::SerializeValue::new(ConvexValueType::<&ConvexValue>::Object(self))
     }
 
     pub fn json_serialize(&self) -> anyhow::Result<String> {
-        Ok(serde_json::to_string(&value::SerializeValue::new(
-            ConvexValueType::<&ConvexValue>::Object(self),
-        ))?)
+        Ok(serde_json::to_string(
+            &self.to_internal_json_serializable(),
+        )?)
     }
 }
 
 impl ConvexArray {
     pub fn to_internal_json(&self) -> JsonValue {
-        value::serialize(
-            ConvexValueType::<&ConvexValue>::Array(self),
-            serde_json::value::Serializer,
-        )
-        .expect("Failed to serialize to JsonValue")
+        serde_json::to_value(self.to_internal_json_serializable())
+            .expect("Failed to serialize to JsonValue")
+    }
+
+    pub fn to_internal_json_serializable(&self) -> impl Serialize + '_ {
+        value::SerializeValue::new(ConvexValueType::<&ConvexValue>::Array(self))
     }
 
     pub fn json_serialize(&self) -> anyhow::Result<String> {
-        Ok(serde_json::to_string(&value::SerializeValue::new(
-            ConvexValueType::<&ConvexValue>::Array(self),
-        ))?)
+        Ok(serde_json::to_string(
+            &self.to_internal_json_serializable(),
+        )?)
     }
 }
 

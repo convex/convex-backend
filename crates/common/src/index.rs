@@ -8,16 +8,14 @@ use value::{
     heap_size::HeapSize,
     id_v6::DeveloperDocumentId,
     sha256::Sha256,
+    sorting::write_sort_key_or_undefined,
     ConvexValue,
     Size,
 };
 
-use crate::{
-    types::{
-        IndexId,
-        Timestamp,
-    },
-    value::values_to_bytes,
+use crate::types::{
+    IndexId,
+    Timestamp,
 };
 
 // Splits a key into a prefix and suffix, where the prefix is the maximum
@@ -132,7 +130,18 @@ impl IndexKey {
     }
 
     pub fn to_bytes(&self) -> IndexKeyBytes {
-        IndexKeyBytes(values_to_bytes(&self.values_with_id))
+        let mut out = vec![];
+        if let Some((id, values)) = self.values_with_id.split_last() {
+            for value in values {
+                let Ok(()) = write_sort_key_or_undefined(value.as_ref(), &mut out);
+            }
+            if let Some(ConvexValue::String(id)) = id {
+                // use `reserve_exact` for memory efficiency
+                out.reserve_exact(id.len() + 2);
+            }
+            let Ok(()) = write_sort_key_or_undefined(id.as_ref(), &mut out);
+        }
+        IndexKeyBytes(out)
     }
 
     pub fn size(&self) -> usize {

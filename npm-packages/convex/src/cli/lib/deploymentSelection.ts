@@ -1,4 +1,4 @@
-import { PlatformProjectDetails } from "@convex-dev/platform/managementApi";
+import { ProjectResponse } from "@convex-dev/platform/managementApi";
 import { BigBrainAuth, Context } from "../../bundler/context.js";
 import { logVerbose } from "../../bundler/log.js";
 import {
@@ -35,6 +35,7 @@ import { getBuildEnvironment } from "./envvars.js";
 import { readGlobalConfig } from "./utils/globalConfig.js";
 import {
   CONVEX_DEPLOYMENT_ENV_VAR_NAME,
+  CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME,
   CONVEX_DEPLOY_KEY_ENV_VAR_NAME,
   CONVEX_SELF_HOSTED_ADMIN_KEY_VAR_NAME,
   CONVEX_SELF_HOSTED_URL_VAR_NAME,
@@ -215,6 +216,72 @@ function getBigBrainAuth(
     };
   }
   return null;
+}
+
+// These guards mirror the management API's auth rules client-side so we can
+// fail with a clear message instead of an opaque 401; the server stays
+// authoritative. Creating a deployment also allows project keys, while the
+// deploy-key commands stay personal-access-token only.
+
+/** Crashes unless logged in with a personal access token (not a deploy key). */
+export async function ensureLoggedInWithAccessToken(
+  ctx: Context,
+  action: string,
+): Promise<void> {
+  const auth = ctx.bigBrainAuth();
+  if (auth !== null && auth.kind === "accessToken") {
+    return;
+  }
+  // Name whichever deploy-key env var is in effect (CONVEX_DEPLOY_KEY wins).
+  const prefix =
+    auth === null
+      ? "Run "
+      : process.env[CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME] &&
+          !process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
+        ? `Unset ${CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME} and run `
+        : `Unset ${CONVEX_DEPLOY_KEY_ENV_VAR_NAME} and run `;
+  return await ctx.crash({
+    exitCode: 1,
+    errorType: "fatal",
+    printedMessage: `${action} requires being logged in with a personal access token. ${prefix}${chalkStderr.bold(
+      "npx convex login",
+    )} and try again.`,
+  });
+}
+
+/**
+ * Crashes unless the auth can create a deployment: personal access tokens and
+ * project keys are accepted, deploy keys are not.
+ */
+export async function ensureAuthCanCreateDeployment(
+  ctx: Context,
+): Promise<void> {
+  const auth = ctx.bigBrainAuth();
+  if (
+    auth !== null &&
+    (auth.kind === "accessToken" || auth.kind === "projectKey")
+  ) {
+    return;
+  }
+  if (auth === null) {
+    return await ctx.crash({
+      exitCode: 1,
+      errorType: "fatal",
+      printedMessage: `Creating a deployment requires logging in. Run ${chalkStderr.bold(
+        "npx convex login",
+      )} and try again.`,
+    });
+  }
+  const envVar = process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
+    ? CONVEX_DEPLOY_KEY_ENV_VAR_NAME
+    : CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME;
+  return await ctx.crash({
+    exitCode: 1,
+    errorType: "fatal",
+    printedMessage: `Creating a deployment isn't supported with a deploy key (${envVar}). Run ${chalkStderr.bold(
+      "npx convex login",
+    )} (or use a project key) and try again.`,
+  });
 }
 
 // ----------------------------------------------------------------------------
@@ -873,7 +940,7 @@ export const shouldAllowAnonymousDevelopment = (): boolean => {
 export async function getProjectDetails(
   ctx: Context,
   projectSelection: ProjectSelection,
-): Promise<PlatformProjectDetails> {
+): Promise<ProjectResponse> {
   switch (projectSelection.kind) {
     case "deploymentName": {
       if (projectSelection.deploymentType === "local") {

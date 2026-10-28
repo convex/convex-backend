@@ -1,0 +1,104 @@
+---
+sidebar_position: 1
+title: "npx convex dev"
+sidebar_label: "npx convex dev"
+description: "Develop against a dev deployment, watching for changes"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex dev`
+
+Develop against a dev deployment, watching for changes
+
+1. Configures a new or existing project (if needed)
+2. Updates generated types and pushes code to the configured dev deployment
+3. Runs the provided command (if `--start` or `--run` is used)
+4. Watches for file changes, and repeats step 2
+
+
+## Syntax
+
+```sh
+npx convex dev [options]
+```
+
+## Options
+
+<dl>
+<dt>`-v, --verbose`</dt>
+<dd>
+
+Show full listing of changes
+
+</dd>
+<dt>`--typecheck <mode>`</dt>
+<dd>
+
+Check TypeScript files with `tsc --noEmit`.
+
+</dd>
+<dt>`--typecheck-components`</dt>
+<dd>
+
+Check TypeScript files within component implementations with `tsc --noEmit`.
+
+</dd>
+<dt>`--codegen <mode>`</dt>
+<dd>
+
+Regenerate code in `convex/_generated/`
+
+</dd>
+<dt>`--once`</dt>
+<dd>
+
+Execute only the first 3 steps, stop on any failure
+
+</dd>
+<dt>`--until-success`</dt>
+<dd>
+
+Execute only the first 3 steps, on failure watch for local and remote changes and retry steps 2 and 3
+
+</dd>
+<dt>`--start <command>`</dt>
+<dd>
+
+Start a long-running command alongside `npx convex dev`, like a frontend dev server. The command inherits stdin/stdout so you can interact with it directly. Example: npx convex dev --start 'vite --open'
+
+</dd>
+<dt>`--run <functionName>`</dt>
+<dd>
+
+The identifier of the function to run in step 3, like `api.init.createData` or `myDir/myFile:myFunction`
+
+</dd>
+<dt>`--run-component <functionName>`</dt>
+<dd>
+
+If --run is used and the function is in a component, the path to the component (e.g. "workflow" or "workflow/workpool"). Components are a beta feature. This flag is unstable and may change in subsequent releases.
+
+</dd>
+<dt>`--tail-logs [mode]`</dt>
+<dd>
+
+Choose whether to tail Convex function logs in this terminal: 
+- `always` shows logs continuously
+- `pause-on-deploy` (the default) pauses logs during deploys so you can spot sync issues
+- `disable` hides logs while developing.
+
+</dd>
+<dt>`--configure [choice]`</dt>
+<dd>
+
+Ignore existing configuration and configure new or existing project, interactively or set by --team \<team_slug>, --project \<project_slug>, and --dev-deployment local|cloud
+
+</dd>
+<dt>`--env-file <envFile>`</dt>
+<dd>
+
+Path to a custom file of environment variables, for choosing the deployment, e.g. CONVEX_DEPLOYMENT or CONVEX_SELF_HOSTED_URL. Same format as .env.local or .env files, and overrides them.
+
+</dd>
+</dl>

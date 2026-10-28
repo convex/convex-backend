@@ -1,0 +1,122 @@
+---
+sidebar_position: 3
+title: "npx convex run"
+sidebar_label: "npx convex run"
+description: "Run a function or evaluate an inline readonly query on your deployment"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex run`
+
+Run a function or evaluate an inline readonly query on your deployment.
+
+- Run a function with JSON arguments: <CodeWithCopyButton text={"npx convex run messages:send '{\"body\": \"hello\", \"author\": \"me\"}'"} />
+- Run a function on prod: <CodeWithCopyButton text={"npx convex run messages:list --prod"} />
+- Live-update a query's result: <CodeWithCopyButton text={"npx convex run messages:list --watch"} />
+- Push local code before running: <CodeWithCopyButton text={"npx convex run messages:send '{}' --push"} />
+- Evaluate an inline readonly query: <CodeWithCopyButton text={"npx convex run --inline-query 'await ctx.db.query(\"messages\").take(5)'"} />
+
+Arguments are specified as a JSON object. By default, this runs on your dev deployment.
+
+## Syntax
+
+```sh
+npx convex run [options] [functionName] [args]
+```
+
+## Arguments
+
+<dl>
+<dt>`[functionName]`</dt>
+<dd>
+
+identifier of the function to run, like `listMessages` or `dir/file:myFunction`
+
+</dd>
+<dt>`[args]`</dt>
+<dd>
+
+JSON-formatted arguments object to pass to the function.
+
+</dd>
+</dl>
+
+## Options
+
+<dl>
+<dt>`-w, --watch`</dt>
+<dd>
+
+Watch a query, printing its result if the underlying data changes. Given function must be a query.
+
+</dd>
+<dt>`--inline-query <query>`</dt>
+<dd>
+
+JavaScript to evaluate as a readonly query. The query is completely sandboxed, so it can only read data and cannot modify the database or access the network.
+
+This is a one-shot query and cannot be combined with `--watch`.
+Use `--component` to target a mounted component.
+
+To format the query:
+- Simple expressions are returned automatically, for example: `await ctx.db.query("messages").take(5)`.
+- For multi-statement queries, use an explicit return, for example: `const firstMessage = await ctx.db.query("messages").first(); console.log(firstMessage?._id); return firstMessage;`.
+- For full control, pass a module source that exports a default query, for example: `export default query({ handler: async (ctx) => { return await ctx.db.query("messages").take(10); } })`.
+
+</dd>
+<dt>`--push`</dt>
+<dd>
+
+Push code to deployment before running the function.
+
+</dd>
+<dt>`--identity <identity>`</dt>
+<dd>
+
+JSON-formatted UserIdentity object, e.g. '\{ name: "John", address: "0x123" }'
+
+</dd>
+<dt>`--typecheck <mode>`</dt>
+<dd>
+
+Whether to check TypeScript files with `tsc --noEmit`.
+
+</dd>
+<dt>`--typecheck-components`</dt>
+<dd>
+
+Check TypeScript files within component implementations with `tsc --noEmit`.
+
+</dd>
+<dt>`--codegen <mode>`</dt>
+<dd>
+
+Regenerate code in `convex/_generated/`
+
+</dd>
+<dt>`--component <path>`</dt>
+<dd>
+
+Path to the component (e.g. "workflow" or "workflow/workpool")
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Run the function on this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Run the function on a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

@@ -46,29 +46,29 @@ use common::{
 };
 use imbl::OrdMap;
 use indexing::{
-    backend_in_memory_indexes::{
+    database_index_snapshot::{
         DatabaseIndexSnapshot,
         DatabaseIndexSnapshotCache,
-        LazyDocument,
-        RangeRequest,
     },
+    in_memory_indexes::LazyDocument,
+    index_reader::RangeRequest,
     index_registry::{
         Index,
         IndexRegistry,
     },
 };
 use search::{
-    query::RevisionWithKeys,
-    CandidateRevision,
     QueryResults,
     Searcher,
     TextIndexManager,
+    TextSearchResults,
 };
 use storage::Storage;
 use tokio::task;
 use value::{
     DeveloperDocumentId,
     FieldPath,
+    TabletId,
 };
 
 use crate::{
@@ -126,27 +126,38 @@ impl TransactionIndex {
         &self.index_registry
     }
 
-    fn pending_iter_for_request<'a>(
-        index_registry: &IndexRegistry,
-        database_index_updates: &'a OrdMap<IndexId, TransactionIndexMap>,
-        range_request: &'a RangeRequest,
+    pub(crate) fn pending_iter_for_interval<'a>(
+        &'a self,
+        index_name: &'a TabletIndexName,
+        printable_index_name: &'a IndexName,
+        interval: &'a Interval,
     ) -> Result<
         impl DoubleEndedIterator<Item = (IndexKeyBytes, Option<PackedDocument>)> + 'a,
         anyhow::Error,
     > {
-        let iter = match index_registry.require_enabled(
-            &range_request.index_name,
-            &range_request.printable_index_name,
-        ) {
-            Ok(index) => database_index_updates.get(&index.id()),
+        let iter = match self
+            .index_registry
+            .require_enabled(index_name, printable_index_name)
+        {
+            Ok(index) => self.database_index_updates.get(&index.id()),
             // Range queries on missing tables are allowed for system provided indexes.
-            Err(_) if range_request.index_name.is_by_id_or_creation_time() => None,
+            Err(_) if index_name.is_by_id_or_creation_time() => None,
             Err(e) => return Err(e),
         }
-        .map(|pending| pending.range(&range_request.interval))
+        .map(|pending| pending.range(interval))
         .into_iter()
         .flatten();
         Ok(iter)
+    }
+
+    pub(crate) fn pending_writes_for_by_id_index(
+        &self,
+        tablet_id: TabletId,
+    ) -> Option<&TransactionIndexMap> {
+        let index = self
+            .index_registry
+            .get_enabled(&TabletIndexName::by_id(tablet_id))?;
+        self.database_index_updates.get(&index.id())
     }
 
     /// Range over a index including pending updates.
@@ -170,12 +181,12 @@ impl TransactionIndex {
         let mut pre_resolved = Vec::with_capacity(batch_size);
         let mut persistence_ranges: Vec<&RangeRequest> = Vec::new();
 
-        for &range_request in ranges.iter() {
+        for &range_request in ranges {
             if range_request.interval.is_singleton().is_some() {
-                let pending_result = Self::pending_iter_for_request(
-                    &self.index_registry,
-                    &self.database_index_updates,
-                    range_request,
+                let pending_result = self.pending_iter_for_interval(
+                    &range_request.index_name,
+                    &range_request.printable_index_name,
+                    &range_request.interval,
                 );
                 match pending_result {
                     Ok(mut pending_it) => {
@@ -228,10 +239,14 @@ impl TransactionIndex {
             let result = try_anyhow!({
                 let (snapshot_result_vec, cursor) = snapshot_result?;
                 let mut snapshot_it = snapshot_result_vec.into_iter();
-                let pending_it = Self::pending_iter_for_request(
-                    &self.index_registry,
-                    &self.database_index_updates,
-                    range_request,
+                // Pending writes past `cursor` belong to later pages.
+                let (snapshot_interval, _) = range_request
+                    .interval
+                    .split(cursor.clone(), range_request.order);
+                let pending_it = self.pending_iter_for_interval(
+                    &range_request.index_name,
+                    &range_request.printable_index_name,
+                    &snapshot_interval,
                 )?;
                 let mut pending_it = range_request.order.apply(pending_it);
 
@@ -328,7 +343,7 @@ impl TransactionIndex {
         query: &InternalSearch,
         index_name: TabletIndexName,
         version: SearchVersion,
-    ) -> anyhow::Result<Vec<(CandidateRevision, IndexKeyBytes)>> {
+    ) -> anyhow::Result<TextSearchResults> {
         // We do not allow modifying the index registry and performing a text search
         // in the same transaction. We could implement this by sending the index
         // updates in the search request, but there is no need to bother since we
@@ -362,7 +377,10 @@ impl TransactionIndex {
         // Record the query results in the read set.
         reads.record_search(index_name.clone(), results.reads);
 
-        Ok(results.revisions_with_keys)
+        Ok(TextSearchResults {
+            revisions_with_keys: results.revisions_with_keys,
+            filtered_bytes_searched: results.filtered_bytes_searched,
+        })
     }
 
     /// Fetch a batch of index ranges. This method does not update the read set,
@@ -468,8 +486,8 @@ impl TransactionIndex {
             let (documents, cursor) = result?;
             (_, remaining_interval) = interval.split(cursor, Order::Asc);
             for (_, document, _) in documents {
-                let document = document.unpack();
-                let key = document.value().0.get_path(&indexed_field).cloned();
+                let document = document.pack();
+                let key = document.value().get_path(&indexed_field);
                 anyhow::ensure!(
                     preloaded.insert(key, document).is_none(),
                     "Index {printable_index_name:?} isn't unique",
@@ -490,13 +508,17 @@ impl TransactionIndex {
 
     // TODO: Add precise error types to facilitate detecting which indexing errors
     // are the developer's fault or not.
+    /// `old_document` comes with the write timestamp of its revision.
     pub fn begin_update(
         &mut self,
-        old_document: Option<ResolvedDocument>,
+        old_document: Option<(ResolvedDocument, WriteTimestamp)>,
         new_document: Option<ResolvedDocument>,
     ) -> anyhow::Result<Update<'_>> {
         let mut registry = self.index_registry.clone();
-        registry.update(old_document.as_ref(), new_document.as_ref())?;
+        registry.update(
+            old_document.as_ref().map(|(document, _)| document),
+            new_document.as_ref(),
+        )?;
 
         Ok(Update {
             index: self,
@@ -508,9 +530,13 @@ impl TransactionIndex {
 
     fn finish_update(
         &mut self,
-        old_document: Option<ResolvedDocument>,
+        old_document: Option<(ResolvedDocument, WriteTimestamp)>,
         new_document: Option<ResolvedDocument>,
     ) -> Vec<DatabaseIndexUpdate> {
+        let (old_document, old_ts) = match old_document {
+            Some((document, ts)) => (Some(document), Some(ts)),
+            None => (None, None),
+        };
         // Update the index registry first.
         let index_registry_updated = self
             .index_registry
@@ -520,7 +546,7 @@ impl TransactionIndex {
         // Then compute the index updates.
         let updates = self
             .index_registry
-            .index_updates(old_document.as_ref(), new_document.as_ref());
+            .index_updates(old_document.as_ref().zip(old_ts), new_document.as_ref());
 
         // Add the index updates to self.database_index_updates.
         for update in &updates {
@@ -539,7 +565,7 @@ impl TransactionIndex {
                 },
             };
             self.database_index_updates
-                .entry(update.index_id)
+                .entry(update.index.id())
                 .or_insert_with(TransactionIndexMap::new)
                 .insert(update.key.to_bytes(), new_value);
         }
@@ -684,12 +710,16 @@ impl TransactionIndexMap {
     pub fn insert(&mut self, k: IndexKeyBytes, v: Option<&ResolvedDocument>) {
         self.inner.insert(k.0, v.map(PackedDocument::pack));
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
 }
 
 pub struct Update<'a> {
     index: &'a mut TransactionIndex,
 
-    deletion: Option<ResolvedDocument>,
+    deletion: Option<(ResolvedDocument, WriteTimestamp)>,
     insertion: Option<ResolvedDocument>,
     registry: IndexRegistry,
 }
@@ -721,7 +751,7 @@ pub trait TransactionTextSnapshot: Send + Sync + 'static {
         // should be rare.
         // As a potential future optimization, we could try to make the caller much
         // more coupled with the search algorithm and require it to send bm25 statistics
-        // diff, top fuzzy search suggestions and other search specific properties derived
+        // diff, shortlisted query terms and other search specific properties derived
         // from the writes. Alternatively, we could only do subset of that and relax the
         // determinism requirement since we don't really need to have deterministic between
         // search calls in mutations and search calls in queries, and if anyone relies on
@@ -791,7 +821,7 @@ impl TextIndexManagerSnapshot {
         printable_index_name: &IndexName,
         query: pb::searchlight::TextQuery,
         pending_updates: &Vec<DocumentUpdate>,
-    ) -> anyhow::Result<RevisionWithKeys> {
+    ) -> anyhow::Result<TextSearchResults> {
         let text_indexes_snapshot =
             runtime::block_in_place(|| self.snapshot_with_updates(pending_updates))?;
         text_indexes_snapshot

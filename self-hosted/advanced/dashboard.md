@@ -3,7 +3,8 @@
 From the `npm-packages/dashboard-self-hosted` directory, run:
 
 ```sh
-just rush install
+just install-js
+just turbo run build --filter=dashboard-self-hosted^...
 npm run build
 NEXT_PUBLIC_DEPLOYMENT_URL="<your-backend-url>" npm run start
 ```

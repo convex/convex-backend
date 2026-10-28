@@ -10,8 +10,8 @@ use serde_json::{
 
 use super::OpProvider;
 
-#[convex_macro::v8_op]
-pub fn op_validate_returns<'b, P: OpProvider<'b>>(
+#[convex_macro::op]
+pub fn op_validate_returns<P: OpProvider>(
     provider: &mut P,
     validator: String,
     function_result: String,
@@ -25,11 +25,16 @@ pub fn op_validate_returns<'b, P: OpProvider<'b>>(
         },
     };
 
-    let function_result = value::json_deserialize(&function_result)?;
+    // The result may contain unresolved commit timestamps.
+    let function_result =
+        value::PendingValue::from_uncommitted_json(serde_json::from_str(&function_result)?)?;
 
     let table_mapping = provider.get_all_table_mappings()?;
-    match returns_validator.check_output(&function_result, &table_mapping, virtual_system_mapping())
-    {
+    match returns_validator.check_pending_output(
+        &function_result,
+        &table_mapping,
+        virtual_system_mapping(),
+    )? {
         Some(js_error) => Ok(json!({
             "valid": false,
             "message": format!("{}", js_error)

@@ -1,4 +1,93 @@
 import { SVGProps } from "react";
+import { MagnifyingGlassIcon, ArrowTopRightIcon } from "@radix-ui/react-icons";
+import { FingerPrintIcon } from "@heroicons/react/24/outline";
+import { cn } from "@ui/cn";
+
+export type IndexKind = "database" | "search" | "vector";
+
+export const INDEX_KIND_LABEL: Record<IndexKind, string> = {
+  database: "Database index",
+  search: "Search index",
+  vector: "Vector index",
+};
+
+// Icon for each index kind. Inherits its color (`currentColor`) so callers can
+// set it via `className` or the surrounding text color.
+export function IndexIcon({
+  kind,
+  className,
+}: {
+  kind: IndexKind;
+  className?: string;
+}) {
+  const cls = cn("size-4 shrink-0", className);
+  switch (kind) {
+    case "search":
+      return <MagnifyingGlassIcon className={cls} />;
+    case "vector":
+      return <ArrowTopRightIcon className={cls} />;
+    default:
+      return <FingerPrintIcon className={cls} />;
+  }
+}
+
+// Outline funnel for "filter" affordances.
+export function FunnelIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className={cn("size-4 shrink-0", className)}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M2 3h12L9.5 8.5v5h-3v-5L2 3Z" />
+    </svg>
+  );
+}
+
+// A "field" glyph. Fields can hold any type (not just strings), so a `{}` reads
+// better than a text icon — and neither icon set ships a curly-brace icon, so
+// render it as monospace text. `whitespace-nowrap` keeps the braces on one line;
+// size it via `className`'s font-size.
+export function FieldIcon({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "inline-flex items-center justify-center font-mono leading-none whitespace-nowrap",
+        className,
+      )}
+    >
+      {"{}"}
+    </span>
+  );
+}
+
+export function PackageVersionIcon({
+  className,
+  ...props
+}: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      {...props}
+      viewBox="0 0 16 16"
+      className={cn("size-4 shrink-0", className)}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+      strokeLinecap="round"
+    >
+      <g transform="translate(1.98 -1.98) rotate(-45 8 8)">
+        <path d="M2.1 3.7h7.3l4.3 4.3-4.3 4.3H2.1A1.1 1.1 0 0 1 1 11.2V4.8a1.1 1.1 0 0 1 1.1-1.1Z" />
+        <circle cx="3.4" cy="8" r="1.05" fill="currentColor" stroke="none" />
+      </g>
+    </svg>
+  );
+}
 
 export function FunctionIcon(props: SVGProps<SVGSVGElement>) {
   return (

@@ -42,6 +42,7 @@ import {
 } from "./localDeployment/errors.js";
 import { debugIsolateBundlesSerially } from "../../bundler/debugBundle.js";
 import { DeploymentType } from "./api.js";
+import { isAnonymousDeployment } from "./deployment.js";
 export { productionProvisionHost, provisionHost } from "./utils/utils.js";
 
 /** Type representing WorkOS AuthKit integration configuration. */
@@ -672,7 +673,7 @@ export async function configFromProjectConfig(
   }
   const modules = convexResult.modules;
   modules.push(...nodeResult.modules);
-  modules.push(...(await bundleAuthConfig(ctx, baseDir)));
+  modules.push(...(await bundleAuthConfig(ctx, baseDir)).modules);
 
   const nodeDependencies: NodeDependency[] = [];
   for (const [moduleName, moduleVersion] of nodeResult.externalDependencies) {
@@ -911,6 +912,49 @@ export function diffConfig(
   return { diffString: diff };
 }
 
+export function setEnvVarsInstructions(
+  names: string[],
+  deploymentName: string | null,
+  deploymentType: DeploymentType | undefined,
+  deploymentUrl: string | undefined,
+): string {
+  // Name cloud deployments explicitly: without a flag `env set` targets the
+  // project's default dev deployment, which may not be where this push went
+  // (e.g. `npx convex dev --deployment <other dev deployment>`). Local and
+  // anonymous deployments are always the default target.
+  let deploymentFlag = "";
+  if (
+    deploymentName !== null &&
+    deploymentType !== "local" &&
+    deploymentType !== "anonymous"
+  ) {
+    deploymentFlag = ` --deployment ${deploymentName}`;
+  } else if (deploymentType === "prod") {
+    deploymentFlag = " --prod";
+  } else if (deploymentName === null && deploymentUrl !== undefined) {
+    // Pushes via `--url`/`--admin-key` or self-hosted env vars have no
+    // deployment name. The admin key stays a placeholder to keep it out of
+    // terminal output.
+    deploymentFlag = ` --url ${deploymentUrl} --admin-key <admin key>`;
+  }
+  const commands = (names.length > 0 ? names : ["<NAME>"]).map(
+    (name) =>
+      `    ${chalkStderr.bold(`npx convex env set${deploymentFlag} ${name} <value>`)}`,
+  );
+  let instructions = `Set ${names.length > 1 ? "them" : "it"} with:\n\n${commands.join("\n")}\n`;
+  // Anonymous deployments are only reachable from the local dashboard, which
+  // `deploymentDashboardUrlPage` can't address.
+  if (deploymentName !== null && !isAnonymousDeployment(deploymentName)) {
+    const variableQuery = names.length === 1 ? `?var=${names[0]}` : "";
+    const dashboardUrl = deploymentDashboardUrlPage(
+      deploymentName,
+      `/settings/environment-variables${variableQuery}`,
+    );
+    instructions += `\nor in the dashboard:\n\n    ${chalkStderr.bold(dashboardUrl)}\n`;
+  }
+  return instructions;
+}
+
 /** Handle an error from
  * legacy push path:
  * - /api/push_config
@@ -934,7 +978,7 @@ export async function handlePushConfigError(
         deploymentNotice: string;
       }
     | undefined,
-  _deploymentType: DeploymentType | undefined,
+  deploymentType: DeploymentType | undefined,
 ): Promise<never> {
   const data: ErrorData | undefined =
     error instanceof ThrowingFetchError ? error.serverErrorData : undefined;
@@ -965,26 +1009,49 @@ export async function handlePushConfigError(
       `Environment variable ${chalkStderr.bold(
         variableName,
       )} is used in auth config file but ` + `its value was not set.`;
-    let setEnvVarInstructions =
-      "Go set it in the dashboard or using `npx convex env set`";
-
-    // If `npx convex dev` is running using --url there might not be a configured deployment
-    if (deploymentName !== null) {
-      const variableQuery =
-        variableName !== undefined ? `?var=${variableName}` : "";
-      const dashboardUrl = deploymentDashboardUrlPage(
-        deploymentName,
-        `/settings/environment-variables${variableQuery}`,
-      );
-      setEnvVarInstructions = `Go to:\n\n    ${chalkStderr.bold(
-        dashboardUrl,
-      )}\n\n  to set it up. `;
-    }
     await ctx.crash({
       exitCode: 1,
       errorType: "invalid filesystem or env vars",
       errForSentry: error,
-      printedMessage: envVarMessage + "\n" + setEnvVarInstructions,
+      printedMessage:
+        envVarMessage +
+        "\n" +
+        setEnvVarsInstructions(
+          variableName !== undefined ? [variableName] : [],
+          deploymentName,
+          deploymentType,
+          deployment?.deploymentUrl,
+        ),
+    });
+  }
+
+  if (data?.code === "MissingEnvironmentVariables") {
+    const errorMessage = data.message || "(no error message given)";
+    const [, namesList] = errorMessage.match(/are not set: ([^.]+)\./) ?? [];
+    const names = namesList?.split(", ") ?? [];
+    const envVarMessage =
+      names.length === 0
+        ? errorMessage
+        : names.length === 1
+          ? `Environment variable ${chalkStderr.bold(names[0])} is ` +
+            `declared as required in convex.config.ts but its value was not set.`
+          : `Environment variables ${names
+              .map((name) => chalkStderr.bold(name))
+              .join(", ")} are declared as required in convex.config.ts ` +
+            `but their values were not set.`;
+    await ctx.crash({
+      exitCode: 1,
+      errorType: "invalid filesystem or env vars",
+      errForSentry: error,
+      printedMessage:
+        envVarMessage +
+        "\n" +
+        setEnvVarsInstructions(
+          names,
+          deploymentName,
+          deploymentType,
+          deployment?.deploymentUrl,
+        ),
     });
   }
 

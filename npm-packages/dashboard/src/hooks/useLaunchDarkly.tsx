@@ -2,25 +2,35 @@ import { useFlags } from "launchdarkly-react-client-sdk";
 import kebabCase from "lodash/kebabCase";
 
 export const flagDefaults: {
-  commandPalette: boolean;
   commandPaletteDeleteProjects: boolean;
-  singleSignOn: boolean;
-  workOsEnvironmentProvisioningDashboardUi: boolean;
   enableNewDashboardVersionNotification: boolean;
-  enableStatuspageWidget: boolean;
   connectionStateCheckIntervalMs: number;
-  scopedDeployKeys: boolean;
-  customRoles: boolean;
+  ephemeralZipExportToken: boolean;
+  directorySync: boolean;
+  promos: boolean;
+  dashboardShowCashUsage: boolean;
+  s3ExportIntegration: boolean;
+  showFivetranSyncProgress: boolean;
+  supportTicketForAllPlans: boolean;
+  healthDeployProgress: boolean;
+  componentSwitcherTreeEnabled: boolean;
+  preAuthorizeStarterPlan: boolean;
+  preAuthorizePaymentMethodChange: boolean;
 } = {
-  commandPalette: false,
   commandPaletteDeleteProjects: false,
-  singleSignOn: false,
-  workOsEnvironmentProvisioningDashboardUi: false,
   enableNewDashboardVersionNotification: false,
-  enableStatuspageWidget: true,
   connectionStateCheckIntervalMs: 2500,
-  scopedDeployKeys: false,
-  customRoles: false,
+  ephemeralZipExportToken: false,
+  directorySync: false,
+  promos: false,
+  dashboardShowCashUsage: false,
+  s3ExportIntegration: false,
+  showFivetranSyncProgress: false,
+  supportTicketForAllPlans: false,
+  healthDeployProgress: false,
+  componentSwitcherTreeEnabled: false,
+  preAuthorizeStarterPlan: false,
+  preAuthorizePaymentMethodChange: false,
 };
 
 export const flagDefaultsKebabCase = Object.entries(flagDefaults).reduce(

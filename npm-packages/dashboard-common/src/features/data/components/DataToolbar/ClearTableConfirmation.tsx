@@ -1,7 +1,6 @@
 import { Cursor } from "convex/server";
 import { useContext, useState } from "react";
 import { useMountedState } from "react-use";
-import { useInvalidateShapes } from "@common/features/data/lib/api";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { toast } from "@common/lib/utils";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
@@ -33,28 +32,26 @@ export function ClearTableConfirmation({
     ? Math.min(100, Math.floor((numDeleted / initialNumRows) * 100))
     : 0;
 
-  const closeWithConfirmation = () => {
+  const confirmClose = () => {
     if (isClearing) {
-      // eslint-disable-next-line no-alert
       const shouldClose = window.confirm(
         "Closing the popup will cancel the clear table operation with the table partially cleared. Are you sure you want to continue?",
       );
       if (!shouldClose) {
-        return;
+        return false;
       }
     }
-    closePopup();
+    return true;
   };
 
   const isMounted = useMountedState();
-
-  const invalidateShapes = useInvalidateShapes();
 
   const { captureException } = useContext(DeploymentInfoContext);
 
   return (
     <ConfirmationDialog
-      onClose={closeWithConfirmation}
+      onClose={closePopup}
+      onBeforeClose={confirmClose}
       onConfirm={async () => {
         setInitialNumRows(numRows);
         setIsClearing(true);
@@ -79,14 +76,12 @@ export function ClearTableConfirmation({
               "Failed to clear table. Please try again or contact support.",
             );
             setIsClearing(false);
-            await invalidateShapes();
             return;
           }
         }
         setIsClearing(false);
         clearSelectedRows();
 
-        await invalidateShapes();
         if (isMounted()) {
           toast("success", "Table cleared.");
         } else {
@@ -94,7 +89,9 @@ export function ClearTableConfirmation({
         }
       }}
       validationText={
-        isProd ? `Delete all production documents in ${tableName}` : undefined
+        isProd && !isClearing
+          ? `Delete all production documents in ${tableName}`
+          : undefined
       }
       confirmText="Confirm"
       variant="danger"

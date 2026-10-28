@@ -28,7 +28,10 @@ pub use self::{
         EndRef,
         StartIncluded,
     },
-    interval_set::IntervalSet,
+    interval_set::{
+        IntervalSet,
+        MembershipCursor,
+    },
     key::BinaryKey,
 };
 use crate::{
@@ -125,19 +128,21 @@ impl Interval {
     pub fn split_after(&self, last_key: IndexKeyBytes, order: Order) -> (Self, Self) {
         let last_key_binary = BinaryKey::from(last_key);
         match order {
-            Order::Asc => (
-                Self {
-                    start: self.start.clone(),
-                    end: End::after_prefix(&last_key_binary),
-                },
-                match last_key_binary.increment() {
-                    Some(last_key_incr) => Self {
+            Order::Asc => match last_key_binary.increment() {
+                // It's possible to have `last_key_incr > end` if `self` is a singleton interval;
+                // avoid expanding `self` in that case
+                Some(last_key_incr) if self.end.greater_than(&last_key_incr) => (
+                    Self {
+                        start: self.start.clone(),
+                        end: End::Excluded(last_key_incr.clone()),
+                    },
+                    Self {
                         start: StartIncluded(last_key_incr),
                         end: self.end.clone(),
                     },
-                    None => Interval::empty(),
-                },
-            ),
+                ),
+                _ => (self.clone(), Interval::empty()),
+            },
             Order::Desc => (
                 Self {
                     start: StartIncluded(last_key_binary.clone()),

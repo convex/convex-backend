@@ -2,7 +2,7 @@
 title: "Working with Multiple Deployments"
 sidebar_label: "Multiple Deployments"
 description: "Creating multiple deployments in a single project"
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 import { DeploymentTypesTable } from "@site/src/components/DeploymentTypesTable";
@@ -44,12 +44,14 @@ preview deploy key. You can generate a preview deploy key in the dashboard from
 To deploy code to a preview deployment, use:
 
 ```bash
-npx convex deploy --preview-create="my-preview-deployment-name"
+npx convex deploy --preview-name="my-preview-deployment-name"
 ```
 
-This command will create a preview deployment if needed. If a preview deployment
-with the same name already exists, the existing preview deployment and its data
-will be deleted, and a new one will be created.
+This command will create a preview deployment if needed and reuse the existing
+preview deployment and its data when one with the same name already exists.
+
+Use `--preview-create` instead of `--preview-name` to delete and recreate the
+preview deployment every time.
 
 If you’re deploying your code from
 [Vercel](/production/hosting/vercel.mdx#preview-deployments),

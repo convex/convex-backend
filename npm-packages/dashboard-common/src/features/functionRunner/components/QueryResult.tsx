@@ -47,7 +47,7 @@ export function QueryResult({
   }
 
   return (
-    <div className="flex h-full w-full flex-col gap-4">
+    <div className="flex size-full flex-col gap-4">
       <Result
         result={cachedResult}
         loading={result === undefined}
@@ -69,7 +69,7 @@ export function QueryResult({
           ) : (
             <Tooltip tip="This query is subscribed to updates." side="left">
               <div className="flex items-center gap-1 text-sm text-green-700 select-none motion-safe:animate-blink dark:text-green-200">
-                <div className="h-2.5 w-2.5 rounded-full bg-green-700 dark:bg-green-200" />{" "}
+                <div className="size-2.5 rounded-full bg-green-700 dark:bg-green-200" />{" "}
               </div>
             </Tooltip>
           )

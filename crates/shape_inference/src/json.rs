@@ -191,10 +191,10 @@ impl<C: ShapeConfig> From<&CountedShapeEnum<C>> for JsonValue {
 
 impl<C: ShapeConfig> CountedShape<C> {
     pub fn to_json(&self, include_pii: bool) -> JsonValue {
-        json!({
-            "numValues": self.num_values(),
-            "variant": self.variant().to_json(include_pii),
-        })
+        let mut object = serde_json::Map::new();
+        object.insert("numValues".into(), (*self.num_values()).into());
+        object.insert("variant".into(), self.variant().to_json(include_pii));
+        object.into()
     }
 }
 
@@ -213,7 +213,7 @@ impl<C: ShapeConfig> CountedShapeEnum<C> {
             ShapeEnum::Boolean => json!({"kind": "Boolean"}),
             ShapeEnum::StringLiteral(s) => {
                 if include_pii {
-                    json!({"kind": "StringLiteral", "literal": s.to_string() })
+                    json!({"kind": "StringLiteral", "literal": s.as_str() })
                 } else {
                     json!({"kind": "StringLiteral" })
                 }
@@ -225,29 +225,60 @@ impl<C: ShapeConfig> CountedShapeEnum<C> {
             ShapeEnum::String => json!({"kind": "String"}),
             ShapeEnum::Bytes => json!({"kind": "Bytes"}),
             ShapeEnum::Array(array_shape) => {
-                json!({"kind": "Array", "elementType": array_shape.element().to_json(include_pii)})
+                let mut object = serde_json::Map::new();
+                object.insert("kind".into(), "Array".into());
+                object.insert(
+                    "elementType".into(),
+                    array_shape.element().to_json(include_pii),
+                );
+                object.into()
             },
             ShapeEnum::Object(object_shape) => {
                 let field_json = object_shape
                     .iter()
                     .map(|(field_name, field)| {
-                        let shape_json = json!({
-                            "type": field.value_shape.to_json(include_pii),
-                            "optional": field.optional
+                        let shape_json = serde_json::Value::Object({
+                            let mut object = serde_json::Map::new();
+                            object.insert("type".into(), field.value_shape.to_json(include_pii));
+                            object.insert("optional".into(), field.optional.into());
+                            object
                         });
-                        json!({
-                            "fieldName": String::from(field_name.clone()),
-                            "type": shape_json
-                        })
+                        let mut object = serde_json::Map::new();
+                        object.insert("fieldName".into(), field_name.as_str().into());
+                        object.insert("type".into(), shape_json);
+                        object.into()
                     })
-                    .collect::<Vec<_>>();
-                json!({"kind": "Object", "fields": field_json})
+                    .collect::<Vec<JsonValue>>();
+                let mut object = serde_json::Map::new();
+                object.insert("kind".into(), "Object".into());
+                object.insert("fields".into(), field_json.into());
+                object.into()
             },
             ShapeEnum::Record(record_shape) => {
-                json!({"kind": "Record", "fieldType": record_shape.field().to_json(include_pii), "valueType": record_shape.value().to_json(include_pii)})
+                let mut object = serde_json::Map::new();
+                object.insert("kind".into(), "Record".into());
+                object.insert(
+                    "fieldType".into(),
+                    record_shape.field().to_json(include_pii),
+                );
+                object.insert(
+                    "valueType".into(),
+                    record_shape.value().to_json(include_pii),
+                );
+                object.into()
             },
             ShapeEnum::Union(union_shape) => {
-                json!({"kind": "Union", "types": union_shape.iter().map(|t| t.to_json(include_pii)).collect::<Vec<_>>()})
+                let mut object = serde_json::Map::new();
+                object.insert("kind".into(), "Union".into());
+                object.insert(
+                    "types".into(),
+                    union_shape
+                        .iter()
+                        .map(|t| t.to_json(include_pii))
+                        .collect::<Vec<_>>()
+                        .into(),
+                );
+                object.into()
             },
             ShapeEnum::Unknown => json!({"kind": "Unknown"}),
         }

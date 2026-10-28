@@ -4,7 +4,7 @@ use std::{
 };
 
 use common::{
-    document::ResolvedDocument,
+    document::PackedDocument,
     interval::{
         BinaryKey,
         Interval,
@@ -25,7 +25,7 @@ pub struct PreloadedIndexRange {
     table_name: TableName,
     tablet_index_name: TabletIndexName,
     indexed_field: FieldPath,
-    range: BTreeMap<Option<ConvexValue>, ResolvedDocument>,
+    range: BTreeMap<Option<ConvexValue>, PackedDocument>,
 }
 
 impl PreloadedIndexRange {
@@ -33,7 +33,7 @@ impl PreloadedIndexRange {
         table_name: TableName,
         tablet_index_name: TabletIndexName,
         indexed_field: FieldPath,
-        range: BTreeMap<Option<ConvexValue>, ResolvedDocument>,
+        range: BTreeMap<Option<ConvexValue>, PackedDocument>,
     ) -> Self {
         Self {
             table_name,
@@ -47,7 +47,7 @@ impl PreloadedIndexRange {
         &self,
         tx: &mut Transaction<RT>,
         key: &Option<ConvexValue>,
-    ) -> anyhow::Result<Option<&ResolvedDocument>> {
+    ) -> anyhow::Result<Option<&PackedDocument>> {
         tx.reads.record_indexed_directly(
             self.tablet_index_name.clone(),
             vec![self.indexed_field.clone()].try_into()?,
@@ -55,8 +55,18 @@ impl PreloadedIndexRange {
             &tx.limits,
         )?;
         let result = self.range.get(key);
-        if let Some(document) = result {
-            tx.record_read_document(document, &self.table_name)?;
+        if let Some(document) = &result {
+            let component_path = tx
+                .component_path_for_tablet_id(*self.tablet_index_name.table())?
+                .unwrap_or_default();
+            tx.reads.record_read_document(
+                component_path,
+                self.table_name.clone(),
+                document.size(),
+                &tx.usage_tracker,
+                &tx.virtual_system_mapping,
+                &tx.limits,
+            )?;
         }
         Ok(result)
     }

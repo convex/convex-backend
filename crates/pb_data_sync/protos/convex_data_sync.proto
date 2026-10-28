@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package convex_data_sync;
+
+import "google/protobuf/empty.proto";
+import "common.proto";
+
+// Opaque, forward-compatible cursor for the data sync (streaming export) API.
+// Serialized and returned to the client base64-encoded; clients must treat it
+// as opaque and pass it back verbatim.
+message DataSyncCursor {
+  // All captured documents have a revision <= synced_ts.
+  optional uint64 synced_ts = 1;
+  // Tablets whose entire ID space has been traversed at synced_ts, each
+  // annotated with the (component, table) name it resolved to. The names let
+  // the server detect when a table has been replaced (e.g. by `npx convex
+  // import`) and emit a truncate.
+  repeated SyncedTablet synced_tablets = 2;
+  oneof table_cursor {
+    // The whole ID space of every target table has been traversed.
+    google.protobuf.Empty synced = 3;
+    // Mid-traversal of a table.
+    InProgressTablet in_progress = 4;
+  }
+  // Unique id assigned when the sync started; keys the `_data_sync_progress`
+  // row that tracks this sync's progress. Always set; cursors without it are
+  // rejected.
+  optional string sync_id = 5;
+  // Documents (including tombstones and re-emitted revisions) emitted over
+  // the sync's lifetime.
+  optional uint64 num_docs_synced = 6;
+}
+
+message SyncedTablet {
+  optional bytes tablet_id = 1;
+  optional string component_path = 2;
+  optional string table_name = 3;
+}
+
+message InProgressTablet {
+  optional bytes tablet_id = 1;
+  optional string component_path = 2;
+  optional string table_name = 3;
+  // The last id walked in the in-progress table. Absent if the table's ID
+  // traversal has not begun.
+  optional common.DeveloperDocumentId current_id = 4;
+  // Documents emitted so far from this table's `by_id` traversal.
+  optional uint64 docs_synced = 5;
+}

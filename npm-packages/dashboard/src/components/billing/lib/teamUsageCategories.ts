@@ -6,17 +6,7 @@ export const DATABASE_STORAGE_CATEGORIES = {
   index: {
     name: "Indexes",
     color: "fill-chart-line-2",
-  },
-};
-
-export const FILE_STORAGE_CATEGORIES = {
-  userFiles: {
-    name: "User Files",
-    color: "fill-chart-line-1",
-  },
-  cloudBackup: {
-    name: "Cloud Backups",
-    color: "fill-chart-line-2",
+    tip: "Each index you define is billed as a copy of the table's documents.",
   },
 };
 
@@ -30,41 +20,6 @@ export const BANDWIDTH_CATEGORIES = {
     name: "Writes",
     color: "fill-chart-line-2",
     backgroundColor: "bg-chart-line-2/30 dark:bg-chart-line-2",
-  },
-};
-
-export const FILE_BANDWIDTH_CATEGORIES = {
-  servingEgress: {
-    name: "Serving Reads",
-    color: "fill-chart-line-1",
-  },
-  servingIngress: {
-    name: "Serving Writes",
-    color: "fill-chart-line-2",
-  },
-  userFunctionEgress: {
-    name: "User Function Reads",
-    color: "fill-chart-line-3",
-  },
-  userFunctionIngress: {
-    name: "User Function Writes",
-    color: "fill-chart-line-4",
-  },
-  cloudRestore: {
-    name: "Cloud Restore",
-    color: "fill-chart-line-5",
-  },
-  cloudBackup: {
-    name: "Cloud Backup",
-    color: "fill-chart-line-6",
-  },
-  snapshotExport: {
-    name: "Snapshot Export",
-    color: "fill-chart-line-7",
-  },
-  snapshotImport: {
-    name: "Snapshot Import",
-    color: "fill-chart-line-8",
   },
 };
 
@@ -105,7 +60,7 @@ export const DATA_EGRESS_CATEGORIES = {
     color: "fill-chart-line-6",
   },
   servingEgress: {
-    name: "Serving Reads",
+    name: "File Serving",
     color: "fill-chart-line-3",
   },
   userFunctionEgress: {
@@ -152,7 +107,6 @@ export const DATABASE_IO_CATEGORIES = {
   },
   ingress: {
     name: "Writes",
-    // eslint-disable-next-line no-restricted-syntax
     color: "fill-chart-line-2",
   },
 };
@@ -160,7 +114,6 @@ export const DATABASE_IO_CATEGORIES = {
 export const COMPUTE_CATEGORIES_SELF_SERVE = {
   actionConvex: {
     name: "Action",
-    // eslint-disable-next-line no-restricted-syntax
     color: "fill-chart-line-1",
   },
   actionNode: {
@@ -176,7 +129,6 @@ export const COMPUTE_CATEGORIES = {
   },
   actionConvex: {
     name: "Action",
-    // eslint-disable-next-line no-restricted-syntax
     color: "fill-chart-line-2",
   },
   actionNode: {
@@ -189,6 +141,7 @@ const DEPLOYMENT_CLASS_COLORS: Record<string, string> = {
   s16: "fill-chart-line-1",
   s256: "fill-chart-line-2",
   d1024: "fill-chart-line-3",
+  d2048: "fill-chart-line-4",
 };
 
 export const DEPLOYMENT_CLASS_CATEGORIES: Record<
@@ -200,6 +153,19 @@ export const DEPLOYMENT_CLASS_CATEGORIES: Record<
     { name: key.toUpperCase(), color },
   ]),
 );
+
+export const DEPLOYMENT_STATUS_CATEGORIES: Record<
+  string,
+  { name: string; color: string; tip?: string }
+> = {
+  active: { name: "Active", color: "fill-chart-line-1" },
+  idle: {
+    name: "Idle",
+    color: "fill-chart-line-8",
+    tip: "Ran no functions in the last 30 days.",
+  },
+  paused: { name: "Paused", color: "fill-chart-line-4" },
+};
 
 export const CATEGORY_RENAMES = {
   uncached_query: "query",

@@ -1,0 +1,13 @@
+{
+  "name": "commit-timestamp",
+  "version": "0.0.0",
+  "scripts": {
+    "build": ""
+  },
+  "dependencies": {
+    "convex": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "~5.0.3"
+  }
+}

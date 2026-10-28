@@ -34,6 +34,8 @@ Follow the [step-by-step Convex setup guide](/docs/connectors/databases/convex/s
 
 Once Fivetran is connected to your Convex deployment, the connection fetches an initial consistent snapshot of all data from your Convex database. Once the initial sync is complete, the connection uses Change data capture (CDC) to efficiently incrementally sync updates at a newer consistent view of your Convex deployment. You can configure the frequency of these updates.
 
+Each sync resumes from where the previous one stopped, so an interrupted sync never restarts from the beginning.
+
 ---
 
 ## Configuration
@@ -112,6 +114,10 @@ If you don’t want to sync all the data from your Convex database, you can excl
 
 For more information, see our [Data Blocking documentation](/docs/using-fivetran/features/data-blocking-column-hashing).
 
+{% note %}
+Newly included components and tables are backfilled from your Convex deployment on the next sync, with no historical re-sync needed. When you exclude a component or table, its synced data stays in your destination and stops updating. Selecting it again truncates and backfills the affected tables from your Convex deployment.
+{% /note %}
+
 {% important %}
-If you modify your source data inclusion settings after data has already been synced, the existing data will not be modified retroactively. If you need to apply the new settings to the existing data, [trigger a historical re-sync](/docs/connectors/troubleshooting/trigger-historical-re-syncs).
+Changing which *columns* are included only affects rows synced from that point on; rows already in your destination are not rewritten. To apply a column change to them, [trigger a historical re-sync](/docs/connectors/troubleshooting/trigger-historical-re-syncs).
 {% /important %}

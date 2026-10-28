@@ -4,9 +4,10 @@ use common::runtime::{
     shutdown_and_join,
     SpawnHandle,
 };
-use database::SearchIndexWorkers;
 use parking_lot::Mutex;
+use search_index_workers::SearchIndexWorkers;
 use usage_gauges_tracking_worker::UsageGaugesTrackingWorker;
+use usage_limits::UsageLimitNotifier;
 
 use crate::{
     scheduled_jobs::ScheduledJobRunner,
@@ -26,8 +27,11 @@ pub struct WorkerHandles {
     pub(crate) schema_worker: Arc<Mutex<Box<dyn SpawnHandle>>>,
     pub(crate) snapshot_import_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
     pub(crate) export_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
+    pub(crate) s3_export_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
     pub(crate) system_table_cleanup_worker: Arc<Mutex<Box<dyn SpawnHandle>>>,
     pub(crate) migration_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
+    pub(crate) usage_limit_worker: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
+    pub(crate) usage_limit_notifier: Arc<dyn UsageLimitNotifier>,
 }
 
 impl WorkerHandles {
@@ -43,6 +47,10 @@ impl WorkerHandles {
         self.search_worker.lock().shutdown();
         self.search_and_vector_bootstrap_worker.lock().shutdown();
         self.fast_forward_worker.lock().shutdown();
+        let s3_export_worker = self.s3_export_worker.lock().take();
+        if let Some(s3_export_worker) = s3_export_worker {
+            shutdown_and_join(s3_export_worker).await?;
+        }
         let export_worker = self.export_worker.lock().take();
         if let Some(export_worker) = export_worker {
             shutdown_and_join(export_worker).await?;
@@ -57,6 +65,11 @@ impl WorkerHandles {
         if let Some(migration_worker) = migration_worker {
             shutdown_and_join(migration_worker).await?;
         }
+        let usage_limit_worker = self.usage_limit_worker.lock().take();
+        if let Some(usage_limit_worker) = usage_limit_worker {
+            shutdown_and_join(usage_limit_worker).await?;
+        }
+        self.usage_limit_notifier.shutdown().await;
         Ok(())
     }
 }

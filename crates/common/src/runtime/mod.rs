@@ -279,6 +279,7 @@ pub async fn try_join<T: Send + 'static>(
 #[async_trait]
 pub trait Runtime: Clone + Sync + Send + 'static {
     /// Sleep for the given duration.
+    #[must_use]
     fn wait(&self, duration: Duration) -> Pin<Box<dyn FusedFuture<Output = ()> + Send + 'static>>;
 
     /// Spawn a future on the runtime's executor.

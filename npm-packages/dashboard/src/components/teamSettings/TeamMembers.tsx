@@ -71,7 +71,7 @@ function MembersContent({
   if (isLoading) {
     // Data isn't loaded yet, show a skeleton.
     inviteMembers = (
-      <Loading className="h-[9.5rem] w-full rounded-sm" fullHeight={false} />
+      <Loading className="h-38 w-full rounded-sm" fullHeight={false} />
     );
   } else if (team.managedBy === "vercel") {
     inviteMembers = (

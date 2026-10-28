@@ -30,15 +30,21 @@ export const constructStreamId = (stream: ReadableStream | null): string => {
   }
 };
 
-export const extractStream = (streamId: string): ReadableStream => {
+export const extractStream = (
+  streamId: string,
+  mapError: (e: unknown) => unknown = (e) => e,
+): ReadableStream => {
   return new ReadableStream({
     type: "bytes",
     async pull(controller) {
       while (true) {
-        const { value, done } = await performAsyncOp(
-          "stream/readPart",
-          streamId,
-        );
+        let part;
+        try {
+          part = await performAsyncOp("stream/readPart", streamId);
+        } catch (e) {
+          throw mapError(e);
+        }
+        const { value, done } = part;
         if (done === true) {
           return controller.close();
         } else if (value.length > 0) {

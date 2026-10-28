@@ -359,7 +359,7 @@ impl Debug for CompiledVectorSearch {
             "CompiledVectorSearch {{ vector_size: {}, limit: {}, filter_conditions: {:?} }}",
             self.vector.len(),
             self.limit,
-            &self.filter_conditions,
+            self.filter_conditions,
         )
     }
 }

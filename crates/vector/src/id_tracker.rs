@@ -260,8 +260,23 @@ impl IdTracker for VectorStaticIdTracker {
         panic!("set_link() unsupported")
     }
 
-    fn drop(&mut self, _external_id: PointIdType) -> OperationResult<()> {
-        panic!("drop() unsupported")
+    /// Marks a point deleted in the deleted bitset. The id mapping itself is
+    /// immutable (loaded from disk), so this is a soft delete: the point is
+    /// excluded from `iter_ids` and so from queries and from any subsequent
+    /// segment merge.
+    fn drop(&mut self, external_id: PointIdType) -> OperationResult<()> {
+        let Some(internal_id) = self.internal_id(external_id) else {
+            panic!("Unrecognized external id: {external_id}");
+        };
+        if self.deleted_bitset.is_deleted(internal_id) {
+            return Ok(());
+        }
+        self.deleted_bitset.delete(internal_id).map_err(|e| {
+            OperationError::InconsistentStorage {
+                description: e.to_string(),
+            }
+        })?;
+        Ok(())
     }
 
     fn iter_external(&self) -> Box<dyn Iterator<Item = PointIdType> + '_> {

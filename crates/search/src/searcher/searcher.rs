@@ -33,7 +33,8 @@ use common::{
     },
 };
 use futures::{
-    try_join,
+    stream,
+    StreamExt,
     TryStreamExt,
 };
 use itertools::Itertools;
@@ -67,7 +68,6 @@ use tantivy::{
 use text_search::tracker::StaticDeletionTracker;
 use value::InternalId;
 use vector::{
-    qdrant_segments::UntarredVectorDiskSegmentPaths,
     result_merger::merge_vector_results_stream,
     CompiledVectorSearch,
     QdrantSchema,
@@ -83,7 +83,6 @@ use super::{
     },
     segment_cache::{
         SizedVectorSegment,
-        TextDiskSegmentPaths,
         TextSegment,
         TextSegmentCache,
         VectorSegmentCache,
@@ -92,10 +91,7 @@ use super::{
 use crate::{
     aggregation::TokenMatchAggregator,
     archive::cache::ArchiveCacheManager,
-    constants::{
-        MAX_EDIT_DISTANCE,
-        MAX_UNIQUE_QUERY_TERMS,
-    },
+    constants::MAX_UNIQUE_QUERY_TERMS,
     convex_query::{
         AliveDocuments,
         ConvexSearchQuery,
@@ -109,10 +105,6 @@ use crate::{
         FragmentedSegmentStorageKeys,
     },
     incremental_index::fetch_compact_and_upload_text_segment,
-    levenshtein_dfa::{
-        build_fuzzy_dfa,
-        LevenshteinDfaWrapper,
-    },
     searcher::{
         metrics::{
             text_compaction_searcher_latency_seconds,
@@ -293,16 +285,18 @@ impl<RT: Runtime> SearcherImpl<RT> {
         );
         Ok(Self {
             rt: runtime.clone(),
-            archive_cache,
+            archive_cache: archive_cache.clone(),
             vector_segment_cache: VectorSegmentCache::new(
                 runtime.clone(),
                 *MAX_VECTOR_LRU_SIZE,
+                fragmented_segment_fetcher.clone(),
                 vector_search_pool.clone(),
                 *MAX_CONCURRENT_VECTOR_SEARCHES,
             ),
             text_segment_cache: TextSegmentCache::new(
                 runtime,
                 *MAX_TEXT_LRU_ENTRIES,
+                archive_cache.clone(),
                 text_search_pool,
                 *MAX_CONCURRENT_TEXT_SEARCHES,
             ),
@@ -358,9 +352,14 @@ impl<RT: Runtime> SearcherImpl<RT> {
 
     async fn load_fragmented_segment(
         &self,
-        paths: UntarredVectorDiskSegmentPaths,
+        search_storage: Arc<dyn Storage>,
+        fragment: FragmentedVectorSegmentPaths,
+        labels: SearchIndexMetricLabels<'_>,
     ) -> anyhow::Result<Arc<SizedVectorSegment>> {
-        self.vector_segment_cache.get(paths).await
+        let keys: FragmentedSegmentStorageKeys = fragment.try_into()?;
+        self.vector_segment_cache
+            .get(search_storage, keys, labels)
+            .await
     }
 
     async fn vector_query_segment(
@@ -398,61 +397,15 @@ impl<RT: Runtime> SearcherImpl<RT> {
         self.vector_search_pool.execute(search).await?
     }
 
-    async fn load_text_segment_paths(
-        &self,
-        storage: Arc<dyn Storage>,
-        FragmentedTextStorageKeys {
-            segment,
-            id_tracker,
-            deleted_terms_table,
-            alive_bitset,
-        }: FragmentedTextStorageKeys,
-        labels: SearchIndexMetricLabels<'_>,
-    ) -> anyhow::Result<TextDiskSegmentPaths> {
-        let (index_path, alive_bitset_path, deleted_term_path, id_tracker_path) = try_join!(
-            self.archive_cache.get(
-                storage.clone(),
-                &segment,
-                SearchFileType::Text,
-                labels.clone(),
-            ),
-            self.archive_cache.get_single_file(
-                storage.clone(),
-                &alive_bitset,
-                SearchFileType::TextAliveBitset,
-                labels.clone(),
-            ),
-            self.archive_cache.get_single_file(
-                storage.clone(),
-                &deleted_terms_table,
-                SearchFileType::TextDeletedTerms,
-                labels.clone(),
-            ),
-            self.archive_cache.get_single_file(
-                storage.clone(),
-                &id_tracker,
-                SearchFileType::TextIdTracker,
-                labels,
-            )
-        )?;
-        Ok(TextDiskSegmentPaths {
-            index_path,
-            alive_bitset_path,
-            deleted_terms_table_path: deleted_term_path,
-            id_tracker_path,
-        })
-    }
-
     async fn load_text_segment(
         &self,
         storage: Arc<dyn Storage>,
         text_storage_keys: FragmentedTextStorageKeys,
         labels: SearchIndexMetricLabels<'_>,
     ) -> anyhow::Result<Arc<TextSegment>> {
-        let paths = self
-            .load_text_segment_paths(storage, text_storage_keys, labels)
-            .await?;
-        self.text_segment_cache.get(paths).await
+        self.text_segment_cache
+            .get(storage, text_storage_keys, labels)
+            .await
     }
 }
 
@@ -546,11 +499,11 @@ impl<RT: Runtime> SegmentTermMetadataFetcher for SearcherImpl<RT> {
         labels: SearchIndexMetricLabels<'_>,
     ) -> anyhow::Result<BTreeMap<Field, Vec<TermOrdinal>>> {
         let timer = text_query_term_ordinals_searcher_timer();
-        let segment_path = self
+        let segment_archive = self
             .archive_cache
             .get(search_storage, &segment, SearchFileType::Text, labels)
             .await?;
-        let reader = index_reader_for_directory(segment_path).await?;
+        let reader = index_reader_for_directory(&segment_archive).await?;
         let searcher = reader.searcher();
 
         // Multisegment indexes only write to one segment.
@@ -595,10 +548,14 @@ impl<RT: Runtime> VectorSearcher for SearcherImpl<RT> {
             // Use shared result merger to merge results from all segments using
             // a min-heap approach. This avoids storing all intermediate results
             // from parallel segment fetches in-memory.
-            let results_stream = self
-                .fragmented_segment_fetcher
-                .stream_fetch_fragmented_segments(search_storage, fragments, labels)
-                .and_then(|paths| self.load_fragmented_segment(paths))
+            let results_stream = stream::iter(fragments)
+                .map(|fragment| {
+                    self.load_fragmented_segment(search_storage.clone(), fragment, labels.clone())
+                })
+                // Limit the parallel downloads a bit, we don't want to start and finish all
+                // downloads at the same time. We want to be downloading and working with
+                // segments concurrently.
+                .buffer_unordered(4)
                 .and_then(|segment| {
                     self.vector_query_segment(
                         schema.clone(),
@@ -655,61 +612,23 @@ impl<RT: Runtime> SearcherImpl<RT> {
                 deletion_tracker,
                 id_tracker: _,
                 segment_ord,
+                ..
             } => {
                 let segment = searcher.segment_reader(*segment_ord);
                 anyhow::ensure!(max_results <= MAX_UNIQUE_QUERY_TERMS);
 
-                // The goal of this algorithm is to deterministically choose a set of terms
-                // from our database that are the "best" matches for a given set of query
-                // tokens. For two strings `q` and `t`, define their score to be the
-                // better of fuzzy matching with and without prefix matching:
-                // ```rust
-                // fn score(q: &str, t: &str) -> (u32, bool) {
-                //    let with_prefix_distance = levenshtein_distance_with_prefix(q, t);
-                //    let without_prefix_distance = levenshtein_distance(q, t);
-                //    if with_prefix_distance < without_prefix_distance {
-                //        (with_prefix_distance, true)
-                //    else {
-                //        (without_prefix_distance, false)
-                //    }
-                // }
-                //
-                // // The levenshtein distance with prefix is defined as the minimum edit
-                // // distance over all prefixes of the query string.
-                // fn levenshtein_distance_with_prefix(q: &str, t: &str) -> u32 {
-                //     q.prefixes().map(|prefix| levenshtein_distance(prefix, t)).min()
-                // }
-                // ```
-                // Then, for each query token `q_i`, we can totally order all of the terms in
-                // the database by sorting them by `(score(q_i, t_j), t_j, i)`,
-                // breaking ties by the term contents and the query token index.
-                // ```
-                // q_i: (score(q_i, t_1), t_1, i), (score(q_i, t_2), t_2, i), ..., (score(q_i, t_n), t_n, i)
-                // ```
-                // Note that each query token `q_i` chooses a different order on our terms:
-                // ```
-                // q_0: (score(q_0, t_1), t_1, 0), (score(q_0, t_2), t_2, 0), ..., (score(q_0, t_n), t_n, 0)
-                // q_1: (score(q_1, t_1), t_1, 1), (score(q_1, t_2), t_2, 1), ..., (score(q_1, t_n), t_n, 1)
-                // ...
-                // q_k: (score(q_k, t_1), t_1, k), (score(q_k, t_2), t_2, k), ..., (score(q_k, t_n), t_n, k)
-                // ```
-                // Logically, our algorithm merges these `k` streams, resorts them, and then
-                // takes some number of the best values. Instead of taking the top
-                // `max_results` values, we continue taking these tuples until we
-                // have seen `max_results` unique terms.
-                //
-                // Since `n` may be very large, our implementation pushes down this sorting into
-                // each query term. So, we take tuples from each `q_i` until we've seen
-                // `max_results` unique terms (yielding at most `max_results * k` tuples), merge
-                // and sort the results, and then take the best tuples until we have seen
-                // `max_results` unique terms in the merged stream.
+                // Deterministically choose the best terms in the segment for the query
+                // tokens. Each query token `q_i` totally orders the matching terms by
+                // `TokenMatch` order: its exact match first, then (for prefix tokens) the
+                // terms it prefixes, ties broken by term contents and then `i`. Logically,
+                // we merge these streams and take tuples until we have seen `max_results`
+                // unique terms. `TokenMatchAggregator` performs the merge; each token stops
+                // producing tuples once the aggregator rejects one, since the rest of its
+                // stream sorts after it.
                 let mut match_aggregator = TokenMatchAggregator::new(max_results);
 
                 for (token_ord, token_query) in queries.into_iter().enumerate() {
                     let token_ord = token_ord as u32;
-                    anyhow::ensure!(token_query.max_distance <= MAX_EDIT_DISTANCE);
-
-                    // Query the top scoring tuples for just our query term.
                     Self::visit_top_terms_for_query(
                         segment,
                         deletion_tracker,
@@ -734,75 +653,47 @@ impl<RT: Runtime> SearcherImpl<RT> {
         let field = query.term.field();
         let inverted_index = segment.inverted_index(field)?;
         let term_dict = inverted_index.terms();
-        let mut seen_terms = BTreeSet::new();
-        'query: for distance in [0, 1, 2] {
-            for prefix in [false, true] {
-                if distance > query.max_distance || (!query.prefix && prefix) {
-                    continue;
-                }
-                if distance == 0 && !prefix {
-                    if let Some(term_ord) = term_dict.term_ord(query.term.value_bytes())? {
-                        if deletion_tracker.doc_frequency(field, term_dict, term_ord)? == 0 {
-                            continue;
-                        }
-                        anyhow::ensure!(seen_terms.insert(query.term.clone()));
-                        let m = TokenMatch {
-                            distance,
-                            prefix,
-                            term: query.term.clone(),
-                            token_ord,
-                        };
-                        if !results.insert(m) {
-                            break 'query;
-                        }
-                    }
-                } else {
-                    let term_str = query
-                        .term
-                        .as_str()
-                        .context("Non-exact match for non-string field")?;
-                    let dfa = build_fuzzy_dfa(term_str, distance as u8, prefix);
-                    let dfa_compat = LevenshteinDfaWrapper(&dfa);
-                    let mut term_stream = term_dict.search(dfa_compat).into_stream()?;
-                    while term_stream.advance() {
-                        let match_term_bytes = term_stream.key();
-                        let match_str = std::str::from_utf8(match_term_bytes)?;
-                        let match_term = Term::from_field_text(query.term.field(), match_str);
+        let query_bytes = query.term.value_bytes();
 
-                        let term_ord = term_stream.term_ord();
-                        if deletion_tracker.doc_frequency(field, term_dict, term_ord)? == 0 {
-                            continue;
-                        }
+        if let Some(term_ord) = term_dict.term_ord(query_bytes)?
+            && deletion_tracker.doc_frequency(field, term_dict, term_ord)? > 0
+        {
+            let m = TokenMatch {
+                prefix: false,
+                term: query.term.clone(),
+                token_ord,
+            };
+            if !results.insert(m) {
+                return Ok(());
+            }
+        }
+        if !query.prefix {
+            return Ok(());
+        }
 
-                        // We need to skip terms we've already processed since we perform
-                        // overlapping edit distance queries.
-                        if seen_terms.contains(&match_term) {
-                            continue;
-                        }
-
-                        // TODO: extend Tantivy::TermStreamer to a TermStreamerWithState to avoid
-                        // recomputing distance again here.
-                        // This comment on a Tantivy open issue describes how to approach this:
-                        // https://github.com/quickwit-oss/tantivy/issues/563#issuecomment-801444469
-                        // TODO: Ideally we could make DFAs that only match a particular
-                        // edit distance so we don't have to skip duplicates above.
-                        let match_distance = dfa.eval(match_term_bytes).to_u8() as u32;
-                        if distance != match_distance {
-                            continue;
-                        }
-
-                        seen_terms.insert(match_term.clone());
-                        let m = TokenMatch {
-                            distance,
-                            prefix,
-                            term: match_term,
-                            token_ord,
-                        };
-                        if !results.insert(m) {
-                            break 'query;
-                        }
-                    }
-                }
+        // The term dictionary streams keys in lexicographic order, so the terms
+        // `query_bytes` prefixes are a contiguous run starting at `query_bytes`.
+        anyhow::ensure!(
+            query.term.as_str().is_some(),
+            "Prefix query on non-string term"
+        );
+        let mut term_stream = term_dict.range().gt(query_bytes).into_stream()?;
+        while term_stream.advance() {
+            let match_term_bytes = term_stream.key();
+            if !match_term_bytes.starts_with(query_bytes) {
+                break;
+            }
+            if deletion_tracker.doc_frequency(field, term_dict, term_stream.term_ord())? == 0 {
+                continue;
+            }
+            let match_str = std::str::from_utf8(match_term_bytes)?;
+            let m = TokenMatch {
+                prefix: true,
+                term: Term::from_field_text(field, match_str),
+                token_ord,
+            };
+            if !results.insert(m) {
+                break;
             }
         }
         Ok(())
@@ -820,6 +711,7 @@ impl<RT: Runtime> SearcherImpl<RT> {
                 deletion_tracker,
                 id_tracker: _,
                 segment_ord,
+                ..
             } => {
                 let segment = searcher.segment_reader(*segment_ord);
                 let fields: BTreeSet<Field> = terms.iter().map(|t| t.field()).collect();
@@ -899,6 +791,7 @@ impl<RT: Runtime> SearcherImpl<RT> {
                 deletion_tracker,
                 id_tracker,
                 segment_ord,
+                ..
             } => {
                 let stats_provider = StatsProvider {
                     num_terms_by_field: query.num_terms_by_field,
@@ -993,7 +886,6 @@ impl Bm25StatisticsProvider for StatsProvider {
 #[derive(Clone, Debug)]
 pub struct TokenQuery {
     pub term: Term,
-    pub max_distance: u32,
     pub prefix: bool,
 }
 
@@ -1003,7 +895,6 @@ impl TryFrom<pb::searchlight::TokenQuery> for TokenQuery {
     fn try_from(value: pb::searchlight::TokenQuery) -> Result<Self, Self::Error> {
         Ok(TokenQuery {
             term: Term::wrap(value.term.context("Missing term")?),
-            max_distance: value.max_distance.context("Missing max_distance")?,
             prefix: value.prefix.context("Missing prefix")?,
         })
     }
@@ -1015,7 +906,6 @@ impl TryFrom<TokenQuery> for pb::searchlight::TokenQuery {
     fn try_from(value: TokenQuery) -> Result<Self, Self::Error> {
         Ok(pb::searchlight::TokenQuery {
             term: Some(value.term.as_slice().to_vec()),
-            max_distance: Some(value.max_distance),
             prefix: Some(value.prefix),
         })
     }
@@ -1023,7 +913,6 @@ impl TryFrom<TokenQuery> for pb::searchlight::TokenQuery {
 
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 pub struct TokenMatch {
-    pub distance: u32,
     pub prefix: bool,
     pub term: Term,
     pub token_ord: u32,
@@ -1034,7 +923,6 @@ impl TryFrom<pb::searchlight::TokenMatch> for TokenMatch {
 
     fn try_from(value: pb::searchlight::TokenMatch) -> Result<Self, Self::Error> {
         Ok(TokenMatch {
-            distance: value.distance.context("Missing distance")?,
             prefix: value.prefix.context("Missing prefix")?,
             term: Term::wrap(value.tantivy_bytes.context("Missing term")?),
             token_ord: value.token_ord.context("Missing token_ord")?,
@@ -1047,7 +935,6 @@ impl TryFrom<TokenMatch> for pb::searchlight::TokenMatch {
 
     fn try_from(value: TokenMatch) -> Result<Self, Self::Error> {
         Ok(pb::searchlight::TokenMatch {
-            distance: Some(value.distance),
             prefix: Some(value.prefix),
             tantivy_bytes: Some(value.term.as_slice().to_vec()),
             token_ord: Some(value.token_ord),
@@ -1055,7 +942,7 @@ impl TryFrom<TokenMatch> for pb::searchlight::TokenMatch {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct FragmentedTextStorageKeys {
     pub segment: ObjectKey,
     pub id_tracker: ObjectKey,

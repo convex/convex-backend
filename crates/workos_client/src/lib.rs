@@ -1,7 +1,10 @@
 // These APIs are informally documented in https://convexdev.slack.com/archives/C071SS99WLA/p1776902623741739?thread_ts=1776900543.948619&cid=C071SS99WLA
 
 use std::{
-    collections::HashMap,
+    collections::{
+        HashMap,
+        HashSet,
+    },
     fmt,
     future::Future,
     sync::Arc,
@@ -10,6 +13,10 @@ use std::{
 
 use anyhow::Context;
 use async_trait::async_trait;
+use chrono::{
+    DateTime,
+    Utc,
+};
 use common::types::MemberId;
 use errors::ErrorMetadata;
 use oauth2::{
@@ -52,7 +59,36 @@ pub fn map_workos_identities_to_subjects(
     }
 }
 
-#[derive(Debug, Deserialize)]
+/// WorkOS provider name for Vercel Marketplace OAuth identities. Their
+/// `idp_id` encodes the Vercel account and user as
+/// `account:{account_id}:user:{user_id}`.
+pub const VERCEL_MARKETPLACE_PROVIDER: &str = "VercelMarketplaceOAuth";
+
+/// Parse a Vercel Marketplace identity `idp_id` of the form
+/// `account:{account_id}:user:{user_id}` into `(account_id, user_id)`. The
+/// `account_id` matches `vercel_installations.account_id`.
+pub fn parse_vercel_marketplace_idp_id(idp_id: &str) -> Option<(&str, &str)> {
+    let rest = idp_id.strip_prefix("account:")?;
+    let parts: Vec<&str> = rest.split(':').collect();
+    if parts.len() >= 3 && parts[1] == "user" {
+        Some((parts[0], parts[2]))
+    } else {
+        None
+    }
+}
+
+/// Extract the `(account_id, user_id)` pairs of a WorkOS user's Vercel
+/// Marketplace identities.
+pub fn vercel_marketplace_accounts(identities: &[WorkOSIdentity]) -> Vec<(String, String)> {
+    identities
+        .iter()
+        .filter(|identity| identity.provider == VERCEL_MARKETPLACE_PROVIDER)
+        .filter_map(|identity| parse_vercel_marketplace_idp_id(&identity.idp_id))
+        .map(|(account_id, user_id)| (account_id.to_string(), user_id.to_string()))
+        .collect()
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct WorkOSIdentity {
     pub idp_id: String,
     pub provider: String,
@@ -63,6 +99,38 @@ pub struct WorkOSUser {
     pub email: String,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
+}
+
+/// WorkOS list endpoints wrap their results in a `data` array, alongside
+/// `list_metadata` used for cursor pagination.
+#[derive(Debug, Deserialize)]
+struct WorkOSListResponse<T> {
+    data: Vec<T>,
+    #[serde(default)]
+    list_metadata: WorkOSListMetadata,
+}
+
+/// Cursor pagination metadata returned by WorkOS list endpoints. `after` is the
+/// cursor to pass as the `after` query parameter to fetch the next page; it is
+/// absent (or null) once the final page has been returned.
+#[derive(Debug, Deserialize, Default)]
+struct WorkOSListMetadata {
+    #[serde(default)]
+    after: Option<String>,
+}
+
+/// Minimal projection of a WorkOS user when we only need its id (e.g. when
+/// looking a user up by email).
+#[derive(Debug, Deserialize)]
+struct WorkOSUserId {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkOSAuthFactor {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub factor_type: String,
 }
 
 const APPLICATION_JSON: http::HeaderValue = http::HeaderValue::from_static("application/json");
@@ -258,6 +326,15 @@ pub enum WorkOSDomainState {
     LegacyVerified,
 }
 
+impl WorkOSDomainState {
+    pub fn is_verified(&self) -> bool {
+        match self {
+            WorkOSDomainState::Verified | WorkOSDomainState::LegacyVerified => true,
+            WorkOSDomainState::Pending | WorkOSDomainState::Failed => false,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct WorkOSOrganizationMembershipResponse {
     /// always "organization_membership"
@@ -289,14 +366,104 @@ pub enum WorkOSPortalIntent {
     Sso,
     DomainVerification,
     CertificateRenewal,
+    /// WorkOS serializes the directory sync portal intent as "dsync".
+    #[serde(rename = "dsync")]
+    DirectorySync,
+}
+
+/// A WorkOS SSO Connection.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SSOConnection {
+    /// like "conn_01E4ZCR3C56J083X43JQXF3JK"
+    pub id: String,
+    pub name: String,
+    /// e.g. "OktaSAML", "AzureSAML", "GoogleSAML"
+    pub connection_type: String,
+    /// e.g. "active", "inactive", "draft", "validating"
+    pub state: String,
+}
+
+impl SSOConnection {
+    /// Whether this connection can actually be used to log in. A connection
+    /// that is still a draft or validating exists in WorkOS but does not
+    /// authenticate anyone yet.
+    pub fn is_active(&self) -> bool {
+        self.state == "active"
+    }
+}
+
+/// A WorkOS Directory Sync directory.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct Directory {
+    /// like "directory_01ECAZ4NV9QMV47GW873HDCX74"
+    pub id: String,
+    /// e.g. "linked", "unlinked", "invalid_credentials".
+    pub state: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The identity provider behind the directory, e.g. "okta scim v2.0",
+    /// "azure scim v2.0", "gsuite directory", "generic scim v2.0".
+    #[serde(default)]
+    pub r#type: Option<String>,
+}
+
+impl Directory {
+    /// Whether this directory is actively syncing. An unlinked directory or
+    /// one with rejected credentials exists but delivers no events.
+    pub fn is_linked(&self) -> bool {
+        self.state == "linked"
+    }
+}
+
+/// A group within a WorkOS Directory Sync directory.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DirectoryGroup {
+    /// like "directory_group_01E1JG7J09H96KYP8HM9B0G5SJ"
+    pub id: String,
+    /// The identity provider's own id for this group.
+    pub idp_id: String,
+    pub name: String,
+}
+
+/// A user within a WorkOS Directory Sync directory.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DirectoryUser {
+    /// like "directory_user_01E1JG7J09H96KYP8HM9B0G5SJ"
+    pub id: String,
+    /// The directory user's email address.
+    #[serde(default)]
+    pub email: Option<String>,
+    /// e.g. "active", "inactive", "suspended".
+    pub state: String,
+}
+
+/// An entry in the WorkOS Events API log. Events are immutable and ordered, so
+/// a consumer resumes by passing the last `id` it processed back as the `after`
+/// parameter.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct WorkOSEvent {
+    /// like "event_01E4ZCR3C56J083X43JQXF3JK5"
+    pub id: String,
+    /// e.g. "dsync.user.created".
+    pub event: String,
+    pub created_at: DateTime<Utc>,
+    /// The event-type-specific body, e.g. a `DirectoryUser` for
+    /// `dsync.user.*`.
+    pub data: serde_json::Value,
 }
 
 #[async_trait]
 pub trait WorkOSClient: Send + Sync {
     async fn fetch_identities(&self, user_id: &str) -> anyhow::Result<Vec<WorkOSIdentity>>;
     async fn fetch_user(&self, user_id: &str) -> anyhow::Result<WorkOSUser>;
+    /// Whether the WorkOS user with this email has any enrolled MFA factors.
+    async fn email_has_enrolled_mfa(&self, email: &str) -> anyhow::Result<bool>;
+    /// The id of the WorkOS user with this email, if one exists. Emails are
+    /// unique per environment, so at most one user is returned.
+    async fn find_user_id_by_email(&self, email: &str) -> anyhow::Result<Option<String>>;
     async fn delete_user(&self, user_id: &str) -> anyhow::Result<()>;
     async fn update_user_metadata(&self, user_id: &str, member_id: MemberId) -> anyhow::Result<()>;
+    async fn update_user_email(&self, user_id: &str, email: &str) -> anyhow::Result<()>;
 
     // Organization methods
     async fn create_organization(
@@ -319,6 +486,11 @@ pub trait WorkOSClient: Send + Sync {
         domain: Option<&str>,
     ) -> anyhow::Result<WorkOSOrganizationResponse>;
     async fn delete_organization(&self, organization_id: &str) -> anyhow::Result<()>;
+    /// Removes one domain from its organization. WorkOS has no list-domains
+    /// endpoint; the domains an organization holds come back on
+    /// [`WorkOSClient::get_organization_by_id`]. Deleting an already-deleted
+    /// domain is a no-op.
+    async fn delete_organization_domain(&self, domain_id: &str) -> anyhow::Result<()>;
 
     // Organization membership methods
     async fn create_membership(
@@ -327,6 +499,10 @@ pub trait WorkOSClient: Send + Sync {
         organization_id: &str,
         role_slug: &str,
     ) -> anyhow::Result<WorkOSOrganizationMembershipResponse>;
+    async fn list_organization_memberships(
+        &self,
+        user_id: &str,
+    ) -> anyhow::Result<Vec<WorkOSOrganizationMembershipResponse>>;
 
     // Portal link generation
     async fn generate_portal_link(
@@ -334,6 +510,53 @@ pub trait WorkOSClient: Send + Sync {
         organization_id: &str,
         intent: WorkOSPortalIntent,
     ) -> anyhow::Result<WorkOSPortalLinkResponse>;
+
+    // SSO methods
+    async fn list_sso_connections(
+        &self,
+        organization_id: &str,
+    ) -> anyhow::Result<Vec<SSOConnection>>;
+    /// Deletes an SSO connection. Deleting an already-deleted connection is a
+    /// no-op.
+    async fn delete_sso_connection(&self, connection_id: &str) -> anyhow::Result<()>;
+
+    // Directory Sync methods
+    async fn list_directories(&self, organization_id: &str) -> anyhow::Result<Vec<Directory>>;
+    /// Deletes a directory. Deleting an already-deleted directory is a no-op.
+    async fn delete_directory(&self, directory_id: &str) -> anyhow::Result<()>;
+    async fn list_directory_groups(
+        &self,
+        directory_id: &str,
+    ) -> anyhow::Result<Vec<DirectoryGroup>>;
+    async fn list_directory_users(&self, directory_id: &str) -> anyhow::Result<Vec<DirectoryUser>>;
+    async fn get_directory_user(
+        &self,
+        directory_user_id: &str,
+    ) -> anyhow::Result<Option<DirectoryUser>>;
+    /// Fetches a single directory group by id. Returns `Ok(None)` when the
+    /// group no longer exists.
+    async fn get_directory_group(
+        &self,
+        directory_group_id: &str,
+    ) -> anyhow::Result<Option<DirectoryGroup>>;
+    /// Lists the groups a directory user currently belongs to, following
+    /// pagination.
+    async fn list_directory_groups_for_user(
+        &self,
+        directory_user_id: &str,
+    ) -> anyhow::Result<Vec<DirectoryGroup>>;
+
+    /// Fetches one page of the Events API, restricted to `event_types` and
+    /// resuming after the event id `after`. With no `after`, WorkOS returns
+    /// from the start of its event retention window. A page shorter than
+    /// `limit` means the caller has caught up. Errors if `event_types` is
+    /// empty.
+    async fn list_events(
+        &self,
+        event_types: &[&str],
+        after: Option<&str>,
+        limit: u32,
+    ) -> anyhow::Result<Vec<WorkOSEvent>>;
 }
 
 // Separate trait for WorkOS Platform API operations (requires different API
@@ -415,12 +638,24 @@ where
         fetch_workos_user(&self.api_key, user_id, &*self.http_client).await
     }
 
+    async fn email_has_enrolled_mfa(&self, email: &str) -> anyhow::Result<bool> {
+        email_has_enrolled_mfa(&self.api_key, email, &*self.http_client).await
+    }
+
+    async fn find_user_id_by_email(&self, email: &str) -> anyhow::Result<Option<String>> {
+        find_workos_user_id_by_email(&self.api_key, email, &*self.http_client).await
+    }
+
     async fn delete_user(&self, user_id: &str) -> anyhow::Result<()> {
         delete_workos_user(&self.api_key, user_id, &*self.http_client).await
     }
 
     async fn update_user_metadata(&self, user_id: &str, member_id: MemberId) -> anyhow::Result<()> {
         update_workos_user_metadata(&self.api_key, user_id, member_id, &*self.http_client).await
+    }
+
+    async fn update_user_email(&self, user_id: &str, email: &str) -> anyhow::Result<()> {
+        update_workos_user_email(&self.api_key, user_id, email, &*self.http_client).await
     }
 
     async fn create_organization(
@@ -465,6 +700,23 @@ where
         delete_workos_organization(&self.api_key, organization_id, &*self.http_client).await
     }
 
+    async fn delete_organization_domain(&self, domain_id: &str) -> anyhow::Result<()> {
+        delete_workos_resource(
+            &self.api_key,
+            &format!("https://api.workos.com/organization_domains/{domain_id}"),
+            "delete organization domain",
+            &*self.http_client,
+        )
+        .await
+    }
+
+    async fn list_organization_memberships(
+        &self,
+        user_id: &str,
+    ) -> anyhow::Result<Vec<WorkOSOrganizationMembershipResponse>> {
+        list_workos_organization_memberships(&self.api_key, user_id, &*self.http_client).await
+    }
+
     async fn create_membership(
         &self,
         user_id: &str,
@@ -489,19 +741,278 @@ where
         generate_workos_portal_link(&self.api_key, organization_id, intent, &*self.http_client)
             .await
     }
+
+    async fn list_sso_connections(
+        &self,
+        organization_id: &str,
+    ) -> anyhow::Result<Vec<SSOConnection>> {
+        list_workos_sso_connections(&self.api_key, organization_id, &*self.http_client).await
+    }
+
+    async fn delete_sso_connection(&self, connection_id: &str) -> anyhow::Result<()> {
+        delete_workos_resource(
+            &self.api_key,
+            &format!("https://api.workos.com/connections/{connection_id}"),
+            "delete SSO connection",
+            &*self.http_client,
+        )
+        .await
+    }
+
+    async fn list_directories(&self, organization_id: &str) -> anyhow::Result<Vec<Directory>> {
+        list_workos_directories(&self.api_key, organization_id, &*self.http_client).await
+    }
+
+    async fn delete_directory(&self, directory_id: &str) -> anyhow::Result<()> {
+        delete_workos_resource(
+            &self.api_key,
+            &format!("https://api.workos.com/directories/{directory_id}"),
+            "delete directory",
+            &*self.http_client,
+        )
+        .await
+    }
+
+    async fn list_directory_groups(
+        &self,
+        directory_id: &str,
+    ) -> anyhow::Result<Vec<DirectoryGroup>> {
+        list_workos_directory_groups(&self.api_key, directory_id, &*self.http_client).await
+    }
+
+    async fn list_directory_users(&self, directory_id: &str) -> anyhow::Result<Vec<DirectoryUser>> {
+        list_workos_directory_users(&self.api_key, directory_id, &*self.http_client).await
+    }
+
+    async fn get_directory_user(
+        &self,
+        directory_user_id: &str,
+    ) -> anyhow::Result<Option<DirectoryUser>> {
+        get_workos_directory_user(&self.api_key, directory_user_id, &*self.http_client).await
+    }
+
+    async fn get_directory_group(
+        &self,
+        directory_group_id: &str,
+    ) -> anyhow::Result<Option<DirectoryGroup>> {
+        get_workos_directory_group(&self.api_key, directory_group_id, &*self.http_client).await
+    }
+
+    async fn list_directory_groups_for_user(
+        &self,
+        directory_user_id: &str,
+    ) -> anyhow::Result<Vec<DirectoryGroup>> {
+        list_workos_directory_groups_for_user(&self.api_key, directory_user_id, &*self.http_client)
+            .await
+    }
+
+    async fn list_events(
+        &self,
+        event_types: &[&str],
+        after: Option<&str>,
+        limit: u32,
+    ) -> anyhow::Result<Vec<WorkOSEvent>> {
+        list_workos_events(&self.api_key, event_types, after, limit, &*self.http_client).await
+    }
 }
 
-pub struct MockWorkOSClient;
+/// An in-memory stand-in for the WorkOS API.
+///
+/// Organizations, SSO connections and directories are tracked independently so
+/// tests can build an organization that has SSO but no directory sync, or the
+/// reverse. Cloning shares the same state, so a test can keep a handle while
+/// the client under test holds an `Arc<dyn WorkOSClient>`.
+#[derive(Default, Clone)]
+pub struct MockWorkOSClient {
+    state: Arc<RwLock<MockWorkOSState>>,
+}
 
-impl Default for MockWorkOSClient {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Default)]
+struct MockWorkOSState {
+    /// Configured `find_user_id_by_email` responses, keyed by lowercased email.
+    email_to_user_id: HashMap<String, String>,
+    /// Organizations keyed by WorkOS organization id.
+    organizations: HashMap<String, WorkOSOrganizationResponse>,
+    /// SSO connections keyed by organization id.
+    connections: HashMap<String, Vec<SSOConnection>>,
+    /// Directories keyed by organization id.
+    directories: HashMap<String, Vec<Directory>>,
+    /// Emails `is_mfa_enrolled` reports as enrolled, lowercased.
+    mfa_emails: HashSet<String>,
+    directory_groups: HashMap<String, Vec<DirectoryGroup>>,
+    directory_users: HashMap<String, Vec<DirectoryUser>>,
+    /// Users returned by [`MockWorkOSClient::get_directory_user`], keyed by
+    /// directory user id.
+    directory_users_by_id: HashMap<String, DirectoryUser>,
+    /// Groups returned by [`get_directory_group`], keyed by directory group id.
+    directory_groups_by_id: HashMap<String, DirectoryGroup>,
+    /// Groups returned by [`list_directory_groups_for_user`], keyed by
+    /// directory user id.
+    directory_groups_by_user_id: HashMap<String, Vec<DirectoryGroup>>,
+    /// Domains carried by the organizations [`get_organization_by_id`] returns,
+    /// keyed by organization id.
+    organization_domains: HashMap<String, Vec<WorkOSOrganizationDomain>>,
+    organization_memberships: HashMap<String, Vec<WorkOSOrganizationMembershipResponse>>,
+    /// Distinguishes the ids handed out by successive `create_organization`
+    /// and `with_organization_domain` calls. Shared between the two so a
+    /// domain id names one domain across every organization, as WorkOS's do.
+    next_id: u64,
+    /// The event log served by [`list_events`], oldest first.
+    events: Vec<WorkOSEvent>,
 }
 
 impl MockWorkOSClient {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Configure `find_user_id_by_email` to return `workos_user_id` for
+    /// `email`.
+    pub fn with_email_user_id(self, email: &str, workos_user_id: &str) -> Self {
+        self.state
+            .write()
+            .email_to_user_id
+            .insert(email.to_lowercase(), workos_user_id.to_string());
+        self
+    }
+
+    /// Give the organization [`get_organization_by_id`] returns for
+    /// `organization_id` one more domain in `state`.
+    pub fn with_organization_domain(
+        self,
+        organization_id: &str,
+        domain: &str,
+        state: WorkOSDomainState,
+    ) -> Self {
+        self.add_organization_domain(organization_id, domain, state);
+        self
+    }
+
+    /// Like [`MockWorkOSClient::with_organization_domain`], for a client that
+    /// is already shared, returning the id WorkOS assigned the domain.
+    pub fn add_organization_domain(
+        &self,
+        organization_id: &str,
+        domain: &str,
+        state: WorkOSDomainState,
+    ) -> String {
+        let mut guard = self.state.write();
+        guard.next_id += 1;
+        let id = format!("org_domain_mock{}", guard.next_id);
+        guard
+            .organization_domains
+            .entry(organization_id.to_string())
+            .or_default()
+            .push(WorkOSOrganizationDomain {
+                object: "organization_domain".to_string(),
+                id: id.clone(),
+                domain: domain.to_string(),
+                state,
+            });
+        id
+    }
+
+    /// Report `email` as MFA-enrolled from [`is_mfa_enrolled`].
+    pub fn with_mfa_enrolled(self, email: &str) -> Self {
+        self.state.write().mfa_emails.insert(email.to_lowercase());
+        self
+    }
+
+    /// Attach an SSO connection to an organization, as if it had been created
+    /// through the WorkOS admin portal.
+    pub fn add_sso_connection(&self, organization_id: &str, connection: SSOConnection) {
+        self.state
+            .write()
+            .connections
+            .entry(organization_id.to_string())
+            .or_default()
+            .push(connection);
+    }
+
+    pub fn with_organization_membership(
+        self,
+        user_id: &str,
+        organization_id: &str,
+        status: &str,
+    ) -> Self {
+        {
+            let mut guard = self.state.write();
+            let memberships = guard
+                .organization_memberships
+                .entry(user_id.to_string())
+                .or_default();
+            memberships.push(WorkOSOrganizationMembershipResponse {
+                object: "organization_membership".to_string(),
+                id: format!("om_mock{}", memberships.len()),
+                user_id: user_id.to_string(),
+                organization_id: organization_id.to_string(),
+                role: WorkOSOrganizationRole {
+                    slug: "member".to_string(),
+                },
+                status: status.to_string(),
+                created_at: "2024-01-01T00:00:00.000Z".to_string(),
+                updated_at: "2024-01-01T00:00:00.000Z".to_string(),
+            });
+        }
+        self
+    }
+
+    /// Inject the directories returned by
+    /// [`MockWorkOSClient::list_directories`] for an organization.
+    pub fn set_directories(&self, organization_id: &str, directories: Vec<Directory>) {
+        self.state
+            .write()
+            .directories
+            .insert(organization_id.to_string(), directories);
+    }
+
+    /// Inject the groups returned by
+    /// [`MockWorkOSClient::list_directory_groups`] for a directory.
+    pub fn set_directory_groups(&self, directory_id: &str, groups: Vec<DirectoryGroup>) {
+        self.state
+            .write()
+            .directory_groups
+            .insert(directory_id.to_string(), groups);
+    }
+
+    /// Inject the users returned by [`MockWorkOSClient::list_directory_users`]
+    /// for a directory.
+    pub fn set_directory_users(&self, directory_id: &str, users: Vec<DirectoryUser>) {
+        self.state
+            .write()
+            .directory_users
+            .insert(directory_id.to_string(), users);
+    }
+
+    /// Inject a user returned by [`MockWorkOSClient::get_directory_user`] for
+    /// its id.
+    pub fn set_directory_user(&self, user: DirectoryUser) {
+        self.state
+            .write()
+            .directory_users_by_id
+            .insert(user.id.clone(), user);
+    }
+
+    /// Inject a group returned by [`get_directory_group`] for its id.
+    pub fn set_directory_group(&self, group: DirectoryGroup) {
+        self.state
+            .write()
+            .directory_groups_by_id
+            .insert(group.id.clone(), group);
+    }
+
+    /// Inject the groups returned by [`list_directory_groups_for_user`] for a
+    /// directory user id.
+    pub fn set_directory_groups_for_user(&self, user_id: &str, groups: Vec<DirectoryGroup>) {
+        self.state
+            .write()
+            .directory_groups_by_user_id
+            .insert(user_id.to_string(), groups);
+    }
+
+    /// Inject the event log served by [`list_events`], oldest first.
+    pub fn set_events(&self, events: Vec<WorkOSEvent>) {
+        self.state.write().events = events;
     }
 }
 
@@ -535,6 +1046,19 @@ impl WorkOSClient for MockWorkOSClient {
         })
     }
 
+    async fn email_has_enrolled_mfa(&self, email: &str) -> anyhow::Result<bool> {
+        Ok(self.state.read().mfa_emails.contains(&email.to_lowercase()))
+    }
+
+    async fn find_user_id_by_email(&self, email: &str) -> anyhow::Result<Option<String>> {
+        Ok(self
+            .state
+            .read()
+            .email_to_user_id
+            .get(&email.to_lowercase())
+            .cloned())
+    }
+
     async fn delete_user(&self, _user_id: &str) -> anyhow::Result<()> {
         Ok(())
     }
@@ -547,43 +1071,78 @@ impl WorkOSClient for MockWorkOSClient {
         Ok(())
     }
 
+    async fn update_user_email(&self, _user_id: &str, _email: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn create_organization(
         &self,
         name: &str,
         external_id: &str,
     ) -> anyhow::Result<WorkOSOrganizationResponse> {
-        Ok(WorkOSOrganizationResponse {
+        let mut state = self.state.write();
+        // WorkOS rejects a second organization with the same `external_id`;
+        // callers are expected to recover by looking the existing one up.
+        if state
+            .organizations
+            .values()
+            .any(|org| org.external_id.as_deref() == Some(external_id))
+        {
+            anyhow::bail!("an organization with external_id {external_id} already exists");
+        }
+        state.next_id += 1;
+        let org = WorkOSOrganizationResponse {
             object: "organization".to_string(),
-            id: "org_mock123".to_string(),
+            id: format!("org_mock{}", state.next_id),
             name: name.to_string(),
             external_id: Some(external_id.to_string()),
             created_at: "2024-01-01T00:00:00.000Z".to_string(),
             updated_at: "2024-01-01T00:00:00.000Z".to_string(),
             domains: vec![],
-        })
+        };
+        state.organizations.insert(org.id.clone(), org.clone());
+        Ok(org)
     }
 
     async fn get_organization(
         &self,
         external_id: &str,
     ) -> anyhow::Result<Option<WorkOSOrganizationResponse>> {
-        // Mock returns a simple organization for any external_id
-        Ok(Some(WorkOSOrganizationResponse {
-            object: "organization".to_string(),
-            id: "org_mock123".to_string(),
-            name: format!("Mock Organization for {external_id}"),
-            external_id: Some(external_id.to_string()),
-            created_at: "2024-01-01T00:00:00.000Z".to_string(),
-            updated_at: "2024-01-01T00:00:00.000Z".to_string(),
-            domains: vec![],
-        }))
+        Ok(self
+            .state
+            .read()
+            .organizations
+            .values()
+            .find(|org| org.external_id.as_deref() == Some(external_id))
+            .cloned())
     }
 
     async fn get_organization_by_id(
         &self,
         organization_id: &str,
     ) -> anyhow::Result<Option<WorkOSOrganizationResponse>> {
-        // Mock returns a simple organization for any organization_id
+        let state = self.state.read();
+        let domains = state
+            .organization_domains
+            .get(organization_id)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(org) = state.organizations.get(organization_id) {
+            let mut org = org.clone();
+            if !domains.is_empty() {
+                org.domains = domains;
+            }
+            return Ok(Some(org));
+        }
+        // An id that names neither an organization nor a domain fixture is one
+        // WorkOS does not have, and saying so is what lets a test cover the
+        // callers that fall back when a recorded organization id goes stale.
+        if domains.is_empty() {
+            return Ok(None);
+        }
+
+        // A domain fixture alone conjures its organization, so a test that only
+        // cares about domains does not have to create one.
         Ok(Some(WorkOSOrganizationResponse {
             object: "organization".to_string(),
             id: organization_id.to_string(),
@@ -591,7 +1150,7 @@ impl WorkOSClient for MockWorkOSClient {
             external_id: Some(format!("external_{organization_id}")),
             created_at: "2024-01-01T00:00:00.000Z".to_string(),
             updated_at: "2024-01-01T00:00:00.000Z".to_string(),
-            domains: vec![],
+            domains,
         }))
     }
 
@@ -601,28 +1160,63 @@ impl WorkOSClient for MockWorkOSClient {
         name: Option<&str>,
         domain: Option<&str>,
     ) -> anyhow::Result<WorkOSOrganizationResponse> {
-        Ok(WorkOSOrganizationResponse {
-            object: "organization".to_string(),
-            id: organization_id.to_string(),
-            name: name.unwrap_or("Mock Organization").to_string(),
-            external_id: Some("mock_external_id".to_string()),
-            created_at: "2024-01-01T00:00:00.000Z".to_string(),
-            updated_at: "2024-01-01T00:01:00.000Z".to_string(),
-            domains: domain
-                .map(|d| {
-                    vec![WorkOSOrganizationDomain {
-                        object: "organization_domain".to_string(),
-                        id: "org_domain_mock123".to_string(),
-                        domain: d.to_string(),
-                        state: WorkOSDomainState::Pending,
-                    }]
-                })
-                .unwrap_or_default(),
-        })
+        let mut state = self.state.write();
+        let org = state
+            .organizations
+            .get_mut(organization_id)
+            .with_context(|| format!("no such organization {organization_id}"))?;
+        if let Some(name) = name {
+            org.name = name.to_string();
+        }
+        if let Some(domain) = domain {
+            org.domains = vec![WorkOSOrganizationDomain {
+                object: "organization_domain".to_string(),
+                id: "org_domain_mock123".to_string(),
+                domain: domain.to_string(),
+                state: WorkOSDomainState::Pending,
+            }];
+        }
+        org.updated_at = "2024-01-01T00:01:00.000Z".to_string();
+        Ok(org.clone())
     }
 
-    async fn delete_organization(&self, _organization_id: &str) -> anyhow::Result<()> {
+    async fn delete_organization(&self, organization_id: &str) -> anyhow::Result<()> {
+        let mut state = self.state.write();
+        state.organizations.remove(organization_id);
+        state.organization_domains.remove(organization_id);
+        state.connections.remove(organization_id);
+        state.directories.remove(organization_id);
+        state.organization_memberships.retain(|_, memberships| {
+            memberships.retain(|membership| membership.organization_id != organization_id);
+            !memberships.is_empty()
+        });
         Ok(())
+    }
+
+    async fn delete_organization_domain(&self, domain_id: &str) -> anyhow::Result<()> {
+        let mut state = self.state.write();
+        for domains in state.organization_domains.values_mut() {
+            domains.retain(|domain| domain.id != domain_id);
+        }
+        // `update_organization` writes domains onto the organization itself,
+        // so a domain can live in either place.
+        for org in state.organizations.values_mut() {
+            org.domains.retain(|domain| domain.id != domain_id);
+        }
+        Ok(())
+    }
+
+    async fn list_organization_memberships(
+        &self,
+        user_id: &str,
+    ) -> anyhow::Result<Vec<WorkOSOrganizationMembershipResponse>> {
+        Ok(self
+            .state
+            .read()
+            .organization_memberships
+            .get(user_id)
+            .cloned()
+            .unwrap_or_default())
     }
 
     async fn create_membership(
@@ -654,12 +1248,160 @@ impl WorkOSClient for MockWorkOSClient {
             WorkOSPortalIntent::Sso => "sso",
             WorkOSPortalIntent::DomainVerification => "domain_verification",
             WorkOSPortalIntent::CertificateRenewal => "certificate_renewal",
+            WorkOSPortalIntent::DirectorySync => "dsync",
         };
         Ok(WorkOSPortalLinkResponse {
             link: format!(
                 "https://portal.workos.com/mock-portal-link?organization={organization_id}&intent={intent_str}"
             ),
         })
+    }
+
+    async fn list_sso_connections(
+        &self,
+        organization_id: &str,
+    ) -> anyhow::Result<Vec<SSOConnection>> {
+        Ok(self
+            .state
+            .read()
+            .connections
+            .get(organization_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn delete_sso_connection(&self, connection_id: &str) -> anyhow::Result<()> {
+        for connections in self.state.write().connections.values_mut() {
+            connections.retain(|c| c.id != connection_id);
+        }
+        Ok(())
+    }
+
+    async fn list_directories(&self, organization_id: &str) -> anyhow::Result<Vec<Directory>> {
+        Ok(self
+            .state
+            .read()
+            .directories
+            .get(organization_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn delete_directory(&self, directory_id: &str) -> anyhow::Result<()> {
+        let mut state = self.state.write();
+        for directories in state.directories.values_mut() {
+            directories.retain(|d| d.id != directory_id);
+        }
+        // The by-id lookups are keyed on the group or user rather than the
+        // directory, so they outlive the directory unless its own entries are
+        // taken out with it.
+        let groups = state
+            .directory_groups
+            .remove(directory_id)
+            .unwrap_or_default();
+        for group in &groups {
+            state.directory_groups_by_id.remove(&group.id);
+        }
+        let users = state
+            .directory_users
+            .remove(directory_id)
+            .unwrap_or_default();
+        for user in &users {
+            state.directory_users_by_id.remove(&user.id);
+            state.directory_groups_by_user_id.remove(&user.id);
+        }
+        Ok(())
+    }
+
+    async fn list_directory_groups(
+        &self,
+        directory_id: &str,
+    ) -> anyhow::Result<Vec<DirectoryGroup>> {
+        Ok(self
+            .state
+            .read()
+            .directory_groups
+            .get(directory_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn list_directory_users(&self, directory_id: &str) -> anyhow::Result<Vec<DirectoryUser>> {
+        Ok(self
+            .state
+            .read()
+            .directory_users
+            .get(directory_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn get_directory_user(
+        &self,
+        directory_user_id: &str,
+    ) -> anyhow::Result<Option<DirectoryUser>> {
+        Ok(self
+            .state
+            .read()
+            .directory_users_by_id
+            .get(directory_user_id)
+            .cloned())
+    }
+
+    async fn get_directory_group(
+        &self,
+        directory_group_id: &str,
+    ) -> anyhow::Result<Option<DirectoryGroup>> {
+        Ok(self
+            .state
+            .read()
+            .directory_groups_by_id
+            .get(directory_group_id)
+            .cloned())
+    }
+
+    async fn list_directory_groups_for_user(
+        &self,
+        directory_user_id: &str,
+    ) -> anyhow::Result<Vec<DirectoryGroup>> {
+        Ok(self
+            .state
+            .read()
+            .directory_groups_by_user_id
+            .get(directory_user_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn list_events(
+        &self,
+        event_types: &[&str],
+        after: Option<&str>,
+        limit: u32,
+    ) -> anyhow::Result<Vec<WorkOSEvent>> {
+        // Matches the real client, which rejects this before issuing a request
+        // rather than letting an empty filter mean "every type".
+        if event_types.is_empty() {
+            anyhow::bail!("Refusing to list events with no event types");
+        }
+        let state = self.state.read();
+        let start = match after {
+            Some(after) => match state.events.iter().position(|e| e.id == after) {
+                Some(index) => index + 1,
+                // WorkOS doesn't document what it does with a cursor outside
+                // its retention window, so fail loudly rather than pick a
+                // behaviour: a test that loses its cursor should say so, not
+                // silently replay the whole log.
+                None => anyhow::bail!("Unknown event cursor {after}"),
+            },
+            None => 0,
+        };
+        Ok(state.events[start..]
+            .iter()
+            .filter(|e| event_types.contains(&e.event.as_str()))
+            .take(limit as usize)
+            .cloned()
+            .collect())
     }
 }
 
@@ -1144,6 +1886,117 @@ where
     Ok(user)
 }
 
+/// Looks up the WorkOS user id for an email address, if a user with that email
+/// exists in the environment. Emails are unique per environment, so at most one
+/// user is returned.
+async fn find_workos_user_id_by_email<F, E>(
+    api_key: &str,
+    email: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Option<String>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    let mut url = url::Url::parse("https://api.workos.com/user_management/users")
+        .context("Invalid WorkOS users URL")?;
+    url.query_pairs_mut().append_pair("email", email);
+
+    let request = http::Request::builder()
+        .uri(url.as_str())
+        .method(http::Method::GET)
+        .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header(http::header::ACCEPT, APPLICATION_JSON)
+        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+        .body(vec![])?;
+
+    let response = http_client(request)
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not list WorkOS users: {}", e))?;
+
+    if response.status() != http::StatusCode::OK {
+        let status = response.status();
+        let response_body = response.into_body();
+        anyhow::bail!(WorkOSApiError::new("list users", status, &response_body));
+    }
+
+    let response_body = response.into_body();
+    let list: WorkOSListResponse<WorkOSUserId> = serde_json::from_slice(&response_body)
+        .with_context(|| {
+            format!(
+                "Invalid WorkOS users response: {}",
+                String::from_utf8_lossy(&response_body)
+            )
+        })?;
+
+    Ok(list.data.into_iter().next().map(|u| u.id))
+}
+
+/// Lists the MFA authentication factors enrolled for a WorkOS user.
+async fn list_workos_auth_factors<F, E>(
+    api_key: &str,
+    user_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<WorkOSAuthFactor>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    let url = format!("https://api.workos.com/user_management/users/{user_id}/auth_factors");
+
+    let request = http::Request::builder()
+        .uri(&url)
+        .method(http::Method::GET)
+        .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header(http::header::ACCEPT, APPLICATION_JSON)
+        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+        .body(vec![])?;
+
+    let response = http_client(request)
+        .await
+        .map_err(|e| anyhow::anyhow!("Could not list WorkOS auth factors: {}", e))?;
+
+    if response.status() != http::StatusCode::OK {
+        let status = response.status();
+        let response_body = response.into_body();
+        anyhow::bail!(WorkOSApiError::new(
+            "list auth factors",
+            status,
+            &response_body
+        ));
+    }
+
+    let response_body = response.into_body();
+    let list: WorkOSListResponse<WorkOSAuthFactor> = serde_json::from_slice(&response_body)
+        .with_context(|| {
+            format!(
+                "Invalid WorkOS auth factors response: {}",
+                String::from_utf8_lossy(&response_body)
+            )
+        })?;
+
+    Ok(list.data)
+}
+
+/// Whether the WorkOS user with this email has any enrolled MFA factors.
+/// Returns `false` when no WorkOS user exists for the email (no user ⟹ no
+/// factors could have been enrolled).
+async fn email_has_enrolled_mfa<F, E>(
+    api_key: &str,
+    email: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<bool>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    let Some(user_id) = find_workos_user_id_by_email(api_key, email, http_client).await? else {
+        return Ok(false);
+    };
+    let factors = list_workos_auth_factors(api_key, &user_id, http_client).await?;
+    Ok(!factors.is_empty())
+}
+
 pub async fn delete_workos_user<F, E>(
     api_key: &str,
     user_id: &str,
@@ -1221,6 +2074,58 @@ where
         let status = response.status();
         let response_body = response.into_body();
         anyhow::bail!(WorkOSApiError::new("update user", status, &response_body));
+    }
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct WorkOSUserEmailUpdate<'a> {
+    email: &'a str,
+    /// WorkOS resets `email_verified` to false whenever the email changes, so
+    /// it has to be reasserted here. Callers only reach this after Big Brain
+    /// has verified the address through its own code flow.
+    email_verified: bool,
+}
+
+pub async fn update_workos_user_email<F, E>(
+    api_key: &str,
+    user_id: &str,
+    email: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<()>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    let url = format!("https://api.workos.com/user_management/users/{user_id}");
+
+    let request_body = serde_json::to_vec(&WorkOSUserEmailUpdate {
+        email,
+        email_verified: true,
+    })
+    .context("Failed to serialize WorkOS user email update")?;
+
+    let request = http::Request::builder()
+        .uri(&url)
+        .method(http::Method::PUT)
+        .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header(http::header::ACCEPT, APPLICATION_JSON)
+        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+        .body(request_body)?;
+
+    let response = http_client(request)
+        .await
+        .context("Could not update WorkOS user email")?;
+
+    if response.status() != http::StatusCode::OK {
+        let status = response.status();
+        let response_body = response.into_body();
+        anyhow::bail!(WorkOSApiError::new(
+            "update user email",
+            status,
+            &response_body
+        ));
     }
 
     Ok(())
@@ -1971,34 +2876,51 @@ where
     F: Future<Output = Result<HttpResponse, E>>,
     E: std::error::Error + 'static + Send + Sync,
 {
-    let url = format!("https://api.workos.com/organizations/{organization_id}");
+    delete_workos_resource(
+        api_key,
+        &format!("https://api.workos.com/organizations/{organization_id}"),
+        "delete organization",
+        http_client,
+    )
+    .await
+}
 
+/// `DELETE`s a WorkOS resource, treating a 404 as success so callers are
+/// idempotent. `operation` names the call in error messages.
+async fn delete_workos_resource<F, E>(
+    api_key: &str,
+    url: &str,
+    operation: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<()>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
     let request = http::Request::builder()
-        .uri(&url)
+        .uri(url)
         .method(http::Method::DELETE)
         .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = http_client(request)
+    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
         .await
-        .map_err(|e| anyhow::anyhow!("Could not delete WorkOS organization: {}", e))?;
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "WorkOS API call timed out after {}s",
+                WORKOS_API_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("Could not {operation}: {e}"))?;
 
-    if response.status() != http::StatusCode::OK && response.status() != http::StatusCode::ACCEPTED
-    {
-        if response.status() == http::StatusCode::NOT_FOUND {
-            return Ok(());
-        }
-        let status = response.status();
-        let response_body = response.into_body();
-        anyhow::bail!(WorkOSApiError::new(
-            "delete organization",
-            status,
-            &response_body
-        ));
+    let status = response.status();
+    if status.is_success() || status == http::StatusCode::NOT_FOUND {
+        return Ok(());
     }
 
-    Ok(())
+    let response_body = response.into_body();
+    anyhow::bail!(WorkOSApiError::new(operation, status, &response_body));
 }
 
 pub async fn create_workos_membership<F, E>(
@@ -2140,4 +3062,389 @@ where
         })?;
 
     Ok(portal_link)
+}
+
+/// Fetches every page of a WorkOS list endpoint, following the
+/// `list_metadata.after` cursor until it is exhausted. `query` holds the fixed
+/// query parameters; `after` and `limit` are appended per request.
+async fn list_workos_paginated<T, F, E>(
+    api_key: &str,
+    base_url: &str,
+    query: &[(&str, &str)],
+    operation: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    // WorkOS caps `limit` at 100 for Directory Sync list endpoints.
+    const PAGE_LIMIT: &str = "100";
+
+    let mut results = Vec::new();
+    let mut after: Option<String> = None;
+
+    loop {
+        let mut url =
+            url::Url::parse(base_url).with_context(|| format!("Invalid WorkOS URL: {base_url}"))?;
+        {
+            let mut pairs = url.query_pairs_mut();
+            for (key, value) in query {
+                pairs.append_pair(key, value);
+            }
+            pairs.append_pair("limit", PAGE_LIMIT);
+            if let Some(after) = &after {
+                pairs.append_pair("after", after);
+            }
+        }
+
+        let request = http::Request::builder()
+            .uri(url.as_str())
+            .method(http::Method::GET)
+            .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
+            .header(http::header::ACCEPT, APPLICATION_JSON)
+            .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+            .body(vec![])?;
+
+        let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "WorkOS API call timed out after {}s",
+                    WORKOS_API_TIMEOUT.as_secs()
+                )
+            })?
+            .map_err(|e| anyhow::anyhow!("Could not {operation}: {e}"))?;
+
+        if response.status() != http::StatusCode::OK {
+            let status = response.status();
+            let response_body = response.into_body();
+            anyhow::bail!(WorkOSApiError::new(operation, status, &response_body));
+        }
+
+        let response_body = response.into_body();
+        let page: WorkOSListResponse<T> =
+            serde_json::from_slice(&response_body).with_context(|| {
+                format!(
+                    "Invalid WorkOS {operation} response: {}",
+                    String::from_utf8_lossy(&response_body)
+                )
+            })?;
+        results.extend(page.data);
+
+        match page.list_metadata.after {
+            Some(next) if !next.is_empty() => after = Some(next),
+            _ => break,
+        }
+    }
+
+    Ok(results)
+}
+
+/// Lists all SSO connections for an organization, following pagination.
+pub async fn list_workos_sso_connections<F, E>(
+    api_key: &str,
+    organization_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<SSOConnection>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    list_workos_paginated(
+        api_key,
+        "https://api.workos.com/connections",
+        &[("organization_id", organization_id)],
+        "list SSO connections",
+        http_client,
+    )
+    .await
+}
+
+/// Lists all Directory Sync directories for an organization, following
+/// pagination.
+pub async fn list_workos_directories<F, E>(
+    api_key: &str,
+    organization_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<Directory>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    list_workos_paginated(
+        api_key,
+        "https://api.workos.com/directories",
+        &[("organization_id", organization_id)],
+        "list directories",
+        http_client,
+    )
+    .await
+}
+
+/// Lists all groups within a Directory Sync directory, following pagination.
+pub async fn list_workos_directory_groups<F, E>(
+    api_key: &str,
+    directory_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<DirectoryGroup>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    list_workos_paginated(
+        api_key,
+        "https://api.workos.com/directory_groups",
+        &[("directory", directory_id)],
+        "list directory groups",
+        http_client,
+    )
+    .await
+}
+
+/// Lists the groups a directory user currently belongs to, following
+/// pagination.
+pub async fn list_workos_directory_groups_for_user<F, E>(
+    api_key: &str,
+    directory_user_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<DirectoryGroup>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    list_workos_paginated(
+        api_key,
+        "https://api.workos.com/directory_groups",
+        &[("user", directory_user_id)],
+        "list directory groups for user",
+        http_client,
+    )
+    .await
+}
+
+pub async fn list_workos_organization_memberships<F, E>(
+    api_key: &str,
+    user_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<WorkOSOrganizationMembershipResponse>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    list_workos_paginated(
+        api_key,
+        "https://api.workos.com/user_management/organization_memberships",
+        &[("user_id", user_id)],
+        "list organization memberships",
+        http_client,
+    )
+    .await
+}
+
+/// Lists all users within a Directory Sync directory, following pagination.
+pub async fn list_workos_directory_users<F, E>(
+    api_key: &str,
+    directory_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<DirectoryUser>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    list_workos_paginated(
+        api_key,
+        "https://api.workos.com/directory_users",
+        &[("directory", directory_id)],
+        "list directory users",
+        http_client,
+    )
+    .await
+}
+
+/// Returns `Ok(None)` when the user no longer exists — deletion between an
+/// event and this fetch is normal, not exceptional.
+pub async fn get_workos_directory_user<F, E>(
+    api_key: &str,
+    directory_user_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Option<DirectoryUser>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    let url = format!("https://api.workos.com/directory_users/{directory_user_id}");
+
+    let request = http::Request::builder()
+        .uri(&url)
+        .method(http::Method::GET)
+        .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header(http::header::ACCEPT, APPLICATION_JSON)
+        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+        .body(vec![])?;
+
+    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "WorkOS API call timed out after {}s",
+                WORKOS_API_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("Could not fetch directory user: {}", e))?;
+
+    if response.status() == http::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+
+    if response.status() != http::StatusCode::OK {
+        let status = response.status();
+        let response_body = response.into_body();
+        anyhow::bail!(WorkOSApiError::new(
+            "get directory user",
+            status,
+            &response_body
+        ));
+    }
+
+    let response_body = response.into_body();
+    let user: DirectoryUser = serde_json::from_slice(&response_body).with_context(|| {
+        format!(
+            "Invalid WorkOS directory user response: {}",
+            String::from_utf8_lossy(&response_body)
+        )
+    })?;
+
+    Ok(Some(user))
+}
+
+/// Fetches a single directory group by id. Returns `Ok(None)` when the group
+/// no longer exists — deletion between an event and this fetch is normal, not
+/// exceptional.
+pub async fn get_workos_directory_group<F, E>(
+    api_key: &str,
+    directory_group_id: &str,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Option<DirectoryGroup>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    let url = format!("https://api.workos.com/directory_groups/{directory_group_id}");
+
+    let request = http::Request::builder()
+        .uri(&url)
+        .method(http::Method::GET)
+        .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header(http::header::ACCEPT, APPLICATION_JSON)
+        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+        .body(vec![])?;
+
+    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "WorkOS API call timed out after {}s",
+                WORKOS_API_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("Could not fetch directory group: {}", e))?;
+
+    if response.status() == http::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+
+    if response.status() != http::StatusCode::OK {
+        let status = response.status();
+        let response_body = response.into_body();
+        anyhow::bail!(WorkOSApiError::new(
+            "get directory group",
+            status,
+            &response_body
+        ));
+    }
+
+    let response_body = response.into_body();
+    let group: DirectoryGroup = serde_json::from_slice(&response_body).with_context(|| {
+        format!(
+            "Invalid WorkOS directory group response: {}",
+            String::from_utf8_lossy(&response_body)
+        )
+    })?;
+
+    Ok(Some(group))
+}
+
+/// Fetches one page of the WorkOS Events API, restricted to `event_types` and
+/// resuming after the event id `after`. Errors if `event_types` is empty.
+pub async fn list_workos_events<F, E>(
+    api_key: &str,
+    event_types: &[&str],
+    after: Option<&str>,
+    limit: u32,
+    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+) -> anyhow::Result<Vec<WorkOSEvent>>
+where
+    F: Future<Output = Result<HttpResponse, E>>,
+    E: std::error::Error + 'static + Send + Sync,
+{
+    const EVENTS_URL: &str = "https://api.workos.com/events";
+
+    if event_types.is_empty() {
+        anyhow::bail!("Refusing to list events with no event types");
+    }
+
+    let mut url = url::Url::parse(EVENTS_URL)?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        // The Events API takes its type filter as a repeated `events`
+        // parameter; omitting it entirely would return every event type.
+        for event_type in event_types {
+            pairs.append_pair("events", event_type);
+        }
+        pairs.append_pair("limit", &limit.to_string());
+        // Oldest first, which is what resuming from `after` assumes. This is
+        // already the API's default; setting it keeps the cursor protocol
+        // correct if that default ever changes.
+        pairs.append_pair("order", "asc");
+        if let Some(after) = after {
+            pairs.append_pair("after", after);
+        }
+    }
+
+    let request = http::Request::builder()
+        .uri(url.as_str())
+        .method(http::Method::GET)
+        .header(http::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .header(http::header::ACCEPT, APPLICATION_JSON)
+        .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
+        .body(vec![])?;
+
+    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "WorkOS API call timed out after {}s",
+                WORKOS_API_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("Could not list events: {e}"))?;
+
+    if response.status() != http::StatusCode::OK {
+        let status = response.status();
+        let response_body = response.into_body();
+        anyhow::bail!(WorkOSApiError::new("list events", status, &response_body));
+    }
+
+    let response_body = response.into_body();
+    let page: WorkOSListResponse<WorkOSEvent> = serde_json::from_slice(&response_body)
+        .with_context(|| {
+            format!(
+                "Invalid WorkOS list events response: {}",
+                String::from_utf8_lossy(&response_body)
+            )
+        })?;
+
+    Ok(page.data)
 }

@@ -34,7 +34,8 @@ use value::{
 /// type.
 pub trait SystemTable: Send + Sync + Sized + 'static {
     /// Table name for this system table. Must begin with `_`
-    fn table_name() -> &'static TableName;
+    const TABLE_NAME: TableName;
+
     /// List of indexes for the system table
     fn indexes() -> Vec<SystemIndex<Self>>;
     fn virtual_table() -> Option<AssociatedVirtualTable> {
@@ -65,7 +66,7 @@ where
 /// dyn-compatible form of [`SystemTable`]. This is automatically implemented
 /// for any `SystemTable`.
 pub trait ErasedSystemTable: Send + Sync {
-    fn table_name(&self) -> &'static TableName;
+    fn table_name(&self) -> TableName;
     fn indexes(&self) -> Vec<ErasedSystemIndex>;
     fn virtual_table(&self) -> Option<AssociatedVirtualTable>;
 
@@ -76,8 +77,8 @@ pub trait ErasedSystemTable: Send + Sync {
 }
 
 impl<T: SystemTable> ErasedSystemTable for T {
-    fn table_name(&self) -> &'static TableName {
-        T::table_name()
+    fn table_name(&self) -> TableName {
+        T::TABLE_NAME
     }
 
     fn indexes(&self) -> Vec<ErasedSystemIndex> {
@@ -111,13 +112,13 @@ impl<T: SystemTable> Clone for SystemTableName<T> {
 impl<T: SystemTable> Debug for SystemTableName<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SystemTableName")
-            .field("table_name", T::table_name())
+            .field("table_name", &T::TABLE_NAME)
             .finish()
     }
 }
 impl<T: SystemTable> Display for SystemTableName<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(T::table_name(), f)
+        Display::fmt(&T::TABLE_NAME, f)
     }
 }
 impl<T: SystemTable> HeapSize for SystemTableName<T> {
@@ -190,7 +191,7 @@ impl<T: SystemTable> SystemIndex<T> {
         let Ok(name) = self
             .name
             .clone()
-            .map_table(&|_| Ok::<_, !>(T::table_name().clone()));
+            .map_table(&|_| Ok::<_, !>(T::TABLE_NAME.clone()));
         name
     }
 

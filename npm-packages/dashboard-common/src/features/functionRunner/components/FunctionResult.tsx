@@ -9,6 +9,7 @@ import {
   PermissionsContext,
 } from "@common/lib/deploymentContext";
 import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
+import { deploymentIdentityLabel } from "@common/lib/deploymentTypeColorClasses";
 import { toast } from "@common/lib/utils";
 import { RequestFilter } from "@common/lib/appMetrics";
 import { ComponentId } from "@common/lib/useNents";
@@ -108,6 +109,9 @@ export function useFunctionResult({
   const deployment = useCurrentDeployment();
   const dtype = deployment?.deploymentType;
   const isProd = dtype === "prod";
+  const deploymentIdentity = deployment
+    ? deploymentIdentityLabel(deployment)
+    : null;
 
   const { areEditsAuthorized, authorizeEdits } = useEditsAuthorization();
   const log = useLogDeploymentEvent();
@@ -220,12 +224,15 @@ export function useFunctionResult({
                 "You do not have permission to run this function in this deployment."
               )
             ) : !areEditsAuthorized ? (
-              // TODO(ENG-10340) Edit this message to use the deployment ref
-              `You are about to run a ${udfType.toLowerCase()} in a ${`${dtype ?? ""} deployment`.trim()}. Unlock edits to continue.`
+              `You are about to run a ${udfType.toLowerCase()} in ${
+                deploymentIdentity === null
+                  ? "this deployment"
+                  : `the ${deploymentIdentity} deployment`
+              }. Unlock edits to continue.`
             ) : undefined
           }
           size="sm"
-          className="w-full max-w-[48rem] items-center justify-center"
+          className="w-full max-w-3xl items-center justify-center"
           disabled={disabled || !areEditsAuthorized || !canRunFunction}
           loading={isInFlight}
           onClick={runFunction}
@@ -234,9 +241,12 @@ export function useFunctionResult({
           Run {udfType.toLowerCase()}
         </Button>
         {canRunFunction && !areEditsAuthorized && (
-          // TODO(ENG-10340) Include the deployment ref in the tooltip
           <Button
-            tip="Enables changes to this deployment for the remainder of this dashboard session"
+            tip={`Enables changes to ${
+              deploymentIdentity === null
+                ? "this deployment"
+                : `the ${deploymentIdentity} deployment`
+            } for the remainder of this dashboard session`}
             size="sm"
             onClick={() => {
               authorizeEdits?.();

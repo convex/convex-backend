@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import {
   query,
   action,
+  env,
   internalMutation,
   mutation,
   internalAction,
@@ -14,10 +15,7 @@ export type Result = Doc<"movies"> & { _score: number };
 export type SearchResult = { _id: Id<"movieEmbeddings">; _score: number };
 
 export async function embed(text: string): Promise<number[]> {
-  const key = process.env.OPENAI_KEY;
-  if (!key) {
-    throw new Error("OPENAI_KEY environment variable not set!");
-  }
+  const key = env.OPENAI_KEY;
   const req = { input: text, model: "text-embedding-ada-002" };
   const resp = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
@@ -81,7 +79,7 @@ export const generateAndAddEmbedding = internalAction({
 export const addEmbedding = internalMutation({
   args: { movieId: v.id("movies"), embedding: v.array(v.number()) },
   handler: async (ctx, args) => {
-    const movie = await ctx.db.get(args.movieId);
+    const movie = await ctx.db.get("movies", args.movieId);
     if (movie === null) {
       // No movie to update
       return;
@@ -90,7 +88,7 @@ export const addEmbedding = internalMutation({
       embedding: args.embedding,
       genre: movie.genre,
     });
-    await ctx.db.patch(args.movieId, {
+    await ctx.db.patch("movies", args.movieId, {
       embeddingId: movieEmbeddingId,
     });
   },
@@ -131,11 +129,11 @@ export const fetchResults = query({
 export const upvote = mutation({
   args: { id: v.id("movies") },
   handler: async (ctx, args) => {
-    const movie = await ctx.db.get(args.id);
+    const movie = await ctx.db.get("movies", args.id);
     if (movie === null) {
       return;
     }
-    await ctx.db.patch(args.id, {
+    await ctx.db.patch("movies", args.id, {
       votes: movie.votes + 1,
     });
   },
@@ -144,11 +142,11 @@ export const upvote = mutation({
 export const downvote = mutation({
   args: { id: v.id("movies") },
   handler: async (ctx, args) => {
-    const movie = await ctx.db.get(args.id);
+    const movie = await ctx.db.get("movies", args.id);
     if (movie === null) {
       return;
     }
-    await ctx.db.patch(args.id, {
+    await ctx.db.patch("movies", args.id, {
       votes: movie.votes - 1,
     });
   },

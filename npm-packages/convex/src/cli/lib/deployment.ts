@@ -255,10 +255,6 @@ export async function getTeamAndProjectFromPreviewAdminKey(
   return { teamSlug, projectSlug };
 }
 
-export type OnDeploymentActivityFunc = (
-  isOffline: boolean,
-  wasOffline: boolean,
-) => Promise<void>;
 export type CleanupDeploymentFunc = () => Promise<void>;
 export type DeploymentDetails = {
   deploymentName: string;
@@ -266,5 +262,4 @@ export type DeploymentDetails = {
   adminKey: string;
   reference: string | null;
   isDefault: boolean;
-  onActivity: OnDeploymentActivityFunc | null;
 };

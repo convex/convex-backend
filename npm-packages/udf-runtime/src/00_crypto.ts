@@ -8,6 +8,18 @@ import {
 } from "./helpers.js";
 import { performOp } from "udf-syscall-ffi";
 
+const INTEGER_TYPED_ARRAYS = [
+  Int8Array,
+  Uint8Array,
+  Uint8ClampedArray,
+  Int16Array,
+  Uint16Array,
+  Int32Array,
+  Uint32Array,
+  BigInt64Array,
+  BigUint64Array,
+];
+
 class Crypto {
   constructor() {
     throwUncatchableDeveloperError("Illegal constructor: Crypto");
@@ -16,10 +28,7 @@ class Crypto {
   getRandomValues(typedArray: ArrayBufferView) {
     const prefix = "Failed to execute 'getRandomValues' on 'Crypto'";
     requiredArguments(arguments.length, 1, prefix);
-    if (
-      typedArray instanceof Float32Array ||
-      typedArray instanceof Float64Array
-    ) {
+    if (!INTEGER_TYPED_ARRAYS.some((ctor) => typedArray instanceof ctor)) {
       throw new DOMException(
         "The provided ArrayBufferView is not an integer array type",
         "TypeMismatchError",
@@ -59,8 +68,9 @@ class Crypto {
 Object.defineProperties(Crypto.prototype, {
   [Symbol.toStringTag]: {
     value: "Crypto",
-    writable: false,
     enumerable: false,
+    writable: false,
+    configurable: true,
   },
   subtle: { enumerable: true },
   getRandomValues: { enumerable: true, configurable: true, writable: true },
@@ -145,7 +155,8 @@ class SubtleCrypto {
       format,
       keyData,
       algorithm,
-      extractable,
+      // coerce to boolean per Web IDL
+      !!extractable,
       keyUsages,
     );
   }
@@ -187,7 +198,7 @@ class SubtleCrypto {
       algorithm,
       baseKey,
       derivedKeyType,
-      extractable,
+      !!extractable,
       keyUsages,
     );
   }
@@ -232,7 +243,7 @@ class SubtleCrypto {
     return performOp(
       "crypto/subtle/generateKey",
       algorithm,
-      extractable,
+      !!extractable,
       keyUsages,
     ) as CryptoKey | CryptoKeyPair;
   }
@@ -245,8 +256,9 @@ class SubtleCrypto {
 Object.defineProperties(SubtleCrypto.prototype, {
   [Symbol.toStringTag]: {
     value: "SubtleCrypto",
-    writable: false,
     enumerable: false,
+    writable: false,
+    configurable: true,
   },
   encrypt: { enumerable: true, configurable: true, writable: true },
   decrypt: { enumerable: true, configurable: true, writable: true },

@@ -9,6 +9,7 @@ import { devAgainstDeployment } from "./lib/dev.js";
 import {
   CONVEX_DEPLOYMENT_ENV_VAR_NAME,
   CONVEX_SELF_HOSTED_URL_VAR_NAME,
+  ensureHasConvexDependency,
 } from "./lib/utils/utils.js";
 import {
   getDeploymentSelection,
@@ -66,7 +67,7 @@ export const dev = new Command("dev")
   .addOption(
     new Option(
       "--start <command>",
-      "Start a long-running command alongside `convex dev`, like a frontend " +
+      "Start a long-running command alongside `npx convex dev`, like a frontend " +
         "dev server. The command inherits stdin/stdout so you can interact " +
         "with it directly. Example: npx convex dev --start 'vite --open'",
     ).conflicts(["--run", "--run-sh"]),
@@ -85,13 +86,18 @@ export const dev = new Command("dev")
   )
   .option(
     "--run-component <functionName>",
-    "If --run is used and the function is in a component, the path the component tree defined in convex.config.ts. " +
+    'If --run is used and the function is in a component, the path to the component (e.g. "workflow" or "workflow/workpool"). ' +
       "Components are a beta feature. This flag is unstable and may change in subsequent releases.",
   )
   .addOption(
     new Option(
       "--tail-logs [mode]",
-      "Choose whether to tail Convex function logs in this terminal",
+      [
+        "Choose whether to tail Convex function logs in this terminal: ",
+        "• `always` shows logs continuously",
+        "• `pause-on-deploy` (the default) pauses logs during deploys so you can spot sync issues",
+        "• `disable` hides logs while developing.",
+      ].join("\n"),
     )
       .choices(["always", "pause-on-deploy", "disable"] as const)
       .default("pause-on-deploy"),
@@ -133,6 +139,15 @@ export const dev = new Command("dev")
     new Option(
       "--prod",
       "Develop live against this project's production deployment.",
+    )
+      .default(false)
+      .hideHelp(),
+  )
+  .addOption(
+    // Only `--prod` pushes check this; hidden alongside it.
+    new Option(
+      "--allow-unstaging-schema",
+      "Skip the confirmation prompt when a push to production discards a staged table validator that is validating or already validated.",
     )
       .default(false)
       .hideHelp(),
@@ -205,6 +220,12 @@ Same format as .env.local or .env files, and overrides them.`,
 
     const devOptions = await normalizeDevOptions(ctx, cmdOptions);
 
+    // Check that we're in a Convex project (a package.json with a `convex`
+    // dependency) before doing anything else, so we fail fast with a clear
+    // error instead of prompting to create/select a project and only then
+    // crashing because there's nothing to push.
+    await ensureHasConvexDependency(ctx, "run `npx convex dev`");
+
     if (cmdOptions.configure === undefined) {
       if (cmdOptions.team || cmdOptions.project || cmdOptions.devDeployment)
         return await ctx.crash({
@@ -275,6 +296,7 @@ Same format as .env.local or .env files, and overrides them.`,
                         credentials.deploymentFields.deploymentType,
                     }
                   : {}),
+                backendVersion: localOptions.backendVersion,
               },
               devOptions,
             ),

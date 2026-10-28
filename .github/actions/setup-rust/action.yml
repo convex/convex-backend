@@ -14,18 +14,50 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Configure AWS credentials for cache writes
+      # sccache and the cache save (post) steps write as this role; forks/OSS can't
+      # assume it and fall back to the instance profile. Must precede "Start sccache"
+      # (the server captures creds at spawn); the env guard dedups to one assume/job.
+      if: >-
+        github.repository == 'convex/convex' && runner.environment ==
+        'self-hosted' && env.AWS_SESSION_TOKEN == ''
+      uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+      with:
+        role-to-assume: arn:aws:iam::685401541621:role/ci-cache-write
+        aws-region: us-west-2
+        # 4h: must outlive the longest job; creds aren't refreshed and sccache
+        # captures them at spawn. Role MaxSessionDuration is raised to match.
+        role-duration-seconds: 14400
+
     - name: Install libsodium and libssl
       shell: bash
       if: runner.os == 'Linux'
       run: sudo apt-get install pkg-config libsodium-dev libssl-dev
 
-    - name: Install Just
-      uses: taiki-e/install-action@481c34c1cf3a84c68b5e46f4eccfc82af798415a # v2
-      with:
-        tool: just
-
-      env:
-        GITHUB_TOKEN: ${{ inputs.github-token }}
+    # The runner AMI ships a prebuilt librocksdb but no pkg-config .pc, so mise's
+    # ROCKSDB_COMPILE check fails and librocksdb-sys rebuilds it from source every
+    # run. Write a .pc for the prebuilt so it links instead (no-op if one exists).
+    # TODO: ship the .pc from the AMI (`make install`) and drop this.
+    - name: Make prebuilt rocksdb discoverable via pkg-config
+      shell: bash
+      if: runner.os == 'Linux'
+      run: |
+        if pkg-config --exists rocksdb 2>/dev/null; then
+          echo "pkg-config already resolves rocksdb $(pkg-config --modversion rocksdb)"
+          exit 0
+        fi
+        so=$(ls /usr/lib/librocksdb.so.[0-9]* /lib/librocksdb.so.[0-9]* \
+               /usr/local/lib/librocksdb.so.[0-9]* 2>/dev/null | sort -V | tail -1 || true)
+        if [ -z "$so" ]; then
+          echo "::notice::no prebuilt librocksdb found; it will build from source"
+          exit 0
+        fi
+        ver=${so##*librocksdb.so.}
+        echo "found prebuilt librocksdb $ver at $so; writing rocksdb.pc"
+        sudo mkdir -p /usr/lib/pkgconfig
+        printf 'libdir=%s\nincludedir=/usr/include\n\nName: rocksdb\nDescription: RocksDB prebuilt on the runner image\nVersion: %s\nLibs: -L${libdir} -lrocksdb\nCflags: -I${includedir}\n' \
+          "$(dirname "$so")" "$ver" | sudo tee /usr/lib/pkgconfig/rocksdb.pc >/dev/null
+        pkg-config --modversion rocksdb
 
     - name: Install Rust
       uses: dsherret/rust-toolchain-file@3551321aa44dd44a0393eb3b6bdfbc5d25ecf621 # v1
@@ -40,27 +72,67 @@ runs:
         echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
         if [ "$RUNNER_OS" == "Linux" ]; then
-          echo "SNAPPY_LIB_DIR=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
+          echo "SNAPPY_LIB_DIR=/usr/lib/$(uname -m)-linux-gnu" >> $GITHUB_ENV
           echo "SODIUM_USE_PKG_CONFIG=1" >> $GITHUB_ENV
           echo "ROCKSDB_LIB_DIR=/usr/lib" >> $GITHUB_ENV
+          if command -v ld.mold >/dev/null; then
+            # Link with mold: faster and lighter than rust-lld/bfd, which
+            # matters for the giant test-binary link tail. -fuse-ld=mold makes
+            # the gcc driver pick "ld.mold" from PATH; on x86_64 that also
+            # outranks nightly rustc's bundled rust-lld (injected as "ld" via a
+            # gcc -B dir, where "ld.mold" doesn't exist). Jammy's gcc 11.4
+            # accepts -fuse-ld=mold (Ubuntu backport of the gcc 12.1 feature).
+            # This must be a $CARGO_HOME config layer, not a
+            # CARGO_TARGET_<triple>_RUSTFLAGS env var: the env var REPLACES the
+            # workspace .cargo/config.toml [target.*] rustflags (dropping
+            # aarch64's prod tuning), while config layers JOIN. Runners are
+            # ephemeral, so no pre-existing config.toml to collide with.
+            mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
+            printf '%s\n' \
+              '[target.x86_64-unknown-linux-gnu]' \
+              'rustflags = ["-Clink-arg=-fuse-ld=mold"]' \
+              '[target.aarch64-unknown-linux-gnu]' \
+              'rustflags = ["-Clink-arg=-fuse-ld=mold"]' \
+              >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
+          fi
         fi
         echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse" >> $GITHUB_ENV
         echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> $GITHUB_ENV
 
     - name: Install sccache
-      uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       with:
-        version: "v0.12.0"
+        version: "v0.16.0"
 
     - name: Start sccache
       shell: bash
       env:
-        SCCACHE_ENDPOINT: https://a4aa0fffebef8bc497f64875c40ee6fb.r2.cloudflarestorage.com
-        SCCACHE_BUCKET: cvx-actions-cache
-        SCCACHE_REGION: auto
-        AWS_ACCESS_KEY_ID: ${{ inputs.r2-access-key }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.r2-secret-key }}
+        # Never idle-exit. Linking test binaries doesn't go through sccache, so
+        # a long link tail (>600s, the default idle timeout) makes the server
+        # shut down mid-build; the rest then compiles locally without the cache.
+        SCCACHE_IDLE_TIMEOUT: "0"
+        R2_ACCESS_KEY: ${{ inputs.r2-access-key }}
+        R2_SECRET_KEY: ${{ inputs.r2-secret-key }}
+        IS_SELF_HOSTED: ${{ runner.environment == 'self-hosted' }}
       run: |
+        if [ "$IS_SELF_HOSTED" = "true" ]; then
+          # In-VPC S3 (assumed-role env creds when present, else the instance
+          # profile), same bucket as the rust-cache. Lower-latency than R2.
+          export SCCACHE_BUCKET=convex-ci-cache SCCACHE_S3_KEY_PREFIX=sccache
+          export SCCACHE_REGION=us-west-2 AWS_REGION=us-west-2
+        else
+          # GitHub-hosted OSS mac/windows have no IMDS; use R2 with static creds.
+          export SCCACHE_ENDPOINT=https://a4aa0fffebef8bc497f64875c40ee6fb.r2.cloudflarestorage.com
+          export SCCACHE_BUCKET=cvx-actions-cache SCCACHE_REGION=auto
+          export AWS_ACCESS_KEY_ID=$R2_ACCESS_KEY AWS_SECRET_ACCESS_KEY=$R2_SECRET_KEY
+        fi
+        # OSS can only read shared caches: self-hosted uses S3 (unwritable -- the
+        # cache-write role is convex/convex-only), github-hosted uses R2
+        # (writable, but not from PRs). main's github-hosted runs still warm R2.
+        if [ "$GITHUB_REPOSITORY" != "convex/convex" ] &&
+          { [ "$IS_SELF_HOSTED" = "true" ] || [ "$GITHUB_EVENT_NAME" = "pull_request" ]; }; then
+          export SCCACHE_S3_RW_MODE=READ_ONLY
+        fi
         # Try to start sccache up to 3 times. Sometimes it times out for unknown reasons.
         (r=3;while ! sccache --start-server ; do ((--r))||exit;sleep 5;done)
 
@@ -70,8 +142,35 @@ runs:
     # this step runs, the cache key used for storing the job outputs will not
     # match the cache key used for restoring.
     - name: Cached load of cargo registry
-      uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      uses: convex/rust-cache@afa9e83d23492b0f5abfc75bdc109dbd8a2e5e18 # agent/s3-cache-provider
+      env:
+        # The S3 provider reads the region from the environment; credentials
+        # come from the SDK default chain (assumed-role env creds when
+        # present, else the instance profile).
+        AWS_REGION: us-west-2
       with:
+        cache-provider: "s3"
+        # Bucket and region are hardcoded like the sccache R2 endpoint above;
+        # composite actions cannot read `vars.*`. Self-hosted runners (shared
+        # by this repo and the copybara-exported OSS repo) reach this in-VPC
+        # bucket; GitHub-hosted runners (the OSS mac/windows precompile jobs)
+        # can't, so the empty bucket makes the fork fall back to the GitHub
+        # cache provider there.
+        s3-bucket:
+          ${{ runner.environment == 'self-hosted' && 'convex-ci-cache' || '' }}
+        # One shared cache entry for all jobs instead of a per-job key; the
+        # jobs' cargo registries are near-identical and the entry is only
+        # ~/.cargo (registry + git checkouts), not job-specific artifacts.
+        shared-key: "cargo-registry"
         # Only cache the `.cargo` directory; not build artifacts.
         cache-targets: "false"
-        cache-provider: "buildjet"
+        cache-bin: "false"
+        # The shared S3 entry has no branch scoping and ~/.cargo contents are
+        # executed on restore, so on self-hosted runners only the protected
+        # main/release branches may write it; PRs restore read-only. On
+        # GitHub-hosted runners (OSS mac/windows) the empty bucket falls back
+        # to GitHub's own branch-scoped cache, which is safe to save on any
+        # branch -- so keep the default there rather than starving those jobs.
+        save-if: >-
+          ${{ runner.environment != 'self-hosted' || github.ref ==
+          'refs/heads/main' || github.ref == 'refs/heads/release' }}

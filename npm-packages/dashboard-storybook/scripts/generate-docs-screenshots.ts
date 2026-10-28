@@ -1,12 +1,16 @@
 import * as fs from "node:fs";
+import * as http from "node:http";
+import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
-import { webkit } from "playwright";
+import { chromium } from "playwright";
 import sharp from "sharp";
 import pixelmatch from "pixelmatch";
 import chalk from "chalk";
 import getPort from "get-port";
 import ora from "ora";
+import serveHandler from "serve-handler";
 
 const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname);
 const PACKAGE_DIR = path.resolve(SCRIPT_DIR, "..");
@@ -18,6 +22,14 @@ const MANIFEST_PATH = path.resolve(
   PACKAGE_DIR,
   "../docs/src/generated/screenshotManifest.ts",
 );
+const REPO_DIR = path.resolve(PACKAGE_DIR, "../..");
+const BUILD_DIR = path.join(PACKAGE_DIR, "storybook-static");
+
+// Stories render absolute times via `toLocaleString`/`Intl.DateTimeFormat`, and
+// timezone abbreviations from the browser's resolved timezone, so pin both to
+// keep screenshots identical no matter where they're regenerated.
+const LOCALE = "en-US";
+const TIMEZONE_ID = "UTC";
 
 const CROP_PADDING = 32; // in (real) pixels
 const CROP_PADDING_PAGE = 64; // in (real) pixels, for element crops in page stories
@@ -63,57 +75,94 @@ async function runWithConcurrency<T>(
   return results;
 }
 
-/** Start the Storybook dev server and wait until it responds, returns { close } */
-async function startStorybookDevServer(
-  port: number,
-): Promise<{ close: () => void }> {
+/**
+ * Build the static Storybook that the capture reads from.
+ *
+ * Going through turbo rather than calling `storybook build` keeps this a no-op
+ * when nothing the build reads has changed, and builds the workspace dists it
+ * needs on the way (see this package's turbo.json).
+ */
+async function buildStorybook(): Promise<void> {
   const proc = spawn(
-    "npx",
-    ["storybook", "dev", "-p", String(port), "--no-open", "--quiet"],
-    { cwd: PACKAGE_DIR, stdio: "ignore" },
+    "just",
+    ["turbo", "run", "build", "--filter=dashboard-storybook"],
+    { cwd: REPO_DIR, stdio: ["ignore", "pipe", "pipe"] },
   );
+
+  // Buffered rather than inherited: turbo's output would otherwise scroll the
+  // spinner away on every run, and it only carries anything worth reading when
+  // the build fails, where it is the only description of what went wrong.
+  let output = "";
+  proc.stdout?.on("data", (chunk) => (output += chunk));
+  proc.stderr?.on("data", (chunk) => (output += chunk));
 
   await new Promise<void>((resolve, reject) => {
     proc.on("error", reject);
-    proc.on("exit", (code) => {
-      if (code !== null && code !== 0) {
-        reject(new Error(`Storybook dev server exited with code ${code}`));
+    // `close` rather than `exit`, which can fire while output is still buffered.
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(
+          new Error(`Storybook build exited with code ${code}\n\n${output}`),
+        );
       }
     });
-
-    const url = `http://127.0.0.1:${port}/index.json`;
-    const poll = async () => {
-      try {
-        const res = await fetch(url);
-        if (res.ok) {
-          resolve();
-          return;
-        }
-      } catch {
-        /* not ready yet */
-      }
-      setTimeout(poll, 500);
-    };
-    poll();
   });
-
-  return { close: () => proc.kill() };
 }
 
-// 1. Find an available port and start the Storybook dev server
-const port = await getPort();
-let spinner = ora(`Starting Storybook dev server on port ${port}...`).start();
-const { close: closeServer } = await startStorybookDevServer(port);
-spinner.succeed(`Storybook dev server started on port ${port}`);
+/** Serve the built Storybook off disk, returns { close } */
+async function startStaticServer(port: number): Promise<{ close: () => void }> {
+  const server = http.createServer((req, res) =>
+    serveHandler(req, res, { public: BUILD_DIR, cleanUrls: false }),
+  );
 
-// 2. Fetch stories from the running dev server
+  await new Promise<void>((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(port, "127.0.0.1", resolve);
+  });
+
+  return { close: () => server.close() };
+}
+
+/**
+ * `process.exit()` drops writes still queued on stderr, truncating the failure
+ * log when stderr is a pipe (CI). Wait for the queue to flush first.
+ */
+async function exitWithFailure(): Promise<never> {
+  await new Promise<void>((resolve) => {
+    process.stderr.write("", () => resolve());
+  });
+  process.exit(1);
+}
+
+// 1. Build the Storybook, then serve it off disk. Capturing against the dev
+// server instead would make every page load wait on Vite compiling modules on
+// demand, which both slows the run down and delays each story's render enough
+// to change what its `play` function races against.
+let spinner = ora("Building Storybook...").start();
+try {
+  await buildStorybook();
+} catch (error) {
+  spinner.fail("Storybook build failed");
+  console.error(error instanceof Error ? error.message : error);
+  await exitWithFailure();
+}
+spinner.succeed("Storybook built");
+
+const port = await getPort();
+spinner = ora(`Serving Storybook on port ${port}...`).start();
+const { close: closeServer } = await startStaticServer(port);
+spinner.succeed(`Storybook served on port ${port}`);
+
+// 2. Fetch stories from the running server
 spinner = ora("Fetching stories...").start();
 const indexUrl = `http://127.0.0.1:${port}/index.json`;
 const indexRes = await fetch(indexUrl);
 if (!indexRes.ok) {
   spinner.fail(`Failed to fetch ${indexUrl}: ${indexRes.status}`);
   closeServer();
-  process.exit(1);
+  await exitWithFailure();
 }
 const index = (await indexRes.json()) as {
   entries: Record<
@@ -122,19 +171,31 @@ const index = (await indexRes.json()) as {
   >;
 };
 
+// An optional case-insensitive substring passed on the command line
+// (`just generate-docs-screenshots UsageLimits`) regenerates only the matching
+// stories; without it every docs/ story is captured. Matched stories still
+// overwrite their existing files, and unmatched files are left untouched.
+const titleFilter = process.argv[2]?.toLowerCase();
 const docsStories = Object.values(index.entries).filter(
-  (e) => e.title.toLowerCase().startsWith("docs/") && e.type === "story",
+  (e) =>
+    e.title.toLowerCase().startsWith("docs/") &&
+    e.type === "story" &&
+    (!titleFilter || e.title.toLowerCase().includes(titleFilter)),
 );
 
 if (docsStories.length === 0) {
-  spinner.warn("No docs/ stories found in storybook index.");
+  spinner.warn(
+    titleFilter
+      ? `No docs/ stories matched "${process.argv[2]}".`
+      : "No docs/ stories found in storybook index.",
+  );
 }
 
 spinner.succeed(`Found ${docsStories.length} stories`);
 
-// 3. Launch Playwright (WebKit)
+// 3. Launch Playwright
 spinner = ora("Launching Playwright...").start();
-const browser = await webkit.launch();
+const browser = await chromium.launch();
 spinner.succeed("Playwright launched");
 
 // Ensure output dir exists
@@ -151,7 +212,14 @@ const results: {
 }[] = [];
 
 // 4. Screenshot each story in light and dark mode
-const CONCURRENCY = 5;
+// Half the cores, because each capture also encodes and diffs its image in this
+// process, so the browsers can't have all of them. Giving a context to every
+// core is slightly faster but measurably less stable: over three runs each on a
+// 16-core machine, 8 took ~55s and 12 ~53s with one run of the three differing,
+// while 16 took ~48s and every run differed. The added CPU contention widens the
+// window in which a story's header settles after the command palette has already
+// measured where to anchor its menu.
+const CONCURRENCY = Math.max(4, Math.floor(os.availableParallelism() / 2));
 const total = docsStories.length * 2;
 let completed = 0;
 const inProgress = new Set<string>();
@@ -191,44 +259,95 @@ async function captureScreenshot(
 
   let context: Awaited<ReturnType<typeof browser.newContext>> | null = null;
   try {
+    // Load the story in a page of the given context.
+    const openStoryPage = async (ctx: NonNullable<typeof context>) => {
+      const p = await ctx.newPage();
+      // Nothing answers either route under Storybook — there is no NextAuth
+      // server, and the status endpoint belongs to the dev server. Fail them
+      // outright so the app stops rather than retrying against 404s. Both globs
+      // must stay this narrow — `**/api/**` would also match the dashboard's
+      // own `src/api/*.ts` modules.
+      await p.route("**/api/status", (route) => route.abort());
+      await p.route("**/api/auth/**", (route) => route.abort());
+      // Disable CSS animations and cursor blinking to ensure stable screenshots
+      // of components like Monaco editor that otherwise have non-deterministic renders.
+      await p.emulateMedia({ reducedMotion: "reduce" });
+      await p.goto(url, { waitUntil: "networkidle", timeout: 60_000 });
+      // Network idle does not imply the story rendered and its `play` function
+      // ran, so wait for the render to report that it finished.
+      await p.waitForFunction(
+        (storyId: string) =>
+          [...((window as any).__STORYBOOK_PREVIEW__?.storyRenders ?? [])].some(
+            (r: any) => r.id === storyId && r.phase === "finished",
+          ),
+        story.id,
+        { timeout: 60_000 },
+      );
+      await p.evaluate(() => document.fonts.ready);
+
+      // Hide Monaco editor cursors to ensure stable screenshots
+      await p.addStyleTag({
+        content:
+          ".monaco-editor .cursors-layer > .cursor { display: none !important; }",
+      });
+      await p.addStyleTag({
+        content: ".monaco-editor .slider { opacity: 0 !important; }",
+      });
+      return p;
+    };
+
     // Create a fresh browser context for each screenshot to avoid flaky
-    // rendering caused by shared state between stories.
+    // rendering caused by shared state between stories. Assign `context`
+    // right away so the finally block closes it even when the page setup
+    // fails partway through.
     context = await browser.newContext({
       viewport: { width: 1024, height: 700 },
       deviceScaleFactor: DEVICE_SCALE_FACTOR,
+      locale: LOCALE,
+      timezoneId: TIMEZONE_ID,
     });
-    const page = await context.newPage();
-    // Disable CSS animations and cursor blinking to ensure stable screenshots
-    // of components like Monaco editor that otherwise have non-deterministic renders.
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.goto(url, { waitUntil: "networkidle", timeout: 60_000 });
-    await page.evaluate(() => document.fonts.ready);
+    let page = await openStoryPage(context);
 
-    // Hide Monaco editor cursors to ensure stable screenshots
-    await page.addStyleTag({
-      content:
-        ".monaco-editor .cursors-layer > .cursor { display: none !important; }",
-    });
-    await page.addStyleTag({
-      content: ".monaco-editor .slider { opacity: 0 !important; }",
-    });
+    // Read the element-level crop selector and optional viewport override from
+    // story parameters. In Storybook 10, the store API is
+    // storyStoreValue.loadStory().
+    const storyParams = await page.evaluate(async (storyId: string) => {
+      const empty = {
+        screenshotSelector: null as string | null,
+        screenshotViewport: null as { width: number; height: number } | null,
+      };
+      try {
+        const preview = (window as any).__STORYBOOK_PREVIEW__;
+        const store = preview?.storyStoreValue;
+        if (!store) return empty;
+        const story = await store.loadStory({ storyId });
+        return {
+          screenshotSelector: story?.parameters?.screenshotSelector ?? null,
+          screenshotViewport: story?.parameters?.screenshotViewport ?? null,
+        };
+      } catch {
+        return empty;
+      }
+    }, story.id);
+    const { screenshotSelector, screenshotViewport } = storyParams;
 
-    // Check for element-level crop selector from story parameters.
-    // In Storybook 10, the store API is storyStoreValue.loadStory().
-    const screenshotSelector: string | null = await page.evaluate(
-      async (storyId: string) => {
-        try {
-          const preview = (window as any).__STORYBOOK_PREVIEW__;
-          const store = preview?.storyStoreValue;
-          if (!store) return null;
-          const story = await store.loadStory({ storyId });
-          return story?.parameters?.screenshotSelector ?? null;
-        } catch {
-          return null;
-        }
-      },
-      story.id,
-    );
+    // A story whose page doesn't fit the default 1024x700 (e.g. a wide table
+    // that would otherwise clip) can widen/heighten the capture viewport.
+    // Reload the story in a fresh context at that size instead of resizing the
+    // page: a resize makes width-dependent UI (e.g. the deployment badge)
+    // remount mid-capture, and its entrance animations then race the
+    // screenshot and get frozen at opacity 0.
+    if (screenshotViewport) {
+      await context.close();
+      context = null;
+      context = await browser.newContext({
+        viewport: screenshotViewport,
+        deviceScaleFactor: DEVICE_SCALE_FACTOR,
+        locale: LOCALE,
+        timezoneId: TIMEZONE_ID,
+      });
+      page = await openStoryPage(context);
+    }
 
     const isComponentStory = story.title
       .toLowerCase()
@@ -432,23 +551,28 @@ if (errors.length > 0) {
   }
 }
 
-// 5. Delete stale screenshots
-const deleted: string[] = [];
-spinner = ora("Cleaning up stale screenshots...").start();
-const existingWebps = fs.existsSync(OUTPUT_DIR)
-  ? fs.readdirSync(OUTPUT_DIR).filter((f) => f.endsWith(".webp"))
-  : [];
-for (const file of existingWebps) {
-  if (!currentFilenames.has(file)) {
-    fs.unlinkSync(path.join(OUTPUT_DIR, file));
-    deleted.push(file);
-    console.log(chalk.red(`  ✓ ${chalk.white.bgRed("  Deleted  ")} ${file}`));
-  }
-}
-if (deleted.length > 0) {
-  spinner.succeed(`Deleted ${deleted.length} stale screenshot(s)`);
+// 5. Delete stale screenshots. Skip this when a title filter is active: only
+// the matched stories were captured, so every other file would look "stale".
+if (titleFilter) {
+  ora().info("Skipped stale cleanup (title filter active)");
 } else {
-  spinner.succeed("No stale screenshots to delete");
+  const deleted: string[] = [];
+  spinner = ora("Cleaning up stale screenshots...").start();
+  const existingWebps = fs.existsSync(OUTPUT_DIR)
+    ? fs.readdirSync(OUTPUT_DIR).filter((f) => f.endsWith(".webp"))
+    : [];
+  for (const file of existingWebps) {
+    if (!currentFilenames.has(file)) {
+      fs.unlinkSync(path.join(OUTPUT_DIR, file));
+      deleted.push(file);
+      console.log(chalk.red(`  ✓ ${chalk.white.bgRed("  Deleted  ")} ${file}`));
+    }
+  }
+  if (deleted.length > 0) {
+    spinner.succeed(`Deleted ${deleted.length} stale screenshot(s)`);
+  } else {
+    spinner.succeed("No stale screenshots to delete");
+  }
 }
 
 // 6. Write manifest
@@ -466,7 +590,7 @@ const getDimensions = async (filename: string) => {
   return { width: width!, height: height! };
 };
 
-const manifestArray = await Promise.all(
+const generatedEntries = await Promise.all(
   [...byStory.entries()].map(async ([storyTitle, themes]) => ({
     storyTitle,
     light: themes.light
@@ -477,6 +601,23 @@ const manifestArray = await Promise.all(
       : undefined,
   })),
 );
+
+// A filtered run only regenerated some stories, so merge into the existing
+// manifest instead of replacing it — keep every prior entry and overwrite the
+// ones we just captured.
+const manifestByStory = new Map<string, (typeof generatedEntries)[number]>();
+if (titleFilter && fs.existsSync(MANIFEST_PATH)) {
+  const { screenshots: existing } = (await import(
+    pathToFileURL(MANIFEST_PATH).href
+  )) as { screenshots: (typeof generatedEntries)[number][] };
+  for (const entry of existing) manifestByStory.set(entry.storyTitle, entry);
+}
+for (const entry of generatedEntries) {
+  manifestByStory.set(entry.storyTitle, entry);
+}
+// Map iteration preserves insertion order, so existing entries stay where they
+// were (overwriting a key keeps its position) and newly added stories append.
+const manifestArray = [...manifestByStory.values()];
 
 const manifestContent = `// @generated by dashboard-storybook/scripts/generate-docs-screenshots.ts
 // Do not edit manually.

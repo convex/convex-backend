@@ -10,20 +10,20 @@
   },
   "dependencies": {
     "convex": "workspace:*",
-    "next": "^15.5.18",
+    "next": "^15.5.28",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "@tailwindcss/postcss": "^4.1.11",
-    "postcss": "^8.5.10",
-    "tailwindcss": "^4.1.11"
+    "@tailwindcss/postcss": "^4.3.3",
+    "postcss": "^8.5.18",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "workspace:*",
     "@eslint/js": "~9.39.0",
     "@eslint/eslintrc": "^3",
     "@types/node": "^20",
-    "@types/react": "^18.3.17",
-    "@types/react-dom": "^18.3.1",
+    "@types/react": "^19.2.4",
+    "@types/react-dom": "^19.2.3",
     "eslint": "^9.37.0",
     "eslint-config-next": "^15.5.4",
     "typescript": "^5.1.3"

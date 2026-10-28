@@ -8,17 +8,14 @@ pub mod types;
 
 use types::PersistedBackendState;
 
-pub static BACKEND_STATE_TABLE: TableName = TableName::const_new("_backend_state");
+pub const BACKEND_STATE_TABLE: TableName = TableName::const_new("_backend_state");
 
 pub struct BackendStateTable;
 impl SystemTable for BackendStateTable {
     type Metadata = PersistedBackendState;
 
     const FOR_MIGRATION: bool = true;
-
-    fn table_name() -> &'static TableName {
-        &BACKEND_STATE_TABLE
-    }
+    const TABLE_NAME: TableName = BACKEND_STATE_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]

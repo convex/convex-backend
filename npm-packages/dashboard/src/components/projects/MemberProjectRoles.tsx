@@ -11,7 +11,7 @@ import {
   useUpdateProjectRoles,
   useCurrentProjectRoles,
 } from "api/roles";
-import { TeamMember } from "generatedApi";
+import { TeamMember } from "@convex-dev/platform/managementApi";
 import { Link } from "@ui/Link";
 import { useState } from "react";
 import sortBy from "lodash/sortBy";

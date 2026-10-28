@@ -7,35 +7,35 @@ import Head from "next/head";
 import React from "react";
 import { TeamResponse } from "generatedApi";
 import { SidebarLink } from "@common/elements/Sidebar";
-import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+import {
+  TEAM_SETTINGS_PAGE_ICONS,
+  TeamSettingsPage,
+} from "layouts/teamSettingsPages";
 
 export function TeamSettingsLayout({
   page: selectedPage,
   Component,
   title,
+  fillHeight = false,
 }: {
-  page:
-    | "general"
-    | "members"
-    | "billing"
-    | "usage"
-    | "audit-log"
-    | "referrals"
-    | "access-tokens"
-    | "applications"
-    | "custom-roles"
-    | "sso";
+  page: TeamSettingsPage;
   Component: React.FunctionComponent<{ team: TeamResponse }>;
   title: string;
+  /**
+   * Hands the page a definite height rather than one that grows with its
+   * content, for a page that scrolls regions of its own: without it their
+   * `h-full` resolves against an auto height and they grow instead of
+   * scrolling. Falls back to growing where the height above is itself
+   * indefinite, as it is when the sidebar stacks on a narrow screen.
+   */
+  fillHeight?: boolean;
 }) {
   const selectedTeam = useCurrentTeam();
 
   const entitlements = useTeamEntitlements(selectedTeam?.id);
   const auditLogsEnabled = entitlements?.auditLogRetentionDays !== 0;
 
-  const { singleSignOn, customRoles } = useLaunchDarkly();
-
-  const pages = [
+  const pages: TeamSettingsPage[] = [
     "general",
     "members",
     "billing",
@@ -64,8 +64,8 @@ export function TeamSettingsLayout({
           <aside
             className={classNames(
               "flex sm:flex-col gap-1",
-              "min-w-40 sm:w-fit",
-              "min-h-fit",
+              "min-w-40 sm:w-68",
+              "h-fit sm:h-auto sm:min-h-fit",
               "px-3 py-2",
               "overflow-x-auto scrollbar-none",
               "bg-background-secondary",
@@ -78,6 +78,7 @@ export function TeamSettingsLayout({
                 href={`/t/${selectedTeam?.slug}/settings/${
                   page === "general" ? "" : page
                 }`}
+                Icon={TEAM_SETTINGS_PAGE_ICONS[page]}
                 isActive={page === selectedPage}
                 key={page}
               >
@@ -87,34 +88,38 @@ export function TeamSettingsLayout({
             <SidebarLink
               isActive={selectedPage === "audit-log"}
               href={`/t/${selectedTeam?.slug}/settings/audit-log`}
+              Icon={TEAM_SETTINGS_PAGE_ICONS["audit-log"]}
               disabled={!auditLogsEnabled}
               proBadge={!auditLogsEnabled}
             >
               Audit Log
             </SidebarLink>
-            {customRoles && (
-              <SidebarLink
-                isActive={selectedPage === "custom-roles"}
-                href={`/t/${selectedTeam?.slug}/settings/custom-roles`}
-              >
-                Custom Roles
-              </SidebarLink>
-            )}
-            {singleSignOn && (
-              <SidebarLink
-                isActive={selectedPage === "sso"}
-                href={`/t/${selectedTeam?.slug}/settings/sso`}
-              >
-                Single Sign-On
-              </SidebarLink>
-            )}
+            <SidebarLink
+              isActive={selectedPage === "custom-roles"}
+              href={`/t/${selectedTeam?.slug}/settings/custom-roles`}
+              Icon={TEAM_SETTINGS_PAGE_ICONS["custom-roles"]}
+            >
+              Custom Roles
+            </SidebarLink>
+            <SidebarLink
+              isActive={selectedPage === "team-authentication"}
+              href={`/t/${selectedTeam?.slug}/settings/team-authentication`}
+              Icon={TEAM_SETTINGS_PAGE_ICONS["team-authentication"]}
+            >
+              Team Authentication
+            </SidebarLink>
           </aside>
           <div className="scrollbar w-full overflow-y-auto">
-            <div className="flex h-full max-w-[80rem] flex-col gap-6 p-6">
+            <div
+              className={classNames(
+                "flex max-w-7xl flex-col gap-6 p-6",
+                fillHeight ? "h-full" : "min-h-full",
+              )}
+            >
               {selectedTeam ? (
                 <Component team={selectedTeam} key={selectedTeam.id} />
               ) : (
-                <Loading className="h-[50rem]" fullHeight={false} />
+                <Loading className="h-200" fullHeight={false} />
               )}
             </div>
           </div>

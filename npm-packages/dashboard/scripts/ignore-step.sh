@@ -13,5 +13,5 @@ elif [[ "${VERCEL_GIT_COMMIT_REF}" == "release" ]] ; then
     exit 1;
 else
     # Only build if dashboard packages or design system changed.
-    git diff HEAD^ HEAD --quiet ../dashboard ../dashboard-common ../dashboard-storybook ../@convex-dev/design-system && echo "🛑 - Build canceled"
+    git diff HEAD^ HEAD --quiet ../dashboard ../dashboard-common ../dashboard-self-hosted ../dashboard-storybook ../@convex-dev/design-system && echo "🛑 - Build canceled"
 fi

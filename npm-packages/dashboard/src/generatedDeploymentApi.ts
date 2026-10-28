@@ -133,8 +133,8 @@ export interface components {
             componentId?: string | null;
         };
         DeleteTableArgs: {
-            componentId?: string | null;
             tableNames: string[];
+            componentId?: string | null;
         };
         GetIndexesResponse: {
             indexes: Record<string, never>[];

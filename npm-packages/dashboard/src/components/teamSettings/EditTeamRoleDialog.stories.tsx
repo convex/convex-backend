@@ -1,6 +1,9 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
-import type { CustomRoleResponse } from "@convex-dev/platform/managementApi";
-import { TeamMember, TeamResponse } from "generatedApi";
+import type {
+  CustomRoleResponse,
+  TeamMember,
+} from "@convex-dev/platform/managementApi";
+import { TeamResponse } from "generatedApi";
 
 import { EditTeamRoleDialog } from "./EditTeamRoleDialog";
 
@@ -86,7 +89,6 @@ export const DeveloperMember: Story = {
     member: developer,
     customRoles,
     customRolesEnabled: true,
-    customRolesVisible: true,
     onSave,
     onClose,
   },
@@ -98,7 +100,6 @@ export const AdminMember: Story = {
     member: admin,
     customRoles,
     customRolesEnabled: true,
-    customRolesVisible: true,
     onSave,
     onClose,
   },
@@ -110,7 +111,6 @@ export const CustomMember: Story = {
     member: customMember,
     customRoles,
     customRolesEnabled: true,
-    customRolesVisible: true,
     onSave,
     onClose,
   },
@@ -129,7 +129,6 @@ export const AllCustomRolesAssigned: Story = {
     },
     customRoles,
     customRolesEnabled: true,
-    customRolesVisible: true,
     onSave,
     onClose,
   },
@@ -141,19 +140,6 @@ export const EntitlementOff: Story = {
     member: developer,
     customRoles: [],
     customRolesEnabled: false,
-    customRolesVisible: true,
-    onSave,
-    onClose,
-  },
-};
-
-export const FlagOff: Story = {
-  args: {
-    team,
-    member: developer,
-    customRoles: [],
-    customRolesEnabled: false,
-    customRolesVisible: false,
     onSave,
     onClose,
   },
@@ -165,7 +151,6 @@ export const NoCustomRolesExist: Story = {
     member: { ...customMember, customRoles: [] },
     customRoles: [],
     customRolesEnabled: true,
-    customRolesVisible: true,
     onSave,
     onClose,
   },

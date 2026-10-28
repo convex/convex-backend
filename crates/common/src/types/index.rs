@@ -5,19 +5,24 @@ use std::{
         Debug,
         Display,
     },
+    num::NonZeroU32,
     str::FromStr,
 };
 
 use anyhow::Context;
 use compact_str::CompactString;
-use sync_types::identifier::{
-    check_valid_identifier,
-    MIN_IDENTIFIER,
+use sync_types::{
+    identifier::{
+        check_valid_identifier,
+        MIN_IDENTIFIER,
+    },
+    Timestamp,
 };
 use value::{
     heap_size::HeapSize,
     identifier::is_valid_identifier,
     FieldName,
+    InternalDocumentId,
     InternalId,
     ResolvedDocumentId,
     TableName,
@@ -354,6 +359,76 @@ impl IndexId {
     }
 }
 
+/// The compact identifier used by a persistence implementation to store an
+/// index's rows.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct PersistenceIndexId(NonZeroU32);
+
+impl PersistenceIndexId {
+    pub const FIRST: Self = Self(NonZeroU32::MIN);
+
+    pub const fn new(value: u32) -> Option<Self> {
+        match NonZeroU32::new(value) {
+            Some(value) => Some(Self(value)),
+            None => None,
+        }
+    }
+
+    pub const fn value(self) -> u32 {
+        self.0.get()
+    }
+}
+
+impl TryFrom<u32> for PersistenceIndexId {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u32) -> anyhow::Result<Self> {
+        Self::new(value).context("persistence index IDs must be nonzero")
+    }
+}
+
+/// A database index as persistence identifies it: the `_index` document's ID
+/// and the persistence index ID its metadata held at the snapshot being read,
+/// so a layout keyed by that ID never resolves it from newer metadata. Text and
+/// vector indexes have no persistence rows and so no ref.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct IndexRef {
+    id: IndexId,
+    /// `None` until the index's metadata is assigned one, or without metadata.
+    /// Non-optional once every index has one and every ref comes from metadata.
+    persistence_index_id: Option<PersistenceIndexId>,
+}
+
+impl IndexRef {
+    /// A ref built without metadata, which a layout keyed by the persistence
+    /// index ID rejects. Its callers are the fallback for a funrun predating
+    /// the ID on the wire and `db_import`, whose exports carry none; when both
+    /// are gone, so is this, and the ID stops being optional.
+    pub const fn unresolved(id: IndexId) -> Self {
+        Self {
+            id,
+            persistence_index_id: None,
+        }
+    }
+
+    /// Reassembles a ref whose parts came from one ref or one metadata
+    /// revision.
+    pub const fn from_parts(id: IndexId, persistence_index_id: Option<PersistenceIndexId>) -> Self {
+        Self {
+            id,
+            persistence_index_id,
+        }
+    }
+
+    pub const fn id(&self) -> IndexId {
+        self.id
+    }
+
+    pub const fn persistence_index_id(&self) -> Option<PersistenceIndexId> {
+        self.persistence_index_id
+    }
+}
+
 // TODO: this encoding is rarely used and confusing
 impl From<IndexId> for String {
     fn from(index_id: IndexId) -> String {
@@ -368,15 +443,42 @@ impl FromStr for IndexId {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum IndexWriteMode {
+    /// Index backfill has inserted all existing index entries. In persistence
+    /// v6, `DatabaseIndexUpdate::prev` (copied to
+    /// `PersistenceIndexEntry::prev`) identifies the row to remove from the
+    /// current index and store in history, using its `ts` and `document_id`
+    /// for the update's `index` and `key`.
+    ScanComplete,
+    /// Index backfill is still inserting entries, so `prev` may not exist in
+    /// persistence yet. Persistence v6 records deletions for post-scan
+    /// reconciliation instead of verifying `prev`.
+    Scanning,
+}
+
 #[derive(Eq, PartialEq, Clone, Debug, Ord, PartialOrd)]
 pub struct DatabaseIndexUpdate {
-    // id of the index document where the index is defined.
-    pub index_id: IndexId,
+    pub mode: IndexWriteMode,
+    pub index: IndexRef,
 
     pub key: IndexKey,
     pub value: DatabaseIndexValue,
+    /// The entry this update supersedes: the old document's entry for the same
+    /// key, when it produced one.
+    pub prev: Option<PrevIndexEntry>,
 
     pub is_system_index: bool,
+}
+
+/// An index entry a newer one supersedes: the same key's previous revision. A
+/// layout that keeps one live row per key moves that row into its history from
+/// these values instead of reading it back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PrevIndexEntry {
+    pub ts: Timestamp,
+    pub document_id: InternalDocumentId,
 }
 
 #[derive(Eq, PartialEq, Clone, Debug, Ord, PartialOrd)]

@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 import { DailyMetric, DailyPerTagMetrics } from "hooks/usageMetrics";
 import { Bar, Rectangle, ReferenceArea } from "recharts";
-import { useMemo } from "react";
+import { ReactNode, useMemo } from "react";
 import groupBy from "lodash/groupBy";
 import sumBy from "lodash/sumBy";
 import { toNumericUTC } from "@common/lib/format";
@@ -22,14 +22,17 @@ export function UsageStackedBarChart({
   categoryRenames = {},
   quantityType = "unit",
   isGauge = false,
+  showEmptyCategories = false,
   selectedDate,
   setSelectedDate,
+  note,
 }: {
   rows: DailyPerTagMetrics[];
   categories: {
     [tag: string]: {
       name: string;
       color: string;
+      tip?: string;
     };
   };
   // Merge multiple categories together (e.g. to count cached and uncached queries together)
@@ -37,8 +40,14 @@ export function UsageStackedBarChart({
   quantityType?: QuantityType;
   /** If true, total shows the most recent day's value instead of summing all days */
   isGauge?: boolean;
+  /**
+   * List every category in the legend, including ones with a zero value. Use
+   * for fixed category sets where the full breakdown should always be visible.
+   */
+  showEmptyCategories?: boolean;
   selectedDate: number | null;
   setSelectedDate: (date: number | null) => void;
+  note?: ReactNode;
 }) {
   const chartData = useMemo(() => {
     const filledData = [];
@@ -110,18 +119,20 @@ export function UsageStackedBarChart({
       if (selectedDate !== null) {
         const dataPoint = chartData.find((d) => d.dateNumeric === selectedDate);
         if (dataPoint) {
-          return categoryEntries.map(([tag, { name, color }]) => ({
+          return categoryEntries.map(([tag, { name, color, tip }]) => ({
             name,
             value: ((dataPoint as any)[tag] as number) || 0,
             sortValue: totalByTag[tag] || 0,
             color,
+            tip,
           }));
         }
       }
-      return categoryEntries.map(([tag, { name, color }]) => ({
+      return categoryEntries.map(([tag, { name, color, tip }]) => ({
         name,
         value: totalByTag[tag] || 0,
         color,
+        tip,
       }));
     }
 
@@ -182,7 +193,6 @@ export function UsageStackedBarChart({
                 }
               }}
               shape={(props: any) => {
-                // eslint-disable-next-line react/prop-types
                 const { dateNumeric, name: categoryName } = props;
                 if (
                   typeof dateNumeric !== "number" ||
@@ -214,7 +224,13 @@ export function UsageStackedBarChart({
         </DailyChart>
       </div>
 
-      <InlineDetailList items={detailItems} quantityType={quantityType} />
+      {note}
+
+      <InlineDetailList
+        items={detailItems}
+        quantityType={quantityType}
+        showZeroValues={showEmptyCategories}
+      />
     </div>
   );
 }

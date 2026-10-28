@@ -9,26 +9,44 @@ import {
 } from "@headlessui/react";
 import classNames from "classnames";
 import { ClosePanelButton } from "@ui/ClosePanelButton";
+import { cn } from "@ui/cn";
 
 type ModalProps = {
   onClose: () => void;
+  // Runs on a close request (Escape, overlay click, or close button) before the
+  // exit animation starts. Return false to veto the close, e.g. to keep the
+  // modal open after the user cancels a "discard unsaved changes?" prompt. The
+  // veto must happen here rather than in onClose because onClose only fires
+  // after the modal has already animated shut.
+  onBeforeClose?: () => boolean;
+  // Ignores overlay clicks and Escape so the modal only closes through the
+  // close button or controls in `children`. Use when accidentally dismissing
+  // would lose information the user can't get back.
+  requireExplicitClose?: boolean;
   title: string | ReactNode;
   description?: string | ReactNode;
   children: ReactNode;
   size?: "sm" | "md" | "lg";
+  contentClassName?: string;
 };
 
 export function Modal({
   onClose,
+  onBeforeClose,
+  requireExplicitClose = false,
   title,
   description,
   children,
   size = "sm",
+  contentClassName,
 }: ModalProps) {
   const [open, setOpen] = useState(true);
   const handleClose = useCallback(() => {
+    if (onBeforeClose && !onBeforeClose()) {
+      return;
+    }
     setOpen(false);
-  }, [setOpen]);
+  }, [onBeforeClose]);
 
   return (
     <Transition show={open} appear afterLeave={onClose}>
@@ -38,7 +56,7 @@ export function Modal({
         data-testid="modal"
         className="fixed inset-0 z-40 overflow-hidden"
         open // Real openness status is controlled by Transition above
-        onClose={handleClose}
+        onClose={requireExplicitClose ? () => {} : handleClose}
       >
         <div className="flex sm:min-h-screen sm:items-center sm:justify-center sm:px-4">
           <TransitionChild
@@ -93,7 +111,12 @@ export function Modal({
               </div>
 
               {/* Contents */}
-              <div className="mx-6 mb-12 max-h-[80dvh] overflow-y-auto sm:mb-6">
+              <div
+                className={cn(
+                  "mx-6 mb-12 max-h-[80dvh] overflow-y-auto sm:mb-6",
+                  contentClassName,
+                )}
+              >
                 {children}
               </div>
             </DialogPanel>

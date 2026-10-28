@@ -1,6 +1,7 @@
 use metrics::{
     log_counter,
     log_counter_with_labels,
+    log_distribution,
     log_gauge,
     prometheus::{
         VMHistogram,
@@ -38,6 +39,22 @@ pub fn log_index_cache_cleared() {
 }
 
 register_convex_histogram!(
+    TRANSACTION_INDEX_CACHE_MAX_SIZE_BYTES,
+    "Size of transaction cache before pruning to only intervals read"
+);
+pub fn log_transaction_index_cache_size(bytes: usize) {
+    log_distribution(&TRANSACTION_INDEX_CACHE_MAX_SIZE_BYTES, bytes as f64);
+}
+
+register_convex_histogram!(
+    TRANSACTION_INDEX_CACHE_RETAINED_SIZE_BYTES,
+    "Size of transaction cache after pruning to just the intervals read"
+);
+pub fn log_transaction_index_cache_retained_size(bytes: usize) {
+    log_distribution(&TRANSACTION_INDEX_CACHE_RETAINED_SIZE_BYTES, bytes as f64);
+}
+
+register_convex_histogram!(
     INDEX_PAGE_SECONDS,
     "Time to execute IndexReader::index_page in seconds",
     &["source", "status"]
@@ -62,6 +79,14 @@ register_convex_counter!(
 );
 pub fn log_index_cache_invalidation() {
     log_counter(&INDEX_CACHE_INVALIDATION_TOTAL, 1);
+}
+
+register_convex_counter!(
+    INDEX_CACHE_SIZE_EVICTION_TOTAL,
+    "Count of IndexCache entries evicted because the cache exceeded its capacity"
+);
+pub fn log_index_cache_size_eviction() {
+    log_counter(&INDEX_CACHE_SIZE_EVICTION_TOTAL, 1);
 }
 
 register_convex_histogram!(

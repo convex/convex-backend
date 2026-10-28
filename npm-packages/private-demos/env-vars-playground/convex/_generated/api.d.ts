@@ -48,4 +48,6 @@ export declare const internal: FilterApi<
 
 export declare const components: {
   fakeComponent: import("../../fakecomponent/_generated/component.js").ComponentApi<"fakeComponent">;
+  optionalComponent: import("../../optionalcomponent/_generated/component.js").ComponentApi<"optionalComponent">;
+  optionalComponentWithEnv: import("../../optionalcomponent/_generated/component.js").ComponentApi<"optionalComponentWithEnv">;
 };

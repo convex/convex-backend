@@ -8,7 +8,11 @@ import { useState, useEffect, useCallback } from "react";
 import { TeamResponse } from "generatedApi";
 import { useCurrentTheme } from "@common/lib/useCurrentTheme";
 
-const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLIC_KEY!);
+// `loadStripe` rejects if the publishable key is missing (e.g. in Storybook,
+// tests, or self-hosted builds without billing), so only initialize when it's set.
+const stripePromise = process.env.NEXT_PUBLIC_STRIPE_PUBLIC_KEY
+  ? loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLIC_KEY)
+  : Promise.resolve(null);
 
 export function useStripePaymentSetup(
   team: TeamResponse,
@@ -106,21 +110,6 @@ export function useStripePaymentSetup(
     },
   };
 
-  // Retrives the setup intent from stripe
-  const retrieveSetupIntent = useCallback(async () => {
-    const stripe = await stripePromise;
-    const result = stripe && (await stripe.retrieveSetupIntent(clientSecret));
-    if (!result || !result.setupIntent) {
-      return null;
-    }
-    const { payment_method } = result.setupIntent;
-    if (payment_method !== null && typeof payment_method !== "string") {
-      throw new Error(`Unexpected payment method type: ${payment_method}`);
-    }
-    await setPaymentMethod(payment_method || undefined);
-    return result.setupIntent;
-  }, [clientSecret, setPaymentMethod]);
-
   // Validates payment details and saves a payment method in stripe.
   const confirmSetup = useCallback(
     async (elements: StripeElements) => {
@@ -159,7 +148,6 @@ export function useStripePaymentSetup(
     resetClientSecret: () => {
       setClientSecret("");
     },
-    retrieveSetupIntent,
     confirmSetup,
   };
 }
@@ -169,9 +157,8 @@ export function useStripeAddressSetup(
   hasAdminPermissions: boolean,
 ) {
   // Reuse the existing stripe initialization for collecting the payment method,
-  // the main difference is that we don't need the retrieveSetupIntent and
-  // confirmSetup functions so we pass in dummy values for paymentMethod and
-  // setPaymentMethod.
+  // the main difference is that we don't need the confirmSetup function so we
+  // pass in dummy values for paymentMethod and setPaymentMethod.
   const { options } = useStripePaymentSetup(
     team,
     undefined,

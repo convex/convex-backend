@@ -148,18 +148,6 @@ impl ComponentRegistry {
             .with_context(|| format!("Component {component_id:?} not found"))
     }
 
-    pub fn component_path_from_document_id(
-        &self,
-        table_mapping: &TableMapping,
-        id: ResolvedDocumentId,
-        reads: &mut TransactionReadSet,
-    ) -> anyhow::Result<Option<ComponentPath>> {
-        let tablet_id = id.tablet_id;
-        let table_namespace = table_mapping.tablet_namespace(tablet_id)?;
-        let component_id = ComponentId::from(table_namespace);
-        Ok(self.get_component_path(component_id, reads))
-    }
-
     pub fn all_component_paths(
         &self,
         reads: &mut TransactionReadSet,

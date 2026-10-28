@@ -10,7 +10,7 @@
     "commander": "^14.0.3"
   },
   "scripts": {
-    "postinstall": "puppeteer browsers install chrome",
+    "postinstall": "node ./install-browser.mjs",
     "build": "tsc",
     "test-relational-data-modeling": "node ./dist/relational-data-modeling.js",
     "test-users-and-auth": "node ./dist/users-and-auth.js",

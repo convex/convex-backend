@@ -33,14 +33,25 @@ const main = async () => {
 
     // After successful login, navigate to the OAuth authorization URL
     console.log(`Navigating to OAuth URL: ${authUrl}`);
-    let gotoResponse = await page.goto(authUrl);
+    // `page.goto` throws net::ERR_ABORTED if the login redirect chain is
+    // still in flight and supersedes our navigation, so retry thrown errors
+    // as well as error statuses.
+    const gotoAuthUrl = async () => {
+      try {
+        return await page.goto(authUrl);
+      } catch (error) {
+        console.log(`OAuth page navigation failed: ${error}`);
+        return null;
+      }
+    };
+    let gotoResponse = await gotoAuthUrl();
     let retries = 0;
     while ((!gotoResponse || gotoResponse.status() >= 400) && retries < 2) {
       console.log(
         `OAuth page returned status ${gotoResponse?.status()}, retrying (attempt ${retries + 1})...`,
       );
       await sleep(3000);
-      gotoResponse = await page.goto(authUrl);
+      gotoResponse = await gotoAuthUrl();
       retries++;
     }
 

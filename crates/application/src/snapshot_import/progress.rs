@@ -9,12 +9,12 @@ use database::Database;
 use keybroker::Identity;
 use model::snapshot_imports::SnapshotImportModel;
 use usage_tracking::FunctionUsageTracker;
-use value::ResolvedDocumentId;
+use value::DeveloperDocumentId;
 
 pub async fn best_effort_update_progress_message<RT: Runtime>(
     database: &Database<RT>,
     identity: &Identity,
-    import_id: ResolvedDocumentId,
+    import_id: DeveloperDocumentId,
     progress_message: String,
     component_path: &ComponentPath,
     display_table_name: &TableName,
@@ -49,7 +49,7 @@ pub async fn best_effort_update_progress_message<RT: Runtime>(
 pub async fn add_checkpoint_message<RT: Runtime>(
     database: &Database<RT>,
     identity: &Identity,
-    import_id: ResolvedDocumentId,
+    import_id: DeveloperDocumentId,
     checkpoint_message: String,
     component_path: &ComponentPath,
     display_table_name: &TableName,

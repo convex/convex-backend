@@ -9,7 +9,7 @@ use fivetran_common::fivetran_sdk::{
 };
 
 use crate::{
-    api_types::selection::DEFAULT_FIVETRAN_SCHEMA_NAME,
+    conversions::selection::DEFAULT_FIVETRAN_SCHEMA_NAME,
     convex_api::{
         ComponentPath,
         FieldName,

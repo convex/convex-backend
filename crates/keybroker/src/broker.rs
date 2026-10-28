@@ -4,6 +4,7 @@ use std::{
         HashMap,
     },
     fmt,
+    sync::Arc,
     time::{
         Duration,
         SystemTime,
@@ -15,12 +16,17 @@ use biscuit::JWT;
 use chrono::DateTime;
 pub use common::types::SystemKey;
 use common::{
+    audit_log_lines::ConvexActorVar,
     components::ComponentId,
     identity::{
         IdentityCacheKey,
         InertIdentity,
     },
     index::IndexKeyBytes,
+    knobs::{
+        ADMIN_IDENTITY_EXPIRATION_DELAY,
+        ADMIN_IDENTITY_REVALIDATION_DELAY,
+    },
     query::{
         Cursor,
         CursorPosition,
@@ -35,6 +41,7 @@ use common::{
         format_admin_key,
         remove_type_prefix_from_deployment_name,
         split_admin_key,
+        AccessTokenId,
         ActionCallbackToken,
         AdminKey,
         MemberId,
@@ -75,6 +82,7 @@ use pb::{
             StoreFile as StoreFileProto,
         },
         AdminKey as AdminKeyProto,
+        ExportDownloadToken as ExportDownloadTokenProto,
         StorageToken as StorageTokenProto,
     },
     convex_query_journal::InstanceQueryJournal as InstanceQueryJournalProto,
@@ -91,6 +99,7 @@ use sync_types::{
 };
 
 use crate::{
+    deployment_jwt::DeploymentJwtKeys,
     encryptor::{
         DeterministicEncryptor,
         Purpose,
@@ -103,7 +112,7 @@ use crate::{
         log_store_file_auth_expired,
     },
     operations::{
-        bad_admin_key_error,
+        operations_for_deploy_key,
         DeploymentOp,
     },
     secret::DeploymentSecret,
@@ -112,6 +121,7 @@ use crate::{
 const ACTION_KEY_VERSION: u8 = 2;
 const ADMIN_KEY_VERSION: u8 = 1;
 const CURSOR_VERSION: u8 = 7;
+const EXPORT_DOWNLOAD_KEY_VERSION: u8 = 1;
 const STORE_FILE_AUTHZ_VERSION: u8 = 1;
 const QUERY_JOURNAL_VERSION: u8 = 7;
 
@@ -125,8 +135,11 @@ pub struct KeyBroker {
     admin_key_encryptor: RandomEncryptor,
     action_callback_encryptor: RandomEncryptor,
     cursor_encryptor: DeterministicEncryptor,
+    data_sync_encryptor: RandomEncryptor,
+    export_download_encryptor: RandomEncryptor,
     journal_encryptor: RandomEncryptor,
     store_file_encryptor: RandomEncryptor,
+    deployment_jwt_keys: DeploymentJwtKeys,
 }
 
 // This enum encodes a successful authentication decision, and its nontrivial
@@ -141,7 +154,7 @@ pub enum Identity {
     User(UserIdentity),
     // ActingUser keeps track of the ID of the admin acting as a user,
     // and that user's fake attributes
-    ActingUser(AdminIdentity, UserIdentityAttributes),
+    ActingUser(AdminIdentity, Arc<UserIdentityAttributes>),
     // Unknown(None) means no identity was provided.
     // Unknown(Some(error_message)) means an error occurred while parsing the identity.
     // We allow the request to go through, but keep the error to throw when code tries to
@@ -154,7 +167,7 @@ impl From<Identity> for AuthenticationToken {
         match i {
             Identity::User(identity) => AuthenticationToken::User(identity.original_token),
             Identity::ActingUser(identity, user) => {
-                AuthenticationToken::Admin(identity.key, Some(user))
+                AuthenticationToken::Admin(identity.key, Some(Arc::unwrap_or_clone(user)))
             },
             Identity::DeploymentAdmin(identity) => AuthenticationToken::Admin(identity.key, None),
             _ => AuthenticationToken::None,
@@ -162,11 +175,13 @@ impl From<Identity> for AuthenticationToken {
     }
 }
 
-impl From<Identity> for pb::convex_identity::UncheckedIdentity {
-    fn from(i: Identity) -> Self {
+impl TryFrom<Identity> for pb::convex_identity::UncheckedIdentity {
+    type Error = anyhow::Error;
+
+    fn try_from(i: Identity) -> anyhow::Result<Self> {
         let identity = match i {
             Identity::DeploymentAdmin(admin_identity) => {
-                UncheckedIdentityProto::AdminIdentity(admin_identity.into())
+                UncheckedIdentityProto::AdminIdentity(admin_identity.try_into()?)
             },
             Identity::System(_) => UncheckedIdentityProto::System(()),
             Identity::User(user_identity) => {
@@ -174,18 +189,28 @@ impl From<Identity> for pb::convex_identity::UncheckedIdentity {
             },
             Identity::ActingUser(admin_identity, attributes) => {
                 UncheckedIdentityProto::ActingUser(ActingUser {
-                    admin_identity: Some(admin_identity.into()),
-                    attributes: Some(attributes.into()),
+                    admin_identity: Some(admin_identity.try_into()?),
+                    attributes: Some(Arc::unwrap_or_clone(attributes).into()),
                 })
             },
             Identity::Unknown(error_message) => UncheckedIdentityProto::Unknown(UnknownIdentity {
                 error_message: error_message.map(|e| e.into()),
             }),
         };
-        Self {
+        Ok(Self {
             identity: Some(identity),
-        }
+        })
     }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum IdentityValidity {
+    /// Identity is valid
+    Valid {
+        /// Identity is valid, but needs revalidation soon
+        needs_revalidation_soon: bool,
+    },
+    Invalid,
 }
 
 impl Identity {
@@ -212,7 +237,10 @@ impl Identity {
                 )?;
                 let attributes =
                     attributes.ok_or_else(|| anyhow::anyhow!("Missing user attributes"))?;
-                Ok(Identity::ActingUser(admin_identity, attributes.try_into()?))
+                Ok(Identity::ActingUser(
+                    admin_identity,
+                    Arc::new(attributes.try_into()?),
+                ))
             },
             UncheckedIdentityProto::Unknown(UnknownIdentity { error_message }) => Ok(
                 Identity::Unknown(error_message.map(|e| e.try_into()).transpose()?),
@@ -223,6 +251,29 @@ impl Identity {
     pub fn tag(&self) -> StaticMetricLabel {
         InertIdentity::from(self.clone()).tag()
     }
+
+    pub fn check_valid(&self, check_at: SystemTime) -> IdentityValidity {
+        match self {
+            Identity::DeploymentAdmin(admin_identity) | Identity::ActingUser(admin_identity, _) => {
+                if admin_identity.check_expired(check_at) == Err(AdminIdentityExpired) {
+                    IdentityValidity::Invalid
+                } else {
+                    let needs_revalidation_soon = admin_identity.check_expired(
+                        check_at + *ADMIN_IDENTITY_EXPIRATION_DELAY
+                            - *ADMIN_IDENTITY_REVALIDATION_DELAY,
+                    ) == Err(AdminIdentityExpired);
+                    IdentityValidity::Valid {
+                        needs_revalidation_soon,
+                    }
+                }
+            },
+            Identity::System(_) | Identity::User(_) | Identity::Unknown(_) => {
+                IdentityValidity::Valid {
+                    needs_revalidation_soon: false,
+                }
+            },
+        }
+    }
 }
 
 impl From<Identity> for InertIdentity {
@@ -231,13 +282,13 @@ impl From<Identity> for InertIdentity {
             Identity::DeploymentAdmin(i) => InertIdentity::DeploymentAdmin(i.deployment_name),
             Identity::System(_) => InertIdentity::System,
             Identity::Unknown(_) => InertIdentity::Unknown,
-            Identity::User(user) => InertIdentity::User(user.attributes.token_identifier),
+            Identity::User(user) => InertIdentity::User(user.attributes.token_identifier.clone()),
             Identity::ActingUser(identity, user) => match identity.principal {
                 AdminIdentityPrincipal::Member(member_id) => {
-                    InertIdentity::MemberActingUser(member_id, user.token_identifier)
+                    InertIdentity::MemberActingUser(member_id, user.token_identifier.clone())
                 },
                 AdminIdentityPrincipal::Team(team_id) => {
-                    InertIdentity::TeamActingUser(team_id, user.token_identifier)
+                    InertIdentity::TeamActingUser(team_id, user.token_identifier.clone())
                 },
             },
         }
@@ -271,7 +322,13 @@ impl Eq for Identity {}
 impl Identity {
     pub fn cache_key(&self) -> IdentityCacheKey {
         match self.clone() {
-            Identity::DeploymentAdmin(i) => IdentityCacheKey::DeploymentAdmin(i.deployment_name),
+            Identity::DeploymentAdmin(i) => IdentityCacheKey::DeploymentAdmin {
+                deployment_name: i.deployment_name,
+                // Include the allowed operations so that admins with different
+                // operation scopes don't share cached query results. `{op:?}`
+                // yields the stable variant name (e.g. "ViewBackups").
+                allowed_ops: i.allowed_ops.iter().map(|op| format!("{op:?}")).collect(),
+            },
             Identity::System(_) => IdentityCacheKey::System,
             Identity::Unknown(error_message) => {
                 IdentityCacheKey::Unknown(error_message.map(|e| e.to_string()))
@@ -305,6 +362,33 @@ impl Identity {
         matches!(self, Identity::ActingUser(..))
     }
 
+    pub fn convex_actor_var(&self) -> Option<ConvexActorVar> {
+        let admin_identity = match self {
+            Identity::DeploymentAdmin(admin_identity) | Identity::ActingUser(admin_identity, _) => {
+                admin_identity
+            },
+            Identity::System(_) | Identity::User(_) | Identity::Unknown(_) => return None,
+        };
+        // Mirror `model::deployment_audit_log::types::DeploymentAuditLogActor`: an
+        // identity backed by an access token is a `Token` (with the member that
+        // owns the token, if any), otherwise a member-authenticated identity is a
+        // `Member`.
+        let member_id = match admin_identity.principal {
+            AdminIdentityPrincipal::Member(member_id) => Some(member_id.0),
+            AdminIdentityPrincipal::Team(_) => None,
+        };
+        Some(match admin_identity.token_id {
+            Some(token_id) => ConvexActorVar::Token {
+                member_id,
+                token_id: token_id.0,
+                client_id: admin_identity.app_client_id.clone(),
+            },
+            None => ConvexActorVar::Member {
+                member_id: member_id?,
+            },
+        })
+    }
+
     pub fn is_user(&self) -> bool {
         matches!(self, Identity::User(..))
     }
@@ -320,6 +404,24 @@ impl Identity {
             };
         }
         None
+    }
+
+    pub fn token_id(&self) -> Option<AccessTokenId> {
+        match self {
+            Identity::DeploymentAdmin(admin_identity) | Identity::ActingUser(admin_identity, _) => {
+                admin_identity.token_id
+            },
+            _ => None,
+        }
+    }
+
+    pub fn app_client_id(&self) -> Option<String> {
+        match self {
+            Identity::DeploymentAdmin(admin_identity) | Identity::ActingUser(admin_identity, _) => {
+                admin_identity.app_client_id.clone()
+            },
+            _ => None,
+        }
     }
 
     pub fn instance_admin_principal(&self) -> Option<AdminIdentityPrincipal> {
@@ -346,28 +448,6 @@ impl Identity {
         }
         None
     }
-
-    /// Check that this identity is an admin allowed to perform `operation`.
-    /// System identities are always allowed. Admin identities are checked
-    /// against their allowed operations. All other identities are rejected.
-    pub fn require_operation(&self, operation: DeploymentOp) -> anyhow::Result<()> {
-        let admin_identity = match self {
-            Identity::System(_) => return Ok(()),
-            Identity::DeploymentAdmin(admin_identity) | Identity::ActingUser(admin_identity, _) => {
-                admin_identity
-            },
-            Identity::User(_) | Identity::Unknown(_) => {
-                return Err(bad_admin_key_error(self.instance_name()).into());
-            },
-        };
-        if !admin_identity.is_operation_allowed(operation) {
-            anyhow::bail!(ErrorMetadata::forbidden(
-                "Unauthorized",
-                format!("You do not have permission to perform this operation ({operation:?})."),
-            ));
-        }
-        Ok(())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -377,7 +457,7 @@ pub struct UserIdentity {
     // Might be useful for developers to know which provider authenticated this user.
     pub issuer: String,
     pub expiration: SystemTime,
-    pub attributes: UserIdentityAttributes,
+    pub attributes: Arc<UserIdentityAttributes>,
     // The original token this user identity was created from. This may either by an
     // OIDC JWT or a custom JWT.
     pub original_token: String,
@@ -397,7 +477,7 @@ impl From<UserIdentity> for pb::convex_identity::UserIdentity {
             subject: Some(subject),
             issuer: Some(issuer),
             expiration: Some(expiration.into()),
-            attributes: Some(attributes.into()),
+            attributes: Some(Arc::unwrap_or_clone(attributes).into()),
             original_token: Some(original_token),
         }
     }
@@ -450,6 +530,9 @@ impl UserIdentity {
         let mut custom_claims = BTreeMap::new();
         if let serde_json::Value::Object(ref properties) = payload.private {
             custom_claims = extract_custom_jwt_claims(properties);
+            // `fva` (factor verification age) grows over time, so it changes
+            // across token refreshes and would bust the query cache.
+            custom_claims.remove("fva");
         }
         Ok(UserIdentity {
             subject: subject.clone(),
@@ -461,7 +544,8 @@ impl UserIdentity {
                 issuer: Some(issuer.clone()),
                 custom_claims,
                 ..Default::default()
-            },
+            }
+            .into(),
             original_token,
         })
     }
@@ -480,9 +564,11 @@ impl UserIdentity {
         let issuer = claims.issuer().to_string();
         let mut custom_claims = BTreeMap::new();
         for claim in &claims.additional_claims().0 {
-            // Filter out standard claims and claims set by auth providers
             match claim.0.as_str() {
-                // Standard claims that we support: see https://docs.convex.dev/api/interfaces/server.UserIdentity
+                // Standard OIDC claims. These are surfaced as typed fields on
+                // the identity below (see the struct literal / `get_string!`
+                // calls and https://docs.convex.dev/api/interfaces/server.UserIdentity),
+                // so we don't also duplicate them into `custom_claims`.
                 "sub"
                 | "iss"
                 | "exp"
@@ -503,9 +589,15 @@ impl UserIdentity {
                 | "phone_number"
                 | "phone_number_verified"
                 | "address"
-                | "updated_at"
-                // Clerk claims: see https://clerk.com/docs/backend-requests/resources/session-tokens
-                | "jti" | "nbf" => {
+                | "updated_at" => {
+                    continue;
+                },
+                // Claims we deliberately drop because they vary across token
+                // refreshes and would bust the query cache. `jti`/`nbf` are JWT
+                // housekeeping; `fva` (Clerk factor verification age) grows over
+                // time. See
+                // https://clerk.com/docs/backend-requests/resources/session-tokens
+                "jti" | "nbf" | "fva" => {
                     continue;
                 },
                 _ => {
@@ -544,7 +636,8 @@ impl UserIdentity {
                     .map(|f| f.to_string()),
                 updated_at: claims.updated_at().map(|dt| dt.to_rfc3339()),
                 custom_claims,
-            },
+            }
+            .into(),
         })
     }
 
@@ -562,10 +655,11 @@ impl UserIdentity {
             .expiration
             .ok_or_else(|| anyhow::anyhow!("Missing expiration"))?
             .try_into()?;
-        let attributes = msg
-            .attributes
-            .ok_or_else(|| anyhow::anyhow!("Missing user identity attributes"))?
-            .try_into()?;
+        let attributes = Arc::new(
+            msg.attributes
+                .ok_or_else(|| anyhow::anyhow!("Missing user identity attributes"))?
+                .try_into()?,
+        );
         let original_token = msg
             .original_token
             .ok_or_else(|| anyhow::anyhow!("Missing original_token"))?
@@ -600,13 +694,27 @@ fn extract_custom_jwt_claims(
     result
 }
 
-use crate::operations::operations_for_deploy_key;
-
 #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub enum AdminIdentityPrincipal {
     Member(MemberId),
     Team(TeamId),
 }
+
+/// The actor that requested an export download token, recorded in the token
+/// so each download can be attributed (e.g. for audit logging): the member
+/// and/or the big brain access token (e.g. a deploy key) that authenticated
+/// the request. Both are `None` for system actors.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExportDownloadActor {
+    pub member_id: Option<MemberId>,
+    pub token_id: Option<AccessTokenId>,
+}
+
+/// AdminIdentityExpired - means that the identity has been around for too long
+/// and its claims are no longer valid.
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
+#[error("AdminIdentityExpired")]
+pub struct AdminIdentityExpired;
 
 // Token indicating the possessor has authenticated as the admin for an
 // instance.
@@ -622,19 +730,28 @@ pub struct AdminIdentity {
     is_read_only: bool,
     // Operations this identity is allowed to perform. Empty means all operations allowed.
     allowed_ops: Vec<DeploymentOp>,
+    validated_at: SystemTime,
+    token_id: Option<AccessTokenId>,
+    app_client_id: Option<String>,
 }
 
-impl From<AdminIdentity> for pb::convex_identity::AdminIdentity {
-    fn from(
-        AdminIdentity {
+impl TryFrom<AdminIdentity> for pb::convex_identity::AdminIdentity {
+    type Error = anyhow::Error;
+
+    fn try_from(identity: AdminIdentity) -> Result<Self, Self::Error> {
+        // Refuse to serialize an expired identity
+        identity.check_expired(SystemTime::now())?;
+        let AdminIdentity {
             deployment_name: instance_name,
             principal,
             key,
             is_read_only,
             allowed_ops,
-        }: AdminIdentity,
-    ) -> Self {
-        Self {
+            validated_at,
+            token_id,
+            app_client_id,
+        } = identity;
+        Ok(Self {
             instance_name: Some(instance_name),
             principal: match principal {
                 AdminIdentityPrincipal::Member(member_id) => Some(
@@ -650,16 +767,29 @@ impl From<AdminIdentity> for pb::convex_identity::AdminIdentity {
                 .into_iter()
                 .map(|op| ProtoDeploymentOperation::from(op) as i32)
                 .collect(),
-        }
+            validated_at: Some(validated_at.into()),
+            token_id: token_id.map(|id| id.0),
+            app_client_id,
+        })
     }
 }
 
 impl AdminIdentity {
-    pub fn from_proto_unchecked(msg: pb::convex_identity::AdminIdentity) -> anyhow::Result<Self> {
-        let instance_name = msg
-            .instance_name
-            .ok_or_else(|| anyhow::anyhow!("Missing instance_name"))?;
-        let principal = match msg.principal {
+    pub fn from_proto_unchecked(
+        pb::convex_identity::AdminIdentity {
+            instance_name,
+            key,
+            is_read_only,
+            allowed_operations,
+            validated_at,
+            principal,
+            token_id,
+            app_client_id,
+        }: pb::convex_identity::AdminIdentity,
+    ) -> anyhow::Result<Self> {
+        let instance_name =
+            instance_name.ok_or_else(|| anyhow::anyhow!("Missing instance_name"))?;
+        let principal = match principal {
             Some(pb::convex_identity::admin_identity::Principal::MemberId(id)) => {
                 AdminIdentityPrincipal::Member(id.into())
             },
@@ -668,22 +798,29 @@ impl AdminIdentity {
             },
             None => anyhow::bail!("Missing principal"),
         };
-        let key = msg.key.ok_or_else(|| anyhow::anyhow!("Missing key"))?;
-        let is_read_only: bool = msg.is_read_only;
-        let allowed_ops: Vec<DeploymentOp> = msg
-            .allowed_operations
+        let key = key.ok_or_else(|| anyhow::anyhow!("Missing key"))?;
+        let is_read_only: bool = is_read_only;
+        let allowed_ops: Vec<DeploymentOp> = allowed_operations
             .into_iter()
             .map(|i| match ProtoDeploymentOperation::try_from(i) {
                 Ok(proto) => DeploymentOp::from(proto),
                 Err(_) => DeploymentOp::Unknown,
             })
             .collect();
+        // TODO(nipunn) remove the `unwrap_or_else` once services push
+        let validated_at = validated_at
+            .unwrap_or_else(|| SystemTime::now().into())
+            .try_into()?;
+        let token_id = token_id.map(AccessTokenId);
         Ok(Self {
             deployment_name: instance_name,
             principal,
             key,
             is_read_only,
             allowed_ops,
+            validated_at,
+            token_id,
+            app_client_id,
         })
     }
 
@@ -693,6 +830,9 @@ impl AdminIdentity {
         access_token: String,
         is_read_only: bool,
         allowed_ops: Vec<DeploymentOp>,
+        validated_at: SystemTime,
+        token_id: Option<AccessTokenId>,
+        app_client_id: Option<String>,
     ) -> Self {
         Self {
             deployment_name,
@@ -700,6 +840,9 @@ impl AdminIdentity {
             key: access_token,
             is_read_only,
             allowed_ops,
+            validated_at,
+            token_id,
+            app_client_id,
         }
     }
 
@@ -715,26 +858,40 @@ impl AdminIdentity {
         self.is_read_only
     }
 
-    pub fn allowed_ops(&self) -> &[DeploymentOp] {
-        &self.allowed_ops
+    fn check_expired(&self, check_at: SystemTime) -> Result<(), AdminIdentityExpired> {
+        let diff = check_at.duration_since(self.validated_at);
+        if let Ok(diff) = diff
+            && diff > *ADMIN_IDENTITY_EXPIRATION_DELAY
+        {
+            return Err(AdminIdentityExpired);
+        }
+        Ok(())
+    }
+
+    pub fn allowed_ops(&self) -> Result<&[DeploymentOp], AdminIdentityExpired> {
+        self.check_expired(SystemTime::now())?;
+        Ok(&self.allowed_ops)
     }
 
     /// Check whether this identity is allowed to perform a specific operation.
     /// Empty `allowed_ops` means all operations are allowed.
-    pub fn is_operation_allowed(&self, operation: DeploymentOp) -> bool {
-        self.allowed_ops.is_empty() || self.allowed_ops.contains(&operation)
+    pub fn is_operation_allowed(
+        &self,
+        operation: DeploymentOp,
+    ) -> Result<bool, AdminIdentityExpired> {
+        self.check_expired(SystemTime::now())?;
+        Ok(self.allowed_ops.is_empty() || self.allowed_ops.contains(&operation))
     }
 }
 
+// `key` is a usable admin key, so it is omitted to keep it out of logs, spans,
+// and error contexts that `{:?}`-format identities.
 impl fmt::Debug for AdminIdentity {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{}/{:?}/{}/{:?}",
-            self.deployment_name,
-            self.principal,
-            self.key,
-            self.allowed_ops()
+            "{}/{:?}/{:?}/read_only={}",
+            self.deployment_name, self.principal, self.allowed_ops, self.is_read_only,
         )
     }
 }
@@ -775,6 +932,14 @@ impl KeyBroker {
                 &deployment_secret,
                 Purpose::CURSOR,
             )?,
+            data_sync_encryptor: RandomEncryptor::derive_from_secret(
+                &deployment_secret,
+                Purpose::DATA_SYNC_CURSOR,
+            )?,
+            export_download_encryptor: RandomEncryptor::derive_from_secret(
+                &deployment_secret,
+                Purpose::EXPORT_DOWNLOAD_TOKEN,
+            )?,
             journal_encryptor: RandomEncryptor::derive_from_secret(
                 &deployment_secret,
                 Purpose::QUERY_JOURNAL,
@@ -783,6 +948,7 @@ impl KeyBroker {
                 &deployment_secret,
                 Purpose::STORE_FILE_AUTHORIZATION,
             )?,
+            deployment_jwt_keys: DeploymentJwtKeys::derive_from_secret(&deployment_secret)?,
         })
     }
 
@@ -791,8 +957,8 @@ impl KeyBroker {
     }
 
     pub fn local_dev(instance_name: &str) -> Self {
-        // Must match `LOCAL_BACKEND_INSTANCE_SECRET` in the CLI
-        // (npm-packages/convex/src/cli/lib/localDeployment/utils.ts), since admin
+        // Must match `LEGACY_LOCAL_BACKEND_INSTANCE_SECRET` in the CLI
+        // (npm-packages/convex/src/cli/lib/localDeployment/auth.ts), since admin
         // keys issued here are sent to backends launched by the CLI with that secret.
         const LOCAL_DEV_SECRET: &str = include_str!("../dev/secret.txt");
         Self::new(
@@ -802,11 +968,21 @@ impl KeyBroker {
         .unwrap()
     }
 
+    /// Encryptor for data sync (streaming export) cursors.
+    pub fn data_sync_encryptor(&self) -> &RandomEncryptor {
+        &self.data_sync_encryptor
+    }
+
+    pub fn deployment_jwt_keys(&self) -> &DeploymentJwtKeys {
+        &self.deployment_jwt_keys
+    }
+
     pub fn function_runner_keybroker(&self) -> FunctionRunnerKeyBroker {
         FunctionRunnerKeyBroker {
             instance_name: self.deployment_name.clone(),
             cursor_encryptor: self.cursor_encryptor.clone(),
             store_file_encryptor: self.store_file_encryptor.clone(),
+            deployment_jwt_keys: Some(self.deployment_jwt_keys.clone()),
         }
     }
 
@@ -872,7 +1048,7 @@ impl KeyBroker {
         admin_key.is_ok()
     }
 
-    pub fn check_admin_key(&self, key: &str) -> anyhow::Result<Identity> {
+    pub fn check_admin_key(&self, key: &str, now: SystemTime) -> anyhow::Result<Identity> {
         let (instance_name, encrypted_part) = split_admin_key(key)
             .map(|(name, key)| (Some(remove_type_prefix_from_deployment_name(name)), key))
             .unwrap_or((None, key));
@@ -889,7 +1065,13 @@ impl KeyBroker {
                     .decode_proto(ADMIN_KEY_VERSION, encrypted_part)
                     .inspect(|_| log_legacy_admin_key())
             })
-            .with_context(|| format!("Couldn't decode the AdminKeyProto {key}"))?;
+            .with_context(|| {
+                format!(
+                    "Couldn't decode the AdminKeyProto for deployment {instance_name:?} (key \
+                     length {})",
+                    key.len()
+                )
+            })?;
         let instance_name = instance_name
             .or(instance_name_from_encrypted_part.as_deref())
             .context("Invalid admin key format")?;
@@ -916,6 +1098,9 @@ impl KeyBroker {
                 key: key.to_string(),
                 is_read_only,
                 allowed_ops: operations_for_deploy_key(is_read_only),
+                validated_at: now,
+                token_id: None,
+                app_client_id: None,
             }),
             AdminIdentityProto::System(()) => Identity::system(),
         })
@@ -986,11 +1171,10 @@ impl KeyBroker {
         persistence_version: PersistenceVersion,
     ) -> SerializedQueryJournal {
         let query_journal_version = persistence_version.index_key_version(QUERY_JOURNAL_VERSION);
-        let cursor = match &journal.end_cursor {
-            Some(cursor) => Some(cursor_to_proto(&self.deployment_name, cursor)),
-            None => return None,
+        let cursor = journal.end_cursor.as_ref()?;
+        let proto = InstanceQueryJournalProto {
+            end_cursor: Some(cursor_to_proto(&self.deployment_name, cursor)),
         };
-        let proto = InstanceQueryJournalProto { end_cursor: cursor };
         Some(
             self.journal_encryptor
                 .encrypt_proto(query_journal_version, &proto),
@@ -1066,6 +1250,77 @@ impl KeyBroker {
         let component_id = ComponentId::deserialize_from_string(component_id.as_deref())?;
         Ok((system_time, component_id))
     }
+
+    /// Issues a short-lived token authorizing the download of a single snapshot
+    /// export. This lets the dashboard trigger a browser download without
+    /// putting the long-lived admin key in the URL. The token records the
+    /// actor that requested it so each download can be audit logged.
+    pub fn issue_export_download_token(
+        &self,
+        snapshot_id: String,
+        actor: ExportDownloadActor,
+    ) -> String {
+        let now = SystemTime::now();
+        let since_epoch = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("Failed to compute seconds since epoch?");
+
+        let proto = ExportDownloadTokenProto {
+            issued_s: since_epoch.as_secs(),
+            snapshot_id,
+            member_id: actor.member_id.map(|m| m.0),
+            token_id: actor.token_id.map(|t| t.0),
+        };
+
+        self.export_download_encryptor
+            .encrypt_proto(EXPORT_DOWNLOAD_KEY_VERSION, &proto)
+    }
+
+    /// Checks that an export download token is valid for the given snapshot id
+    /// and was issued within `validity` ago. Returns the actor that requested
+    /// the token, for audit logging.
+    pub fn check_export_download_token(
+        &self,
+        token: &str,
+        snapshot_id: &str,
+        validity: Duration,
+    ) -> anyhow::Result<ExportDownloadActor> {
+        let ExportDownloadTokenProto {
+            issued_s,
+            snapshot_id: token_snapshot_id,
+            member_id,
+            token_id,
+        } = self
+            .export_download_encryptor
+            .decrypt_proto(EXPORT_DOWNLOAD_KEY_VERSION, token)
+            .context(ErrorMetadata::forbidden(
+                "InvalidExportDownloadToken",
+                "Invalid export download token",
+            ))?;
+
+        if issued_s == 0 || token_snapshot_id != snapshot_id {
+            anyhow::bail!(ErrorMetadata::forbidden(
+                "InvalidExportDownloadToken",
+                "Invalid export download token",
+            ));
+        }
+
+        let now = SystemTime::now();
+        let since_epoch = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("Failed to compute seconds since epoch?")
+            .as_secs();
+        if issued_s + validity.as_secs() <= since_epoch {
+            anyhow::bail!(ErrorMetadata::forbidden(
+                "ExportDownloadTokenExpired",
+                "This download link has expired. Please retry the download.",
+            ));
+        }
+        Ok(ExportDownloadActor {
+            member_id: member_id.map(MemberId),
+            token_id: token_id.map(AccessTokenId),
+        })
+    }
 }
 
 fn proto_to_cursor(instance_name: &str, proto: InstanceCursorProto) -> anyhow::Result<Cursor> {
@@ -1112,6 +1367,9 @@ pub struct FunctionRunnerKeyBroker {
     pub instance_name: String,
     pub cursor_encryptor: DeterministicEncryptor,
     pub store_file_encryptor: RandomEncryptor,
+    /// `None` only in a function runner whose caller predates the key: old
+    /// callers can run everything but `ctx.auth.signJwt`.
+    pub deployment_jwt_keys: Option<DeploymentJwtKeys>,
 }
 
 impl FunctionRunnerKeyBroker {
@@ -1122,6 +1380,9 @@ impl FunctionRunnerKeyBroker {
         component: ComponentId,
     ) -> anyhow::Result<StoreFileAuthorization> {
         let now = rt.unix_timestamp();
+        // Snapshot-bounded UDF time can be ahead of wall time. Cap issuance at
+        // wall time so clock skew cannot extend the token's validity.
+        let issued = issued.min(now);
         if (now - issued) > MAX_TS_DELAY {
             anyhow::bail!("Could not issue authorization. Issued TS too far in past.");
         }

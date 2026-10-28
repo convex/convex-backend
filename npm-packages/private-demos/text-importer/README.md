@@ -10,7 +10,7 @@ which was MIT licensed at the time it was downloaded.
 Download the file from drive or kaggle, extract the archive into a .jsonl file,
 then run the script with:
 
-1. `just rush update`
+1. `just update-js`
 2. `npx convex dev --once`
 3. `uv run main <path_to_jsonl>`
 

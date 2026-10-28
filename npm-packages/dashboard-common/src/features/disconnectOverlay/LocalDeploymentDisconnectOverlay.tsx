@@ -1,6 +1,7 @@
 import { ExternalLinkIcon } from "@radix-ui/react-icons";
 import { Button } from "@ui/Button";
 import { Link } from "@ui/Link";
+import { useIsSafari } from "@common/lib/useIsSafari";
 import { DisconnectedOverlay } from "./DisconnectOverlay";
 import { useEffect, useState } from "react";
 
@@ -63,17 +64,6 @@ export function LocalDeploymentDisconnectOverlay() {
       )}
     </DisconnectedOverlay>
   );
-}
-
-function useIsSafari(): boolean {
-  const [isSafari, setIsSafari] = useState(false);
-  useEffect(() => {
-    setIsSafari(
-      // https://stackoverflow.com/a/23522755
-      /^((?!chrome|android).)*safari/i.test(navigator.userAgent),
-    );
-  }, []);
-  return isSafari;
 }
 
 function useIsBrave(): boolean {

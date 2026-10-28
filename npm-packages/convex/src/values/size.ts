@@ -23,7 +23,7 @@
  * @module
  */
 
-import type { Value } from "./value.js";
+import { CommitTsPlaceholder, type Value } from "./value.js";
 import { isSimpleObject } from "../common/index.js";
 
 /**
@@ -49,6 +49,10 @@ export function getConvexSize(value: Value | undefined): number {
   }
   if (typeof value === "bigint") {
     // Int64: 1 byte type marker + 8 bytes value
+    return 9;
+  }
+  if (value instanceof CommitTsPlaceholder) {
+    // Same as bigint
     return 9;
   }
   if (typeof value === "number") {

@@ -1,0 +1,27 @@
+---
+title: "schema.ts"
+slug: "schema.ts"
+sidebar_label: "schema.ts"
+description: "Declare your tables and indexes in the schema.ts file."
+---
+
+import Example from "!!raw-loader!@site/../private-demos/snippets-config-files/convex/schema.ts";
+
+`convex/schema.ts` allows you to declare your [**tables**](/database/schemas)
+and their [**indexes**](/database/reading-data/indexes). Convex derives your
+document types from it, and validates every insert and update in the declared
+tables — unless you turn that off with
+[`schemaValidation: false`](/database/schemas#schemavalidation-boolean).
+Documents in tables the schema doesn’t list are never validated.
+
+The file is optional: without it, no schema is enforced on your documents. If
+you don’t have a schema yet, you can
+[generate one from the dashboard](/dashboard/deployments/schema#viewing-the-schema-file).
+
+<Snippet title="convex/schema.ts" source={Example} />
+
+## Learn More
+
+- [Schemas](/database/schemas)
+- [Indexes](/database/reading-data/indexes)
+- [Schema in the Dashboard](/dashboard/deployments/schema)

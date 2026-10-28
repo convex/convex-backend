@@ -110,6 +110,7 @@ const mockClient = mockConvexReactClient().registerQueryFake(
       path: "myComponent",
       args: {},
       state: "active" as const,
+      httpPrefix: null,
     },
   ],
 );

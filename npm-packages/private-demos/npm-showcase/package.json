@@ -18,11 +18,10 @@
     "proxy-agent": "^6.4.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "sharp": "~0.34.0",
+    "sharp": "~0.35.5",
     "snowflake-sdk": "^2.0.0",
     "tiktoken": "^1.0.10",
-    "@types/node-fetch": "^2.6.1",
-    "prettier": "3.8.1"
+    "@types/node-fetch": "^2.6.1"
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "workspace:*",
@@ -33,11 +32,11 @@
     "@types/react-dom": "^18.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@vitejs/plugin-react": "^4.2.1",
-    "@tailwindcss/vite": "^4.1.13",
+    "@tailwindcss/vite": "^4.3.3",
     "eslint": "^9.37.0",
-    "postcss": "^8.5.10",
-    "tailwindcss": "^4.1.11",
+    "postcss": "^8.5.18",
+    "tailwindcss": "^4.3.3",
     "typescript": "~5.0.3",
-    "vite": "^6.4.2"
+    "vite": "^6.4.4"
   }
 }

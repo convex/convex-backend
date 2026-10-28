@@ -27,7 +27,7 @@ export type LargeIndexDeletionCheck =
   | "no verification"
   // If large indexes are being deleted, ask for confirmation (and fail in non-interactive envs)
   | "ask for confirmation"
-  // If large indexes are being deleted, confirm (the user has used --allow-deleting-large-indexes)
+  // If large indexes are being deleted, confirm (the user has used --skip-large-indexes-check)
   | "has confirmation";
 
 export function addProgressLinkIfSlow(
@@ -38,7 +38,7 @@ export function addProgressLinkIfSlow(
   if (Date.now() - start > 10_000) {
     const dashboardUrl = deploymentDashboardUrlPage(
       deploymentName,
-      `/data?showSchema=true`,
+      `/schema?showSchema=true`,
     );
     msg = msg.concat(`\nSee progress here: ${dashboardUrl}`);
   }

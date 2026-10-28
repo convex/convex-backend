@@ -1,0 +1,71 @@
+# Tool versions for Convex local dev + CI, managed by mise (https://mise.jdx.dev).
+# Node is NOT here -- it stays in .nvmrc (via idiomatic_version_file in [settings]),
+# the shared source of truth for the builder image, copybara, and the OSS repo.
+# Rust (rustup), Python (uv), and pnpm/Turbo manage themselves. Pins are exact and
+# checksum-locked in mise.lock; Renovate proposes bumps.
+
+# mise's own version: read by the bootstrap installer + the release Dockerfiles, and
+# a floor (mise refuses to run an older binary against this config).
+min_version = "2026.8.9"
+
+[tools]
+uv       = "0.12.9"
+just     = "1.52.0"
+jq       = "1.8.1"
+cmake    = "3.31.12"   # 3.x line; 4.x drops compat with our older CMakeLists
+protoc   = "21.12"
+
+# Dev Cargo lint tools (prebuilt via cargo-binstall, no compile). `mise install`
+# pulls them in dev + CI (cached); the release images install only specific tools.
+cargo-binstall = "1.20.0"
+"cargo:cargo-machete" = "0.9.2"
+"cargo:cargo-sort" = "2.1.4"
+"github:WebAssembly/binaryen" = { version = "132", version_prefix = "version_" }
+"github:WebAssembly/wasi-sdk" = { version = "34", version_prefix = "wasi-sdk-", strip_components = 1, bin_path = "share/wasi-sysroot" }
+[env]
+# Build hints for the native -sys crates, primarily for LOCAL dev -- CI Linux gets
+# these (plus SNAPPY_LIB_DIR) from .github/actions/setup-rust, which also covers the
+# jobs that don't run mise. Windows has neither pkg-config nor these prebuilt libs,
+# so the -sys crates build from bundled sources -- windows.yml unsets both before cargo.
+SODIUM_USE_PKG_CONFIG = "1"
+# Resolve the rocksdb lib dir per-OS via mise's os(); Windows falls through to
+# empty (and windows.yml unsets it before cargo regardless).
+ROCKSDB_LIB_DIR = "{% if os() == 'macos' %}/opt/homebrew/lib{% elif os() == 'linux' %}/usr/lib{% endif %}"
+# Force librocksdb-sys to build bundled rocksdb when the system lib isn't the 8.x its
+# bindings need (Ubuntu 22.04 ships only 6.x). It's checked before ROCKSDB_LIB_DIR so it
+# wins; empty is ignored. (Unsetting ROCKSDB_LIB_DIR isn't an option: a Tera-empty value
+# is "", which librocksdb-sys still reads as "use system".)
+ROCKSDB_COMPILE = "{% if os() == 'linux' and exec(command='pkg-config --atleast-version=8 rocksdb && ! pkg-config --atleast-version=9 rocksdb && echo y || echo n') == 'n' %}1{% endif %}"
+WASI_SDK = { value = "{% if 'github:WebAssembly/wasi-sdk' in tools %}{{ tools['github:WebAssembly/wasi-sdk'].path }}{% endif %}", tools = true }
+
+[settings]
+# Read Node's version from the existing .nvmrc.
+idiomatic_version_file_enable_tools = ["node"]
+# Commit mise.lock so binaries are checksum-pinned across platforms.
+lockfile = true
+
+# System C libraries the Rust crates link against (outside [tools]). setup_env.py
+# installs these via `mise bootstrap packages` (apt/brew); plain `mise install`
+# ignores them, so CI is unaffected. "latest" because apt/brew can't
+# portably pin and mise.lock doesn't cover OS packages.
+[bootstrap.packages]
+"apt:build-essential" = "latest"
+"apt:pkg-config" = "latest"
+"apt:libclang-dev" = "latest"
+"apt:libssl-dev" = "latest"
+"apt:libsodium-dev" = "latest"
+# librocksdb-dev (not librocksdb8.9): the -dev package exists on every Ubuntu (8.x on
+# 24.04, 6.x on 22.04) with the headers + unversioned .so linking needs. 22.04's 6.x is
+# ABI-incompatible, so ROCKSDB_COMPILE forces the bundled build there.
+"apt:librocksdb-dev" = "latest"
+"apt:libsnappy-dev" = "latest"
+# os = "macos": mise pours bottles itself, so unfiltered brew entries install on Linux too.
+"brew:pkgconf" = { version = "latest", os = "macos" }
+"brew:openssl@3" = { version = "latest", os = "macos" }
+"brew:libsodium" = { version = "latest", os = "macos" }
+"brew:snappy" = { version = "latest", os = "macos" }
+# GNU diff3 for copybara pull merges (Apple's diff3 silently corrupts them)
+"brew:diffutils" = { version = "latest", os = "macos" }
+# rocksdb (+ gflags) can't live here: they need pinning to match the librocksdb-sys
+# bindings, which brew can't do for core formulae. setup_env.py installs pinned
+# versions from our Homebrew tap instead.

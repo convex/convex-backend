@@ -1,7 +1,13 @@
 import { jsonToConvex, JSONValue } from "convex/values";
 import { useRouter } from "next/router";
 import { useMemo, useState } from "react";
-import { CellProps, useTable } from "react-table";
+import {
+  CellContext,
+  createColumnHelper,
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
 import { formatDuration } from "date-fns/formatDuration";
 import { ChevronRightIcon, ExternalLinkIcon } from "@radix-ui/react-icons";
 import {
@@ -16,7 +22,7 @@ import {
   scheduleLiteral,
 } from "@common/features/schedules/lib/cronHelpers";
 import { stringifyValue } from "@common/lib/stringifyValue";
-import { prettier } from "@common/lib/format";
+import { formatExpression } from "@common/lib/format";
 import { Tooltip } from "@ui/Tooltip";
 import { useFunctionUrl } from "@common/lib/deploymentApi";
 import { displayName } from "@common/lib/functions/generateFileTree";
@@ -28,29 +34,33 @@ import { ReadonlyCode } from "@common/elements/ReadonlyCode";
 import { Sheet } from "@ui/Sheet";
 import { Doc } from "system-udfs/convex/_generated/dataModel";
 
+// Shared by header and body cells, so every column needs a width that doesn't
+// depend on its content for the header to line up with the rows.
 const COLUMN_STYLES = [
-  { fontWeight: "500", flex: "2 0 80px", fontSize: "0.875rem" },
+  { flex: "2 0 80px" },
   { flex: "1 0 180px" },
   { flex: "2 2 60px" },
   { flex: "1 0 160px" },
-  { flex: "0 0 auto" },
-  { flex: "0 0 auto" },
+  { flex: "0 0 7rem" },
+  { flex: "0 0 2rem" },
 ];
 
-function Name({ value }: CellProps<CronDatum, string>) {
+function Name({ getValue }: CellContext<CronDatum, string>) {
+  const value = getValue();
   return (
-    <div title={value} className="">
+    <div title={value} className="text-sm font-medium">
       {value}
     </div>
   );
 }
 
 function Schedule({
-  value: { schedule },
-}: CellProps<
+  getValue,
+}: CellContext<
   CronDatum,
   { schedule: CronSchedule; nextDate: Date | undefined }
 >) {
+  const { schedule, nextDate } = getValue();
   const literal = scheduleLiteral(schedule);
 
   let formattedSchedule = "";
@@ -60,8 +70,10 @@ function Schedule({
     const duration = formatDuration({ seconds: Number(schedule.seconds) });
     formattedSchedule = `Every ${duration}`;
   } else if (wasmCron) {
+    // When the schedule omits the minute, Convex chooses it; describe the
+    // schedule using the minute of the actual next run.
     const [cron, description] = wasmCron.parseAndDescribe(
-      scheduleAsCron(schedule),
+      scheduleAsCron(schedule, nextDate?.getUTCMinutes()),
     );
     cron.free();
     formattedSchedule = prettierSaffron(description);
@@ -78,7 +90,8 @@ function Schedule({
   );
 }
 
-function Function({ value }: CellProps<CronDatum, string>) {
+function Function({ getValue }: CellContext<CronDatum, string>) {
+  const value = getValue();
   const url = useFunctionUrl(value);
   const name = displayName(value);
   return (
@@ -127,16 +140,17 @@ function NextTs({ value }: { value: Date }) {
 }
 
 function PrevNextTs({
-  value,
-}: CellProps<
+  getValue,
+}: CellContext<
   CronDatum,
   {
     nextDate: Date | undefined;
-    prevDate: Date;
+    prevDate: Date | undefined;
     prevRun: CronJobLog | undefined;
     nextRun: Doc<"_cron_next_run">;
   }
 >) {
+  const value = getValue();
   const isRunning = value.nextRun.state.type === "inProgress";
   return (
     <div className="flex flex-col truncate">
@@ -146,7 +160,8 @@ function PrevNextTs({
   );
 }
 
-function More({ value }: CellProps<CronDatum, string>) {
+function More({ getValue }: CellContext<CronDatum, string>) {
+  const value = getValue();
   const router = useRouter();
   const handleClick = () => {
     router.query.id = value;
@@ -164,12 +179,21 @@ function More({ value }: CellProps<CronDatum, string>) {
   );
 }
 
-function Args({ value }: CellProps<CronDatum, JSONValue[]>) {
+function Args({ getValue }: CellContext<CronDatum, JSONValue[]>) {
+  const value = getValue();
   const [showArgs, setShowArgs] = useState(false);
 
   if (value.length === 0) {
-    return <div className="h-6 w-24" />;
+    return <div className="h-6" />;
   }
+
+  const args = value.map((arg) => jsonToConvex(arg));
+  // Cron jobs almost always take a single argument object; show it unwrapped.
+  const code = formatExpression(
+    args.length === 1
+      ? stringifyValue(args[0])
+      : `[${args.map((arg) => stringifyValue(arg)).join(",")}]`,
+  );
 
   return (
     <>
@@ -188,14 +212,7 @@ function Args({ value }: CellProps<CronDatum, JSONValue[]>) {
           header="Cron job arguments"
           content={
             <div className="h-full rounded-sm p-4">
-              <ReadonlyCode
-                path="scheduling"
-                code={`${prettier(`
-                [${value
-                  .map((arg) => stringifyValue(jsonToConvex(arg)))
-                  .join(",")}]`).slice(0, -1)}
-                `}
-              />
+              <ReadonlyCode path="scheduling" code={code} />
             </div>
           }
         />
@@ -212,67 +229,94 @@ function cronDatum(cronJob: CronJobWithRuns) {
     name,
     schedule: { schedule: cronSpec.cronSchedule, nextDate },
     prevNextTs: {
-      prevDate,
+      prevDate: prevDate ?? undefined,
       nextDate,
-      prevRun: lastRun,
+      prevRun: lastRun ?? undefined,
       nextRun,
     },
     udfPath: cronSpec.udfPath,
     udfArgs:
       cronSpec.udfArgs &&
-      (JSON.parse(
-        Buffer.from(cronSpec.udfArgs).toString("utf8"),
-      ) as JSONValue[]),
+      (JSON.parse(new TextDecoder().decode(cronSpec.udfArgs)) as JSONValue[]),
   };
 }
 type CronDatum = ReturnType<typeof cronDatum>;
 
+const columnHelper = createColumnHelper<CronDatum>();
+
 export function CronsTable({ cronJobs }: { cronJobs: CronJobWithRuns[] }) {
   const columns = useMemo(
-    () =>
-      [
-        { Header: "Name", accessor: "name", Cell: Name },
-        { Header: "Schedule", accessor: "schedule", Cell: Schedule },
-        { Header: "Function", accessor: "udfPath", Cell: Function },
-        { Header: "Next/Last Run", accessor: "prevNextTs", Cell: PrevNextTs },
-        { Header: "Args", accessor: "udfArgs", Cell: Args },
-        { Header: "More", accessor: "name", id: "more", Cell: More },
-      ] as const,
+    () => [
+      columnHelper.accessor("name", { header: "Name", cell: Name }),
+      columnHelper.accessor("schedule", { header: "Schedule", cell: Schedule }),
+      columnHelper.accessor("udfPath", { header: "Function", cell: Function }),
+      columnHelper.accessor("prevNextTs", {
+        header: "Next/Last Run",
+        cell: PrevNextTs,
+      }),
+      columnHelper.accessor("udfArgs", { header: "Args", cell: Args }),
+      columnHelper.accessor("name", {
+        id: "more",
+        header: () => <span className="sr-only">More</span>,
+        cell: More,
+      }),
+    ],
     [],
   );
 
   const data = useMemo(() => cronJobs.map(cronDatum), [cronJobs]);
 
-  const { getTableProps, getTableBodyProps, rows, prepareRow } = useTable({
-    columns: columns as any, // TODO(react-18-upgrade)
+  const table = useReactTable({
+    columns,
     data,
+    getCoreRowModel: getCoreRowModel(),
   });
 
   return (
     <Sheet padding={false} className="scrollbar overflow-x-auto">
-      <div {...getTableProps()} className="mx-4 block min-w-[42rem]">
-        <div {...getTableBodyProps()} className="divide-y">
-          {rows.map((row) => {
-            prepareRow(row);
-            return (
-              // eslint-disable-next-line react/jsx-key -- `key` from `row.getRowProps()`
-              <div
-                {...row.getRowProps()}
-                className="flex items-stretch justify-start gap-2 py-3 text-xs text-content-primary"
-              >
-                {row.cells.map((cell, i) => (
-                  // eslint-disable-next-line react/jsx-key -- `key` from `cell.getCellProps()`
-                  <div
-                    {...cell.getCellProps()}
-                    style={COLUMN_STYLES[i]}
-                    className="flex items-center overflow-hidden"
-                  >
-                    {cell.render("Cell")}
-                  </div>
-                ))}
-              </div>
-            );
-          })}
+      <div role="table" className="block min-w-2xl">
+        <div role="rowgroup" className="border-b">
+          {table.getHeaderGroups().map((headerGroup) => (
+            <div
+              key={headerGroup.id}
+              role="row"
+              className="flex gap-2 px-4 py-2 text-xs text-content-secondary"
+            >
+              {headerGroup.headers.map((header, i) => (
+                <div
+                  key={header.id}
+                  role="columnheader"
+                  style={COLUMN_STYLES[i]}
+                  className="overflow-hidden text-left"
+                >
+                  {flexRender(
+                    header.column.columnDef.header,
+                    header.getContext(),
+                  )}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div role="rowgroup" className="divide-y">
+          {table.getRowModel().rows.map((row) => (
+            <div
+              key={row.id}
+              role="row"
+              className="flex items-stretch justify-start gap-2 px-4 py-3 text-xs text-content-primary"
+            >
+              {row.getVisibleCells().map((cell, i) => (
+                <div
+                  key={cell.id}
+                  role="cell"
+                  style={COLUMN_STYLES[i]}
+                  className="flex items-center overflow-hidden"
+                >
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </div>
+              ))}
+            </div>
+          ))}
         </div>
       </div>
     </Sheet>

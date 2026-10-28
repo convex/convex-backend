@@ -142,13 +142,11 @@ export function PerformanceGraphs() {
     const lineKeys = [];
     const percentiles = [...mapPercentileToBuckets.keys()];
     const xAxisKey = "time";
-    // eslint-disable-next-line no-restricted-syntax
     for (const [i, bucket] of mapPercentileToBuckets
       .get(percentiles[0])!
       .entries()) {
       const dataPoint: any = {};
       dataPoint[xAxisKey] = format(bucket.time, "h:mm a");
-      // eslint-disable-next-line no-restricted-syntax
       for (const percentile of percentiles) {
         const { metric } = mapPercentileToBuckets.get(percentile)![i];
         dataPoint[`p${percentile}`] = metric
@@ -157,7 +155,6 @@ export function PerformanceGraphs() {
       }
       data.push(dataPoint);
     }
-    // eslint-disable-next-line no-restricted-syntax
     for (const [i, percentile] of percentiles.entries()) {
       const pstring = `p${percentile}`;
       const lineKey = {

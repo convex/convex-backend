@@ -9,10 +9,16 @@ import { getDeploymentSelection } from "./lib/deploymentSelection.js";
 export const data = new Command("data")
   .summary("List tables and print data from your database")
   .description(
-    "Inspect your Convex deployment's database.\n\n" +
-      "  List tables: `npx convex data`\n" +
-      "  List documents in a table: `npx convex data tableName`\n\n" +
+    [
+      "Inspect your Convex deployment's database.",
+      "",
+      "• List tables: `npx convex data`",
+      "• List documents in a table: `npx convex data tableName`",
+      "",
       "By default, this inspects your dev deployment.",
+      "",
+      "This works with system tables, such as `_storage`, in addition to your own tables.",
+    ].join("\n"),
   )
   .allowExcessArguments(false)
   .addDataOptions()

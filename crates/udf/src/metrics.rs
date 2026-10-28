@@ -1,4 +1,5 @@
 use metrics::{
+    log_counter,
     log_counter_with_labels,
     register_convex_counter,
     StaticMetricLabel,
@@ -47,4 +48,13 @@ pub fn is_developer_ok(outcome: &FunctionOutcome) -> bool {
             HttpActionResult::Error(_) => false,
         },
     }
+}
+
+register_convex_counter!(
+    LEGACY_POSITIONAL_ARGS_TOTAL,
+    "Number of times that legacy positional arguments are used",
+);
+
+pub fn log_legacy_positional_args() {
+    log_counter(&LEGACY_POSITIONAL_ARGS_TOTAL, 1);
 }

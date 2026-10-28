@@ -3,8 +3,6 @@ import { ChevronLeftIcon } from "@radix-ui/react-icons";
 import { BreadcrumbLink } from "components/header/BreadcrumbLink/BreadcrumbLink";
 import { Header } from "components/header/Header/Header";
 import { NavBar } from "components/header/NavBar/NavBar";
-import { CreateTeamModal } from "components/header/CreateTeamModal";
-import { logEvent } from "convex-analytics";
 import { useTeams } from "api/teams";
 import { useProjectBySlug } from "api/projects";
 import {
@@ -13,11 +11,9 @@ import {
 } from "hooks/useLastViewed";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useAccessToken } from "hooks/useServerSideData";
 import { ProjectSelector } from "components/header/ProjectSelector/ProjectSelector";
-import { useCreateProjectModal } from "hooks/useCreateProjectModal";
-import { TeamResponse } from "generatedApi";
 
 import {
   PROVISION_PROD_PAGE_NAME,
@@ -65,26 +61,14 @@ function DashboardHeaderWhenLoggedIn() {
     }
   }, [selectedProject, projectSlug, router]);
 
-  const [showCreateTeamModal, setShowCreateTeamModal] = useState(false);
-
   useRememberLastViewedTeam(selectedTeamSlug);
   useRememberLastViewedProject(projectSlug);
-
-  const [createProjectModal, showCreateProjectModal] = useCreateProjectModal();
 
   const projectSelector = (
     <ProjectSelector
       teams={teams}
       selectedProject={projectSlug ? (selectedProject ?? undefined) : undefined}
       selectedTeamSlug={selectedTeamSlug}
-      onCreateTeamClick={() => {
-        logEvent("view create team modal");
-        setShowCreateTeamModal(true);
-      }}
-      onCreateProjectClick={(t: TeamResponse) => {
-        logEvent("view create project modal");
-        showCreateProjectModal(t);
-      }}
     />
   );
   const inNoTeamRoute = NO_TEAM_ROUTES.some((r) => r === router.pathname);
@@ -166,11 +150,6 @@ function DashboardHeaderWhenLoggedIn() {
         usageBannerVariant !== null && (
           <UsageBanner team={team!} variant={usageBannerVariant} />
         )}
-
-      {showCreateTeamModal && (
-        <CreateTeamModal onClose={() => setShowCreateTeamModal(false)} />
-      )}
-      {createProjectModal}
     </div>
   );
 }

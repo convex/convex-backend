@@ -14,7 +14,6 @@ let isOnlineCache = {
 let statusCheckIntervalId: NodeJS.Timeout | null = null;
 
 // Promise-based mutex to prevent concurrent checks
-// eslint-disable-next-line import/no-mutable-exports
 export let checkMutex: Promise<boolean> | null = null;
 
 // Track retry count for backoff and toast display
@@ -94,7 +93,6 @@ const scheduleNextOfflineCheck = () => {
   // Use (retryCount - 1) because the first retry should use a base value of 0
   const backoffTime = backoffWithJitter(Math.max(0, retryCount - 1));
 
-  // eslint-disable-next-line no-console
   console.log(
     `Disconnected from Dashboard server, retrying in ${backoffTime}ms`,
   );

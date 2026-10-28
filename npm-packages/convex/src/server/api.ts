@@ -42,6 +42,9 @@ export type FunctionType = "query" | "mutation" | "action";
  * const result = useQuery(api.myModule.myFunction);
  * ```
  *
+ * If you want to accept a `FunctionReference` as a callback argument, prefer
+ * typing the callback parameter as {@link FunctionReference_future}.
+ *
  * @typeParam Type - The type of the function ("query", "mutation", or "action").
  * @typeParam Visibility - The visibility of the function ("public" or "internal").
  * @typeParam Args - The arguments to this function. This is an object mapping
@@ -58,9 +61,179 @@ export type FunctionReference<
 > = {
   _type: Type;
   _visibility: Visibility;
+  /**
+   * To read the arguments for a `FunctionReference`, prefer
+   * {@link FunctionArgs}.
+   *
+   * This slot will be removed in a future version.
+   *
+   * @deprecated
+   */
   _args: Args;
+  /**
+   * To read the return type of a `FunctionReference`, prefer
+   * {@link FunctionReturnType}.
+   *
+   * This slot will be removed in a future version.
+   *
+   * @deprecated
+   */
   _returnType: ReturnType;
   _componentPath: ComponentPath;
+  /**
+   * To read the arguments or return type of a `FunctionReference`, prefer
+   * {@link FunctionArgs} and {@link FunctionReturnType}.
+   */
+  // This phantom slot exists so that a `FunctionReference` can be checked
+  // against a `FunctionReference_future`. It changes nothing about how two
+  // `FunctionReference`s compare with each other.
+  //
+  // The slot models the function itself: it puts `Args` in a contravariant
+  // position and `ReturnType` in a covariant one, so the slot alone is enough
+  // to compare a reference the way TypeScript compares two functions.
+  //
+  // In that comparison the `keys` parameter has an important role. It carries
+  // the keys of `Args`, so that checking a `FunctionReference` against a
+  // `FunctionReference_future` also checks that every key the consumer passes
+  // is a key the function declares. TypeScript treats a surplus property as
+  // harmless, but a Convex argument validator rejects it, so this is what
+  // makes the comparison match the runtime. See `FunctionReferenceArgKeys`.
+  _fn?(args: Args, keys: FunctionReferenceArgKeys<Args>): ReturnType;
+};
+
+/**
+ * The keys of a reference's arguments.
+ *
+ * `0 extends 1 & Args` holds only when `Args` is `any`. That maps to `any`
+ * rather than `keyof any` so that an untyped reference neither imposes nor
+ * fails the key check in either direction. Arguments with an index signature,
+ * such as `EmptyObject` and `DefaultFunctionArgs`, map to `string`, which
+ * accepts every key and leaves the decision to the first parameter.
+ */
+type ArgKeys<Args> = 0 extends 1 & Args ? any : keyof Args;
+
+/**
+ * The second parameter of `FunctionReference._fn`.
+ *
+ * Wrapping the keys in a function of a function puts them two parameters deep,
+ * so comparing this parameter contravariantly checks that every key the
+ * consumer passes is one the function declares. That is the check a Convex
+ * argument validator performs and an ordinary function-type comparison skips.
+ *
+ * The union with {@link UncheckedArgKeys} is what keeps two
+ * `FunctionReference`s comparing as they did before this slot existed. Every
+ * `FunctionReferenceArgKeys` is assignable to `UncheckedArgKeys`, so between
+ * two `FunctionReference`s the keys always relate and only `_args` decides.
+ * {@link FunctionReference_futureArgKeys} is not assignable to it, so a
+ * `FunctionReference` compared against a `FunctionReference_future` has to
+ * satisfy the real check.
+ */
+type FunctionReferenceArgKeys<Args> = 0 extends 1 & Args
+  ? any
+  : ((keys: (key: ArgKeys<Args>) => void) => void) | UncheckedArgKeys;
+
+/**
+ * A keys parameter that every {@link FunctionReferenceArgKeys} is assignable
+ * to, and that no {@link FunctionReference_futureArgKeys} is: `unknown` for
+ * the second parameter accepts the former's missing parameter and rejects the
+ * latter's `never`.
+ */
+type UncheckedArgKeys = (keys: never, unchecked?: unknown) => void;
+
+/**
+ * The second parameter of `FunctionReference_future._fn`. The same shape as
+ * {@link FunctionReferenceArgKeys} plus a `guard` parameter that keeps it out
+ * of {@link UncheckedArgKeys}.
+ */
+type FunctionReference_futureArgKeys<Args> = 0 extends 1 & Args
+  ? any
+  : (keys: (key: ArgKeys<Args>) => void, guard?: never) => void;
+
+/**
+ * A reference to a Convex function whose arguments are checked closer to the
+ * way Convex checks them at runtime.
+ *
+ * Use this instead of {@link FunctionReference} when you accept someone else's
+ * Convex function as a callback and know which arguments you will pass it.
+ *
+ * A plain `FunctionReference` gets a couple things backwards: it accepts a
+ * function requiring arguments you never pass, and rejects a function
+ * accepting broader values than you pass. An ordinary TypeScript function type
+ * doesn't map perfectly either: it treats a surplus argument as harmless,
+ * where a Convex validator rejects it.
+ *
+ * This type melds regular TypeScript function reference behavior with top
+ * level checking of arguments to prevent surplus arguments from hitting
+ * runtime validation errors. The caveat: a surplus key inside a nested object,
+ * an array element, or one arm of a union passes the type check and fails the
+ * validator at runtime.
+ *
+ * ```ts
+ * import { FunctionReference_future } from "convex/server";
+ *
+ * declare function onComplete(
+ *   fn: FunctionReference_future<
+ *     "mutation",
+ *     "internal",
+ *     { taskId: string; force: boolean },
+ *     null
+ *   >,
+ * ): void;
+ *
+ * // Takes exactly `{ taskId: string; force: boolean }`.
+ * onComplete(internal.tasks.finish);
+ * // Takes `{ taskId: string | number; force?: boolean }`: calling it is safe.
+ * onComplete(internal.tasks.finishLoosely);
+ * // Requires a `reason` argument that `onComplete` never passes.
+ * onComplete(internal.tasks.finishWithReason);
+ * //          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ rejected
+ * // Takes only `{ taskId: string }`: its validator would reject `force`.
+ * onComplete(internal.tasks.finishById);
+ * //          ~~~~~~~~~~~~~~~~~~~~~~~~ rejected
+ * ```
+ *
+ * A value of this type is usable with `ctx.runMutation`,
+ * `ctx.scheduler.runAfter`, `createFunctionHandle`, and everything else in
+ * this package that takes a reference, all of which accept either kind.
+ *
+ * It is *not* assignable to a plain `FunctionReference`. Code that wants to
+ * accept both kinds should take
+ * `FunctionReference<...> | FunctionReference_future<...>` and read arguments
+ * and return types through {@link FunctionArgs} and {@link FunctionReturnType}.
+ *
+ * Argument checking here relies on `strictFunctionTypes` (implied by `strict`)
+ * and is skipped for projects that disable it. Everything else about the
+ * reference is compared exactly as `FunctionReference` compares it.
+ *
+ * @typeParam Type - The type of the function ("query", "mutation", or "action").
+ * @typeParam Visibility - The visibility of the function ("public" or "internal").
+ * @typeParam Args - The arguments the consumer of the reference will pass.
+ * @typeParam ReturnType - The return type of this function.
+ * @public
+ */
+export type FunctionReference_future<
+  Type extends FunctionType,
+  Visibility extends FunctionVisibility = "public",
+  Args extends DefaultFunctionArgs = any,
+  ReturnType = any,
+  ComponentPath = string | undefined,
+> = {
+  _type: Type;
+  _visibility: Visibility;
+  _componentPath: ComponentPath;
+  // Declared as a *property* rather than a method: TypeScript compares method
+  // parameters bivariantly and would not check anything. The explicit
+  // `| undefined` is needed because an optional method on the source side
+  // (`FunctionReference._fn`) carries a real `undefined` in its type, which
+  // `exactOptionalPropertyTypes` would otherwise reject.
+  //
+  // Both parameters are compared contravariantly: the first checks that the
+  // consumer's arguments satisfy the function's, the second that the consumer
+  // passes no key the function does not declare. See
+  // `FunctionReference_futureArgKeys`.
+  _fn?:
+    | ((args: Args, keys: FunctionReference_futureArgKeys<Args>) => ReturnType)
+    | undefined;
 };
 
 /**
@@ -76,7 +249,9 @@ export type FunctionReference<
  * @public
  */
 export function getFunctionName(
-  functionReference: AnyFunctionReference,
+  functionReference:
+    | FunctionReference<any, any>
+    | FunctionReference_future<any, any>,
 ): string {
   const address = getFunctionAddress(functionReference);
 
@@ -431,13 +606,33 @@ export type PartialApi<API> = {
 export const anyApi: AnyApi = createApi() as any;
 
 /**
- * Given a {@link FunctionReference}, get the return type of the function.
+ * Given a {@link FunctionReference} or {@link FunctionReference_future}, get
+ * the arguments of the function.
  *
  * This is represented as an object mapping argument names to values.
+ *
  * @public
  */
-export type FunctionArgs<FuncRef extends AnyFunctionReference> =
-  FuncRef["_args"];
+export type FunctionArgs<
+  FuncRef extends
+    | FunctionReference<any, any>
+    | FunctionReference_future<any, any>,
+> = ExtractSignature<FuncRef>["args"];
+
+// The arguments and return type a reference declares. A `FunctionReference`
+// declares them in `_args` and `_returnType`, a `FunctionReference_future`
+// only in its `_fn` slot. Reading the named slots first also covers a
+// reference typed by an older copy of this package, which has no `_fn`.
+type ExtractSignature<FuncRef> = FuncRef extends {
+  _args: infer Args;
+  _returnType: infer R;
+}
+  ? { args: Args; returnType: R }
+  : FuncRef extends {
+        _fn?: ((args: infer Args, keys: never) => infer R) | undefined;
+      }
+    ? { args: Args; returnType: R }
+    : { args: any; returnType: any };
 
 /**
  * A tuple type of the (maybe optional) arguments to `FuncRef`.
@@ -447,10 +642,14 @@ export type FunctionArgs<FuncRef extends AnyFunctionReference> =
  *
  * @public
  */
-export type OptionalRestArgs<FuncRef extends AnyFunctionReference> =
-  FuncRef["_args"] extends EmptyObject
+export type OptionalRestArgs<
+  FuncRef extends
+    | FunctionReference<any, any>
+    | FunctionReference_future<any, any>,
+> =
+  FunctionArgs<FuncRef> extends EmptyObject
     ? [args?: EmptyObject]
-    : [args: FuncRef["_args"]];
+    : [args: FunctionArgs<FuncRef>];
 
 /**
  * A tuple type of the (maybe optional) arguments to `FuncRef`, followed by an options
@@ -462,19 +661,26 @@ export type OptionalRestArgs<FuncRef extends AnyFunctionReference> =
  * @public
  */
 export type ArgsAndOptions<
-  FuncRef extends AnyFunctionReference,
+  FuncRef extends
+    | FunctionReference<any, any>
+    | FunctionReference_future<any, any>,
   Options,
-> = FuncRef["_args"] extends EmptyObject
-  ? [args?: EmptyObject, options?: Options]
-  : [args: FuncRef["_args"], options?: Options];
+> =
+  FunctionArgs<FuncRef> extends EmptyObject
+    ? [args?: EmptyObject, options?: Options]
+    : [args: FunctionArgs<FuncRef>, options?: Options];
 
 /**
- * Given a {@link FunctionReference}, get the return type of the function.
+ * Given a {@link FunctionReference} or {@link FunctionReference_future}, get
+ * the return type of the function.
  *
  * @public
  */
-export type FunctionReturnType<FuncRef extends AnyFunctionReference> =
-  FuncRef["_returnType"];
+export type FunctionReturnType<
+  FuncRef extends
+    | FunctionReference<any, any>
+    | FunctionReference_future<any, any>,
+> = ExtractSignature<FuncRef>["returnType"];
 
 type UndefinedToNull<T> = T extends void ? null : T;
 

@@ -1,6 +1,7 @@
 import { useContext, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { useDebounce } from "react-use";
+import { Link } from "@ui/Link";
 import { Sheet } from "@ui/Sheet";
 import { Button } from "@ui/Button";
 import { Combobox, MAX_DISPLAYED_OPTIONS } from "@ui/Combobox";
@@ -11,10 +12,15 @@ import {
   useHasCustomRolePermission,
   useHasProjectAdminPermissions,
 } from "api/roles";
-import { usePaginatedProjects, useCurrentProject } from "api/projects";
+import {
+  usePaginatedProjects,
+  useCurrentProject,
+  useProjectById,
+} from "api/projects";
 import { useCurrentTeam } from "api/teams";
 import { deploymentResource } from "lib/permissions";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
+import { DEPLOYMENT_SETTINGS_SECTIONS } from "lib/sectionAnchors";
 
 export function TransferDeployment() {
   const { useCurrentDeployment } = useContext(DeploymentInfoContext);
@@ -67,6 +73,15 @@ export function TransferDeployment() {
 
   const projects = paginatedProjects?.items;
 
+  const [destinationProjectId, setDestinationProjectId] = useState<
+    number | null
+  >(null);
+  const [showConfirmation, setShowConfirmation] = useState(false);
+
+  const { project: destinationProject } = useProjectById(
+    destinationProjectId ?? undefined,
+  );
+
   // Filter out the current project and prepare options with duplicate name handling
   const { projectOptions, slugByProjectId } = useMemo(() => {
     const otherProjects =
@@ -87,39 +102,59 @@ export function TransferDeployment() {
       return { label, value: p.id };
     });
 
-    return { projectOptions: options, slugByProjectId: slugMap };
-  }, [projects, deployment?.projectId]);
+    // Ensure the selected destination is always an option, even when it's
+    // filtered out of the paginated list, so its label survives in the button.
+    if (
+      destinationProject &&
+      !options.some((o) => o.value === destinationProject.id)
+    ) {
+      options.push({
+        label: destinationProject.name,
+        value: destinationProject.id,
+      });
+    }
 
-  const [destinationProjectId, setDestinationProjectId] = useState<
-    number | null
-  >(null);
-  const [showConfirmation, setShowConfirmation] = useState(false);
+    return { projectOptions: options, slugByProjectId: slugMap };
+  }, [projects, deployment?.projectId, destinationProject]);
 
   const transferDeployment = useTransferDeployment(deployment?.name ?? "");
 
-  const destinationProject = projects?.find(
-    (p) => p.id === destinationProjectId,
-  );
-
   const canTransfer = hasAdminPermissions || canTransferCustom === true;
+  const transferProjectHref =
+    team && project
+      ? `/t/${team.slug}/${project.slug}/settings#transfer-project`
+      : undefined;
 
   if (!deployment || isLocal) {
     return null;
   }
 
   return (
-    <Sheet>
+    <Sheet id={DEPLOYMENT_SETTINGS_SECTIONS.transferDeployment.id}>
       <h3 className="mb-4">Transfer Deployment</h3>
-      <p className="mb-5 max-w-prose text-sm text-content-primary">
-        Transfer this deployment to another project within the same team.
-        {isProd && (
-          <span className="font-semibold">
-            {" "}
-            Transferring a production deployment requires project admin
-            permissions on both projects.
-          </span>
-        )}
-      </p>
+      <div className="mb-5 flex max-w-prose flex-col gap-2 text-sm text-content-primary">
+        <p>
+          Transfer this deployment to another project within the same team.
+          {isProd && (
+            <span className="font-semibold">
+              {" "}
+              Transferring a production deployment requires project admin
+              permissions on both projects.
+            </span>
+          )}
+        </p>
+        <p>
+          To transfer the project to another team, go to{" "}
+          {transferProjectHref ? (
+            <Link href={transferProjectHref}>
+              Project Settings &gt; Transfer Project
+            </Link>
+          ) : (
+            "Project Settings > Transfer Project"
+          )}
+          .
+        </p>
+      </div>
       <div className="mb-4 flex flex-col gap-1">
         <Combobox
           label="Destination Project"

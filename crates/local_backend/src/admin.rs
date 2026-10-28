@@ -1,4 +1,5 @@
 use authentication::application_auth::ApplicationAuth;
+use common::runtime::Runtime;
 use errors::ErrorMetadataAnyhowExt;
 use keybroker::{
     bad_admin_key_error,
@@ -6,8 +7,8 @@ use keybroker::{
     Identity,
 };
 
-pub async fn must_be_admin_from_key(
-    app_auth: &ApplicationAuth,
+pub async fn must_be_admin_from_key<RT: Runtime>(
+    app_auth: &ApplicationAuth<RT>,
     instance_name: String,
     admin_key: String,
 ) -> anyhow::Result<Identity> {

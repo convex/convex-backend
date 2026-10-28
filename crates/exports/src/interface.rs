@@ -1,11 +1,20 @@
 use common::{
     runtime::Runtime,
-    types::ObjectKey,
+    types::{
+        streaming_export::selection::Selection,
+        ObjectKey,
+    },
 };
+use database::DatabaseSnapshot;
 use futures::future::BoxFuture;
 use model::exports::types::{
     ExportFormat,
     ExportRequestor,
+};
+use streaming_export::managed::{
+    SyncDestination,
+    SyncFormat,
+    SyncPage,
 };
 use usage_tracking::FunctionUsageTracker;
 use value::ResolvedDocumentId;
@@ -20,6 +29,18 @@ pub type ResumptionToken = serde_json::Map<String, serde_json::Value>;
 
 #[async_trait::async_trait]
 pub trait ExportProvider<RT: Runtime>: Send + Sync {
+    async fn sync(
+        &self,
+        instance_name: &str,
+        database: &DatabaseSnapshot<RT>,
+        destination: SyncDestination,
+        format: SyncFormat,
+        selection: &Selection,
+        // The export's `_log_sinks` document ID. The destination owns the
+        // cursor; a different ID there means the export was recreated.
+        export_id: &str,
+    ) -> anyhow::Result<SyncPage>;
+
     async fn export(
         &self,
         components: &ExportComponents<RT>,
@@ -47,6 +68,18 @@ pub struct InProcessExportProvider;
 
 #[async_trait::async_trait]
 impl<RT: Runtime> ExportProvider<RT> for InProcessExportProvider {
+    async fn sync(
+        &self,
+        _instance_name: &str,
+        _database: &DatabaseSnapshot<RT>,
+        _destination: SyncDestination,
+        _format: SyncFormat,
+        _selection: &Selection,
+        _export_id: &str,
+    ) -> anyhow::Result<SyncPage> {
+        anyhow::bail!("In-process managed streaming exports are not implemented yet");
+    }
+
     async fn export(
         &self,
         components: &ExportComponents<RT>,

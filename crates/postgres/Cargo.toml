@@ -5,9 +5,6 @@ authors = ["Convex, Inc. <no-reply@convex.dev>"]
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
-[package.metadata.cargo-machete]
-ignored = ["proptest"]
-
 [features]
 testing = ["common/testing", "errors/testing", "metrics/testing"]
 
@@ -17,12 +14,12 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 cmd_util = { workspace = true }
 common = { workspace = true }
+const-hex = { workspace = true }
 const_format = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
-hex = { workspace = true }
 itertools = { workspace = true }
 lru = { workspace = true }
 metrics = { workspace = true }
@@ -46,7 +43,6 @@ tracing = { workspace = true }
 common = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }
-proptest = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

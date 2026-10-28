@@ -20,6 +20,7 @@ import { useAuthHeader } from "hooks/fetching";
 import { createGlobalState } from "react-use";
 import * as Yup from "yup";
 import { useWorkOS } from "hooks/useWorkOS";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 
 export const useSupportFormOpen = createGlobalState<
   { defaultMessage: string; defaultSubject: string } | boolean
@@ -29,12 +30,14 @@ export function SupportWidget() {
   const team = useCurrentTeam();
   const { subscription } = useTeamOrbSubscription(team?.id);
   const { user } = useWorkOS();
+  const { supportTicketForAllPlans } = useLaunchDarkly();
   const [openState, setOpenState] = useSupportFormOpen();
 
   const canSubmitTicket =
-    subscription &&
-    (subscription.plan.planType === "CONVEX_PROFESSIONAL" ||
-      subscription.plan.planType === "CONVEX_BUSINESS");
+    supportTicketForAllPlans ||
+    (subscription &&
+      (subscription.plan.planType === "CONVEX_PROFESSIONAL" ||
+        subscription.plan.planType === "CONVEX_BUSINESS"));
   if (openState === false || !user) {
     return null;
   }
@@ -116,7 +119,6 @@ function SupportForm() {
 
   const profile = useProfile();
 
-  const { subscription } = useTeamOrbSubscription(team?.id);
   const [openState, setOpenState] = useSupportFormOpen();
   const authHeader = useAuthHeader();
 
@@ -237,7 +239,7 @@ function SupportForm() {
       >
         Send
       </Button>
-      {subscription && profile?.email && (
+      {profile?.email && (
         <p className="text-xs text-content-secondary">
           The Convex support team will respond by email to {profile.email}.
         </p>

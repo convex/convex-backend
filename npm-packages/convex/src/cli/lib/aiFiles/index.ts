@@ -44,11 +44,18 @@ async function hasExistingAiFilesArtifacts({
   );
 }
 
+type InstallAiFilesResult =
+  | { kind: "success" }
+  | { kind: "error"; message: string };
+
 /**
  * Install or refresh all Convex AI files.
  *
  * Reads the existing state if present, or starts from a blank one for a
  * fresh install.
+ *
+ * Writes everything it can even when the guidelines download or the skills
+ * install fails, and returns an error if either of them failed.
  */
 export async function installAiFiles({
   projectDir,
@@ -56,16 +63,29 @@ export async function installAiFiles({
   aiFilesConfig,
 }: AiFilesPaths & {
   aiFilesConfig?: AiFilesProjectConfig | undefined;
-}): Promise<void> {
+}): Promise<InstallAiFilesResult> {
   const convexDirName = path.relative(projectDir, convexDir);
   const state = await readAiStateOrDefault(convexDir);
 
-  await installGuidelinesFile({ convexDir, state });
+  const guidelinesInstalled = await installGuidelinesFile({ convexDir, state });
   await applyAgentsMdSection({ projectDir, state, convexDirName });
   await applyClaudeMdSection({ projectDir, state, convexDirName });
-  await installSkills({ projectDir, state, aiFilesConfig });
+  const skillsInstalled = await installSkills({
+    projectDir,
+    state,
+    aiFilesConfig,
+  });
   await removeLegacyCursorRules(projectDir);
   await writeAiState({ state, convexDir });
+
+  if (!guidelinesInstalled || !skillsInstalled) {
+    return {
+      kind: "error",
+      message:
+        "Some Convex AI files could not be installed. See the messages above.",
+    };
+  }
+  return { kind: "success" };
 }
 
 async function attemptToInstallAiFiles(

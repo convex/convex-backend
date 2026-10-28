@@ -12,13 +12,6 @@ use imbl_slab::{
     SlabKey,
 };
 use itertools::Itertools;
-use levenshtein_automata::{
-    Distance,
-    DFA,
-    SINK_STATE,
-};
-
-use crate::EditDistance;
 
 /// Radix trees must store values associated with keys in the tree. There are
 /// two simple ways to do this: store values within internal tree nodes or have
@@ -31,8 +24,8 @@ use crate::EditDistance;
 /// choose not to do this. To use ARTs strategy here, just need to change the
 /// Leaf variant.
 ///
-/// We also do not store keys in sorted order because we do not require range
-/// queries or sorted iterations just yet.
+/// Node4 and Node16 do not keep their children sorted, so `iter_prefix` sorts
+/// each node's children as it visits them.
 #[derive(Debug, Clone)]
 enum ARTNode<V: Clone> {
     Leaf(NodeRef<V, 0, 0>),
@@ -899,131 +892,69 @@ impl<K: AsRef<[u8]>, V: Clone> ART<K, V> {
         )
     }
 
-    fn iter_rec<'a>(
-        &'a self,
-        curr: SlabKey,
-        trail: &mut Vec<u8>,
-        output: &mut Vec<(Vec<u8>, &'a V)>,
-    ) {
-        let curr_node = self.get_validated_node(curr);
-
-        let prefix = curr_node.get_meta().prefix.as_ref();
-        trail.extend_from_slice(prefix);
-
-        if let Some(value) = curr_node.get_value() {
-            output.push((trail.clone(), value));
-        }
-
-        for (transition_byte, child_key) in curr_node.iter_children() {
-            trail.push(transition_byte);
-            self.iter_rec(child_key, trail, output);
-            trail.pop();
-        }
-        trail.truncate(trail.len().saturating_sub(prefix.len()));
-    }
-
-    #[allow(unused)]
-    pub fn iter(&self) -> Vec<(Vec<u8>, &V)> {
-        let Some(curr) = self.root else {
-            return vec![];
-        };
-        let mut res = vec![];
-        self.iter_rec(curr, &mut vec![], &mut res);
-        res
-    }
-
-    #[allow(unused)]
-    pub fn node_count(&self) -> usize {
-        self.nodes.len()
-    }
-
     pub fn len(&self) -> usize {
         self.iter_values().count()
     }
 
-    /// DFA-intersection implementation for fuzzy search
-    pub fn intersect<'a>(
+    /// Iterates over the entries whose keys start with `prefix` in
+    /// lexicographic key order, yielding each value with its full key.
+    pub fn iter_prefix<'a>(
         &'a self,
-        dfa: DFA,
-        skip_prefix: Option<&'a [u8]>,
-    ) -> impl Iterator<Item = (&'a V, EditDistance, Vec<u8>)> + 'a {
+        prefix: &'a [u8],
+    ) -> impl Iterator<Item = (&'a V, Vec<u8>)> + 'a {
         std::iter::from_coroutine(
             #[coroutine]
             move || {
-                if dfa.initial_state() == SINK_STATE {
-                    return;
-                }
-                let Some(mut root) = self.root else {
+                let Some(mut node_key) = self.root else {
                     return;
                 };
 
-                // If a skip_prefix was specified, seek to node + prefix offset of that node
-                // which matches skip_prefix. Start search from there.
-                let prefix_offset = if let Some(skip_prefix) = skip_prefix {
-                    let mut skip_prefix_offset = 0;
-                    self.seek(skip_prefix, |last_state, _, depth| {
-                        root = last_state;
-                        skip_prefix_offset = depth;
-                    });
-                    let art_node = self.get_validated_node(root);
-                    let last_prefix = &art_node.get_meta().prefix;
-                    max_shared_prefix(last_prefix, &skip_prefix[skip_prefix_offset..])
-                } else {
-                    0
-                };
-
-                let mut stack = vec![(root, dfa.initial_state(), None::<u8>, false, prefix_offset)];
-                let mut path = skip_prefix
-                    .map(|prefix| prefix.to_vec())
-                    .unwrap_or_default();
-                'outer: while let Some((
-                    art_key,
-                    mut dfa_state,
-                    transition,
-                    visited,
-                    prefix_offset,
-                )) = stack.pop()
-                {
-                    let art_node = self.get_validated_node(art_key);
-                    let prefix = &art_node.get_meta().prefix[prefix_offset..];
-
-                    if visited {
-                        assert!(path.len() >= prefix.len());
-                        // truncate the prefix + transition byte if it exists
-                        path.truncate(path.len() - prefix.len());
-                        if transition.is_some() {
-                            path.pop();
-                        }
-                    } else {
-                        for byte in prefix.iter() {
-                            dfa_state = dfa.transition(dfa_state, *byte);
-                            if dfa_state == SINK_STATE {
-                                continue 'outer;
-                            }
-                        }
-                        if let Some(transition) = transition {
-                            path.push(transition);
-                        }
-                        path.extend_from_slice(prefix);
-
-                        if let Some(value) = art_node.get_value()
-                            && let Distance::Exact(dist) = dfa.distance(dfa_state)
-                        {
-                            yield (value, dist, path.clone())
-                        }
-
-                        // Repush node with visited set to true so we can reset the elements pushed
-                        // to path
-                        stack.push((art_key, dfa_state, transition, true, prefix_offset));
-
-                        // Recurse on children for which a DFA transition exists
-                        for (transition_byte, child_key) in art_node.iter_children() {
-                            let new_state = dfa.transition(dfa_state, transition_byte);
-                            if new_state != SINK_STATE {
-                                stack.push((child_key, new_state, Some(transition_byte), false, 0));
-                            }
-                        }
+                // Descend to the shallowest node whose key extends `prefix`. `path` holds the
+                // key bytes above `node_key`.
+                let mut path = Vec::with_capacity(prefix.len());
+                loop {
+                    let node = self.get_validated_node(node_key);
+                    let node_prefix = node.get_meta().prefix.as_ref();
+                    let remaining = &prefix[path.len()..];
+                    let shared = max_shared_prefix(node_prefix, remaining);
+                    if shared == remaining.len() {
+                        break;
                     }
+                    if shared < node_prefix.len() {
+                        return;
+                    }
+                    path.extend_from_slice(node_prefix);
+                    let transition = prefix[path.len()];
+                    let Some(child_key) = node.find_child(transition) else {
+                        return;
+                    };
+                    path.push(transition);
+                    node_key = child_key;
+                }
+
+                // A preorder traversal that visits children in byte order yields keys in
+                // lexicographic order. Each stack entry carries the length of `path` at its
+                // parent so siblings can truncate back to it.
+                let mut stack = vec![(node_key, None::<u8>, path.len())];
+                while let Some((node_key, transition, parent_path_len)) = stack.pop() {
+                    path.truncate(parent_path_len);
+                    path.extend(transition);
+                    let node = self.get_validated_node(node_key);
+                    path.extend_from_slice(&node.get_meta().prefix);
+                    if let Some(value) = node.get_value() {
+                        yield (value, path.clone());
+                    }
+
+                    // Node4 and Node16 keep children in insertion order.
+                    let mut children = node.iter_children().collect_vec();
+                    children.sort_unstable_by_key(|(byte, _)| *byte);
+                    let path_len = path.len();
+                    stack.extend(
+                        children
+                            .into_iter()
+                            .rev()
+                            .map(|(byte, child_key)| (child_key, Some(byte), path_len)),
+                    );
                 }
             },
         )

@@ -3,6 +3,7 @@ import { version } from "../../index.js";
 import {
   AnyFunctionReference,
   FunctionReference,
+  FunctionReference_future,
   FunctionType,
 } from "../api.js";
 import { performAsyncSyscall } from "../impl/syscall.js";
@@ -49,6 +50,17 @@ export type FunctionHandle<
 > = string & FunctionReference<Type, "internal", Args, ReturnType>;
 
 /**
+ * A {@link FunctionHandle} with the type semantics of {@link FunctionReference_future}.
+ *
+ * @public
+ */
+export type FunctionHandle_future<
+  Type extends FunctionType,
+  Args extends DefaultFunctionArgs = any,
+  ReturnType = any,
+> = string & FunctionReference_future<Type, "internal", Args, ReturnType>;
+
+/**
  * Create a serializable reference to a Convex function.
  * Passing a this reference to another component allows that component to call this
  * function during the current function execution or at any later time.
@@ -66,12 +78,9 @@ export async function createFunctionHandle<
   Args extends DefaultFunctionArgs,
   ReturnType,
 >(
-  functionReference: FunctionReference<
-    Type,
-    "public" | "internal",
-    Args,
-    ReturnType
-  >,
+  functionReference:
+    | FunctionReference<Type, "public" | "internal", Args, ReturnType>
+    | FunctionReference_future<Type, "public" | "internal", Args, ReturnType>,
 ): Promise<FunctionHandle<Type, Args, ReturnType>> {
   const address = getFunctionAddress(functionReference);
   return await performAsyncSyscall("1.0/createFunctionHandle", {
@@ -105,7 +114,7 @@ export type ComponentDefinition<
    */
   use<Definition extends ComponentDefinition<any, any>>(
     definition: Definition,
-    options?: UseOptions<Definition>,
+    ...args: UseArgs<Definition>
   ): InstalledComponent<Definition>;
 
   /**
@@ -137,29 +146,54 @@ type ComponentDefinitionEnv<T extends ComponentDefinition<any, any>> =
   T["__env"];
 
 /**
+ * The names in an {@link EnvDefinition} whose validators are required (not
+ * wrapped in `v.optional(...)`).
+ */
+type RequiredEnvKeys<E extends EnvDefinition> = {
+  [K in keyof E]: E[K] extends Validator<any, "optional", any> ? never : K;
+}[keyof E];
+
+/**
  * Options for installing a component via `app.use()` or `component.use()`.
  *
- * If the component declares required env vars, the `env` property is required.
+ * If the component declares any required env vars, the `env` property is
+ * required. Otherwise it is optional, so that a component with no env vars (or
+ * only optional ones) can be installed without passing `env`.
  */
 type UseOptions<Definition extends ComponentDefinition<any, any>> =
-  keyof ComponentDefinitionEnv<Definition> extends never
-    ? { name?: string; httpPrefix?: string }
+  RequiredEnvKeys<ComponentDefinitionEnv<Definition>> extends never
+    ? {
+        name?: string;
+        httpPrefix?: string;
+        env?: UseOptionsEnv<ComponentDefinitionEnv<Definition>>;
+      }
     : {
         name?: string;
         httpPrefix?: string;
         env: UseOptionsEnv<ComponentDefinitionEnv<Definition>>;
       };
 
+/**
+ * The arguments to `use()` after the component definition.
+ *
+ * When the component declares required env vars the `options` argument is
+ * mandatory (so it can't be dropped to skip the required `env`); otherwise it
+ * is optional.
+ */
+type UseArgs<Definition extends ComponentDefinition<any, any>> =
+  RequiredEnvKeys<ComponentDefinitionEnv<Definition>> extends never
+    ? [options?: UseOptions<Definition>]
+    : [options: UseOptions<Definition>];
+
 type UseOptionsEnv<E extends EnvDefinition> = Expand<
   {
-    [K in keyof E as E[K] extends VOptional<any> ? never : K]:
+    [K in keyof E as E[K] extends Validator<any, "optional", any> ? never : K]:
       | Infer<E[K]>
       | EnvRef;
   } & {
-    [K in keyof E as E[K] extends VOptional<any> ? K : never]?:
-      | Infer<E[K]>
-      | EnvRef
-      | undefined;
+    [K in keyof E as E[K] extends Validator<any, "optional", any>
+      ? K
+      : never]?: Infer<E[K]> | EnvRef | undefined;
   }
 >;
 
@@ -213,11 +247,13 @@ export type EnvDefinition = Record<
  */
 export type EnvFromDefinition<E extends EnvDefinition> = Expand<
   {
-    [K in keyof E as E[K] extends VOptional<any> ? never : K]: Infer<E[K]>;
+    [K in keyof E as E[K] extends Validator<any, "optional", any>
+      ? never
+      : K]: Infer<E[K]>;
   } & {
-    [K in keyof E as E[K] extends VOptional<any> ? K : never]?:
-      | Infer<E[K]>
-      | undefined;
+    [K in keyof E as E[K] extends Validator<any, "optional", any>
+      ? K
+      : never]?: Infer<E[K]> | undefined;
   }
 >;
 
@@ -269,7 +305,7 @@ export type AppDefinition<Env extends EnvDefinition = EnvDefinition> = {
    */
   use<Definition extends ComponentDefinition<any, any>>(
     definition: Definition,
-    options?: UseOptions<Definition>,
+    ...args: UseArgs<Definition>
   ): InstalledComponent<Definition>;
 
   /**

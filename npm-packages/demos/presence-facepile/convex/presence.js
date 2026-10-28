@@ -34,7 +34,10 @@ export const update = mutation({
       .withIndex("by_user_room", (q) => q.eq("user", user).eq("room", room))
       .unique();
     if (existing) {
-      await ctx.db.patch(existing._id, { data, updated: Date.now() });
+      await ctx.db.patch("presence", existing._id, {
+        data,
+        updated: Date.now(),
+      });
     } else {
       await ctx.db.insert("presence", {
         user,
@@ -64,7 +67,7 @@ export const heartbeat = mutation({
       .withIndex("by_user_room", (q) => q.eq("user", user).eq("room", room))
       .unique();
     if (existing) {
-      await ctx.db.patch(existing._id, { updated: Date.now() });
+      await ctx.db.patch("presence", existing._id, { updated: Date.now() });
     }
   },
 });

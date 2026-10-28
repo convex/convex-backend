@@ -1,7 +1,6 @@
 import React, { ReactNode } from "react";
 import Link from "@docusaurus/Link";
 import { useDocById } from "@docusaurus/plugin-content-docs/client";
-import Heading from "@theme/Heading";
 
 type Item = {
   docId: string;
@@ -14,11 +13,13 @@ type Item = {
 export function DocCardList(props: { items: Item[] }) {
   const { items } = props;
   return (
-    <div className="cards">
+    <ul className="cards">
       {items.map((item, index) => (
-        <CardLink key={index} item={item} />
+        <li key={index}>
+          <CardLink item={item} />
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -43,9 +44,9 @@ export function CardLink({
     >
       {icon}
       <div>
-        <Heading as="h2" className="text--truncate" title={item.label}>
+        <div className="card__title text--truncate" title={item.label}>
           {item.label}
-        </Heading>
+        </div>
         <p className="text--truncate" title={doc?.description}>
           {doc?.description}
         </p>

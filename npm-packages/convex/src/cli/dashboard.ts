@@ -6,7 +6,6 @@ import { logMessage, logOutput, logWarning } from "../bundler/log.js";
 import { loadSelectedDeploymentCredentials } from "./lib/api.js";
 import { actionDescription } from "./lib/command.js";
 import { getDeploymentSelection } from "./lib/deploymentSelection.js";
-import { checkIfDashboardIsRunning } from "./lib/localDeployment/dashboard.js";
 import { DASHBOARD_HOST, getDashboardUrl } from "./lib/dashboard.js";
 import { isAnonymousDeployment } from "./lib/deployment.js";
 
@@ -45,8 +44,15 @@ export const dashboard = new Command("dashboard")
         logWarning(warningMessage);
         return;
       }
-      const isLocalDashboardRunning = await checkIfDashboardIsRunning(ctx);
-      if (!isLocalDashboardRunning) {
+      // The anonymous-mode dashboard is a separate local HTTP server; confirm
+      // it's actually serving by hitting its API rather than inferring from the
+      // backend.
+      if (
+        !(await isAnonymousDashboardRunning(
+          dashboardUrl,
+          deployment.deploymentFields.deploymentName,
+        ))
+      ) {
         logWarning(warningMessage);
         return;
       }
@@ -56,6 +62,26 @@ export const dashboard = new Command("dashboard")
 
     await logOrOpenUrl(ctx, dashboardUrl ?? DASHBOARD_HOST, options.open);
   });
+
+async function isAnonymousDashboardRunning(
+  dashboardUrl: string,
+  deploymentName: string,
+): Promise<boolean> {
+  try {
+    // `dashboardUrl` ends with a trailing slash.
+    const resp = await fetch(`${dashboardUrl}api/current_deployment`);
+    if (resp.status !== 200) {
+      return false;
+    }
+    // The dashboard port is stored per deployment but can be reused by a
+    // different anonymous dev session, so confirm this dashboard is actually
+    // serving the selected deployment.
+    const currentDeployment = (await resp.json()) as { name?: unknown };
+    return currentDeployment.name === deploymentName;
+  } catch {
+    return false;
+  }
+}
 
 async function logOrOpenUrl(ctx: Context, url: string, shouldOpen: boolean) {
   if (shouldOpen) {

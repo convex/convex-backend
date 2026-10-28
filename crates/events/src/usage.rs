@@ -62,11 +62,30 @@ pub struct FunctionCallUsageFields {
     pub occ_retry_count: Option<u64>,
 }
 
+/// One storage call covered by a [`UsageEvent::StorageCall`]. A summary's
+/// sample is an arbitrary one of its calls, since content type is not part of
+/// the summary's grouping key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageCallSample {
+    pub content_type: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InsightReadLimitCall {
     pub table_name: String,
     pub bytes_read: u64,
     pub documents_read: u64,
+}
+
+/// Reported in place of a table name for usage that isn't attributed to a
+/// single table.
+pub const UNKNOWN_TABLE_NAME: &str = "-unknown-";
+
+fn serialize_unknown_table_name<S: serde::Serializer>(
+    _: &(),
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(UNKNOWN_TABLE_NAME)
 }
 
 // TODO(CX-5845): Use proper serializable types for constants rather than
@@ -100,10 +119,14 @@ pub enum UsageEvent {
     StorageCall {
         id: String,
         component_path: Option<String>,
-        storage_id: String,
         call: String,
-        content_type: Option<String>,
-        sha256: String,
+        /// Flattened so the payload keeps one flat schema for raw events and
+        /// summaries.
+        #[serde(flatten)]
+        sample: StorageCallSample,
+        /// Calls this event covers: one for a raw event, the minute's total for
+        /// a summary.
+        count: u64,
     },
     /// Bandwidth from a storage call outside of a user function (e.g. snapshot
     /// import/export).
@@ -114,16 +137,22 @@ pub enum UsageEvent {
         ingress: u64,
         egress: u64,
     },
+    /// Database bandwidth for a function execution or an aggregated interval.
     DatabaseBandwidth {
         id: String,
-        request_id: String,
+        /// Correlates an individual execution's bandwidth with its request.
+        /// Minute summaries span many requests and omit it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
         component_path: Option<String>,
         udf_id: String,
-        table_name: String,
-        ingress: u64,
+        /// Bandwidth is aggregated across tables, but the downstream pipeline
+        /// still expects a `table_name` column, so it's always
+        /// [`UNKNOWN_TABLE_NAME`].
+        #[serde(serialize_with = "serialize_unknown_table_name", skip_deserializing)]
+        table_name: (),
         // Includes ingress for tables that have virtual tables
         ingress_v2: u64,
-        egress: u64,
         egress_rows: u64,
         // Includes egress for tables that have virtual tables
         egress_v2: u64,
@@ -171,7 +200,11 @@ pub enum UsageEvent {
         table_name: String,
         index_name: String,
         num_searches: u64,
+        /// Total index size per search
         bytes_searched: u64,
+        /// Index size scaled by the share of documents matching each search's
+        /// filter conditions.
+        filtered_bytes_searched: u64,
     },
     VectorQuery {
         id: String,
@@ -181,7 +214,6 @@ pub enum UsageEvent {
         index_name: String,
         num_searches: u64,
         bytes_searched: u64,
-        dimensions: u64,
     },
     AuditLogBandwidth {
         id: String,
@@ -217,6 +249,13 @@ pub enum UsageEvent {
     CurrentDocumentCounts {
         tables: Vec<TableDocumentCount>,
         system_tables: Vec<TableDocumentCount>,
+    },
+    /// The current backend state, broken down into its orthogonal stop states.
+    /// Each field is the serialized state value (e.g. "none", "disabled").
+    CurrentBackendState {
+        system: String,
+        usage_limit: String,
+        user: String,
     },
 }
 

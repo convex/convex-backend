@@ -108,12 +108,30 @@ impl ResolvedAuditLogLine {
     }
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ConvexActorVar {
+    Token {
+        member_id: Option<u64>,
+        token_id: u64,
+        client_id: Option<String>,
+    },
+    Member {
+        member_id: u64,
+    },
+}
+
 #[derive(Serialize)]
 pub struct AuditLogVars {
     request_id: RequestId,
     ip: Option<ClientIp>,
     user_agent: Option<ClientUserAgent>,
     now: UnixTimestamp,
+    convex_actor: Option<ConvexActorVar>,
 }
 
 impl AuditLogVars {
@@ -124,12 +142,17 @@ impl AuditLogVars {
     // escaped (like " or \)
     pub const MAX_VAR_LENGTH: usize = 1026;
 
-    pub fn from_context(context: ExecutionContext, rt: &impl Runtime) -> anyhow::Result<Self> {
+    pub fn from_context(
+        context: ExecutionContext,
+        convex_actor: Option<ConvexActorVar>,
+        rt: &impl Runtime,
+    ) -> anyhow::Result<Self> {
         let vars = AuditLogVars {
             ip: context.request_metadata.ip,
             request_id: context.request_id,
             now: rt.unix_timestamp(),
             user_agent: context.request_metadata.user_agent,
+            convex_actor,
         };
         vars.check_var_lengths()?;
         Ok(vars)
@@ -141,12 +164,14 @@ impl AuditLogVars {
             ip,
             user_agent,
             now,
+            convex_actor,
         } = self;
         let serialized = [
             ("requestId", serde_json::to_string(request_id)?),
             ("ip", serde_json::to_string(ip)?),
             ("userAgent", serde_json::to_string(user_agent)?),
             ("now", serde_json::to_string(&now.as_ms_since_epoch()?)?),
+            ("convexActor", serde_json::to_string(convex_actor)?),
         ];
         for (name, s) in serialized {
             anyhow::ensure!(
@@ -203,6 +228,7 @@ fn resolve_vars(value: &mut JsonValue, vars: &AuditLogVars) -> anyhow::Result<us
         ip,
         user_agent,
         now,
+        convex_actor,
     } = vars;
     let mut num_vars = 0;
     if let Some(var_name) = as_var_sentinel(value) {
@@ -211,6 +237,7 @@ fn resolve_vars(value: &mut JsonValue, vars: &AuditLogVars) -> anyhow::Result<us
             "ip" => *value = serde_json::to_value(ip)?,
             "userAgent" => *value = serde_json::to_value(user_agent)?,
             "now" => *value = serde_json::to_value(now.as_ms_since_epoch()?)?,
+            "convexActor" => *value = serde_json::to_value(convex_actor)?,
             _ => anyhow::bail!(ErrorMetadata::bad_request(
                 "UnknownAuditLogVar",
                 format!("Unknown audit log variable: \"{var_name}\""),

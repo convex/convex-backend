@@ -3,9 +3,10 @@ path = "junit.xml"
 
 [profile.ci]
 fail-fast = false
-status-level = "fail"
+status-level = "slow"
 final-status-level = "fail"
 failure-output = "immediate-final"
+slow-timeout = { period = "30s", terminate-after = 20 }
 
 [[profile.ci.overrides]]
 filter = 'test(/model::tests::model_tests::/)'
@@ -14,6 +15,7 @@ test-group = 'model-tests'
 [[profile.ci.overrides]]
 filter = 'test(/roundtrips/) or test(/proptest/)'
 test-group = 'proptests'
+slow-timeout = { period = "900s", terminate-after = 6 }
 
 [test-groups]
 model-tests = { max-threads = 4 }

@@ -37,6 +37,8 @@ export async function getDashboardUrl(
   }
 }
 
+// FIXME: this doesn't work correctly in local-dev/self-hosted, where the
+// dashboard isn't at DASHBOARD_HOST and deployments aren't addressed by `/d/`.
 export function deploymentDashboardUrlPage(
   configuredDeployment: string | null,
   page: string,

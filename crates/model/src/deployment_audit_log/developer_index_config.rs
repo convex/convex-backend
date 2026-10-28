@@ -27,7 +27,7 @@ use value::codegen_convex_serialization;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeveloperIndexConfig {
     spec: DeveloperIndexSpec,
-    staged: bool,
+    pub staged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

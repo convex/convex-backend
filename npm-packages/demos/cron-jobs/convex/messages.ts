@@ -23,7 +23,7 @@ export const clearAll = internalMutation({
   args: {},
   handler: async (ctx) => {
     for (const message of await ctx.db.query("messages").collect()) {
-      await ctx.db.delete(message._id);
+      await ctx.db.delete("messages", message._id);
     }
   },
 });

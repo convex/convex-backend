@@ -101,7 +101,7 @@ Convex approach leads to fewer surprises in the long run.
 
 You can create an index across multiple fields at once, query a specific range
 of data, and change the order of your query result.
-[Read the complete index documentation](/database/reading-data/indexes/indexes.md)
+[Read the complete index documentation](/database/reading-data/indexes/indexes.mdx)
 to learn more.
 
 Convex also supports a slower filtering mechanism that effectively loops through
@@ -113,7 +113,7 @@ index query further. You can read more about filters
 ## Ordering
 
 By default Convex always returns documents ordered by
-[`_creationTime`](/database/types.md#system-fields).
+[`_creationTime`](/database/types.mdx#system-fields).
 
 You can use [`.order("asc" | "desc")`](/api/interfaces/server.Query#order) to
 pick whether the order is ascending or descending. If the order isn't specified,
@@ -142,9 +142,9 @@ const topTenMostLikedMessages = recentMessages
 ```
 
 For document queries that return larger numbers of documents, you'll want to use
-an [index](/database/reading-data/indexes/indexes.md) to improve the
+an [index](/database/reading-data/indexes/indexes.mdx) to improve the
 performance. Document queries that use indexes will be
-[ordered based on the columns in the index](/database/reading-data/indexes/indexes.md#sorting-with-indexes)
+[ordered based on the columns in the index](/database/reading-data/indexes/indexes.mdx#sorting-with-indexes)
 and can avoid slow table scans.
 
 ```ts
@@ -156,11 +156,11 @@ const messages = await ctx.db
   .take(20);
 ```
 
-See [Limits](/database/reading-data/indexes/indexes.md#limits) for details.
+See [Limits](/database/reading-data/indexes/indexes.mdx#limits) for details.
 
 ### Ordering of different types of values
 
-A single field can have values of any [Convex type](/database/types.md). When
+A single field can have values of any [Convex type](/database/types.mdx). When
 there are values of different types in an indexed field, their ascending order
 is as follows:
 

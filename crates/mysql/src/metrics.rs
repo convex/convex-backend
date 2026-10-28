@@ -1,6 +1,7 @@
 use common::{
     persistence::PersistenceGlobalKey,
     pool_stats::ConnectionPoolStats,
+    types::Timestamp,
 };
 use metrics::{
     log_counter_with_labels,
@@ -22,6 +23,8 @@ use mysql_async::{
     Value,
 };
 use prometheus::VMHistogramVec;
+
+use crate::MaintenanceRound;
 
 fn cluster_name_label(cluster_name: &str) -> StaticMetricLabel {
     StaticMetricLabel::new("cluster_name", cluster_name.to_owned())
@@ -148,7 +151,7 @@ impl<'a> QueryIndexStats<'a> {
     }
 }
 register_convex_counter!(
-    MYSQL_QUERY_INDEX_SQL_STATEMENTS,
+    pub(crate) MYSQL_QUERY_INDEX_SQL_STATEMENTS,
     "Number of index query SQL statements",
     &["cluster_name"]
 );
@@ -549,6 +552,11 @@ register_convex_gauge!(
     &["cluster_name"],
 );
 register_convex_gauge!(
+    MYSQL_POOL_CONNECTIONS_IN_USE_INFO,
+    "Gauge of connections currently checked out from the pool and owned by the application.",
+    &["cluster_name"],
+);
+register_convex_gauge!(
     MYSQL_POOL_ACTIVE_WAIT_REQUESTS_INFO,
     "Gauge of GetConn requests that are currently active.",
     &["cluster_name"],
@@ -607,6 +615,7 @@ pub fn log_pool_metrics(cluster_name: &str, metrics: &mysql_async::Metrics) {
     }
     mysql_metric!(connection_count, MYSQL_POOL_CONNECTION_COUNT_INFO);
     mysql_metric!(connections_in_pool, MYSQL_POOL_CONNECTIONS_IN_POOL_INFO);
+    mysql_metric!(connections_in_use, MYSQL_POOL_CONNECTIONS_IN_USE_INFO);
     mysql_metric!(active_wait_requests, MYSQL_POOL_ACTIVE_WAIT_REQUESTS_INFO);
     mysql_metric!(create_failed, MYSQL_POOL_CREATE_FAILED_TOTAL);
     mysql_metric!(
@@ -633,5 +642,81 @@ pub fn log_pool_metrics(cluster_name: &str, metrics: &mysql_async::Metrics) {
     mysql_metric!(
         connection_returned_to_pool,
         MYSQL_POOL_CONNECTION_RETURNED_TO_POOL_TOTAL
+    );
+}
+
+register_convex_gauge!(
+    INDEXES_LOG_LOOKAHEAD_SECONDS,
+    "How far past now the newest existing V6 index log bucket reaches. A commit past it fails, so \
+     this must stay comfortably positive.",
+    &["cluster_name"]
+);
+register_convex_gauge!(
+    INDEXES_LOG_OLDEST_KEPT_AGE_SECONDS,
+    "Age of the oldest snapshot the V6 index log buckets are advertised to serve",
+    &["cluster_name"]
+);
+register_convex_gauge!(
+    INDEXES_LOG_BUCKET_TABLES,
+    "Number of V6 index log bucket tables present",
+    &["cluster_name"]
+);
+register_convex_gauge!(
+    INDEXES_LOG_MAINTENANCE_LAST_SUCCESS_UNIX_SECONDS,
+    "Unix timestamp of the last successful V6 index log maintenance round",
+    &["cluster_name"]
+);
+register_convex_counter!(
+    INDEXES_LOG_BUCKETS_CREATED_TOTAL,
+    "Number of V6 index log bucket CREATE statements that succeeded. Counts statements, not table \
+     transitions: the DDL is idempotent, so two conductors racing one round each count the table.",
+    &["cluster_name"]
+);
+register_convex_counter!(
+    INDEXES_LOG_BUCKETS_DROPPED_TOTAL,
+    "Number of V6 index log bucket DROP statements that succeeded. Counts statements, not table \
+     transitions; see the created counter.",
+    &["cluster_name"]
+);
+
+pub fn log_indexes_log_bucket_created(cluster_name: &str) {
+    log_counter_with_labels(
+        &INDEXES_LOG_BUCKETS_CREATED_TOTAL,
+        1,
+        vec![cluster_name_label(cluster_name)],
+    );
+}
+
+pub fn log_indexes_log_bucket_dropped(cluster_name: &str) {
+    log_counter_with_labels(
+        &INDEXES_LOG_BUCKETS_DROPPED_TOTAL,
+        1,
+        vec![cluster_name_label(cluster_name)],
+    );
+}
+
+/// These series exist only on conductors running V6, so an alert on index log
+/// maintenance has to key off the series rather than the conductor job.
+pub fn log_indexes_log_maintenance(cluster_name: &str, round: &MaintenanceRound, now: Timestamp) {
+    let labels = vec![cluster_name_label(cluster_name)];
+    log_gauge_with_labels(
+        &INDEXES_LOG_LOOKAHEAD_SECONDS,
+        round.created_through_ts.secs_since_f64(now),
+        labels.clone(),
+    );
+    log_gauge_with_labels(
+        &INDEXES_LOG_OLDEST_KEPT_AGE_SECONDS,
+        now.secs_since_f64(round.oldest_kept_ts),
+        labels.clone(),
+    );
+    log_gauge_with_labels(
+        &INDEXES_LOG_BUCKET_TABLES,
+        round.bucket_count as f64,
+        labels.clone(),
+    );
+    log_gauge_with_labels(
+        &INDEXES_LOG_MAINTENANCE_LAST_SUCCESS_UNIX_SECONDS,
+        now.secs_since_f64(Timestamp::MIN),
+        labels,
     );
 }

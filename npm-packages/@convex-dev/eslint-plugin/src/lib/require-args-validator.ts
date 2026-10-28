@@ -1,5 +1,9 @@
 import type { TSESTree } from "@typescript-eslint/types";
-import { CONVEX_REGISTRARS, createRule } from "../util.js";
+import {
+  CONVEX_REGISTRARS,
+  createRule,
+  getRegisteredFunction,
+} from "../util.js";
 import type {
   ReportFixFunction,
   RuleContext,
@@ -37,30 +41,6 @@ function handlerHasArgsParameter(
   }
 
   return true;
-}
-
-/**
- * Helper function to get the handler property from an object expression
- */
-function getHandlerProperty(
-  objectExpr: TSESTree.ObjectExpression,
-): TSESTree.ArrowFunctionExpression | TSESTree.FunctionExpression | null {
-  const maybeHandler = objectExpr.properties.find(
-    (prop) =>
-      prop.type === "Property" &&
-      prop.key.type === "Identifier" &&
-      prop.key.name === "handler",
-  ) as TSESTree.Property | undefined;
-  if (!maybeHandler) return null;
-
-  if (
-    maybeHandler.value.type === "ArrowFunctionExpression" ||
-    maybeHandler.value.type === "FunctionExpression"
-  ) {
-    return maybeHandler.value;
-  }
-
-  return null;
 }
 
 /**
@@ -147,25 +127,15 @@ export const requireArgsValidator = createRule<Options, MessageIds>({
         }
 
         // Convex function declaration?
-        if (
-          !(
-            node.init?.type === "CallExpression" &&
-            node.init.callee.type === "Identifier" &&
-            CONVEX_REGISTRARS.includes(node.init.callee.name) &&
-            node.init.arguments.length === 1
-          )
-        )
-          return;
+        const registered = getRegisteredFunction(node.init, CONVEX_REGISTRARS);
+        if (!registered) return;
 
         // Old function argument syntax?
-        if (
-          node.init.arguments[0].type === "ArrowFunctionExpression" ||
-          node.init.arguments[0].type === "FunctionExpression"
-        ) {
-          const handler = node.init.arguments[0];
+        if (!registered.objectArg && registered.handler) {
+          const handler = registered.handler;
           if (handlerHasArgsParameter(handler)) {
             context.report({
-              node: node.init,
+              node: registered.call,
               messageId: "missing-args",
               // Not fixable since we don’t know the type
             });
@@ -174,7 +144,7 @@ export const requireArgsValidator = createRule<Options, MessageIds>({
 
           if (!ignoreUnusedArguments) {
             context.report({
-              node: node.init,
+              node: registered.call,
               messageId: "missing-empty-args",
               fix: (fixer) => {
                 let fixText = "{\n";
@@ -198,13 +168,13 @@ export const requireArgsValidator = createRule<Options, MessageIds>({
         }
 
         // New syntax with object argument
-        if (node.init.arguments[0].type === "ObjectExpression") {
-          const objectArg = node.init.arguments[0] as TSESTree.ObjectExpression;
+        if (registered.objectArg) {
+          const objectArg = registered.objectArg;
           if (hasArgsProperty(objectArg)) {
             return;
           }
 
-          const handlerProp = getHandlerProperty(objectArg);
+          const handlerProp = registered.handler;
           const handlerHasArgs =
             handlerProp && handlerHasArgsParameter(handlerProp);
 

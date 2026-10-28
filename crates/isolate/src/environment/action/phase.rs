@@ -14,6 +14,7 @@ use common::{
         Reference,
         Resource,
     },
+    document::ParsedDocument,
     http::RequestDestination,
     runtime::{
         Runtime,
@@ -40,7 +41,6 @@ use model::{
         EnvironmentVariablesModel,
     },
     modules::{
-        module_versions::FullModuleSource,
         types::ModuleMetadata,
         ModuleModel,
     },
@@ -70,12 +70,16 @@ use crate::{
     environment::{
         action::task::TaskRequestEnum,
         helpers::{
-            PerformanceTimeOrigin,
+            performance_unsupported,
+            PerformanceApi,
             Phase,
         },
         ModuleCodeCacheResult,
     },
-    module_cache::ModuleCache,
+    module_cache::{
+        ModuleCache,
+        V8ModuleSource,
+    },
     timeout::{
         PauseReason,
         Timeout,
@@ -115,13 +119,16 @@ enum ActionPreloaded<RT: Runtime> {
     Preloading,
     Ready {
         module_loader: Arc<dyn ModuleCache<RT>>,
-        modules: BTreeMap<CanonicalizedModulePath, (ModuleMetadata, Arc<FullModuleSource>)>,
+        modules: BTreeMap<
+            CanonicalizedModulePath,
+            (Arc<ParsedDocument<ModuleMetadata>>, Arc<V8ModuleSource>),
+        >,
         env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         component_arguments: Option<BTreeMap<Identifier, ConvexValue>>,
         component_env: Option<ComponentEnvCtx>,
         rng: Option<ChaCha12Rng>,
         import_time_unix_timestamp: Option<UnixTimestamp>,
-        performance_time_origin: Option<PerformanceTimeOrigin>,
+        performance_api: Option<PerformanceApi>,
     },
 }
 
@@ -166,166 +173,123 @@ impl<RT: Runtime> ActionPhase<RT> {
         };
 
         let component_id = self.component;
+        self.preloaded = timeout
+            .with_release_permit(PauseReason::UdfInitialize, async {
+                let udf_config = UdfConfigModel::new(&mut tx, component_id.into())
+                    .get()
+                    .await?;
 
-        let udf_config = timeout
-            .with_release_permit(
-                PauseReason::LoadUdfConfig,
-                UdfConfigModel::new(&mut tx, component_id.into()).get(),
-            )
-            .await?;
+                let rng = udf_config
+                    .as_ref()
+                    .map(|c| ChaCha12Rng::from_seed(c.import_phase_rng_seed));
+                let import_time_unix_timestamp =
+                    udf_config.as_ref().map(|c| c.import_phase_unix_timestamp);
 
-        let rng = udf_config
-            .as_ref()
-            .map(|c| ChaCha12Rng::from_seed(c.import_phase_rng_seed));
-        let import_time_unix_timestamp = udf_config.as_ref().map(|c| c.import_phase_unix_timestamp);
-
-        let module_metadata = timeout
-            .with_release_permit(PauseReason::LoadResources, async {
-                let mut modules = Vec::new();
                 let module_metadata = ModuleModel::new(&mut tx)
                     .get_all_metadata(component_id)
                     .await?;
-                for module in module_metadata {
-                    let source_package = SourcePackageModel::new(&mut tx, component_id.into())
-                        .get(module.source_package_id)
-                        .await?;
-                    modules.push((module, source_package));
-                }
-                let loaded_resources = ComponentsModel::new(&mut tx)
-                    .preload_resources(component_id)
+                let source_package = SourcePackageModel::new(&mut tx, component_id.into())
+                    .get_latest()
                     .await?;
-                {
-                    let mut resources = resources.lock();
-                    *resources = loaded_resources;
-                }
-                Ok(modules)
-            })
-            .await?;
-
-        let modules = timeout
-            .with_release_permit(PauseReason::LoadModuleSource, async {
                 let mut modules = BTreeMap::new();
-                for (metadata, source_package) in module_metadata {
+                for metadata in module_metadata {
                     if metadata.path.is_system() {
                         continue;
                     }
                     let path = metadata.path.clone();
                     let module = module_loader
-                        .get_module_with_metadata(&metadata, &source_package)
+                        .get_module_with_metadata(
+                            &metadata,
+                            source_package
+                                .as_ref()
+                                .context("source package not found")?,
+                        )
                         .await?;
-                    modules.insert(path, (metadata.into_value(), module));
+                    modules.insert(path, (metadata, module));
                 }
-                Ok(modules)
-            })
-            .await?;
 
-        let canonical_urls = timeout
-            .with_release_permit(
-                PauseReason::LoadCanonicalUrls,
-                CanonicalUrlsModel::new(&mut tx).get_canonical_urls(),
-            )
-            .await?;
-        if let Some(cloud_url) = canonical_urls.get(&RequestDestination::ConvexCloud) {
-            *convex_origin_override.lock() = Some(ConvexOrigin::from(&cloud_url.url));
-        }
-        // Environment variables are not accessible in component functions,
-        // except CONVEX_SITE_URL which is prefixed with the component's HTTP
-        // prefix (if one is configured).
-        let system_env_var_overrides = parse_system_env_var_overrides(canonical_urls)?;
-        let env_vars = if self.component.is_root() {
-            let mut env_vars = default_system_env_vars;
-            env_vars.extend(system_env_var_overrides);
-            let user_env_vars = timeout
-                .with_release_permit(
-                    PauseReason::LoadEnvironmentVariables,
-                    EnvironmentVariablesModel::new(&mut tx).get_all(),
-                )
-                .await?;
-            env_vars.extend(user_env_vars);
-            env_vars
-        } else {
-            // Non-root components get a prefixed CONVEX_SITE_URL if the component
-            // has an http_prefix configured.
-            let component_metadata = timeout
-                .with_release_permit(
-                    PauseReason::LoadComponentArgs,
-                    BootstrapComponentsModel::new(&mut tx).load_component(self.component),
-                )
-                .await?;
-            let http_prefix = component_metadata
-                .as_ref()
-                .and_then(|m| m.http_prefix.as_deref());
-            if let Some(http_prefix) = http_prefix {
-                // Compute the base CONVEX_SITE_URL (system override takes precedence
-                // over default).
-                let base_site_url = system_env_var_overrides
-                    .get(&*CONVEX_SITE)
-                    .or_else(|| default_system_env_vars.get(&*CONVEX_SITE));
-                if let Some(base_url) = base_site_url {
-                    let prefixed_url = format!(
-                        "{}{}",
-                        base_url.as_ref().trim_end_matches('/'),
-                        http_prefix.trim_end_matches('/')
-                    );
-                    let mut env_vars = BTreeMap::new();
-                    env_vars.insert(CONVEX_SITE.clone(), prefixed_url.parse()?);
-                    env_vars
+                {
+                    let loaded_resources = ComponentsModel::new(&mut tx)
+                        .preload_resources(component_id)
+                        .await?;
+                    let mut resources = resources.lock();
+                    *resources = loaded_resources;
+                }
+                let canonical_urls = CanonicalUrlsModel::new(&mut tx)
+                    .get_canonical_urls()
+                    .await?;
+
+                if let Some(cloud_url) = canonical_urls.get(&RequestDestination::ConvexCloud) {
+                    *convex_origin_override.lock() = Some(ConvexOrigin::from(&cloud_url.url));
+                }
+                // System env vars are visible to every function; user-defined env
+                // vars are visible only to root functions.
+                let system_env_var_overrides = parse_system_env_var_overrides(canonical_urls)?;
+                let mut env_vars = default_system_env_vars;
+                env_vars.extend(system_env_var_overrides);
+                if self.component.is_root() {
+                    let user_env_vars = EnvironmentVariablesModel::new(&mut tx).get_all().await?;
+                    env_vars.extend(user_env_vars);
                 } else {
-                    BTreeMap::new()
+                    // Non-root components with an HTTP prefix see a prefixed
+                    // CONVEX_SITE_URL so they can construct correct absolute URLs.
+                    let component_metadata = BootstrapComponentsModel::new(&mut tx)
+                        .load_component(self.component)
+                        .await?;
+                    if let Some(http_prefix) = component_metadata
+                        .as_ref()
+                        .and_then(|m| m.http_prefix.as_deref())
+                        && let Some(base_url) = env_vars.get(&*CONVEX_SITE).cloned()
+                    {
+                        let prefixed_url = format!(
+                            "{}{}",
+                            base_url.as_ref().trim_end_matches('/'),
+                            http_prefix.trim_end_matches('/')
+                        );
+                        env_vars.insert(CONVEX_SITE.clone(), prefixed_url.parse()?);
+                    }
                 }
-            } else {
-                BTreeMap::new()
-            }
-        };
 
-        let component_env = if self.component.is_root() {
-            None
-        } else {
-            let env = timeout
-                .with_release_permit(
-                    PauseReason::LoadComponentArgs,
-                    BootstrapComponentsModel::new(&mut tx).load_component_env(component_id),
-                )
-                .await?;
-            let parent_env_vars = if env.values().any(|b| matches!(b, EnvBinding::EnvVar(_))) {
-                timeout
-                    .with_release_permit(
-                        PauseReason::LoadEnvironmentVariables,
-                        EnvironmentVariablesModel::new(&mut tx).get_all(),
+                let component_env = if self.component.is_root() {
+                    None
+                } else {
+                    let env = BootstrapComponentsModel::new(&mut tx)
+                        .load_component_env(component_id)
+                        .await?;
+                    let parent_env_vars =
+                        if env.values().any(|b| matches!(b, EnvBinding::EnvVar(_))) {
+                            EnvironmentVariablesModel::new(&mut tx).get_all().await?
+                        } else {
+                            BTreeMap::new()
+                        };
+                    Some(ComponentEnvCtx {
+                        env,
+                        parent_env_vars,
+                    })
+                };
+
+                let component_arguments = if self.component.is_root() {
+                    None
+                } else {
+                    Some(
+                        BootstrapComponentsModel::new(&mut tx)
+                            .load_component_args(component_id)
+                            .await?,
                     )
-                    .await?
-            } else {
-                BTreeMap::new()
-            };
-            Some(ComponentEnvCtx {
-                env,
-                parent_env_vars,
+                };
+
+                Ok(ActionPreloaded::Ready {
+                    module_loader,
+                    modules,
+                    env_vars,
+                    component_arguments,
+                    component_env,
+                    rng,
+                    import_time_unix_timestamp,
+                    performance_api: import_time_unix_timestamp.map(PerformanceApi::new),
+                })
             })
-        };
-
-        let component_arguments = if self.component.is_root() {
-            None
-        } else {
-            Some(
-                timeout
-                    .with_release_permit(
-                        PauseReason::LoadComponentArgs,
-                        BootstrapComponentsModel::new(&mut tx).load_component_args(component_id),
-                    )
-                    .await?,
-            )
-        };
-
-        self.preloaded = ActionPreloaded::Ready {
-            module_loader,
-            modules,
-            env_vars,
-            component_arguments,
-            component_env,
-            rng,
-            import_time_unix_timestamp,
-            performance_time_origin: None,
-        };
+            .await?;
 
         Ok(())
     }
@@ -338,7 +302,7 @@ impl<RT: Runtime> ActionPhase<RT> {
         &mut self,
         module_path: &ModulePath,
         _timeout: &mut Timeout<RT>,
-    ) -> anyhow::Result<Option<(Arc<FullModuleSource>, ModuleCodeCacheResult)>> {
+    ) -> anyhow::Result<Option<(Arc<V8ModuleSource>, ModuleCodeCacheResult)>> {
         let ActionPreloaded::Ready {
             ref module_loader,
             ref modules,
@@ -370,7 +334,7 @@ impl<RT: Runtime> ActionPhase<RT> {
         }
         let ActionPreloaded::Ready {
             ref mut rng,
-            ref mut performance_time_origin,
+            ref mut performance_api,
             ..
         } = self.preloaded
         else {
@@ -379,7 +343,9 @@ impl<RT: Runtime> ActionPhase<RT> {
         self.phase = Phase::Executing;
         let rng_seed = self.rt.rng().random();
         *rng = Some(ChaCha12Rng::from_seed(rng_seed));
-        *performance_time_origin = Some(PerformanceTimeOrigin::new(&self.rt));
+        if let Some(performance_api) = performance_api {
+            performance_api.begin_execution(&self.rt, self.rt.unix_timestamp())?;
+        }
         Ok(())
     }
 
@@ -471,44 +437,34 @@ impl<RT: Runtime> ActionPhase<RT> {
         Ok(timestamp)
     }
 
-    pub fn performance_now(&mut self) -> anyhow::Result<Duration> {
+    pub fn performance_now(&self) -> anyhow::Result<Duration> {
         let ActionPreloaded::Ready {
-            performance_time_origin,
-            ..
+            performance_api, ..
         } = &self.preloaded
         else {
             anyhow::bail!("Phase not initialized");
         };
-
-        let now = performance_time_origin
-            .as_ref()
-            .context(ErrorMetadata::bad_request(
-                "NoPerformanceDuringImport",
-                "Performance unsupported at import time",
-            ))?
-            .now(&self.rt);
-
-        Ok(now)
+        match (&self.phase, performance_api) {
+            (Phase::Importing, Some(PerformanceApi::Importing(api))) => Ok(api.now()),
+            (Phase::Executing, Some(PerformanceApi::Executing(api))) => {
+                Ok(api.now_incrementing(&self.rt))
+            },
+            (_, None) => anyhow::bail!(performance_unsupported()),
+            _ => anyhow::bail!("performance API state does not match phase"),
+        }
     }
 
-    pub fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
+    pub fn performance_time_origin(&self) -> anyhow::Result<UnixTimestamp> {
         let ActionPreloaded::Ready {
-            performance_time_origin,
-            ..
+            performance_api, ..
         } = &self.preloaded
         else {
             anyhow::bail!("Phase not initialized");
         };
-
-        let time_origin = performance_time_origin
-            .as_ref()
-            .context(ErrorMetadata::bad_request(
-                "NoPerformanceDuringImport",
-                "Performance unsupported at import time",
-            ))?
-            .as_unix_timestamp();
-
-        Ok(time_origin)
+        let Some(performance_api) = performance_api else {
+            anyhow::bail!(performance_unsupported());
+        };
+        Ok(performance_api.time_origin())
     }
 
     pub fn require_executing(&self, request: &TaskRequestEnum) -> anyhow::Result<()> {

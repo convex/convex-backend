@@ -54,7 +54,10 @@ use common::{
         ID_FIELD,
     },
     errors::report_error,
-    execution_context::ExecutionId,
+    execution_context::{
+        ExecutionId,
+        RequestMetadata,
+    },
     knobs::{
         MAX_IMPORT_AGE,
         TRANSACTION_MAX_NUM_USER_WRITES,
@@ -120,6 +123,7 @@ use model::{
         SnapshotImportModel,
     },
 };
+use roles::RequireDeploymentOp;
 use serde_json::Value as JsonValue;
 use shape_inference::{
     export_context::GeneratedSchema,
@@ -142,7 +146,6 @@ use value::{
     ConvexObject,
     ConvexValue,
     IdentifierFieldName,
-    ResolvedDocumentId,
     Size,
     TableMapping,
     TableNamespace,
@@ -218,7 +221,7 @@ impl<RT: Runtime> SnapshotImportExecutor<RT> {
     ) -> anyhow::Result<()> {
         anyhow::ensure!(snapshot_import.state == ImportState::Uploaded);
         tracing::info!("Marking snapshot import as WaitingForConfirmation");
-        let import_id = snapshot_import.id();
+        let import_id = snapshot_import.developer_id();
         match info_message_for_import(self, snapshot_import).await {
             Ok((info_message, require_manual_confirmation, new_checkpoints)) => {
                 self.database
@@ -283,7 +286,7 @@ impl<RT: Runtime> SnapshotImportExecutor<RT> {
             snapshot_import.state,
             ImportState::InProgress { .. }
         ));
-        let import_id = snapshot_import.id();
+        let import_id = snapshot_import.developer_id();
         match self.attempt_perform_import(snapshot_import).await {
             Ok((ts, num_rows_written)) => {
                 self.database
@@ -362,7 +365,7 @@ impl<RT: Runtime> SnapshotImportExecutor<RT> {
         snapshot_import: ParsedDocument<SnapshotImport>,
     ) -> anyhow::Result<(Timestamp, u64)> {
         self.fail_if_too_old(&snapshot_import)?;
-        let (initial_schemas, import) = self.parse_import(snapshot_import.id()).await?;
+        let (initial_schemas, import) = self.parse_import(snapshot_import.developer_id()).await?;
 
         let usage = FunctionUsageTracker::new();
 
@@ -374,7 +377,7 @@ impl<RT: Runtime> SnapshotImportExecutor<RT> {
             snapshot_import.mode,
             import,
             usage.clone(),
-            Some(snapshot_import.id()),
+            Some(snapshot_import.developer_id()),
             snapshot_import.requestor.clone(),
         )
         .await?;
@@ -409,13 +412,14 @@ impl<RT: Runtime> SnapshotImportExecutor<RT> {
             &self.database,
             Identity::system(),
             snapshot_import.member_id,
+            RequestMetadata::system(),
             initial_schemas,
             snapshot_import.mode,
             imported_tables,
             AuditLogInfo::SnapshotImport {
                 import_format: snapshot_import.format,
             },
-            Some(id),
+            Some(id.developer_id),
             snapshot_import.requestor.clone(),
             usage.clone(),
         )
@@ -443,7 +447,7 @@ impl<RT: Runtime> SnapshotImportExecutor<RT> {
 
     async fn parse_import(
         &self,
-        import_id: ResolvedDocumentId,
+        import_id: DeveloperDocumentId,
     ) -> anyhow::Result<(SchemasForImport, ParsedImport)> {
         let SnapshotImport {
             object_key,
@@ -528,7 +532,7 @@ pub async fn start_stored_import<RT: Runtime>(
             },
         )
         .await?;
-    Ok(id.into())
+    Ok(id)
 }
 
 pub async fn perform_import<RT: Runtime>(
@@ -545,7 +549,6 @@ pub async fn perform_import<RT: Runtime>(
             "snapshot_import_perform",
             |tx| {
                 async {
-                    let import_id = tx.resolve_developer_id(&import_id, TableNamespace::Global)?;
                     let mut import_model = SnapshotImportModel::new(tx);
                     import_model.confirm_import(import_id).await?;
                     Ok(())
@@ -571,7 +574,6 @@ pub async fn cancel_import<RT: Runtime>(
             "snapshot_import_cancel",
             |tx| {
                 async {
-                    let import_id = tx.resolve_developer_id(&import_id, TableNamespace::Global)?;
                     let mut import_model = SnapshotImportModel::new(tx);
                     import_model.cancel_import(import_id).await?;
                     Ok(())
@@ -590,7 +592,6 @@ async fn wait_for_import_worker<RT: Runtime>(
 ) -> anyhow::Result<ParsedDocument<SnapshotImport>> {
     let snapshot_import = loop {
         let mut tx = application.begin(identity.clone()).await?;
-        let import_id = tx.resolve_developer_id(&import_id, TableNamespace::Global)?;
         let mut import_model = SnapshotImportModel::new(&mut tx);
         let snapshot_import =
             import_model
@@ -693,6 +694,7 @@ pub async fn do_import_from_object_key<RT: Runtime>(
 pub async fn clear_tables<RT: Runtime>(
     application: &Application<RT>,
     identity: &Identity,
+    request_metadata: RequestMetadata,
     table_names: Vec<(ComponentPath, TableName)>,
     requestor: ImportRequestor,
     usage: FunctionUsageTracker,
@@ -736,6 +738,7 @@ pub async fn clear_tables<RT: Runtime>(
         &application.database,
         identity.clone(),
         None,
+        request_metadata,
         initial_schemas,
         ImportMode::Replace,
         table_mapping,
@@ -759,7 +762,7 @@ async fn import_objects<RT: Runtime>(
     mode: ImportMode,
     import: ParsedImport,
     usage: FunctionUsageTracker,
-    import_id: Option<ResolvedDocumentId>,
+    import_id: Option<DeveloperDocumentId>,
     requestor: ImportRequestor,
 ) -> anyhow::Result<(TableMapping, u64)> {
     let mut generated_schemas: BTreeMap<_, _> = import
@@ -770,11 +773,6 @@ async fn import_objects<RT: Runtime>(
         })
         .collect();
     let mut total_num_documents = 0;
-
-    // In ReplaceAll mode, we want to delete all unaffected user tables
-    // If there's a schema, then we want to clear it instead.
-    let db_snapshot = database.latest_snapshot()?;
-    let original_table_mapping = db_snapshot.table_mapping();
 
     // First make sure all components exist, and find their IDs.
     let tables: Vec<(
@@ -793,6 +791,13 @@ async fn import_objects<RT: Runtime>(
         })
         .try_collect()
         .await?;
+
+    // In ReplaceAll mode, we want to delete all unaffected user tables.
+    // If there's a schema, then we want to clear it instead. Capture this
+    // mapping after component preparation so it includes the system tables
+    // initialized for newly created component namespaces.
+    let db_snapshot = database.latest_snapshot()?;
+    let original_table_mapping = db_snapshot.table_mapping();
 
     let (tables_tables, mut tables) = tables
         .into_iter()
@@ -841,6 +846,7 @@ async fn import_objects<RT: Runtime>(
             .insert(table_id.tablet_id, num_to_skip)
             .is_none());
     }
+    validate_prepared_table_numbers(database, mode, &table_mapping_in_import).await?;
 
     let table_mapping_for_schema = {
         let mut mapping = TableMapping::new();
@@ -904,6 +910,86 @@ async fn import_objects<RT: Runtime>(
     Ok((table_mapping_in_import, total_num_documents))
 }
 
+/// Verifies the realized table numbers can coexist after finalization.
+///
+/// [`assign_table_numbers`] leaves fresh allocations as `None`, so preparation
+/// can choose a fresh number that conflicts with one explicitly assigned to
+/// another imported table. The active mapping can also change after the
+/// snapshot used for assignment is captured. This check catches both cases
+/// before importing rows; finalization remains authoritative for later races.
+async fn validate_prepared_table_numbers<RT: Runtime>(
+    database: &Database<RT>,
+    mode: ImportMode,
+    imported_tables: &TableMapping,
+) -> anyhow::Result<()> {
+    #[derive(Default)]
+    struct Candidates {
+        prepared: BTreeSet<TableName>,
+        surviving: BTreeSet<TableName>,
+    }
+
+    let mut tx = database.begin_system().await?;
+    let current_table_mapping = tx.table_mapping().clone();
+    let mut candidates = BTreeMap::<(TableNamespace, TableNumber), Candidates>::new();
+    for (_, namespace, table_number, table_name) in imported_tables.iter() {
+        candidates
+            .entry((namespace, table_number))
+            .or_default()
+            .prepared
+            .insert(table_name.clone());
+    }
+
+    // Include active tables that finalization will neither replace nor delete.
+    for (tablet_id, namespace, table_number, table_name) in current_table_mapping.iter() {
+        if !current_table_mapping.is_active(tablet_id)
+            || imported_tables.tablet_id_exists(tablet_id)
+        {
+            continue;
+        }
+        let replaced_by_import = imported_tables.namespace(namespace).name_exists(table_name);
+        let deleted_by_replace_all = matches!(mode, ImportMode::ReplaceAll)
+            && !table_name.is_system()
+            && tx.get_component_path(namespace.into()).is_some();
+        if !replaced_by_import && !deleted_by_replace_all {
+            candidates
+                .entry((namespace, table_number))
+                .or_default()
+                .surviving
+                .insert(table_name.clone());
+        }
+    }
+
+    for ((namespace, number), candidates) in candidates {
+        let mut prepared = candidates.prepared.into_iter();
+        let Some(first_prepared) = prepared.next() else {
+            continue;
+        };
+        if let Some(second_prepared) = prepared.next() {
+            let component_path =
+                BootstrapComponentsModel::new(&mut tx).get_component_path(namespace.into());
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "TableNumberConflict",
+                format!(
+                    "conflict between `{first_prepared}` and `{second_prepared}`{} with table \
+                     number {number}",
+                    component_path.unwrap_or_default().in_component_str(),
+                )
+            ));
+        }
+        if let Some(existing) = candidates.surviving.into_iter().next() {
+            let component_path =
+                BootstrapComponentsModel::new(&mut tx).get_component_path(namespace.into());
+            anyhow::bail!(TableModel::<RT>::table_conflict_error(
+                tx.virtual_system_mapping(),
+                &component_path.unwrap_or_default(),
+                &first_prepared,
+                &existing,
+            ));
+        }
+    }
+    Ok(())
+}
+
 struct TableMappingForImport {
     table_mapping_in_import: TableMapping,
     to_delete: BTreeMap<TabletId, (TableNamespace, TableNumber, TableName)>,
@@ -940,11 +1026,12 @@ async fn finalize_import<RT: Runtime>(
     database: &Database<RT>,
     identity: Identity,
     member_id_override: Option<MemberId>,
+    request_metadata: RequestMetadata,
     initial_schemas: SchemasForImport,
     mode: ImportMode,
     imported_tables: TableMapping,
     audit_log_info: AuditLogInfo,
-    import_id: Option<ResolvedDocumentId>,
+    import_id: Option<DeveloperDocumentId>,
     requestor: ImportRequestor,
     usage: FunctionUsageTracker,
 ) -> anyhow::Result<(Timestamp, u64)> {
@@ -962,8 +1049,11 @@ async fn finalize_import<RT: Runtime>(
                 if let Some(import_id) = import_id {
                     // Only finalize the import if it's in progress.
                     let mut snapshot_import_model = SnapshotImportModel::new(tx);
-                    let snapshot_import_state =
-                        snapshot_import_model.must_get_state(import_id).await?;
+                    let snapshot_import_state = snapshot_import_model
+                        .must_get(import_id)
+                        .await?
+                        .into_value()
+                        .state;
                     match snapshot_import_state {
                         ImportState::InProgress { .. } => {},
                         // This can happen if the import was canceled or somehow retried after
@@ -1056,7 +1146,11 @@ async fn finalize_import<RT: Runtime>(
                 ))
                 .await?;
                 DeploymentAuditLogModel::new(tx)
-                    .insert_with_member_override(vec![audit_log_event.clone()], member_id_override)
+                    .insert_with_member_override(
+                        vec![audit_log_event.clone()],
+                        member_id_override,
+                        &request_metadata,
+                    )
                     .await?;
 
                 Ok(documents_deleted)
@@ -1274,7 +1368,7 @@ async fn import_single_table<RT: Runtime>(
     table_id: TabletIdAndTableNumber,
     num_to_skip: u64,
     usage: FunctionUsageTracker,
-    import_id: Option<ResolvedDocumentId>,
+    import_id: Option<DeveloperDocumentId>,
     requestor: ImportRequestor,
 ) -> anyhow::Result<u64> {
     if let Some(import_id) = import_id {
@@ -1458,7 +1552,7 @@ async fn prepare_table_for_import<RT: Runtime>(
     component_id: ComponentId,
     table_name: &TableName,
     table_number: Option<TableNumber>,
-    import_id: Option<ResolvedDocumentId>,
+    import_id: Option<DeveloperDocumentId>,
 ) -> anyhow::Result<(TabletIdAndTableNumber, u64)> {
     anyhow::ensure!(
         table_name == &FILE_STORAGE_TABLE || !table_name.is_system(),
@@ -1568,7 +1662,7 @@ async fn create_empty_table<RT: Runtime>(
     component_id: ComponentId,
     table_name: &TableName,
     table_number: Option<TableNumber>,
-    import_id: Option<ResolvedDocumentId>,
+    import_id: Option<DeveloperDocumentId>,
     display_table_name: &TableName,
     component_path: &ComponentPath,
 ) -> anyhow::Result<TabletIdAndTableNumber> {

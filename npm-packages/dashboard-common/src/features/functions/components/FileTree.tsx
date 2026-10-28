@@ -1,4 +1,3 @@
-/* eslint-disable jsx-a11y/no-static-element-interactions */
 import { FolderIcon, FolderOpenIcon } from "@heroicons/react/24/outline";
 import { Disclosure, DisclosurePanel } from "@headlessui/react";
 import { FileItem } from "@common/features/functions/components/FileItem";

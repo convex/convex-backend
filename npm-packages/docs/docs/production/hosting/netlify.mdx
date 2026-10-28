@@ -46,6 +46,7 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
   <Step title="Set up the CONVEX_DEPLOY_KEY environment variable">
     On your [Convex Dashboard](https://dashboard.convex.dev/), create a production deployment for your project if one does not exist already. Go to the _General_ tab on the _Deployment Settings_ page for the production deployment.
     Click the _Generate Production Deploy Key_ button to generate a **Production** deploy key.
+    When scoping the key's permissions, enable the `deployment:deploy` permission so the key can deploy your functions (see [Role Actions](/team-management/role-actions.mdx#data-plane-and-runtime) for all available actions).
     Then click the copy button to copy the key.
 
     In Netlify, click _Add environment variables_ and _New variable_.
@@ -105,8 +106,8 @@ npx convex deploy --cmd-url-env-var-name CUSTOM_CONVEX_URL --cmd 'npm run build'
 
 ## Authentication
 
-You will want to configure your [authentication](/auth.mdx) provider (Clerk,
-Auth0 or other) to accept your production `<site-name>.netlify.app` URL.
+You will want to configure your [authentication](/auth/overview.mdx) provider
+(Clerk, Auth0 or other) to accept your production `<site-name>.netlify.app` URL.
 
 ## Deploy Previews
 
@@ -160,10 +161,12 @@ npx convex deploy --cmd 'npm run build' --preview-run 'functionName'
 
   <Step title="Now test out creating a PR and generating a Deploy Preview!">
 
-    You can find the Convex deployment for your branch in the Convex dashboard.
-    <div className="screenshot-border">
-      ![Preview Deployment in Deployment Picker](/screenshots/preview_deployment_deployment_picker.png)
-    </div>
+    You can find the Convex deployment for your branch in the Convex dashboard,
+    in the deployment switcher at the top-left of any deployment page.
+    <Screenshot
+      story="docs/pages/project/deployment/Data#Preview Deployment Switcher"
+      alt="Preview deployment in the deployment switcher"
+    />
 
   </Step>
 

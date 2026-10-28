@@ -76,7 +76,7 @@ export function ShowSchema({
                     : "saved"}
                   . It is equivalent to your <ConvexSchemaFilePath />.
                 </p>
-                <div className="block rounded-sm border p-4 text-sm break-words whitespace-pre-wrap">
+                <div className="block rounded-sm border p-4 text-sm wrap-break-word whitespace-pre-wrap">
                   <ReadonlyCode
                     disableLineNumbers
                     path="generateSchema"

@@ -49,7 +49,7 @@ use crate::{
 
 pub mod types;
 
-pub static EXPORTS_TABLE: TableName = TableName::const_new("_exports");
+pub const EXPORTS_TABLE: TableName = TableName::const_new("_exports");
 
 pub static EXPORTS_BY_STATE_AND_TS_INDEX: LazyLock<SystemIndex<ExportsTable>> =
     LazyLock::new(|| {
@@ -82,9 +82,7 @@ pub struct ExportsTable;
 impl SystemTable for ExportsTable {
     type Metadata = Export;
 
-    fn table_name() -> &'static TableName {
-        &EXPORTS_TABLE
-    }
+    const TABLE_NAME: TableName = EXPORTS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![

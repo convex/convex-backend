@@ -23,10 +23,10 @@ also give you end-to-end type safety throughout your app.
 
 We recommend beginning your project without a schema for rapid prototyping and
 then adding a schema once you've solidified your plan. To learn more see our
-[Schema Philosophy](/database/advanced/schema-philosophy.md).
+[Schema Philosophy](/database/advanced/schema-philosophy.mdx).
 
 **Example:**
-[TypeScript and Schemas](https://github.com/get-convex/convex-demos/tree/main/typescript)
+[TypeScript and Schemas](https://github.com/convex/convex-demos/tree/main/typescript)
 
 ## Writing schemas
 
@@ -36,20 +36,20 @@ like:
 <Snippet source={Schema} title="convex/schema.ts" />
 
 This schema (which is based on our
-[users and auth example](https://github.com/get-convex/convex-demos/tree/main/users-and-auth)),
+[users and auth example](https://github.com/convex/convex-demos/tree/main/users-and-auth)),
 has 2 tables: messages and users. Each table is defined using the
 [`defineTable`](/api/modules/server#definetable) function. Within each table,
 the document type is defined using the validator builder,
 [`v`](/api/modules/values#v). In addition to the fields listed, Convex will also
 automatically add `_id` and `_creationTime` fields. To learn more, see
-[System Fields](/database/types.md#system-fields).
+[System Fields](/database/types.mdx#system-fields).
 
 <Admonition type="tip" title="Generating a Schema">
 
 While writing your schema, it can be helpful to consult the
-[Convex Dashboard](/dashboard/deployments/data.mdx#generating-a-schema). The
-"Generate Schema" button in the "Data" view suggests a schema declaration based
-on the data in your tables.
+[Convex Dashboard](/dashboard/deployments/schema.mdx). The "View schema file"
+panel on the "Schema" page can generate a schema declaration based on the data
+in your tables.
 
 </Admonition>
 
@@ -69,6 +69,7 @@ export default defineSchema({
     string: v.string(),
     number: v.number(),
     boolean: v.boolean(),
+    commitTs: v.commitTs(),
     nestedObject: v.object({
       property: v.string(),
     }),
@@ -269,9 +270,8 @@ won't be validated).
 
 ## Schema validation
 
-Schemas are pushed automatically in
-[`npx convex dev`](/cli.md#run-the-convex-dev-server) and
-[`npx convex deploy`](/cli.md#deploy-convex-functions-to-production).
+Schemas are pushed automatically in [`npx convex dev`](/cli/reference/dev.mdx)
+and [`npx convex deploy`](/cli/reference/deploy.mdx).
 
 The first push after a schema is added or modified will validate that all
 existing documents match the schema. If there are documents that fail
@@ -286,6 +286,147 @@ is set to `false`.
 Note that schemas only validate documents in the tables listed in the schema.
 You can still create and modify documents in other tables (they just won't be
 validated).
+
+### Staged validators
+
+Staged validators let you validate a schema change in the background without
+delaying deployment. Use them when tightening a table's validator would require
+a long scan of existing documents. The current validator remains enforced on
+writes while validation runs. Once validation succeeds, you can promote the
+change without repeating the scan.
+
+For example, say a table's `value` field is declared as
+`v.union(v.string(), v.number())` because older documents store `"123"` as a
+string while newer ones store `123` as a number. You want to migrate the strings
+to numbers and enforce `value: v.number()`. You also want to remove an optional
+`legacy` field while keeping `label` unchanged.
+
+#### Stage and validate the change
+
+1. Update any functions that write documents to use the new field types, and
+   migrate existing documents. For this example, convert string values to
+   numbers and remove `legacy` from every document. The current validator must
+   continue to accept these writes.
+2. Keep the current validator in `defineTable` and chain `.staged()` with only
+   the fields you want to add, change, or remove:
+
+   ```ts
+   export default defineSchema({
+     documents: defineTable({
+       label: v.string(),
+       value: v.union(v.string(), v.number()),
+       legacy: v.optional(v.string()),
+     }).staged({
+       value: v.number(),
+       legacy: undefined,
+     }),
+   });
+   ```
+
+   Fields omitted from `.staged()` keep their current validators. Here, the
+   staged validator keeps `label: v.string()`, tightens `value` to `v.number()`,
+   and removes `legacy` by setting it to `undefined`. This will validate that no
+   documents have that field. Use `v.optional(...)` to allow the field to be
+   present or unset. Staging a removal does not delete data from existing
+   documents.
+
+   Each supplied validator replaces the entire field validator. To change a
+   nested object, pass `nested: v.object({ ... })` with the complete desired
+   definition of that object, including any nested fields you want to keep. You
+   can also pass a full schema validator, such as `v.object({ ... })` or
+   `v.union(...)`, to specify the entire staged document type. Use this form for
+   tables whose current validator is a union. For a table defined with
+   `v.any()`, a field map defines the complete staged object type: include every
+   field you want that object to allow.
+
+   Put all changes that require revalidating this table in `.staged()` and keep
+   its enforced validator unchanged, so the scan runs in the background.
+
+3. Run `npx convex deploy`. Convex scans existing documents against the staged
+   validator in the background and checks every new write against it. Writes
+   continue to enforce the current validator. A write that passes the current
+   validator but fails the staged validator succeeds and marks staged validation
+   as failed, even if the background scan had already finished.
+4. Check progress with `npx convex deploy --dry-run`. The CLI reports each
+   staged table as validating, validated, or failed, with a progress count or
+   the first validation error. Wait for the state to be validated before
+   promoting. If validation fails, follow the retry steps below.
+
+#### Promote a validated change
+
+When you're ready to start enforcing the new validator, follow these steps.
+
+1. Confirm the staged validation state with `npx convex deploy --dry-run`.
+2. Update `defineTable` to the complete staged document type and remove
+   `.staged()`:
+
+   ```ts
+   export default defineSchema({
+     documents: defineTable({
+       label: v.string(),
+       value: v.number(),
+     }),
+   });
+   ```
+
+3. Run `npx convex deploy` again. Convex reuses the completed staged validation,
+   so this deploy skips the table scan and does not ask for confirmation to
+   remove the staged validator. The new validator becomes enforced on writes.
+
+You can also reuse completed staged validation when the new enforced validator
+accepts every document the staged validator accepts, such as changing a staged
+field from `v.number()` to `v.union(v.number(), v.string())`.
+
+#### Retry a failed validation
+
+If validation fails, follow these steps to resolve and retry a staged
+validation.
+
+1. Inspect the reported validation error. Each attempt reports only the first
+   offending document it finds, so use a query or migration to find and fix all
+   offending documents. Fix any functions that still write documents rejected by
+   the staged validator.
+2. Keep the same `.staged()` definition and deploy again. This retries
+   validation from the beginning, scanning the whole table in the background.
+3. Wait for the validation state to be validated, then follow the promotion
+   steps above. Repeat the repair and retry steps if another document fails.
+
+#### Promote before validation succeeds
+
+If you want to stop the background validation and start enforcing immediately,
+follow these steps. Note: this is generally not recommended, as it may take a
+long time to complete.
+
+1. Update `defineTable` to the desired validator and remove `.staged()`.
+2. Deploy. Convex runs normal schema validation because the pending or failed
+   staged result cannot prove that all documents match. If this requires a full
+   table scan, the deploy blocks until that expensive scan finishes. Existing
+   documents that fail the new validator cause the deploy to fail.
+
+If staged validation is still running, the CLI asks for confirmation because
+this push cancels that background validation and clears its progress. Pass
+`--allow-unstaging-schema` to skip the prompt. If staged validation has failed,
+the CLI proceeds without this prompt; schema validation can still require the
+same full table scan.
+
+#### Change or remove a staged validator
+
+- Deploying the same staged validator preserves validation that is running or
+  already validated. Deploying it again after a failure retries the scan.
+- Changing a successfully validated `.staged()` validator to a more permissive
+  one preserves its validated state without another scan. For example, you can
+  change a staged field from `v.number()` to `v.union(v.number(), v.string())`.
+  The replacement must accept every document the previous staged validator
+  accepts. The CLI does not ask for confirmation because the completed
+  validation is reused.
+- Other changes to `.staged()` start a new validation. Changing a validator that
+  is still running or has failed restarts the scan, including when making it
+  more permissive. Each table can have at most one staged validator.
+- Removing a staged validator, or changing it without reusing its validation,
+  clears its validation progress. Staging it again later starts a new scan. The
+  CLI asks for confirmation before clearing running or validated progress; pass
+  `--allow-unstaging-schema` to skip the prompt. Promotion of a validated change
+  follows the reuse rules above.
 
 ### Circular references
 
@@ -333,14 +474,13 @@ document, then set the reference on the preferences document:
 
 <Snippet title="convex/users.ts" source={circularExample} />
 
-[Let us know](/production/contact.md) if you need better support for circular
+[Let us know](/production/contact.mdx) if you need better support for circular
 references.
 
 ## TypeScript types
 
-Once you've defined a schema,
-[`npx convex dev`](/cli.md#run-the-convex-dev-server) will produce new versions
-of [`dataModel.d.ts`](/generated-api/data-model) and
+Once you've defined a schema, [`npx convex dev`](/cli/reference/dev.mdx) will
+produce new versions of [`dataModel.d.ts`](/generated-api/data-model) and
 [`server.d.ts`](/generated-api/server) with types based on your schema.
 
 ### `Doc<TableName>`

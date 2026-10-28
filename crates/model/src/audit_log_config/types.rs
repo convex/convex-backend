@@ -11,24 +11,26 @@ pub struct AuditLogConfig {
     /// The name of the AWS Firehose delivery stream to send audit logs to.
     /// None if no firehose stream has been configured yet.
     pub firehose_stream_name: Option<String>,
-    /// Whether to forward audit logs to configured log streams (e.g. Datadog,
-    /// Axiom).
-    pub include_in_log_streams: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SerializedAuditLogConfig {
     pub firehose_stream_name: Option<String>,
+    /// This field is unused. This information is now an entitlement,
+    /// `custom_audit_logs_in_log_streams_config_enabled`, and is stored in
+    /// BackendInfo.
     #[serde(default)]
-    pub include_in_log_streams: bool,
+    #[deprecated]
+    pub include_in_log_streams: Option<bool>,
 }
 
 impl From<AuditLogConfig> for SerializedAuditLogConfig {
     fn from(value: AuditLogConfig) -> Self {
         Self {
             firehose_stream_name: value.firehose_stream_name,
-            include_in_log_streams: value.include_in_log_streams,
+            #[allow(deprecated)]
+            include_in_log_streams: None,
         }
     }
 }
@@ -37,7 +39,6 @@ impl From<SerializedAuditLogConfig> for AuditLogConfig {
     fn from(value: SerializedAuditLogConfig) -> Self {
         Self {
             firehose_stream_name: value.firehose_stream_name,
-            include_in_log_streams: value.include_in_log_streams,
         }
     }
 }

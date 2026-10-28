@@ -3,35 +3,23 @@
   "version": "0.0.0",
   "scripts": {
     "build": "",
-    "lint": "eslint .",
     "test": "vitest run --typecheck"
   },
   "dependencies": {
     "@convex-dev/ratelimiter": "workspace:*",
     "convex": "workspace:*",
     "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "prettier": "3.8.1"
+    "react-dom": "^18.0.0"
   },
   "devDependencies": {
     "@clerk/react": "^6.4.3",
-    "@eslint/compat": "~2.0.0",
-    "@eslint/eslintrc": "^3",
-    "@eslint/js": "~9.39.0",
     "@faker-js/faker": "^10.0.0",
-    "@typescript-eslint/eslint-plugin": "^8.0.0",
-    "@typescript-eslint/parser": "^8.0.0",
-    "eslint": "^9.37.0",
-    "eslint-config-prettier": "^10.0.0",
-    "eslint-plugin-jest": "~29.15.0",
-    "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-hooks": "^5.2.0",
     "typescript": "~5.0.3",
     "@types/node": "^18.17.0",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
     "globals": "~17.4.0",
     "openai": "^6.0.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.0"
   }
 }

@@ -10,6 +10,7 @@ use common::{
 };
 use errors::ErrorMetadata;
 use keybroker::DeploymentOp;
+use roles::RequireDeploymentOp;
 use value::{
     ConvexObject,
     ConvexValue,
@@ -65,7 +66,7 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         anyhow::ensure!(
             bootstrap_system_tables()
                 .iter()
-                .all(|t| t.table_name() != table_name),
+                .all(|t| t.table_name() != *table_name),
             "Cannot import into bootstrap system table {table_name}"
         );
         self.tx
@@ -111,13 +112,11 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         };
 
         let document = ResolvedDocument::new(id, creation_time, value)?;
-        if !table_name.is_system() {
-            document.check_user_size()?;
-        }
         SchemaModel::new(self.tx, namespace)
             .enforce_with_table_mapping(&document, &table_mapping_for_schema.namespace(namespace))
             .await?;
-        self.tx.apply_validated_write(id, None, Some(document))?;
+        self.tx
+            .apply_validated_write(id, None, Some(document.into()))?;
 
         Ok(id.into())
     }
@@ -143,7 +142,7 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         anyhow::ensure!(
             bootstrap_system_tables()
                 .iter()
-                .all(|t| t.table_name() != table_name),
+                .all(|t| t.table_name() != *table_name),
             "Cannot import into bootstrap system table {table_name}"
         );
         self.tx
@@ -186,14 +185,11 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         };
 
         let document = ResolvedDocument::new(id, creation_time, value)?;
-        if !table_name.is_system() {
-            document.check_user_size()?;
-        }
         SchemaModel::new(self.tx, namespace)
             .enforce_with_table_mapping(&document, &table_mapping_for_schema.namespace(namespace))
             .await?;
         self.tx
-            .apply_validated_write(id, existing_doc, Some(document))?;
+            .apply_validated_write(id, existing_doc, Some(document.into()))?;
 
         Ok(id.into())
     }
@@ -217,7 +213,7 @@ impl<'a, RT: Runtime> ImportFacingModel<'a, RT> {
         anyhow::ensure!(
             bootstrap_system_tables()
                 .iter()
-                .all(|t| t.table_name() != table_name),
+                .all(|t| t.table_name() != *table_name),
             "Cannot import into bootstrap system table {table_name}"
         );
         self.tx

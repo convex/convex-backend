@@ -204,7 +204,7 @@ pub struct RequestId(String);
 impl RequestId {
     pub fn new() -> Self {
         let bytes = rand::rng().random::<[u8; 8]>();
-        Self(hex::encode(bytes))
+        Self(const_hex::encode(bytes))
     }
 
     // This produces a RequestId based off of information provided by a WS client

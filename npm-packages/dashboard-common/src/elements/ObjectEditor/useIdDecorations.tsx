@@ -37,20 +37,7 @@ export function useIdDecorations(
     componentId,
   });
 
-  // TODO: Instead of getting the table name from the table mapping, we should infer it from a validator.
-  const idsArg = ids
-    .map((id) => ({
-      id: id.value,
-      tableName: getReferencedTableName(tableMapping, id.value),
-    }))
-    .filter(
-      (id): id is { id: string; tableName: string } => id.tableName !== null,
-    );
-
-  // Dedupe ids found in the document.
-  const uniqueIdsArg = Array.from(
-    new Set(idsArg.slice(0, MAX_IDS_TO_DECORATE).map((id) => id.id)),
-  ).map((id) => idsArg.find((arg) => arg.id === id)!);
+  const uniqueIdsArg = idsToDecorate(ids, tableMapping).lookUp;
 
   // Lookup all documents by their ids.
   const docs = useQuery(
@@ -75,11 +62,13 @@ export function useIdDecorations(
       return;
     }
 
-    const documentRefs = ids.map((id) => ({
-      doc: docs.find((doc) => doc && doc._id === id.value) ?? null,
-      id: id.value as string,
-      loc: id.loc as SourceLocation,
-    }));
+    const documentRefs = idsToDecorate(ids, tableMapping).decorate.map(
+      (id) => ({
+        doc: docs.find((doc) => doc && doc._id === id.value) ?? null,
+        id: id.value as string,
+        loc: id.loc as SourceLocation,
+      }),
+    );
 
     let decorationIds: string[] | undefined;
     const doProcessDecorations = async () => {
@@ -114,6 +103,37 @@ export function useIdDecorations(
   ]);
 
   return setIds;
+}
+
+/**
+ * Picks the ids to look up and the id literals to decorate. Only the first
+ * `MAX_IDS_TO_DECORATE` unique ids that resolve to a table are looked up. Ids
+ * past that cap have no result, so they stay undecorated rather than being
+ * marked missing. Ids that resolve to no table are decorated as missing.
+ */
+export function idsToDecorate(
+  ids: LiteralNode[],
+  tableMapping: Record<number, string> | undefined,
+): { lookUp: { id: string; tableName: string }[]; decorate: LiteralNode[] } {
+  // TODO: Instead of getting the table name from the table mapping, we should infer it from a validator.
+  const resolved = ids
+    .map((id) => ({
+      id: id.value as string,
+      tableName: getReferencedTableName(tableMapping, id.value),
+    }))
+    .filter(
+      (id): id is { id: string; tableName: string } => id.tableName !== null,
+    );
+  const lookUp = Array.from(
+    new Map(resolved.map((arg) => [arg.id, arg])).values(),
+  ).slice(0, MAX_IDS_TO_DECORATE);
+  const lookedUp = new Set(lookUp.map((arg) => arg.id));
+  const decorate = ids.filter(
+    (id) =>
+      lookedUp.has(id.value) ||
+      getReferencedTableName(tableMapping, id.value) === null,
+  );
+  return { lookUp, decorate };
 }
 
 function hoverMessageForDoc(
@@ -256,7 +276,7 @@ async function provideDecoration({
             },
           ],
       afterContentClassName: cn(
-        "hover-decoration mr-1 ml-1",
+        "hover-decoration mx-1",
         doc ? "codicon-link mtk23" : "codicon-warning mtk11",
       ),
       after: {

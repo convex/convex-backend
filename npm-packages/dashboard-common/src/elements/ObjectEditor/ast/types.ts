@@ -1,4 +1,3 @@
-// eslint-disable-next-line max-classes-per-file
 import { Node as AcornNode, Position, SourceLocation } from "acorn";
 import { ValidatorJSON, Value } from "convex/values";
 import type { editor } from "monaco-editor";

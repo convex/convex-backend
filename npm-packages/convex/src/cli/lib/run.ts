@@ -11,7 +11,11 @@ import {
 import { Value, convexToJson, jsonToConvex } from "../../values/value.js";
 import { Context, OneoffCtx } from "../../bundler/context.js";
 import { logFinishedStep, logMessage, logOutput } from "../../bundler/log.js";
-import { waitForever, waitUntilCalled } from "./utils/utils.js";
+import {
+  permissionDeniedErrorMessage,
+  waitForever,
+  waitUntilCalled,
+} from "./utils/utils.js";
 import JSON5 from "json5";
 import path from "path";
 import { readProjectConfig } from "./config.js";
@@ -58,6 +62,15 @@ export async function runFunctionAndLog(
     );
   } catch (err) {
     const errorMessage = (err as Error).toString().trim();
+
+    const permissionError = permissionDeniedErrorMessage(errorMessage);
+    if (permissionError !== null) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: chalkStderr.red(permissionError),
+      });
+    }
 
     if (errorMessage.includes("Could not find function")) {
       const functions = (await runSystemQuery(ctx, {
@@ -377,7 +390,7 @@ export async function subscribeAndLog(
 }
 
 export async function subscribe(
-  _ctx: Context,
+  ctx: Context,
   args: {
     deploymentUrl: string;
     adminKey: string;
@@ -399,7 +412,28 @@ export async function subscribe(
     args.deploymentUrl,
     (updatedQueries) => {
       for (const queryToken of updatedQueries) {
-        args.callbacks?.onChange?.(client.localQueryResultByToken(queryToken)!);
+        let result: Value;
+        try {
+          result = client.localQueryResultByToken(queryToken)!;
+        } catch (err) {
+          // A failed query (e.g. a permission error) throws here. Surface
+          // permission errors cleanly instead of an uncaught stack trace, and
+          // let any other error propagate as before.
+          const permissionError = permissionDeniedErrorMessage(
+            (err as Error).toString(),
+          );
+          if (permissionError !== null) {
+            void ctx.crash({
+              exitCode: 1,
+              errorType: "fatal",
+              printedMessage: chalkStderr.red(permissionError),
+            });
+            return;
+          }
+          // eslint-disable-next-line no-restricted-syntax
+          throw err;
+        }
+        args.callbacks?.onChange?.(result);
       }
     },
     {
@@ -501,6 +535,9 @@ export async function pushToDeployment(
       liveComponentSources: args.liveComponentSources,
       pushAllModules: false,
       largeIndexDeletionCheck: "no verification", // `convex run` can’t push to prod
+      largeIndexBackfillCheck: "no verification", // ditto
+      stagedValidatorDeletionCheck: "no verification", // ditto
+      warnOnSlowSchemaValidation: true,
       message: null,
     },
     {

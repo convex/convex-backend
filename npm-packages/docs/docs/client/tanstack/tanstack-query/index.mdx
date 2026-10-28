@@ -17,9 +17,9 @@ library provides
 [Query Option](https://tanstack.com/query/latest/docs/framework/react/guides/query-options)
 functions for use with TanStack Query.
 
-Not all features of the standard [Convex React client](/client/react) are
-available through the TanStack Query APIs but you can use the two alongside each
-other, dropping into the standard Convex React hooks as necessary.
+Not all features of the standard [Convex React client](/client/react/overview)
+are available through the TanStack Query APIs but you can use the two alongside
+each other, dropping into the standard Convex React hooks as necessary.
 
 <BetaAdmonition feature="The TanStack Query adapter" verb="is" />
 
@@ -72,7 +72,7 @@ Note that when your create your React tree you should both:
   [TanStack Query hooks](https://tanstack.com/query/latest/docs/framework/react/reference/useQuery)
   and
 - wrap your app in the [`ConvexProvider`](/api/modules/react#convexprovider) so
-  you can also use normal [Convex React](/client/react) hooks
+  you can also use normal [Convex React](/client/react/overview) hooks
 
 ## Queries
 
@@ -128,8 +128,8 @@ export function App() {
 ```
 
 `useConvexMutation` is just a re-export of the
-[`useMutation`](/client/react#editing-data) hook from
-[Convex React](/client/react).
+[`useMutation`](/client/react/overview#editing-data) hook from
+[Convex React](/client/react/overview).
 
 ## Differences from using `fetch` with TanStack Query
 

@@ -8,8 +8,9 @@ import Definition from "!!raw-loader!@site/../private-demos/snippets/convex/plan
 import Call from "!!raw-loader!@site/../private-demos/snippets/convex/internalFunctionsCall.ts";
 import DefinitionWithoutValidation from "!!raw-loader!@site/../private-demos/snippets/convex/internalFunctionsDefinitionWithoutValidation.ts";
 
-Internal functions can only be called by other [functions](/functions.mdx) and
-cannot be called directly from a [Convex client](/client/react.mdx).
+Internal functions can only be called by other
+[functions](/functions/overview.mdx) and cannot be called directly from a
+[Convex client](/client/react/overview.mdx).
 
 By default your Convex functions are public and accessible to clients. Public
 functions may be called by malicious users in ways that cause surprising
@@ -35,8 +36,8 @@ Leverage internal functions by:
 - Scheduling them to run periodically from
   [cron jobs](/scheduling/cron-jobs.mdx)
 - Running them using the
-  [Dashboard](/dashboard/deployments/functions.md#running-functions)
-- Running them from the [CLI](/cli.md#run-convex-functions)
+  [Dashboard](/dashboard/deployments/functions.mdx#running-functions)
+- Running them from the [CLI](/cli/reference/run.mdx)
 
 ## Defining internal functions
 
@@ -57,11 +58,7 @@ of the database.
 
 <Details summary="Internal function without argument validation">
 
-<Snippet
-  title="convex/plans.ts"
-  source={DefinitionWithoutValidation}
-  highlightPatterns={[": {"]}
-/>
+<Snippet title="convex/plans.ts" source={DefinitionWithoutValidation} />
 
 </Details>
 

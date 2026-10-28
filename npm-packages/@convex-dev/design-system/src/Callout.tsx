@@ -30,7 +30,7 @@ export function Callout({
   return (
     <div
       className={cn(
-        `mt-2 flex rounded-lg border p-3 text-sm ${classes[variant]}`,
+        `mt-2 flex max-w-prose rounded-lg border p-3 text-sm ${classes[variant]}`,
         className,
       )}
       role="alert"

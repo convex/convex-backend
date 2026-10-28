@@ -645,9 +645,11 @@ export async function bundleImplementations({
     functions: Bundle[];
     definitionPath: ComponentDefinitionPath;
   }[];
+  buildDebugInfos: BuildDebugInfo[];
 }> {
   let appImplementation;
   const componentImplementations = [];
+  const buildDebugInfos: BuildDebugInfo[] = [];
 
   // For --component-dir flag, skip bundling root implementations (no real code to bundle)
   const directoriesToBundle = rootComponentDirectory.syntheticComponentImport
@@ -660,13 +662,25 @@ export async function bundleImplementations({
       rootComponentDirectory.path,
       directory.path,
     );
+    // definitionPath is the canonical form
+    const definitionPath = toComponentDefinitionPath(
+      rootComponentDirectory,
+      directory,
+    );
     let schema;
-    if (ctx.fs.exists(path.resolve(resolvedPath, "schema.ts"))) {
-      schema =
-        (await bundleSchema(ctx, resolvedPath, extraConditions))[0] || null;
-    } else if (ctx.fs.exists(path.resolve(resolvedPath, "schema.js"))) {
-      schema =
-        (await bundleSchema(ctx, resolvedPath, extraConditions))[0] || null;
+    if (
+      ctx.fs.exists(path.resolve(resolvedPath, "schema.ts")) ||
+      ctx.fs.exists(path.resolve(resolvedPath, "schema.js"))
+    ) {
+      const schemaResult = await bundleSchema(
+        ctx,
+        resolvedPath,
+        extraConditions,
+      );
+      buildDebugInfos.push(
+        buildDebugInfo(directory, definitionPath, "schema", schemaResult),
+      );
+      schema = schemaResult.modules[0] || null;
     } else {
       schema = null;
     }
@@ -676,6 +690,7 @@ export async function bundleImplementations({
       modules: Bundle[];
       externalDependencies: Map<string, string>;
       bundledModuleNames: Set<string>;
+      metafile: Metafile | null;
     } = await bundle({
       ctx,
       dir: resolvedPath,
@@ -693,6 +708,9 @@ export async function bundleImplementations({
         printedMessage: "external dependencies not supported",
       });
     }
+    buildDebugInfos.push(
+      buildDebugInfo(directory, definitionPath, "convex", convexResult),
+    );
     const functions = convexResult.modules;
     if (isRoot) {
       if (verbose) {
@@ -702,6 +720,7 @@ export async function bundleImplementations({
         modules: Bundle[];
         externalDependencies: Map<string, string>;
         bundledModuleNames: Set<string>;
+        metafile: Metafile | null;
       } = await bundle({
         ctx,
         dir: resolvedPath,
@@ -713,6 +732,9 @@ export async function bundleImplementations({
         extraConditions,
         includeSourcesContent,
       });
+      buildDebugInfos.push(
+        buildDebugInfo(directory, definitionPath, "node", nodeResult),
+      );
 
       const externalNodeDependencies: NodeDependency[] = [];
       for (const [
@@ -724,10 +746,15 @@ export async function bundleImplementations({
           version: moduleVersion,
         });
       }
-      const authBundle = await bundleAuthConfig(ctx, resolvedPath);
+      const authResult = await bundleAuthConfig(ctx, resolvedPath);
+      buildDebugInfos.push(
+        buildDebugInfo(directory, definitionPath, "auth", authResult),
+      );
       appImplementation = {
         schema,
-        functions: functions.concat(nodeResult.modules).concat(authBundle),
+        functions: functions
+          .concat(nodeResult.modules)
+          .concat(authResult.modules),
         externalNodeDependencies,
       };
     } else {
@@ -757,11 +784,6 @@ export async function bundleImplementations({
           });
         }
       }
-      // definitionPath is the canonical form
-      const definitionPath = toComponentDefinitionPath(
-        rootComponentDirectory,
-        directory,
-      );
       componentImplementations.push({ definitionPath, schema, functions });
     }
   }
@@ -783,7 +805,39 @@ export async function bundleImplementations({
     }
   }
 
-  return { appImplementation, componentImplementations };
+  return { appImplementation, componentImplementations, buildDebugInfos };
+}
+
+/**
+ * Debug information for a build in a push.
+ */
+export type BuildDebugInfo = {
+  directory: ComponentDirectory;
+  definitionPath: ComponentDefinitionPath;
+  kind: "convex" | "node" | "schema" | "auth";
+  metafile: Metafile | null;
+  modules: Bundle[];
+  externalDependencies: Map<string, string>;
+};
+
+function buildDebugInfo(
+  directory: ComponentDirectory,
+  definitionPath: ComponentDefinitionPath,
+  kind: BuildDebugInfo["kind"],
+  result: {
+    modules: Bundle[];
+    metafile: Metafile | null;
+    externalDependencies?: Map<string, string>;
+  },
+): BuildDebugInfo {
+  return {
+    directory,
+    definitionPath,
+    kind,
+    metafile: result.metafile,
+    modules: result.modules,
+    externalDependencies: result.externalDependencies ?? new Map(),
+  };
 }
 
 async function registerEsbuildReads(

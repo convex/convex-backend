@@ -27,13 +27,12 @@ use common::{
         Runtime,
         UnixTimestamp,
     },
-    types::{
-        GenericIndexName,
-        IndexName,
-    },
+    types::IndexName,
+    version::Version,
     virtual_system_mapping::AssociatedVirtualTable,
 };
 use database::{
+    query::TableFilter,
     unauthorized_error,
     ResolvedQuery,
     SystemMetadataModel,
@@ -80,19 +79,21 @@ pub mod args;
 pub mod types;
 pub mod virtual_table;
 
-pub static SCHEDULED_JOBS_TABLE: TableName = TableName::const_new("_scheduled_jobs");
+pub const SCHEDULED_JOBS_TABLE: TableName = TableName::const_new("_scheduled_jobs");
 
-pub static SCHEDULED_JOBS_VIRTUAL_TABLE: TableName = TableName::const_new("_scheduled_functions");
+pub const SCHEDULED_JOBS_VIRTUAL_TABLE: TableName = TableName::const_new("_scheduled_functions");
 
-static SCHEDULED_JOBS_INDEX_BY_ID: LazyLock<IndexName> =
-    LazyLock::new(|| GenericIndexName::by_id(SCHEDULED_JOBS_TABLE.clone()));
-
-static SCHEDULED_JOBS_INDEX_BY_CREATION_TIME: LazyLock<IndexName> =
-    LazyLock::new(|| GenericIndexName::by_creation_time(SCHEDULED_JOBS_TABLE.clone()));
-static SCHEDULED_JOBS_VIRTUAL_INDEX_BY_ID: LazyLock<IndexName> =
-    LazyLock::new(|| GenericIndexName::by_id(SCHEDULED_JOBS_VIRTUAL_TABLE.clone()));
-static SCHEDULED_JOBS_VIRTUAL_INDEX_BY_CREATION_TIME: LazyLock<IndexName> =
-    LazyLock::new(|| GenericIndexName::by_creation_time(SCHEDULED_JOBS_VIRTUAL_TABLE.clone()));
+/// Clients on this version or newer may not cancel themselves.
+/// Older clients are warned that it will change.
+pub static MIN_NPM_VERSION_MUTATION_SELF_CANCEL: LazyLock<Version> =
+    LazyLock::new(|| Version::new(1, 50, 0));
+const SCHEDULED_JOBS_INDEX_BY_ID: IndexName = IndexName::by_id(SCHEDULED_JOBS_TABLE);
+const SCHEDULED_JOBS_INDEX_BY_CREATION_TIME: IndexName =
+    IndexName::by_creation_time(SCHEDULED_JOBS_TABLE);
+const SCHEDULED_JOBS_VIRTUAL_INDEX_BY_ID: IndexName =
+    IndexName::by_id(SCHEDULED_JOBS_VIRTUAL_TABLE);
+const SCHEDULED_JOBS_VIRTUAL_INDEX_BY_CREATION_TIME: IndexName =
+    IndexName::by_creation_time(SCHEDULED_JOBS_VIRTUAL_TABLE);
 
 /// By next ts. Used to efficiently find next jobs to execute next.
 pub static SCHEDULED_JOBS_INDEX: LazyLock<SystemIndex<ScheduledJobsTable>> =
@@ -123,9 +124,7 @@ pub struct ScheduledJobsTable;
 impl SystemTable for ScheduledJobsTable {
     type Metadata = ScheduledJobMetadata;
 
-    fn table_name() -> &'static TableName {
-        &SCHEDULED_JOBS_TABLE
-    }
+    const TABLE_NAME: TableName = SCHEDULED_JOBS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![
@@ -137,12 +136,12 @@ impl SystemTable for ScheduledJobsTable {
 
     fn virtual_table() -> Option<AssociatedVirtualTable> {
         Some(AssociatedVirtualTable::Primary {
-            virtual_table_name: SCHEDULED_JOBS_VIRTUAL_TABLE.clone(),
+            virtual_table_name: SCHEDULED_JOBS_VIRTUAL_TABLE,
             virtual_to_system_indexes: ordmap! {
-                SCHEDULED_JOBS_VIRTUAL_INDEX_BY_CREATION_TIME.clone() =>
-                    SCHEDULED_JOBS_INDEX_BY_CREATION_TIME.clone(),
-                SCHEDULED_JOBS_VIRTUAL_INDEX_BY_ID.clone() =>
-                    SCHEDULED_JOBS_INDEX_BY_ID.clone()
+                SCHEDULED_JOBS_VIRTUAL_INDEX_BY_CREATION_TIME =>
+                    SCHEDULED_JOBS_INDEX_BY_CREATION_TIME,
+                SCHEDULED_JOBS_VIRTUAL_INDEX_BY_ID =>
+                    SCHEDULED_JOBS_INDEX_BY_ID
             },
             doc_mapper: Arc::new(ScheduledJobsDocMapper),
         })
@@ -349,6 +348,11 @@ impl<'a, RT: Runtime> SchedulerModel<'a, RT> {
         id: ResolvedDocumentId,
         state: ScheduledJobState,
     ) -> anyhow::Result<()> {
+        anyhow::ensure!(self
+            .tx
+            .table_mapping()
+            .namespace(self.namespace)
+            .tablet_matches_name(id.tablet_id, &SCHEDULED_JOBS_TABLE));
         match state {
             ScheduledJobState::InProgress { .. } | ScheduledJobState::Pending => {
                 anyhow::bail!("invalid state for completing a scheduled job")
@@ -509,6 +513,11 @@ impl<'a, RT: Runtime> SchedulerModel<'a, RT> {
         &mut self,
         job_id: ResolvedDocumentId,
     ) -> anyhow::Result<Option<ScheduledJobState>> {
+        anyhow::ensure!(self
+            .tx
+            .table_mapping()
+            .namespace(self.namespace)
+            .tablet_matches_name(job_id.tablet_id, &SCHEDULED_JOBS_TABLE));
         let state = self
             .tx
             .get(job_id)
@@ -518,6 +527,13 @@ impl<'a, RT: Runtime> SchedulerModel<'a, RT> {
             .map(|job| job.state.clone());
         Ok(state)
     }
+}
+
+fn invalid_scheduled_function_id() -> ErrorMetadata {
+    ErrorMetadata::bad_request(
+        "InvalidArgument",
+        "Invalid scheduled function ID. The ID must be an ID on the '_scheduled_functions' table.",
+    )
 }
 
 /// Same as SchedulerModel but works with the respective virtual table instead
@@ -548,6 +564,18 @@ impl<'a, RT: Runtime> VirtualSchedulerModel<'a, RT> {
     }
 
     pub async fn cancel(&mut self, virtual_id: DeveloperDocumentId) -> anyhow::Result<()> {
+        let table_name = self
+            .tx
+            .resolve_idv6(
+                virtual_id,
+                self.namespace,
+                TableFilter::ExcludePrivateSystemTables,
+            )
+            .context(invalid_scheduled_function_id())?;
+        anyhow::ensure!(
+            table_name == SCHEDULED_JOBS_VIRTUAL_TABLE,
+            invalid_scheduled_function_id()
+        );
         let table_mapping = self.tx.table_mapping().clone();
         let system_id = self
             .tx

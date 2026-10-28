@@ -1,204 +1,134 @@
 import { ProjectDetails, TeamResponse } from "generatedApi";
 
 import classNames from "classnames";
-import React, { useState } from "react";
+import React from "react";
 import { Button } from "@ui/Button";
-import { CaretSortIcon, GearIcon, ResetIcon } from "@radix-ui/react-icons";
+import { CaretSortIcon } from "@radix-ui/react-icons";
 import { Avatar } from "elements/Avatar";
 import { cn } from "@ui/cn";
-import { logEvent } from "convex-analytics";
 import { useWindowSize } from "react-use";
-import { Popover } from "@ui/Popover";
-import { Breadcrumbs } from "../Breadcrumbs/Breadcrumbs";
-import { ProjectMenuOptions } from "./ProjectMenuOptions";
-import { TeamMenuOptions } from "./TeamMenuOptions";
+import {
+  useCommandPaletteAnchor,
+  useCommandPaletteOpen,
+  useOpenCommandPalette,
+} from "elements/CommandPalette";
+import type { PalettePage } from "elements/CommandPalette/pages";
+import { usePaletteAnalytics } from "elements/CommandPalette/analytics";
 
 export function ProjectSelector({
   teams,
   selectedTeamSlug,
   selectedProject,
-  onCreateProjectClick,
-  onCreateTeamClick,
 }: {
   teams?: TeamResponse[];
   selectedTeamSlug?: string;
   selectedProject?: ProjectDetails;
-  onCreateTeamClick: () => void;
-  onCreateProjectClick: (team: TeamResponse) => void;
 }) {
   const team = teams?.find((t) => t.slug === selectedTeamSlug) ?? null;
 
   const { width } = useWindowSize();
+  const openCommandPalette = useOpenCommandPalette();
+  const [isPaletteOpen] = useCommandPaletteOpen();
+  const [paletteAnchor] = useCommandPaletteAnchor();
+  const { trackOpened } = usePaletteAnalytics();
+  const teamActive = isPaletteOpen && paletteAnchor?.source === "team-switcher";
+  const projectActive =
+    isPaletteOpen && paletteAnchor?.source === "project-switcher";
 
-  const selected =
-    team === undefined ? null : (
-      <Breadcrumbs>
+  const triggerClassName = classNames(
+    "flex items-center h-full ml-1",
+    "w-fit select-none",
+    "text-content-primary group",
+    "cursor-pointer",
+    "outline-none",
+  );
+
+  const openAnchored = (
+    event: React.MouseEvent,
+    page: PalettePage,
+    source: string,
+  ) => {
+    trackOpened("project-selector");
+    const rect = event.currentTarget.getBoundingClientRect();
+    openCommandPalette({
+      pages: [page],
+      anchor: { left: rect.left, top: rect.bottom + 8, source },
+    });
+  };
+
+  const segmentClassName = cn(
+    "flex h-full items-center rounded-full outline-none",
+    "hover:bg-background-tertiary",
+    "focus-visible:ring-2 focus-visible:ring-border-selected focus-visible:ring-inset",
+  );
+  const nameStyle = {
+    maxWidth: width > 1024 ? "14rem" : width > 640 ? "10rem" : "6rem",
+  };
+
+  return (
+    <div className={triggerClassName}>
+      <div className="flex h-10 items-center rounded-full bg-(--project-selector-bg)">
         {team && selectedProject ? (
-          <Avatar name={team.name} hashKey={team.id.toString()} />
-        ) : null}
-        {selectedProject ? (
-          <div
-            className="truncate font-semibold"
-            style={{
-              maxWidth: width > 1024 ? "14rem" : width > 640 ? "10rem" : "6rem",
-            }}
-          >
-            {selectedProject.name}
-          </div>
-        ) : null}
-        {selectedProject ? null : (
-          <div
-            className="flex max-w-[14rem] items-center gap-2"
-            style={{
-              maxWidth: width > 1024 ? "14rem" : width > 640 ? "10rem" : "6rem",
-            }}
+          <>
+            <Button
+              aria-label="Switch team"
+              variant="unstyled"
+              type="button"
+              className={cn(
+                segmentClassName,
+                "px-2",
+                teamActive && "bg-background-tertiary",
+              )}
+              onClick={(event) =>
+                openAnchored(event, { type: "teams" }, "team-switcher")
+              }
+            >
+              <Avatar name={team.name} hashKey={team.id.toString()} />
+            </Button>
+            <span className="text-content-secondary" role="separator">
+              /
+            </span>
+            <Button
+              aria-label="Switch project"
+              variant="unstyled"
+              type="button"
+              className={cn(
+                segmentClassName,
+                "gap-2 px-2",
+                projectActive && "bg-background-tertiary",
+              )}
+              onClick={(event) =>
+                openAnchored(event, { type: "projects" }, "project-switcher")
+              }
+            >
+              <div className="truncate font-semibold" style={nameStyle}>
+                {selectedProject.name}
+              </div>
+              <CaretSortIcon className="size-5" />
+            </Button>
+          </>
+        ) : (
+          <Button
+            aria-label="Switch team"
+            variant="unstyled"
+            type="button"
+            className={cn(
+              segmentClassName,
+              "gap-2 px-3",
+              teamActive && "bg-background-tertiary",
+            )}
+            onClick={(event) =>
+              openAnchored(event, { type: "teams" }, "team-switcher")
+            }
           >
             <Avatar name={team?.name} hashKey={team?.id.toString() ?? ""} />
-            <span className="grow truncate">{team?.name}</span>
-          </div>
+            <span className="grow truncate" style={nameStyle}>
+              {team?.name}
+            </span>
+            <CaretSortIcon className="size-5" />
+          </Button>
         )}
-      </Breadcrumbs>
-    );
-
-  const button = (
-    <Button
-      aria-label="Switch to team selection"
-      variant="unstyled"
-      type="button"
-      className={classNames(
-        "flex items-center h-full",
-        "w-fit select-none",
-        "text-content-primary group",
-        "cursor-pointer",
-        "outline-none",
-        "min-h-[calc(56px-1px)]", // navbar height - border
-      )}
-      onClick={() => {
-        logEvent("click project selector");
-      }}
-    >
-      <div
-        className={classNames(
-          "flex h-10 items-center px-3 py-2 rounded-full gap-2",
-          "bg-(--project-selector-bg) group-hover:bg-background-tertiary",
-          "group-focus-visible:ring-2 group-focus-visible:ring-inset group-focus-visible:ring-border-selected",
-        )}
-      >
-        {selected}
-        <CaretSortIcon className="size-5" />
       </div>
-    </Button>
-  );
-
-  return (
-    <Popover
-      padding={false}
-      focus
-      className="-mt-2.5"
-      portal
-      placement="bottom-start"
-      openButtonClassName="[--project-selector-bg:var(--background-tertiary)]"
-      button={button}
-    >
-      {({ close }) => (
-        <ProjectSelectorPanel
-          close={close}
-          teams={teams}
-          onCreateTeamClick={onCreateTeamClick}
-          onCreateProjectClick={onCreateProjectClick}
-          team={team}
-        />
-      )}
-    </Popover>
-  );
-}
-
-function ProjectSelectorPanel({
-  teams,
-  onCreateTeamClick,
-  onCreateProjectClick,
-  close,
-  team,
-}: {
-  teams?: TeamResponse[];
-  onCreateTeamClick: () => void;
-  onCreateProjectClick: (team: TeamResponse) => void;
-  close: () => void;
-  team: TeamResponse | null;
-}) {
-  const [switchingTeams, setSwitchingTeams] = useState(false);
-
-  return (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
-    <div role="dialog">
-      {team && (
-        <div className="flex max-h-[calc(100vh-3.625rem)] w-[12rem] flex-col py-2 sm:h-fit sm:w-[21.5rem]">
-          <div className="my-0.5 flex w-full items-center justify-between gap-2 px-0.5">
-            <h5 className="mb-1 flex h-fit items-center gap-1 truncate">
-              {switchingTeams ? (
-                <div className="px-1.5 py-2 text-sm">Select Team</div>
-              ) : (
-                <Button
-                  variant="unstyled"
-                  className="mx-1.5 flex cursor-pointer items-center gap-1 rounded-full border px-1.5 py-1 hover:bg-background-tertiary"
-                  onClick={() => setSwitchingTeams(true)}
-                  tip="Select team"
-                  tipSide="right"
-                >
-                  <Avatar name={team.name} hashKey={team.id.toString()} />
-                  <span className="max-w-[12rem] truncate">{team.name}</span>
-                  <CaretSortIcon
-                    className={cn(
-                      "text-content-primary",
-                      "min-h-[1rem] min-w-[1rem] rounded-full",
-                    )}
-                  />
-                </Button>
-              )}
-            </h5>
-            {switchingTeams ? (
-              <Button
-                size="xs"
-                onClick={() => setSwitchingTeams(false)}
-                inline
-                variant="neutral"
-                icon={<ResetIcon />}
-                tip="Select project"
-                aria-label={`Switch to project selection for ${team.name}`}
-                tipSide="right"
-              />
-            ) : (
-              <Button
-                size="xs"
-                href={`/t/${team.slug}/settings`}
-                onClickOfAnchorLink={close}
-                inline
-                variant="neutral"
-                icon={<GearIcon />}
-                tip="Team settings"
-                aria-label={`Team settings for ${team.name}`}
-                tipSide="right"
-              />
-            )}
-          </div>
-          <div className="flex flex-col items-start gap-0.5 overflow-x-hidden">
-            {switchingTeams ? (
-              <TeamMenuOptions
-                teams={teams}
-                close={close}
-                onCreateTeamClick={onCreateTeamClick}
-                team={team}
-              />
-            ) : (
-              <ProjectMenuOptions
-                onCreateProjectClick={onCreateProjectClick}
-                team={team}
-                close={close}
-              />
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

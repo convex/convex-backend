@@ -46,7 +46,7 @@ export type WithOptionalSystemFields<Document extends GenericDocument> = Expand<
  * @public
  */
 export type SystemIndexes = {
-  // Note `db.get(id)` is simpler and equivalent to a query on `by_id`.
+  // Note `db.get(tableName, id)` is simpler and equivalent to a query on `by_id`.
   // Unless the query is being built dynamically, or doing manual pagination.
   by_id: ["_id"];
 

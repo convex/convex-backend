@@ -50,7 +50,10 @@ use crate::{
         ModuleConfig,
     },
     modules::module_versions::ModuleSource,
-    source_packages::types::PackageSize,
+    source_packages::types::{
+        PackageSize,
+        SourcePackage,
+    },
 };
 
 #[derive(Debug)]
@@ -161,14 +164,22 @@ pub async fn upload_package(
 #[fastrace::trace]
 pub async fn download_package(
     storage: Arc<dyn Storage>,
-    key: ObjectKey,
-    // TODO: Check that the hash matches.
-    _digest: Sha256Digest,
+    package: &SourcePackage,
 ) -> anyhow::Result<BTreeMap<CanonicalizedModulePath, ModuleConfig>> {
-    let stream = storage
-        .get(&key)
-        .await?
-        .context(format!("Src Pkg storage key not found?? {key:?}"))?;
+    let object_key = storage.fully_qualified_key(&package.storage_key);
+    let object_size = package.package_size.zipped_size_bytes as u64;
+    let stream = if object_size > 0 {
+        // N.B.: `get_fq_object_exact_range` is slightly more efficient than just
+        // `get()` since it doesn't need to discover the object size
+        storage.get_fq_object_exact_range(&object_key, 0..object_size)
+    } else {
+        // compatibility for very old uploaded packages...
+        storage
+            .get_fq_object(&object_key)
+            .await?
+            .with_context(|| format!("Src Pkg storage key not found?? {:?}", package.storage_key))?
+    };
+    // TODO: Check that the hash matches.
     let mut reader = ZipFileReader::new(stream.into_tokio_reader());
 
     let mut source = BTreeMap::new();
@@ -220,7 +231,8 @@ pub async fn download_package(
     metadata_paths.sort();
     anyhow::ensure!(
         metadata_paths == found_paths,
-        "metadata.json paths don't match paths in zip for source package {key:?}",
+        "metadata.json paths don't match paths in zip for source package {:?}",
+        package.storage_key
     );
 
     let mut module_environments: Option<BTreeMap<String, ModuleEnvironment>> = metadata_json
@@ -240,7 +252,7 @@ pub async fn download_package(
         let config = ModuleConfig {
             path: path.clone().into(),
             source: ModuleSource::new(&source),
-            source_map: source_maps.remove(&path),
+            source_map: source_maps.remove(&path).map(Into::into),
             environment,
         };
         out.insert(path, config);

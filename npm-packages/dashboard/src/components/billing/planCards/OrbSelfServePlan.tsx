@@ -89,7 +89,7 @@ export function OrbSelfServePlan({
         action={
           orbSub?.plan.planType === plan.planType ||
           orbSub?.plan.id === plan.id ? (
-            <p className="flex h-[2.125rem] items-center px-2 font-semibold">
+            <p className="flex h-8.5 items-center px-2 font-semibold">
               Current Plan
             </p>
           ) : orbSub ? (
@@ -102,9 +102,7 @@ export function OrbSelfServePlan({
                       "billing:subscription:changePlan",
                     )
                   : team.managedBy === "vercel"
-                    ? plan.planType === "CONVEX_PROFESSIONAL"
-                      ? `Convex Professional is not available for teams managed by ${startCase(team.managedBy)}. You can create a new team to use Convex Professional. Existing projects can be transferred to another team on the Project Settings page.`
-                      : `You can manage your subscription in ${startCase(team.managedBy)}.`
+                    ? `You can manage your subscription in ${startCase(team.managedBy)}.`
                     : isOnBusinessPlan
                       ? "Please contact support to change your plan."
                       : missingRequiredPaymentMethod
@@ -139,9 +137,7 @@ export function OrbSelfServePlan({
                       "billing:subscription:changePlan",
                     )
                   : team.managedBy === "vercel"
-                    ? plan.planType === "CONVEX_PROFESSIONAL"
-                      ? `Convex Professional is not available for teams managed by ${startCase(team.managedBy)}. You can create a new team to use Convex Professional. Existing projects can be transferred to another team on the Project Settings page.`
-                      : `You can manage your subscription in ${startCase(team.managedBy)}.`
+                    ? `You can manage your subscription in ${startCase(team.managedBy)}.`
                     : undefined
               }
             >
@@ -161,7 +157,9 @@ export function OrbSelfServePlan({
         ) : (
           <UpgradePlanDialog
             onClose={() => setIsChangingPlan(false)}
-            onConfirm={(newPlanId) => changePlan({ newPlanId })}
+            onConfirm={(newPlanId, promoCode) =>
+              changePlan({ newPlanId, promoCode })
+            }
             newPlan={plan}
             team={team}
           />

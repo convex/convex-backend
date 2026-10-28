@@ -12,7 +12,6 @@ import {
 import type { Dispatch, SetStateAction, RefObject } from "react";
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
   interface WindowEventMap {
     "local-storage": CustomEvent;
   }

@@ -39,10 +39,10 @@ use crate::{
         EXECUTE_TIMEOUT_RESPONSE_JSON,
     },
     handle_node_executor_stream,
+    InvokeCompletion,
     NodeExecutorStreamPart,
 };
 
-const NVMRC_VERSION: &str = include_str!("../../../.nvmrc");
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_HEALTH_CHECK_ATTEMPTS: u32 = 50;
 
@@ -53,6 +53,11 @@ pub struct LocalNodeExecutor {
 
 struct LocalNodeExecutorConfig {
     node_process_timeout: Duration,
+    /// Overrides the initial callback retry backoff in the spawned node
+    /// process (read by syscalls.ts at module load). Tests zero this so
+    /// callbacks retrying against an unreachable backend settle within test
+    /// timeouts.
+    callback_initial_backoff: Option<Duration>,
 }
 
 struct InnerLocalNodeExecutor {
@@ -62,7 +67,7 @@ struct InnerLocalNodeExecutor {
 }
 
 impl InnerLocalNodeExecutor {
-    async fn new() -> anyhow::Result<Self> {
+    async fn new(config: &LocalNodeExecutorConfig) -> anyhow::Result<Self> {
         tracing::info!("Initializing inner local node executor");
         // Create a single temp directory for both source files and Node.js temp files
         let source_dir = TempDir::new()?;
@@ -89,8 +94,13 @@ impl InnerLocalNodeExecutor {
             panic!("not supported");
         };
         let server_handle =
-            Self::start_node_with_listener(&source_path, &source_dir, &socket_path).await?;
-        let mut client_builder = Client::builder();
+            Self::start_node_with_listener(config, &source_path, &source_dir, &socket_path).await?;
+        // Don't keep idle connections in the pool. The Node HTTP server closes
+        // idle keep-alive connections after its (default 5s) `keepAliveTimeout`,
+        // but hyper's pool would hold one much longer and reuse it right as the
+        // server closes it, surfacing as a spurious "connection reset by peer".
+        // Opening a fresh connection per request is cheap over a local socket.
+        let mut client_builder = Client::builder().pool_max_idle_per_host(0);
         #[cfg(unix)]
         {
             client_builder = client_builder.unix_socket(socket_path);
@@ -122,15 +132,11 @@ impl InnerLocalNodeExecutor {
             .await?;
         let version = String::from_utf8_lossy(&cmd.stdout);
 
-        if !version.starts_with("v18.")
-            && !version.starts_with("v20.")
-            && !version.starts_with("v22.")
-            && !version.starts_with("v24.")
-        {
+        if !version.starts_with("v22.") && !version.starts_with("v24.") {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "DeploymentNotConfiguredForNodeActions",
                 "Deployment is not configured to deploy \"use node\" actions. \
-                 Node.js v18, 20, 22, or 24 is not installed. \
+                 Node.js v22 or 24 is not installed. \
                  Install a supported Node.js version with nvm (https://github.com/nvm-sh/nvm) \
                  to deploy Node.js actions."
             ))
@@ -140,7 +146,7 @@ impl InnerLocalNodeExecutor {
 
     async fn check_server_health(client: &Client) -> anyhow::Result<bool> {
         match client
-            .get(format!("http://localhost/health"))
+            .get("http://localhost/health".to_string())
             .timeout(Duration::from_secs(1))
             .send()
             .await
@@ -151,23 +157,13 @@ impl InnerLocalNodeExecutor {
     }
 
     async fn start_node_with_listener(
+        config: &LocalNodeExecutorConfig,
         source_path: &PathBuf,
         temp_dir: &TempDir,
         socket_path: &PathBuf,
     ) -> anyhow::Result<Child> {
-        let preferred_node_version = NVMRC_VERSION.trim();
-
-        // Look for node in a few places.
-        let possible_path = home::home_dir()
-            .unwrap()
-            .join(".nvm")
-            .join(format!("versions/node/v{preferred_node_version}/bin/node"));
-        let node_path = if possible_path.exists() {
-            possible_path.to_string_lossy().to_string()
-        } else {
-            "node".to_string()
-        };
-        Self::check_node_version(&node_path).await?;
+        let node_path = "node";
+        Self::check_node_version(node_path).await?;
 
         let mut cmd = TokioCommand::new(node_path);
         cmd.arg(source_path)
@@ -176,6 +172,12 @@ impl InnerLocalNodeExecutor {
             .arg("--tempdir")
             .arg(temp_dir.path())
             .kill_on_drop(true);
+        if let Some(backoff) = config.callback_initial_backoff {
+            cmd.env(
+                "CALLBACK_INITIAL_BACKOFF_MS",
+                backoff.as_millis().to_string(),
+            );
+        }
 
         let child = cmd.spawn()?;
 
@@ -189,6 +191,7 @@ impl LocalNodeExecutor {
             inner: Arc::new(Mutex::new(None)),
             config: LocalNodeExecutorConfig {
                 node_process_timeout,
+                callback_initial_backoff: None,
             },
         };
 
@@ -206,19 +209,22 @@ impl LocalNodeExecutor {
                         let chunk = chunk?;
                         match chunk {
                             Some(chunk) => {
-                                let chunk_vec = chunk.to_vec();
-                                anyhow::Ok(NodeExecutorStreamPart::Chunk(chunk_vec))
+                                anyhow::Ok(NodeExecutorStreamPart::Chunk(chunk))
                             }
                             None => {
-                                anyhow::Ok(NodeExecutorStreamPart::InvokeComplete(Ok(())))
+                                anyhow::Ok(NodeExecutorStreamPart::InvokeComplete(
+                                    InvokeCompletion::Success,
+                                ))
                             }
                         }
                     },
                     _ = timeout_future.fuse() => {
-                        anyhow::Ok(NodeExecutorStreamPart::InvokeComplete(Err(InvokeResponse {
-                            response: EXECUTE_TIMEOUT_RESPONSE_JSON.clone(),
-                            aws_request_id: None,
-                        })))
+                        anyhow::Ok(NodeExecutorStreamPart::InvokeComplete(
+                            InvokeCompletion::ExplicitError(InvokeResponse {
+                                response: EXECUTE_TIMEOUT_RESPONSE_JSON.clone(),
+                                aws_request_id: None,
+                            }),
+                        ))
                     },
                 }
             };
@@ -248,7 +254,7 @@ impl NodeExecutor for LocalNodeExecutor {
             let mut inner = self.inner.lock().await;
             if inner.is_none() {
                 *inner = Some(
-                    InnerLocalNodeExecutor::new()
+                    InnerLocalNodeExecutor::new(&self.config)
                         .await
                         .context("Failed to create inner local node executor")?,
                 )
@@ -259,7 +265,7 @@ impl NodeExecutor for LocalNodeExecutor {
         let request_json = JsonValue::try_from(request)?;
 
         let response_result = client
-            .post(format!("http://localhost/invoke"))
+            .post("http://localhost/invoke".to_string())
             .json(&request_json)
             .timeout(self.config.node_process_timeout)
             .send()

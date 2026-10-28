@@ -3,9 +3,13 @@ import React from "react";
 export function Donut({
   current,
   max,
+  strokeClassName = "stroke-util-accent",
 }: {
   current: number;
   max: number | null | undefined;
+  // Stroke class for the progress arc, e.g. to tint an over-limit gauge with
+  // an error color.
+  strokeClassName?: string;
 }) {
   if (max === null || max === undefined || max === 0) {
     return null;
@@ -17,7 +21,7 @@ export function Donut({
   const endAngle = 2 * Math.PI * progress - Math.PI / 2;
   const endX = radius * Math.cos(endAngle);
   const endY = radius * Math.sin(endAngle);
-  const color = "stroke-util-accent";
+  const color = strokeClassName;
   return (
     <div className="relative hidden sm:inline-block">
       <svg

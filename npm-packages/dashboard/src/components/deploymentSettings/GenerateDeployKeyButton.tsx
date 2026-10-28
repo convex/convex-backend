@@ -1,16 +1,23 @@
 import { Button } from "@ui/Button";
 import { Checkbox } from "@ui/Checkbox";
-import { Modal } from "@ui/Modal";
 import { TextInput } from "@ui/TextInput";
 import { CopyButton } from "@common/elements/CopyButton";
 import { CopyTextButton } from "@common/elements/CopyTextButton";
+import { ClosePanelButton } from "@ui/ClosePanelButton";
 import { Callout } from "@ui/Callout";
-import { SegmentedControl } from "@ui/SegmentedControl";
-import { useState } from "react";
+import { Modal } from "@ui/Modal";
+import {
+  Dialog,
+  DialogPanel,
+  DialogTitle,
+  Transition,
+  TransitionChild,
+} from "@headlessui/react";
+import { useCallback, useState } from "react";
 import { ExclamationTriangleIcon, PlusIcon } from "@radix-ui/react-icons";
 import { DeploymentType as DeploymentTypeType } from "generatedApi";
+import { PlatformCreateDeployKeyArgs } from "@convex-dev/platform/managementApi";
 import { usePostHog } from "hooks/usePostHog";
-import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { HelpTooltip } from "@ui/HelpTooltip";
 import {
   TokenExpirationSelector,
@@ -18,44 +25,42 @@ import {
   resolveExpirationTime,
 } from "components/TokenExpirationSelector";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
+import { Link } from "@ui/Link";
 
 export type DeployKeyGenerationDisabledReason =
   | "CannotManageDeployment"
   | "LocalDeployment"
   | "NoPermissionForPreview";
 
-type OperationGroup = {
+// The set of actions a deploy key can be scoped to, mirrored from the
+// management API's `allowedActions` enum. Actions are rendered to users by
+// their canonical name (e.g. `deployment:data:view`) rather than a prettified
+// label.
+export type DeployKeyAction = NonNullable<
+  PlatformCreateDeployKeyArgs["allowedActions"]
+>[number];
+
+type ActionGroup = {
   label: string;
-  operations: { key: string; label: string; description: string }[];
+  actions: { key: DeployKeyAction; description: string }[];
 };
 
-export function formatOperationName(name: string): string {
-  return name
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/^(\S)/, (m) => m.toUpperCase())
-    .replace(/\s(\S)/g, (m) => m.toLowerCase());
-}
-
-export const OPERATION_GROUPS: OperationGroup[] = [
+export const ACTION_GROUPS: ActionGroup[] = [
   {
     label: "Deployment",
-    operations: [
+    actions: [
       {
-        key: "Deploy",
-        label: formatOperationName("Deploy"),
+        key: "deployment:deploy",
         description:
           "Allows deploying to this deployment. This includes updating code, the database schema, and auth configuration.",
       },
       {
-        key: "PauseDeployment",
-        label: formatOperationName("PauseDeployment"),
+        key: "deployment:pause",
         description:
           "Allows pausing this deployment, blocking all functions from running, including scheduled functions and Cron jobs.",
       },
       {
-        key: "UnpauseDeployment",
-        label: formatOperationName("UnpauseDeployment"),
+        key: "deployment:unpause",
         description:
           "Allows unpausing this deployment, re-enabling functions, scheduled functions, and Cron jobs.",
       },
@@ -63,16 +68,14 @@ export const OPERATION_GROUPS: OperationGroup[] = [
   },
   {
     label: "Environment variables",
-    operations: [
+    actions: [
       {
-        key: "ViewEnvironmentVariables",
-        label: formatOperationName("ViewEnvironmentVariables"),
+        key: "deployment:env:view",
         description:
           "Allows viewing all environment variables configured for this deployment.",
       },
       {
-        key: "WriteEnvironmentVariables",
-        label: formatOperationName("WriteEnvironmentVariables"),
+        key: "deployment:env:write",
         description:
           "Allows creating, updating, and deleting all environment variables in this deployment.",
       },
@@ -80,16 +83,14 @@ export const OPERATION_GROUPS: OperationGroup[] = [
   },
   {
     label: "Data",
-    operations: [
+    actions: [
       {
-        key: "ViewData",
-        label: formatOperationName("ViewData"),
+        key: "deployment:data:view",
         description:
           "Allows viewing all data stored in this deployment, including data in tables, the database schema, scheduled functions, and file storage.",
       },
       {
-        key: "WriteData",
-        label: formatOperationName("WriteData"),
+        key: "deployment:data:write",
         description:
           "Allows writing to all data in this deployment, including updating data in tables, uploading and deleting files, canceling scheduled jobs, and exporting data with streaming export.",
       },
@@ -97,366 +98,404 @@ export const OPERATION_GROUPS: OperationGroup[] = [
   },
   {
     label: "Functions",
-    operations: [
+    actions: [
       {
-        key: "RunInternalQueries",
-        label: formatOperationName("RunInternalQueries"),
+        key: "deployment:functions:runInternalQueries",
         description:
           "Allows running internal queries defined in this deployment.",
       },
       {
-        key: "RunInternalMutations",
-        label: formatOperationName("RunInternalMutations"),
+        key: "deployment:functions:runInternalMutations",
         description:
           "Allows running internal mutations defined in this deployment.",
       },
       {
-        key: "RunInternalActions",
-        label: formatOperationName("RunInternalActions"),
+        key: "deployment:functions:runInternalActions",
         description:
           "Allows running internal actions defined in this deployment.",
       },
       {
-        key: "RunTestQuery",
-        label: formatOperationName("RunTestQuery"),
+        key: "deployment:functions:runTestQuery",
         description:
           "Allows running custom test queries against this deployment.",
       },
       {
-        key: "ActAsUser",
-        label: formatOperationName("ActAsUser"),
+        key: "deployment:functions:actAsUser",
         description:
           "Allows running functions assuming a specific user identity.",
       },
     ],
   },
   {
-    label: "Backups",
-    operations: [
-      {
-        key: "ViewBackups",
-        label: formatOperationName("ViewBackups"),
-        description: "Not yet implemented.",
-      },
-      {
-        key: "CreateBackups",
-        label: formatOperationName("CreateBackups"),
-        description:
-          "Allows exporting data with the Convex CLI. In the future, will also allow deploy keys to create cloud backups.",
-      },
-      {
-        key: "DownloadBackups",
-        label: formatOperationName("DownloadBackups"),
-        description: "Allows downloading previously generated backups.",
-      },
-      {
-        key: "DeleteBackups",
-        label: formatOperationName("DeleteBackups"),
-        description: "Not yet implemented.",
-      },
-      {
-        key: "ImportBackups",
-        label: formatOperationName("ImportBackups"),
-        description:
-          "Allows importing data with the Convex CLI and Streaming Import. In the future, will also allow deploy keys to restore from a cloud backup.",
-      },
-    ],
-  },
-  {
     label: "Monitoring",
-    operations: [
+    actions: [
       {
-        key: "ViewLogs",
-        label: formatOperationName("ViewLogs"),
+        key: "deployment:logs:view",
         description: "Allows viewing function execution logs.",
       },
       {
-        key: "ViewMetrics",
-        label: formatOperationName("ViewMetrics"),
+        key: "deployment:metrics:view",
         description: "Allows viewing application metrics.",
       },
       {
-        key: "ViewAuditLog",
-        label: formatOperationName("ViewAuditLog"),
+        key: "deployment:auditLog:view",
         description:
           "Allows viewing the deployment audit log, visible on the dashboard's history page.",
       },
     ],
   },
   {
-    label: "Integrations",
-    operations: [
+    label: "Usage",
+    actions: [
       {
-        key: "ViewIntegrations",
-        label: formatOperationName("ViewIntegrations"),
+        key: "deployment:usage:view",
+        description: "Allows viewing usage metrics for this deployment.",
+      },
+      {
+        key: "deployment:usageLimits:view",
+        description:
+          "Allows viewing the usage limits configured for this deployment.",
+      },
+      {
+        key: "deployment:usageLimits:write",
+        description:
+          "Allows creating, updating, and deleting usage limits for this deployment.",
+      },
+    ],
+  },
+  {
+    label: "Integrations",
+    actions: [
+      {
+        key: "deployment:integrations:view",
         description:
           "Allows viewing integration configured for this deployment.",
       },
       {
-        key: "WriteIntegrations",
-        label: formatOperationName("WriteIntegrations"),
+        key: "deployment:integrations:write",
         description: "Allows configuring integrations for this deployment.",
+      },
+    ],
+  },
+  {
+    label: "Backups",
+    actions: [
+      {
+        key: "deployment:backups:view",
+        description: "Not yet implemented.",
+      },
+      {
+        key: "deployment:backups:create",
+        description:
+          "Allows exporting data with the Convex CLI. In the future, will also allow deploy keys to create cloud backups.",
+      },
+      {
+        key: "deployment:backups:download",
+        description: "Allows downloading previously generated backups.",
+      },
+      {
+        key: "deployment:backups:delete",
+        description: "Not yet implemented.",
+      },
+      {
+        key: "deployment:backups:import",
+        description:
+          "Allows importing data with the Convex CLI and Streaming Import. In the future, will also allow deploy keys to restore from a cloud backup.",
       },
     ],
   },
 ];
 
-type PermissionMode = "deploy" | "custom";
-
-const PERMISSION_MODE_OPTIONS: {
-  label: string;
-  value: PermissionMode;
-}[] = [
-  { label: "Deploy only", value: "deploy" },
-  { label: "Custom permissions", value: "custom" },
-];
-
-export type GenerateDeployKeyWithNameButtonProps = {
+export type CreateDeployKeyFormProps = {
   disabledReason: DeployKeyGenerationDisabledReason | null;
   getAdminKey: (
     name: string,
-    allowedOperations: string[] | undefined,
+    allowedActions: DeployKeyAction[] | undefined,
     expiresAt: number | undefined,
   ) => Promise<{ ok: true; adminKey: string } | { ok: false; error: string }>;
   deploymentType: DeploymentTypeType;
   showCustomPermissions?: boolean;
 };
 
-export function GenerateDeployKeyWithNameButton({
+export function CreateDeployKeyForm({
   disabledReason,
   getAdminKey,
   deploymentType,
   showCustomPermissions = true,
-}: GenerateDeployKeyWithNameButtonProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  onClose,
+}: CreateDeployKeyFormProps & { onClose: () => void }) {
+  const [open, setOpen] = useState(true);
+  const closePanel = useCallback(() => setOpen(false), []);
   const [isLoading, setIsLoading] = useState(false);
   const [name, setName] = useState("");
-  const [permissionMode, setPermissionMode] =
-    useState<PermissionMode>("deploy");
-  const [selectedOps, setSelectedOps] = useState<Set<string>>(() => new Set());
+  const [selectedActions, setSelectedActions] = useState<Set<DeployKeyAction>>(
+    () => new Set(),
+  );
   const [createdKey, setCreatedKey] = useState<string | null>(null);
+  const [panelClosed, setPanelClosed] = useState(false);
   const [expiration, setExpiration] = useState<TokenExpirationValue>(null);
   const [error, setError] = useState<string | null>(null);
   const { capture } = usePostHog();
-  const { scopedDeployKeys } = useLaunchDarkly();
-
-  const handleClose = () => {
-    setIsOpen(false);
-    setCreatedKey(null);
-    setName("");
-    setPermissionMode("deploy");
-    setSelectedOps(new Set());
-    setExpiration(null);
-    setError(null);
-  };
 
   return (
     <>
-      {isOpen &&
-        (createdKey ? (
-          <Modal title="Deploy Key Created" onClose={handleClose}>
-            <div className="flex flex-col gap-4">
-              <p className="text-sm text-content-primary">
-                Copy your new deploy key now. You won&apos;t be able to see it
-                again.
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="min-w-0 flex-1 truncate rounded bg-background-tertiary px-2 py-1 text-sm">
-                  {createdKey}
-                </code>
-                <CopyButton text={createdKey} />
-              </div>
-              <div className="flex justify-end">
-                <Button onClick={handleClose}>Done</Button>
-              </div>
-            </div>
-          </Modal>
-        ) : (
-          <Modal
-            title="Create Deploy Key"
-            onClose={handleClose}
-            size={scopedDeployKeys && showCustomPermissions ? "md" : "sm"}
-          >
-            <form
-              className="flex flex-col gap-3"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                setIsLoading(true);
-                setError(null);
-                try {
-                  const allowedOperations =
-                    scopedDeployKeys && showCustomPermissions
-                      ? permissionMode === "deploy"
-                        ? ["Deploy"]
-                        : Array.from(selectedOps)
-                      : undefined;
-                  const expiresAt = resolveExpirationTime(expiration);
-                  const result = await getAdminKey(
-                    name,
-                    allowedOperations,
-                    expiresAt ?? undefined,
-                  );
-                  if (!result.ok) {
-                    setError(result.error);
-                    return;
-                  }
-                  setCreatedKey(result.adminKey);
-                  capture("generated_deploy_key", {
-                    type: deploymentType,
-                  });
-                } finally {
-                  setIsLoading(false);
-                }
-              }}
-            >
-              <TextInput
-                label="Name"
-                id="name"
-                autoFocus
-                value={name}
-                placeholder="Enter a memorable name for your deploy key"
-                onChange={(event) => {
-                  setName(event.target.value);
-                }}
-              />
-              <TokenExpirationSelector
-                value={expiration}
-                onChange={setExpiration}
-              />
-              {scopedDeployKeys && showCustomPermissions && (
-                <div className="mt-2 flex flex-col gap-3">
-                  <SegmentedControl
-                    className="w-fit"
-                    options={PERMISSION_MODE_OPTIONS}
-                    value={permissionMode}
-                    onChange={(value) => {
-                      setPermissionMode(value);
-                      if (value === "custom") {
-                        setSelectedOps(new Set());
-                      }
-                    }}
-                  />
-                  {permissionMode === "deploy" ? (
-                    <p className="text-xs text-content-secondary">
-                      This key will able to deploy to this deployment. Deploying
-                      includes updating code, the database schema, and auth
-                      configuration.
-                    </p>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          variant="neutral"
-                          size="xs"
-                          onClick={() => {
-                            const all = new Set(
-                              OPERATION_GROUPS.flatMap((g) =>
-                                g.operations.map((op) => op.key),
-                              ),
-                            );
-                            setSelectedOps(all);
-                          }}
-                        >
-                          Select all
-                        </Button>
-                        <Button
-                          variant="neutral"
-                          size="xs"
-                          onClick={() => {
-                            setSelectedOps(new Set());
-                          }}
-                        >
-                          Select none
-                        </Button>
-                      </div>
-                      <div className="scrollbar max-h-[50dvh] overflow-y-auto">
-                        <div className="flex flex-col gap-3">
-                          {OPERATION_GROUPS.map((group) => (
-                            <div key={group.label}>
-                              <div className="mb-1 text-sm font-semibold text-content-secondary">
-                                {group.label}
-                              </div>
-                              <div className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-x-4 gap-y-1">
-                                {group.operations.map((op) => (
-                                  <label
-                                    key={op.key}
-                                    htmlFor={`op-${op.key}`}
-                                    className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-background-secondary"
-                                  >
-                                    <Checkbox
-                                      id={`op-${op.key}`}
-                                      checked={selectedOps.has(op.key)}
-                                      onChange={() => {
-                                        setSelectedOps((prev) => {
-                                          const next = new Set(prev);
-                                          if (next.has(op.key)) {
-                                            next.delete(op.key);
-                                          } else {
-                                            next.add(op.key);
-                                          }
-                                          return next;
-                                        });
-                                      }}
-                                    />
-                                    {op.label}
-                                    <HelpTooltip>{op.description}</HelpTooltip>
-                                  </label>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-              {error !== null && (
-                <Callout variant="error" className="text-xs break-words">
-                  <ExclamationTriangleIcon className="mt-0.5 mr-1 min-w-4" />
-                  {error}
-                </Callout>
-              )}
-              <div className="flex items-center justify-end gap-2">
-                {scopedDeployKeys &&
-                  showCustomPermissions &&
-                  permissionMode === "custom" &&
-                  selectedOps.size === 0 && (
-                    <span className="text-xs text-content-errorSecondary">
-                      Select at least one operation
-                    </span>
-                  )}
-                <Button
-                  className="w-fit"
-                  type="submit"
-                  disabled={
-                    disabledReason !== null ||
-                    name.trim() === "" ||
-                    (scopedDeployKeys &&
-                      showCustomPermissions &&
-                      permissionMode === "custom" &&
-                      selectedOps.size === 0)
-                  }
-                  loading={isLoading}
-                >
-                  Create
-                </Button>
-              </div>
-            </form>
-          </Modal>
-        ))}
-      <Button
-        disabled={disabledReason !== null}
-        tip={
-          disabledReason === null
-            ? undefined
-            : DEPLOY_KEY_GENERATION_DISABLED_REASONS[disabledReason]
-        }
-        onClick={() => setIsOpen(true)}
-        icon={<PlusIcon />}
+      <Transition
+        show={open}
+        appear
+        afterLeave={() => {
+          if (createdKey === null) {
+            onClose();
+          } else {
+            setPanelClosed(true);
+          }
+        }}
       >
-        {getGenerateButtonText(deploymentType)}
-      </Button>
+        <Dialog
+          static
+          as="div"
+          className="fixed inset-0 z-50 overflow-hidden"
+          open // Real openness status is controlled by Transition above
+          onClose={closePanel}
+        >
+          <div className="absolute inset-0 overflow-hidden">
+            <TransitionChild
+              enter="ease-in-out duration-300"
+              enterFrom="opacity-0"
+              enterTo="opacity-100"
+              leave="ease-in-out duration-300"
+              leaveFrom="opacity-100"
+              leaveTo="opacity-0"
+            >
+              <div className="absolute inset-0 transition-opacity" />
+            </TransitionChild>
+
+            <div className="fixed inset-0 flex items-center justify-center p-4 md:inset-y-0 md:right-0 md:left-auto md:items-stretch md:justify-end md:p-0 md:pl-10">
+              <TransitionChild
+                enter="transform transition ease-in-out duration-200 md:duration-300"
+                enterFrom="translate-y-2 opacity-0 md:translate-x-full md:translate-y-0"
+                enterTo="translate-y-0 opacity-100 md:translate-x-0"
+                leave="transform transition ease-in-out duration-200 md:duration-300"
+                leaveFrom="translate-y-0 opacity-100 md:translate-x-0"
+                leaveTo="translate-y-2 opacity-0 md:translate-x-full md:translate-y-0"
+              >
+                <DialogPanel className="w-full max-w-lg md:w-screen md:max-w-3xl">
+                  <div
+                    data-testid="create-deploy-key-panel"
+                    className="flex max-h-[85vh] flex-col rounded-lg bg-background-secondary shadow-xl md:h-full md:max-h-none md:rounded-none dark:border"
+                  >
+                    <div className="flex items-center justify-between px-6 pt-6 pb-4">
+                      <DialogTitle as="h4">Create Deploy Key</DialogTitle>
+                      <ClosePanelButton onClose={closePanel} />
+                    </div>
+
+                    <form
+                      className="flex min-h-0 flex-1 flex-col"
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+                        setIsLoading(true);
+                        setError(null);
+                        try {
+                          const allowedActions = showCustomPermissions
+                            ? Array.from(selectedActions)
+                            : undefined;
+                          const expiresAt = resolveExpirationTime(expiration);
+                          const result = await getAdminKey(
+                            name,
+                            allowedActions,
+                            expiresAt ?? undefined,
+                          );
+                          if (!result.ok) {
+                            setError(result.error);
+                            return;
+                          }
+                          setCreatedKey(result.adminKey);
+                          closePanel();
+                          capture("generated_deploy_key", {
+                            type: deploymentType,
+                          });
+                        } finally {
+                          setIsLoading(false);
+                        }
+                      }}
+                    >
+                      {/* `--scroll-fade-height` sizes the sticky fade gradient
+                        at the bottom of this scroll area (see the trailing
+                        sticky div below). */}
+                      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 [--scroll-fade-height:3rem]">
+                        <TextInput
+                          label="Name"
+                          id="name"
+                          autoFocus
+                          value={name}
+                          placeholder="Enter a memorable name for your deploy key"
+                          onChange={(event) => {
+                            setName(event.target.value);
+                          }}
+                        />
+                        <TokenExpirationSelector
+                          value={expiration}
+                          onChange={setExpiration}
+                        />
+                        {showCustomPermissions && (
+                          <div className="mt-2 flex flex-col gap-3">
+                            <p className="text-xs text-content-secondary">
+                              Select the permissions this key needs.{" "}
+                              <Link
+                                href="https://docs.convex.dev/team-management/role-actions#data-plane-and-runtime"
+                                target="_blank"
+                              >
+                                Learn more about permissions.
+                              </Link>
+                            </p>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="neutral"
+                                size="xs"
+                                onClick={() => {
+                                  const all = new Set(
+                                    ACTION_GROUPS.flatMap((g) =>
+                                      g.actions.map((a) => a.key),
+                                    ),
+                                  );
+                                  setSelectedActions(all);
+                                }}
+                              >
+                                Select all
+                              </Button>
+                              <Button
+                                variant="neutral"
+                                size="xs"
+                                onClick={() => {
+                                  setSelectedActions(new Set());
+                                }}
+                              >
+                                Select none
+                              </Button>
+                            </div>
+                            <div className="columns-1 gap-x-6 md:columns-2">
+                              {ACTION_GROUPS.map((group) => (
+                                <div
+                                  key={group.label}
+                                  className="mb-3 break-inside-avoid"
+                                >
+                                  <div className="mb-1 text-sm font-semibold text-content-secondary">
+                                    {group.label}
+                                  </div>
+                                  <div className="flex flex-col gap-y-1">
+                                    {group.actions.map((action) => (
+                                      <label
+                                        key={action.key}
+                                        htmlFor={`action-${action.key}`}
+                                        className="flex cursor-pointer items-center gap-2 rounded-sm p-1 text-xs hover:bg-background-secondary"
+                                      >
+                                        <Checkbox
+                                          id={`action-${action.key}`}
+                                          checked={selectedActions.has(
+                                            action.key,
+                                          )}
+                                          onChange={() => {
+                                            setSelectedActions((prev) => {
+                                              const next = new Set(prev);
+                                              if (next.has(action.key)) {
+                                                next.delete(action.key);
+                                              } else {
+                                                next.add(action.key);
+                                              }
+                                              return next;
+                                            });
+                                          }}
+                                        />
+                                        <span className="font-mono">
+                                          {action.key}
+                                        </span>
+                                        <HelpTooltip>
+                                          {action.description}
+                                        </HelpTooltip>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {error !== null && (
+                          <Callout
+                            variant="error"
+                            className="text-xs wrap-break-word"
+                          >
+                            <ExclamationTriangleIcon className="mt-0.5 mr-1 min-w-4" />
+                            {error}
+                          </Callout>
+                        )}
+                        {/* Sticky fade that pins to the bottom of the scroll
+                            area to hint there's more to scroll. As a sticky
+                            child it lives in the content box (left of the
+                            scrollbar, so it never covers it). */}
+                        <div
+                          aria-hidden
+                          className="pointer-events-none sticky bottom-0 h-(--scroll-fade-height) shrink-0 bg-linear-to-b from-transparent to-background-secondary"
+                        />
+                      </div>
+                      <div className="flex items-center justify-end gap-2 px-6 py-4">
+                        {showCustomPermissions &&
+                          selectedActions.size === 0 && (
+                            <span className="text-xs text-content-errorSecondary">
+                              Select at least one action
+                            </span>
+                          )}
+                        <Button
+                          variant="neutral"
+                          onClick={closePanel}
+                          disabled={isLoading}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          className="w-fit"
+                          type="submit"
+                          disabled={
+                            disabledReason !== null ||
+                            name.trim() === "" ||
+                            (showCustomPermissions &&
+                              selectedActions.size === 0)
+                          }
+                          loading={isLoading}
+                        >
+                          Create
+                        </Button>
+                      </div>
+                    </form>
+                  </div>
+                </DialogPanel>
+              </TransitionChild>
+            </div>
+          </div>
+        </Dialog>
+      </Transition>
+      {createdKey !== null && panelClosed && (
+        <Modal
+          title="Deploy Key Created"
+          onClose={onClose}
+          requireExplicitClose
+        >
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-content-primary">
+              Copy your new deploy key now. You won&apos;t be able to see it
+              again.
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded-sm bg-background-tertiary px-2 py-1 text-sm">
+                {createdKey}
+              </code>
+              <CopyButton text={createdKey} />
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={onClose}>Done</Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
@@ -479,14 +518,14 @@ export function GenerateDeployKeyButton({
   return (
     <>
       {deployKey ? (
-        <div className="flex max-w-[32rem] flex-col gap-3">
+        <div className="flex max-w-lg flex-col gap-3">
           <Callout variant="instructions">
             This key enables reading and writing data to your deployment without
             needing to log in, so it should not be shared or committed to git.
           </Callout>
           <CopyTextButton
             text={deployKey}
-            className="block max-w-[30rem] truncate font-mono text-sm font-normal"
+            className="block max-w-120 truncate font-mono text-sm font-normal"
           />
         </div>
       ) : (
@@ -525,7 +564,7 @@ export function GenerateDeployKeyButton({
 // Map of disabled-reason → tooltip body. Permission-driven reasons use
 // `permissionDeniedTip` so custom-role members see the specific missing
 // action surfaced inline.
-const DEPLOY_KEY_GENERATION_DISABLED_REASONS: Record<
+export const DEPLOY_KEY_GENERATION_DISABLED_REASONS: Record<
   DeployKeyGenerationDisabledReason,
   React.ReactNode
 > = {
@@ -540,6 +579,6 @@ const DEPLOY_KEY_GENERATION_DISABLED_REASONS: Record<
   ),
 };
 
-function getGenerateButtonText(_deploymentType: DeploymentTypeType) {
+export function getGenerateButtonText(_deploymentType: DeploymentTypeType) {
   return "Create Deploy Key";
 }

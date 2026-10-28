@@ -1,0 +1,25 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      // .env* files are gitignored (pullEnv writes .env.local) but next build
+      // reads them, so they must be explicit inputs to invalidate the cache.
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**",
+        "src/hooks/generated/**",
+        "src/generatedApi.ts",
+        "src/generatedDeploymentApi.ts"
+      ],
+      // Baked into the build by next.config.js / server bundles.
+      "env": [
+        "BIG_BRAIN_URL",
+        "PROMOS_URL",
+        "WORKOS_LOGIN_URL",
+        "VERCEL*",
+        "NEXT_PUBLIC_*"
+      ]
+    }
+  }
+}

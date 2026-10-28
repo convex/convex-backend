@@ -7,15 +7,23 @@ edition = "2021"
 rust-version = "1.85"
 resolver = "2"
 license = "Apache-2.0"
-repository = "https://github.com/get-convex/convex-rs"
+repository = "https://github.com/convex/convex-rs"
 homepage = "https://www.convex.dev/"
 
-[features]
+[package.metadata.cargo-machete]
+ignored = ["tokio-native-tls"]
+
+# The non-rustls features are quarantined to the OSS release to avoid
+# accidentally including native-tls features into the main monorepo
+[package.metadata.oss-features]
 default = ["native-tls-vendored"]
 native-tls = ["tokio-tungstenite/native-tls"]
 native-tls-vendored = ["tokio-tungstenite/native-tls-vendored"]
-rustls-tls-native-roots = ["tokio-tungstenite/rustls-tls-native-roots"]
 rustls-tls-webpki-roots = ["tokio-tungstenite/rustls-tls-webpki-roots"]
+
+[features]
+default = ["rustls-tls-native-roots"]
+rustls-tls-native-roots = ["tokio-tungstenite/rustls-tls-native-roots"]
 testing = ["convex_sync_types/testing", "proptest", "proptest-derive", "parking_lot"]
 
 [dependencies]
@@ -55,6 +63,12 @@ pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+# HAX: This is here to force `tokio-native-tls` into the root Cargo.lock file so
+# that `generate_oss_cargo_tomls.py` can generate Cargo.oss.lock without
+# consulting the registry; that script also strips out this section
+[target."cfg(any())".dev-dependencies]
+tokio-native-tls = { version = "0.3", features = ["vendored"] }
 
 [lints]
 workspace = true

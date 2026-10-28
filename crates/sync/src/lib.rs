@@ -5,6 +5,7 @@
 
 mod metrics;
 mod state;
+pub mod subscription_reconnect;
 pub mod worker;
 
 pub use worker::{

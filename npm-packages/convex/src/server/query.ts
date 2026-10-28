@@ -26,8 +26,9 @@ import { SearchFilter, SearchFilterBuilder } from "./search_filter_builder.js";
  *
  * @public
  */
-export interface QueryInitializer<TableInfo extends GenericTableInfo>
-  extends Query<TableInfo> {
+export interface QueryInitializer<
+  TableInfo extends GenericTableInfo,
+> extends Query<TableInfo> {
   /**
    * Query by reading all of the values out of this table.
    *
@@ -106,7 +107,7 @@ export interface QueryInitializer<TableInfo extends GenericTableInfo>
 /**
  * The {@link Query} interface allows functions to read values out of the database.
  *
- * **If you only need to load an object by ID, use `db.get(id)` instead.**
+ * **If you only need to load an object by ID, use `db.get(tableName, id)` instead.**
  *
  * Executing a query consists of calling
  * 1. (Optional) {@link Query.order} to define the order
@@ -163,8 +164,9 @@ export interface QueryInitializer<TableInfo extends GenericTableInfo>
  *
  * @public
  */
-export interface Query<TableInfo extends GenericTableInfo>
-  extends OrderedQuery<TableInfo> {
+export interface Query<
+  TableInfo extends GenericTableInfo,
+> extends OrderedQuery<TableInfo> {
   /**
    * Define the order of the query output.
    *
@@ -179,8 +181,9 @@ export interface Query<TableInfo extends GenericTableInfo>
  *
  * @public
  */
-export interface OrderedQuery<TableInfo extends GenericTableInfo>
-  extends AsyncIterable<DocumentByInfo<TableInfo>> {
+export interface OrderedQuery<
+  TableInfo extends GenericTableInfo,
+> extends AsyncIterable<DocumentByInfo<TableInfo>> {
   /**
    * Filter the query output, returning only the values for which `predicate` evaluates to true.
    *

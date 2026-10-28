@@ -1,11 +1,9 @@
 use std::collections::{
     BTreeMap,
-    BTreeSet,
     HashSet,
 };
 
 use anyhow::Context;
-use bitvec::vec::BitVec;
 use common::{
     document::{
         CreationTime,
@@ -24,14 +22,10 @@ use common::{
     },
 };
 use compact_str::CompactString;
-use itertools::{
-    Either,
-    Itertools,
-};
+use itertools::Itertools;
 use maplit::btreemap;
 use tantivy::{
     schema::Field,
-    Score,
     Term,
 };
 use value::{
@@ -47,13 +41,8 @@ use value::{
 
 use crate::{
     convex_en,
-    memory_index::{
-        art::ART,
-        TermId,
-    },
+    memory_index::art::ART,
     metrics,
-    scoring::term_from_str,
-    EditDistance,
 };
 
 /// A search query compiled against a particular `SearchIndexSchema`.
@@ -67,10 +56,6 @@ impl CompiledQuery {
     /// If true, this query can't match anything
     pub fn is_empty(&self) -> bool {
         self.text_query.is_empty()
-    }
-
-    pub fn num_terms(&self) -> usize {
-        self.text_query.len() + self.filter_conditions.len()
     }
 
     pub fn try_from_text_query_proto(
@@ -131,10 +116,6 @@ impl QueryTerm {
         self.term
     }
 
-    pub fn max_distance(&self) -> u32 {
-        0
-    }
-
     pub fn prefix(&self) -> bool {
         self.prefix
     }
@@ -184,7 +165,6 @@ impl From<QueryTerm> for pb::searchlight::TextQueryTerm {
         let term_type = if value.prefix {
             pb::searchlight::text_query_term::TermType::Prefix(pb::searchlight::PrefixTextTerm {
                 token: term_str,
-                prefix: value.prefix,
             })
         } else {
             pb::searchlight::text_query_term::TermType::Exact(pb::searchlight::ExactTextTerm {
@@ -194,279 +174,6 @@ impl From<QueryTerm> for pb::searchlight::TextQueryTerm {
         Self {
             term_type: Some(term_type),
         }
-    }
-}
-
-/// An expanded version of CompiledQuery's search terms which expands fuzzy
-/// queries. Maps each QueryTerm from a CompiledQuery to a vector of term
-/// matches and their distance.
-///
-/// TermShortlist is the list of terms that will be considered for a search
-/// query. `shortlist` and `query_term_shortlist_items` are normalized (with the
-/// latter storing indices into the other) to deduplicate terms. This allows
-/// `CandidateRevision` to include a list of positions for the document
-/// represented as a `ShortlistId`.
-///
-/// Without this deduplicated structure, `CandidateRevision` would need to store
-/// the terms themselves which is potentially a lot of unneeded space in the
-/// searchlight RPC.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TermShortlist {
-    shortlist: Vec<Term>,
-    pub query_term_shortlist_items: BTreeMap<QueryTerm, Vec<(EditDistance, ShortlistId)>>,
-}
-
-pub struct TermShortlistBuilder {
-    shortlist: Vec<Term>,
-    query_term_shortlist_items: BTreeMap<QueryTerm, Vec<(EditDistance, ShortlistId)>>,
-
-    term_to_shortlist: BTreeMap<Term, ShortlistId>,
-}
-
-impl TermShortlistBuilder {
-    fn new() -> Self {
-        Self {
-            shortlist: vec![],
-            query_term_shortlist_items: Default::default(),
-            term_to_shortlist: Default::default(),
-        }
-    }
-
-    fn build(self) -> TermShortlist {
-        TermShortlist {
-            shortlist: self.shortlist,
-            query_term_shortlist_items: self.query_term_shortlist_items,
-        }
-    }
-
-    /// Adds the given set of matches for the given term to the short list.
-    /// Returns a vec[] containing a 1-1 mapping between each term in
-    /// `matches` and the corresponding shortlist id.
-    ///
-    /// The returned vec will return Some at each position where the
-    /// corresponding term was newly added to the shortlist, and None at
-    /// each position where the term already existed in the shortlist.
-    fn add_matches(
-        &mut self,
-        term: QueryTerm,
-        matches: BTreeSet<(EditDistance, Term)>,
-    ) -> Vec<Option<ShortlistId>> {
-        let shortlist_items = self.query_term_shortlist_items.entry(term).or_default();
-        let mut shortlist_ids = vec![];
-
-        for (distance, term) in matches {
-            let maybe_new_shortlist_id = if !self.term_to_shortlist.contains_key(&term) {
-                let shortlist_id = ShortlistId(self.shortlist.len() as u16);
-                self.term_to_shortlist.insert(term.clone(), shortlist_id);
-                self.shortlist.push(term);
-                shortlist_items.push((distance, shortlist_id));
-
-                Some(shortlist_id)
-            } else {
-                None
-            };
-            shortlist_ids.push(maybe_new_shortlist_id);
-        }
-        shortlist_ids
-    }
-}
-
-/// A pointer to a term in the shortlist.
-///
-/// For now, ShortlistId fits in a u8 since we will never consider more than 128
-/// terms but we use u16 to be generous.
-///
-/// As an implementation detail that may change in the future, these are
-/// currently just the index of the term in the shortlist.
-#[derive(PartialOrd, Ord, Clone, Debug, Eq, PartialEq, Copy)]
-pub struct ShortlistId(u16);
-
-impl TryFrom<u32> for ShortlistId {
-    type Error = anyhow::Error;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        Ok(ShortlistId(value.try_into()?))
-    }
-}
-
-pub(crate) fn shortlist_and_id_mapping(
-    term_matches: BTreeMap<QueryTerm, Vec<(EditDistance, Term, TermId)>>,
-) -> (TermShortlist, BTreeMap<ShortlistId, TermId>) {
-    let mut shortlist_id_to_term_id = BTreeMap::new();
-    let mut builder = TermShortlistBuilder::new();
-    for (query_term, matches) in term_matches {
-        let (matches, term_ids): (BTreeSet<_>, Vec<TermId>) = matches
-            .into_iter()
-            .map(|(distance, match_term, term_id)| ((distance, match_term), term_id))
-            .unzip();
-        let shortlist_ids = builder.add_matches(query_term, matches);
-        shortlist_id_to_term_id.extend(shortlist_ids.into_iter().zip(term_ids).filter_map(
-            |(shortlist_id, term_id)| shortlist_id.map(|shortlist_id| (shortlist_id, term_id)),
-        ));
-    }
-    (builder.build(), shortlist_id_to_term_id)
-}
-
-impl TermShortlist {
-    pub fn new(term_matches: BTreeMap<QueryTerm, BTreeSet<(EditDistance, Term)>>) -> Self {
-        let mut builder = TermShortlistBuilder::new();
-        for (query_term, matches) in term_matches {
-            builder.add_matches(query_term, matches);
-        }
-        builder.build()
-    }
-
-    pub fn terms(&self) -> Vec<Term> {
-        self.shortlist.clone()
-    }
-
-    pub fn ids_and_terms(&self) -> impl Iterator<Item = (ShortlistId, &Term)> {
-        self.shortlist
-            .iter()
-            .enumerate()
-            .map(|(idx, term)| (ShortlistId(idx as u16), term))
-    }
-
-    pub fn get_term(&self, id: ShortlistId) -> anyhow::Result<&Term> {
-        self.shortlist
-            .get(id.0 as usize)
-            .context("Invalid shortlist id, did we mix up ids and shortlists?")
-    }
-
-    pub fn get_shortlisted_terms_for_query_term(
-        &self,
-        query_term: &QueryTerm,
-    ) -> impl Iterator<Item = &(EditDistance, ShortlistId)> + use<'_> {
-        if let Some(vec) = self.query_term_shortlist_items.get(query_term) {
-            Either::Left(vec.iter())
-        } else {
-            Either::Right(vec![].into_iter())
-        }
-    }
-
-    pub fn try_from_proto(
-        value: pb::searchlight::TermShortlist,
-        search_field: Field,
-    ) -> anyhow::Result<TermShortlist> {
-        Ok(TermShortlist {
-            shortlist: value
-                .shortlist
-                .into_iter()
-                .map(|term_str| term_from_str(term_str.as_str()))
-                .collect_vec(),
-            query_term_shortlist_items: value
-                .query_term_shortlist_items
-                .into_iter()
-                .map(|query_term_shortlist| {
-                    anyhow::Ok((
-                        QueryTerm::try_from_text_query_term_proto(
-                            query_term_shortlist
-                                .query_term
-                                .context("QueryTerm missing from TermShortlist proto")?,
-                            search_field,
-                        )?,
-                        query_term_shortlist
-                            .items
-                            .into_iter()
-                            .map(|item| {
-                                Ok((
-                                    item.distance as EditDistance,
-                                    ShortlistId::try_from(item.shortlist_id)?,
-                                ))
-                            })
-                            .collect::<anyhow::Result<Vec<_>>>()?,
-                    ))
-                })
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
-        })
-    }
-}
-
-impl From<TermShortlist> for pb::searchlight::TermShortlist {
-    fn from(value: TermShortlist) -> Self {
-        pb::searchlight::TermShortlist {
-            shortlist: value
-                .shortlist
-                .into_iter()
-                .map(|term| {
-                    term.as_str()
-                        .expect("shortlisted term not a string")
-                        .to_string()
-                })
-                .collect_vec(),
-            query_term_shortlist_items: value
-                .query_term_shortlist_items
-                .into_iter()
-                .map(
-                    |(qterm, matches)| pb::searchlight::QueryTermShortlistItems {
-                        query_term: Some(pb::searchlight::TextQueryTerm::from(qterm)),
-                        items: matches
-                            .into_iter()
-                            .map(|(dist, id)| pb::searchlight::ShortlistItem {
-                                distance: dist as u32,
-                                shortlist_id: id.0 as u32,
-                            })
-                            .collect_vec(),
-                    },
-                )
-                .collect_vec(),
-        }
-    }
-}
-
-/// A memory-index specific query that is useful for scoring
-#[derive(Debug)]
-pub struct TermListBitsetQuery {
-    /// Stores a sorted list of term IDs in this query
-    pub sorted_terms: Vec<TermId>,
-    /// Is `sorted_terms[i]` a filter term?
-    pub intersection_terms: BitVec,
-    /// Is `union_terms[i]` a search term?
-    pub union_terms: BitVec,
-    /// Score multiplier for a match of this union term
-    pub union_id_boosts: Vec<Score>,
-}
-
-impl TermListBitsetQuery {
-    pub const NEVER_MATCH: TermListBitsetQuery = TermListBitsetQuery {
-        sorted_terms: vec![],
-        intersection_terms: BitVec::EMPTY,
-        union_terms: BitVec::EMPTY,
-        union_id_boosts: vec![],
-    };
-
-    pub fn new(
-        term_ids: BTreeSet<TermId>,
-        intersection_term_ids: BTreeSet<TermId>,
-        boosts_by_union_id: BTreeMap<TermId, Score>,
-    ) -> Self {
-        let sorted_terms = term_ids.into_iter().collect_vec();
-
-        let mut intersection_terms = BitVec::repeat(false, sorted_terms.len());
-        let mut union_terms = BitVec::repeat(false, sorted_terms.len());
-        let mut union_id_boosts = Vec::with_capacity(sorted_terms.len());
-
-        for (i, term) in sorted_terms.iter().enumerate() {
-            intersection_terms.set(i, intersection_term_ids.contains(term));
-            if let Some(boost) = boosts_by_union_id.get(term) {
-                union_terms.set(i, true);
-                union_id_boosts.push(*boost);
-            }
-        }
-
-        Self {
-            sorted_terms,
-            intersection_terms,
-            union_terms,
-            union_id_boosts,
-        }
-    }
-
-    /// Empty `sorted_terms` indicates that a term cannot match any documents,
-    /// either from an empty user query or from a query that is instantiated
-    /// with TermListBitsetQuery::NEVER_MATCH
-    pub fn never_match(&self) -> bool {
-        self.sorted_terms.is_empty()
     }
 }
 
@@ -516,56 +223,13 @@ impl TryFrom<pb::searchlight::CandidateRevision> for CandidateRevision {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct CandidateRevisionPositions {
-    pub revision: CandidateRevision,
-    pub positions: BTreeMap<ShortlistId, Vec<u32>>,
-}
-
-impl From<CandidateRevisionPositions> for CandidateRevision {
-    fn from(value: CandidateRevisionPositions) -> Self {
-        value.revision
-    }
-}
-
-impl TryFrom<pb::searchlight::CandidateRevisionPositions> for CandidateRevisionPositions {
-    type Error = anyhow::Error;
-
-    fn try_from(value: pb::searchlight::CandidateRevisionPositions) -> Result<Self, Self::Error> {
-        Ok(CandidateRevisionPositions {
-            revision: CandidateRevision::try_from(
-                value.revision.context("candidate revision missing")?,
-            )?,
-            positions: value
-                .positions
-                .into_iter()
-                .map(|pos| Ok((ShortlistId::try_from(pos.shortlist_id)?, pos.positions)))
-                .collect::<anyhow::Result<BTreeMap<_, _>>>()?,
-        })
-    }
-}
-
-impl From<CandidateRevisionPositions> for pb::searchlight::CandidateRevisionPositions {
-    fn from(value: CandidateRevisionPositions) -> Self {
-        pb::searchlight::CandidateRevisionPositions {
-            revision: Some(pb::searchlight::CandidateRevision::from(value.revision)),
-            positions: value
-                .positions
-                .into_iter()
-                .map(|(id, positions)| pb::searchlight::ShortlistPositions {
-                    shortlist_id: id.0 as u32,
-                    positions,
-                })
-                .collect_vec(),
-        }
-    }
-}
-
 pub type RevisionWithKeys = Vec<(CandidateRevision, IndexKeyBytes)>;
 
 pub struct QueryResults {
     pub revisions_with_keys: RevisionWithKeys,
     pub reads: QueryReads,
+    /// See `TextSearchResults::filtered_bytes_searched`.
+    pub filtered_bytes_searched: u64,
 }
 
 impl QueryResults {
@@ -573,6 +237,7 @@ impl QueryResults {
         Self {
             revisions_with_keys: vec![],
             reads: QueryReads::empty(),
+            filtered_bytes_searched: 0,
         }
     }
 }
@@ -580,7 +245,7 @@ impl QueryResults {
 /// A read based on a single token extracted from a text query search.
 ///
 /// A single text query will be split into many parts (tokenized), each part
-/// will be combined with the constant metadata (path, distance prefix etc) into
+/// will be combined with the constant metadata (path, prefix etc) into
 /// a term, then we track reads based on individual terms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextQueryTermRead {
@@ -653,9 +318,9 @@ pub struct QueryReads {
     pub filter_conditions: WithHeapSize<Vec<FilterConditionRead>>,
 
     // State derived from text_queries for more efficient matching with many
-    // fuzzy text subscriptions. Because this is strictly derived, it can always
+    // text subscriptions. Because this is strictly derived, it can always
     // be reconstructed from the simpler text_queries / filter_conditions.
-    fuzzy_terms: SearchTermTries<()>,
+    term_tries: SearchTermTries<()>,
 }
 
 impl QueryReads {
@@ -663,12 +328,12 @@ impl QueryReads {
         text_queries: WithHeapSize<Vec<TextQueryTermRead>>,
         filter_conditions: WithHeapSize<Vec<FilterConditionRead>>,
     ) -> Self {
-        let mut fuzzy_terms = SearchTermTries::new();
-        fuzzy_terms.extend((), &text_queries);
+        let mut term_tries = SearchTermTries::new();
+        term_tries.extend((), &text_queries);
         Self {
             text_queries,
             filter_conditions,
-            fuzzy_terms,
+            term_tries,
         }
     }
 }
@@ -682,7 +347,7 @@ impl PartialEq for QueryReads {
 impl Eq for QueryReads {}
 
 impl HeapSize for QueryReads {
-    // TODO(CX-5459): Include fuzzy_terms in heap size.
+    // TODO(CX-5459): Include term_tries in heap size.
     fn heap_size(&self) -> usize {
         self.text_queries.heap_size() + self.filter_conditions.heap_size()
     }
@@ -795,7 +460,7 @@ impl<T: Clone + Ord> SearchTermTries<T> {
 #[derive(Debug, Clone)]
 struct Tries<T: Clone> {
     // TODO: Allow ART to store N values:
-    // https://github.com/get-convex/convex/pull/20030/files#r1427222221
+    // https://github.com/convex/convex/pull/20030/files#r1427222221
     tries: BTreeMap<bool, ART<String, BTreeMap<T, usize>>>,
 }
 
@@ -829,12 +494,12 @@ impl QueryReads {
         QueryReads {
             text_queries: WithHeapSize::default(),
             filter_conditions: WithHeapSize::default(),
-            fuzzy_terms: SearchTermTries::new(),
+            term_tries: SearchTermTries::new(),
         }
     }
 
     pub fn merge(&mut self, other: Self) {
-        self.fuzzy_terms.extend((), &other.text_queries);
+        self.term_tries.extend((), &other.text_queries);
 
         self.text_queries.extend(other.text_queries);
         self.filter_conditions.extend(other.filter_conditions);
@@ -849,7 +514,7 @@ impl QueryReads {
             let document_value = document.value().get_path(field_path);
             let document_value = FilterValue::from_search_value(document_value.as_ref());
             // If the document doesn't match the filter condition, we can skip checking
-            // fuzzy terms
+            // text query terms
             if document_value != *filter_value {
                 metrics::log_query_reads_outcome(false);
                 return false;
@@ -863,10 +528,10 @@ impl QueryReads {
             return true;
         }
         // If all the filter conditions match and there are text queries, we then check
-        // for fuzzy matches.
-        let is_fuzzy_match = self.fuzzy_terms.overlaps_document(document);
-        metrics::log_query_reads_outcome(is_fuzzy_match);
-        is_fuzzy_match
+        // for exact or prefix term matches.
+        let is_term_match = self.term_tries.overlaps_document(document);
+        metrics::log_query_reads_outcome(is_term_match);
+        is_term_match
     }
 
     #[fastrace::trace]
@@ -898,10 +563,10 @@ impl QueryReads {
             return true;
         }
         // If all the filter conditions match and there are text queries, we then check
-        // for fuzzy matches.
-        let is_fuzzy_match = self.fuzzy_terms.overlaps_index_key_value(index_key_value);
-        metrics::log_query_reads_outcome(is_fuzzy_match);
-        is_fuzzy_match
+        // for exact or prefix term matches.
+        let is_term_match = self.term_tries.overlaps_index_key_value(index_key_value);
+        metrics::log_query_reads_outcome(is_term_match);
+        is_term_match
     }
 }
 
@@ -970,7 +635,7 @@ impl TextSearchSubscriptions {
         notify: &mut impl FnMut(SubscriberId),
     ) {
         self.add_filter_conditions_matches(&subscription.filter_conditions, index_key, notify);
-        self.add_fuzzy_matches(&subscription.tries, index_key, notify);
+        self.add_term_matches(&subscription.tries, index_key, notify);
     }
 
     fn add_filter_conditions_matches(
@@ -1001,7 +666,7 @@ impl TextSearchSubscriptions {
     /// This inverse looking search optimizes for cases where the number of
     /// reads/subscriptions is significantly larger than the number of
     /// tokens in the document.
-    fn add_fuzzy_matches(
+    fn add_term_matches(
         &self,
         tries: &SearchTermTries<SubscriberId>,
         index_key: &SearchIndexKeyValue,

@@ -127,7 +127,7 @@ export function HealthWithInsights() {
     <div
       className={cn(
         "sticky top-0 mx-6 flex flex-wrap items-center justify-between gap-4 pt-2",
-        page === "insights" ? "max-w-[70rem]" : "",
+        page === "insights" ? "max-w-280" : "",
       )}
     >
       <div className="flex items-center gap-2">
@@ -300,7 +300,7 @@ function InsightsWrapper({ children }: { children: React.ReactNode }) {
         className="mb-6 flex w-full shrink-0 px-6"
       >
         {canViewInsights === false ? (
-          <Sheet className="scrollbar h-fit max-h-full w-full max-w-[70rem] min-w-0 overflow-auto py-12">
+          <Sheet className="scrollbar h-fit max-h-full w-full max-w-280 min-w-0 overflow-auto py-12">
             <NoPermissionMessage
               message="You do not have permission to view insights."
               missingPermission="deployment:insights:view"
@@ -309,7 +309,7 @@ function InsightsWrapper({ children }: { children: React.ReactNode }) {
         ) : (
           <Sheet
             padding={false}
-            className="scrollbar h-fit max-h-full w-full max-w-[70rem] min-w-0 overflow-auto"
+            className="scrollbar h-fit max-h-full w-full max-w-280 min-w-0 overflow-auto"
           >
             <InsightsSummary
               insights={insights?.filter((insight) => {

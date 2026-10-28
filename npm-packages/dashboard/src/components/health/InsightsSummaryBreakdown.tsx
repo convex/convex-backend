@@ -25,7 +25,7 @@ export function InsightSummaryBreakdown({
   );
   if (!insight) {
     return (
-      <Sheet className="flex h-full w-full items-center justify-center text-content-secondary">
+      <Sheet className="flex size-full items-center justify-center text-content-secondary">
         {insight === null ? (
           "Insight not found."
         ) : (
@@ -36,7 +36,7 @@ export function InsightSummaryBreakdown({
   }
 
   return (
-    <Sheet className="scrollbar flex max-h-full min-h-[40rem] max-w-full flex-col gap-4 overflow-y-auto">
+    <Sheet className="scrollbar flex max-h-full min-h-160 max-w-full flex-col gap-4 overflow-y-auto">
       <h4 className="flex items-center gap-1">
         Insight Breakdown for{" "}
         <Link

@@ -1,0 +1,80 @@
+[package]
+name = "search_index_workers"
+version = "0.1.0"
+authors = ["Convex, Inc. <no-reply@convex.dev>"]
+edition = "2024"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
+
+[lib]
+doctest = false
+
+[features]
+testing = [
+    "must-let",
+    "common/testing",
+    "database/testing",
+    "errors/testing",
+    "events/testing",
+    "keybroker/testing",
+    "metrics/testing",
+    "runtime/testing",
+    "search/testing",
+    "storage/testing",
+    "usage_tracking/testing",
+    "value/testing",
+    "vector/testing",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+common = { workspace = true }
+database = { workspace = true }
+errors = { workspace = true }
+events = { workspace = true }
+futures = { workspace = true }
+futures-async-stream = { workspace = true }
+governor = { workspace = true }
+itertools = { workspace = true }
+keybroker = { workspace = true }
+maplit = { workspace = true }
+metrics = { workspace = true }
+must-let = { workspace = true, optional = true }
+pb = { workspace = true }
+prometheus = { workspace = true }
+qdrant_segment = { workspace = true }
+rand = { workspace = true }
+runtime = { workspace = true }
+search = { workspace = true }
+storage = { workspace = true }
+sync_types = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+usage_tracking = { workspace = true }
+value = { workspace = true }
+vector = { workspace = true }
+
+[dev-dependencies]
+cmd_util = { workspace = true }
+common = { workspace = true, features = ["testing"] }
+convex_macro = { workspace = true, features = ["testing"] }
+database = { workspace = true, features = ["testing"] }
+errors = { workspace = true, features = ["testing"] }
+events = { workspace = true, features = ["testing"] }
+indexing = { workspace = true, features = ["testing"] }
+keybroker = { workspace = true, features = ["testing"] }
+metrics = { workspace = true, features = ["testing"] }
+must-let = { workspace = true }
+pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+proptest-derive = { workspace = true }
+runtime = { workspace = true, features = ["testing"] }
+search = { workspace = true, features = ["testing"] }
+storage = { workspace = true, features = ["testing"] }
+usage_tracking = { workspace = true, features = ["testing"] }
+value = { workspace = true, features = ["testing"] }
+vector = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

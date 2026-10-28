@@ -33,6 +33,7 @@ import {
   safePolygon,
   useClick,
   useMergeRefs,
+  type Placement,
 } from "@floating-ui/react";
 import classNames from "classnames";
 import { ChevronDownIcon, ChevronRightIcon } from "@radix-ui/react-icons";
@@ -67,6 +68,7 @@ export type Target = { x: number; y: number };
 type ContextMenuProps = React.PropsWithChildren<{
   target: Target | null;
   onClose: () => void;
+  placement?: Placement;
 }>;
 
 // Based on https://codesandbox.io/s/trusting-rui-2duieo
@@ -79,7 +81,12 @@ export function ContextMenu(props: ContextMenuProps) {
   );
 }
 
-function ContextMenuInner({ target, onClose, children }: ContextMenuProps) {
+function ContextMenuInner({
+  target,
+  onClose,
+  children,
+  placement = "right-start",
+}: ContextMenuProps) {
   const isMobile = useIsMobile();
   const isOpen = target !== null;
   const onOpenChange = useCallback(
@@ -91,17 +98,19 @@ function ContextMenuInner({ target, onClose, children }: ContextMenuProps) {
     [onClose],
   );
 
+  const isVertical =
+    placement.startsWith("bottom") || placement.startsWith("top");
   const { refs, floatingStyles, context } = useFloating({
     open: isOpen,
     onOpenChange,
     middleware: [
-      offset({ mainAxis: 5, alignmentAxis: 4 }),
+      offset(isVertical ? { mainAxis: 5 } : { mainAxis: 5, alignmentAxis: 4 }),
       flip({
-        fallbackPlacements: ["left-start"],
+        fallbackPlacements: isVertical ? ["top-start"] : ["left-start"],
       }),
       shift({ padding: 10 }),
     ],
-    placement: "right-start",
+    placement,
     strategy: "fixed",
     whileElementsMounted: autoUpdate,
   });
@@ -201,7 +210,7 @@ function ContextMenuInner({ target, onClose, children }: ContextMenuProps) {
                     />
                     {/* Bottom sheet */}
                     <div
-                      className="fixed inset-x-0 bottom-0 z-50 flex animate-slideUp flex-col rounded-t-xl bg-background-secondary shadow-xl dark:border dark:border-b-0"
+                      className="fixed inset-x-0 bottom-0 z-50 flex animate-slideUp flex-col rounded-t-xl bg-background-secondary shadow-xl outline-hidden dark:border dark:border-b-0"
                       ref={refs.setFloating}
                       {...getFloatingProps()}
                     >
@@ -394,7 +403,9 @@ function ContextMenuSubmenu({
     onOpenChange: setIsOpen,
     placement: "right-start",
     middleware: [
-      offset({ mainAxis: 0, alignmentAxis: 0 }),
+      // Pull the submenu up by its own top padding and border so its first
+      // item lines up with the parent item that opened it.
+      offset({ mainAxis: 0, alignmentAxis: -9 }),
       flip(),
       shift({ padding: 10 }),
     ],

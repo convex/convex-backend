@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Context;
 use common::{
     components::ComponentPath,
@@ -9,7 +11,6 @@ use common::{
     query::{
         Expression,
         Order,
-        Query,
     },
     runtime::Runtime,
     types::FullyQualifiedObjectKey,
@@ -26,7 +27,7 @@ use types::ImportRequestor;
 use value::{
     ConvexObject,
     ConvexValue,
-    ResolvedDocumentId,
+    DeveloperDocumentId,
     TableName,
     TableNamespace,
     TabletId,
@@ -46,15 +47,13 @@ use crate::{
 
 pub mod types;
 
-pub static SNAPSHOT_IMPORTS_TABLE: TableName = TableName::const_new("_snapshot_imports");
+pub const SNAPSHOT_IMPORTS_TABLE: TableName = TableName::const_new("_snapshot_imports");
 
 pub struct SnapshotImportsTable;
 impl SystemTable for SnapshotImportsTable {
     type Metadata = SnapshotImport;
 
-    fn table_name() -> &'static TableName {
-        &SNAPSHOT_IMPORTS_TABLE
-    }
+    const TABLE_NAME: TableName = SNAPSHOT_IMPORTS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -72,28 +71,30 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
 
     pub async fn get(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
     ) -> anyhow::Result<Option<ParsedDocument<SnapshotImport>>> {
-        anyhow::ensure!(self
+        match self
             .tx
-            .table_mapping()
-            .namespace(TableNamespace::Global)
-            .tablet_matches_name(id.tablet_id, SnapshotImportsTable::table_name()));
-        match self.tx.get(id).await? {
+            .get_system::<SnapshotImportsTable>(TableNamespace::Global, id)
+            .await?
+        {
             None => Ok(None),
-            Some(doc) => Ok(Some(doc.parse()?)),
+            Some(doc) => Ok(Some(Arc::unwrap_or_clone(doc))),
         }
     }
 
     pub async fn list(&mut self) -> anyhow::Result<Vec<ParsedDocument<SnapshotImport>>> {
-        let value_query = Query::full_table_scan(SNAPSHOT_IMPORTS_TABLE.clone(), Order::Asc);
-        let mut query_stream = ResolvedQuery::new(self.tx, TableNamespace::Global, value_query)?;
-        let mut result = vec![];
-        while let Some(doc) = query_stream.next(self.tx, None).await? {
-            let row: ParsedDocument<SnapshotImport> = doc.parse()?;
-            result.push(row);
-        }
-        Ok(result)
+        Ok(self
+            .tx
+            .query_system(
+                TableNamespace::Global,
+                &SystemIndex::<SnapshotImportsTable>::by_creation_time(),
+            )?
+            .all()
+            .await?
+            .into_iter()
+            .map(Arc::unwrap_or_clone)
+            .collect())
     }
 
     pub async fn start_import(
@@ -103,7 +104,7 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
         component_path: ComponentPath,
         object_key: FullyQualifiedObjectKey,
         requestor: ImportRequestor,
-    ) -> anyhow::Result<ResolvedDocumentId> {
+    ) -> anyhow::Result<DeveloperDocumentId> {
         let snapshot_import = SnapshotImport {
             state: ImportState::Uploaded,
             format,
@@ -116,32 +117,30 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
         };
         let id = SystemMetadataModel::new_global(self.tx)
             .insert(
-                SnapshotImportsTable::table_name(),
+                &SnapshotImportsTable::TABLE_NAME,
                 snapshot_import.try_into()?,
             )
             .await?;
-        Ok(id)
+        Ok(id.developer_id)
     }
 
-    pub async fn must_get_state(&mut self, id: ResolvedDocumentId) -> anyhow::Result<ImportState> {
-        let state = self
-            .get(id)
-            .await?
-            .context(ErrorMetadata::not_found(
-                "ImportNotFound",
-                format!("import {id} not found"),
-            ))?
-            .state
-            .clone();
-        Ok(state)
+    pub async fn must_get(
+        &mut self,
+        id: DeveloperDocumentId,
+    ) -> anyhow::Result<ParsedDocument<SnapshotImport>> {
+        self.get(id).await?.context(ErrorMetadata::not_found(
+            "ImportNotFound",
+            format!("import {id} not found"),
+        ))
     }
 
     async fn update_state(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         new_state: impl FnOnce(ImportState) -> ImportState,
     ) -> anyhow::Result<()> {
-        let current_state = self.must_get_state(id).await?;
+        let (id, doc) = self.must_get(id).await?.into_id_and_value();
+        let current_state = doc.state;
         let new_state = new_state(current_state.clone());
         match (&current_state, &new_state) {
             (ImportState::Uploaded, ImportState::WaitingForConfirmation { .. })
@@ -166,25 +165,22 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
 
     async fn update_checkpoints(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         update_checkpoints: impl FnOnce(&mut Vec<ImportTableCheckpoint>),
     ) -> anyhow::Result<()> {
-        let mut import = self.get(id).await?.context(ErrorMetadata::not_found(
-            "ImportNotFound",
-            format!("import {id} not found"),
-        ))?;
+        let mut import = self.must_get(id).await?;
         let mut checkpoints = import.checkpoints.clone().unwrap_or_default();
         update_checkpoints(&mut checkpoints);
         import.checkpoints = Some(checkpoints);
         SystemMetadataModel::new_global(self.tx)
-            .replace(id, import.into_value().try_into()?)
+            .replace(import.id(), import.into_value().try_into()?)
             .await?;
         Ok(())
     }
 
     pub async fn mark_waiting_for_confirmation(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         info_message: String,
         require_manual_confirmation: bool,
         new_checkpoints: Vec<ImportTableCheckpoint>,
@@ -200,8 +196,8 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
         .await
     }
 
-    pub async fn confirm_import(&mut self, id: ResolvedDocumentId) -> anyhow::Result<()> {
-        let current_state = self.must_get_state(id).await?;
+    pub async fn confirm_import(&mut self, id: DeveloperDocumentId) -> anyhow::Result<()> {
+        let current_state = self.must_get(id).await?.into_value().state;
         // No-op if the import is already in progress or finished since the CLI may
         // show a confirmation prompt when the import was confirmed in the dashboard.
         if matches!(current_state, ImportState::WaitingForConfirmation { .. }) {
@@ -214,8 +210,8 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
         Ok(())
     }
 
-    pub async fn cancel_import(&mut self, id: ResolvedDocumentId) -> anyhow::Result<()> {
-        let current_state = self.must_get_state(id).await?;
+    pub async fn cancel_import(&mut self, id: DeveloperDocumentId) -> anyhow::Result<()> {
+        let current_state = self.must_get(id).await?.into_value().state;
         match current_state {
             ImportState::Uploaded
             | ImportState::WaitingForConfirmation { .. }
@@ -236,7 +232,7 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
 
     pub async fn complete_import(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         ts: Timestamp,
         num_rows_written: u64,
     ) -> anyhow::Result<()> {
@@ -249,7 +245,7 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
 
     pub async fn fail_import(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         error_message: String,
     ) -> anyhow::Result<()> {
         self.update_state(id, move |_| ImportState::Failed(error_message))
@@ -258,7 +254,7 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
 
     pub async fn checkpoint_tablet_created(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         component_path: &ComponentPath,
         table_name: &TableName,
         tablet_id: TabletId,
@@ -275,7 +271,7 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
 
     pub async fn get_table_checkpoint(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         component_path: &ComponentPath,
         display_table_name: &TableName,
     ) -> anyhow::Result<Option<ImportTableCheckpoint>> {
@@ -295,7 +291,7 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
 
     pub async fn add_checkpoint_message(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         checkpoint_message: String,
         component_path: &ComponentPath,
         display_table_name: &TableName,
@@ -341,7 +337,7 @@ impl<'a, RT: Runtime> SnapshotImportModel<'a, RT> {
 
     pub async fn update_progress_message(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         progress_message: String,
         component_path: &ComponentPath,
         display_table_name: &TableName,

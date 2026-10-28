@@ -130,8 +130,9 @@ const RESOURCE_TEMPLATES: ResourceTemplate[] = [
   {
     label: "member:*",
     insertText: "member:*",
-    detail: "Team members",
-    documentation: "Use `*` for all members or `id=<memberId>` for one.",
+    detail: "All team members",
+    documentation:
+      "Matches all team members. The `member` resource only supports `*` — individual members can't be targeted by id.",
     category: "member",
   },
   {
@@ -163,6 +164,13 @@ const RESOURCE_TEMPLATES: ResourceTemplate[] = [
     category: "sso",
   },
   {
+    label: "directorySync:*",
+    insertText: "directorySync:*",
+    detail: "Directory Sync",
+    documentation: "Team Directory Sync (SCIM) configuration.",
+    category: "directorySync",
+  },
+  {
     label: "integration:*",
     insertText: "integration:*",
     detail: "Team integrations",
@@ -190,6 +198,7 @@ const RESOURCE_PATTERNS: Array<{ regex: RegExp; category: ActionCategory }> = [
   { regex: /^billing:[^:]+$/, category: "billing" },
   { regex: /^oauthApplication:[^:]+$/, category: "oauthApplication" },
   { regex: /^sso:[^:]+$/, category: "sso" },
+  { regex: /^directorySync:[^:]+$/, category: "directorySync" },
   { regex: /^integration:[^:]+$/, category: "integration" },
 ];
 

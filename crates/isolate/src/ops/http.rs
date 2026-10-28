@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use ada_url::Url;
 use common::sync::spsc;
 use deno_core::{
     serde_v8,
@@ -12,13 +13,9 @@ use serde::{
     Deserialize,
     Serialize,
 };
-use url::{
-    form_urlencoded,
-    Position,
-    Url,
-};
+use url::form_urlencoded;
 
-use super::OpProvider;
+use super::V8OpProvider;
 use crate::{
     convert_v8::TypeError,
     environment::{
@@ -29,7 +26,7 @@ use crate::{
     request_scope::StreamListener,
 };
 
-pub fn async_op_fetch<'b, P: OpProvider<'b>>(
+pub fn async_op_fetch<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     args: v8::FunctionCallbackArguments,
     resolver: v8::Global<v8::PromiseResolver>,
@@ -47,7 +44,7 @@ pub fn async_op_fetch<'b, P: OpProvider<'b>>(
     )
 }
 
-pub fn async_op_parse_multi_part<'b, P: OpProvider<'b>>(
+pub fn async_op_parse_multi_part<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     args: v8::FunctionCallbackArguments,
     resolver: v8::Global<v8::PromiseResolver>,
@@ -70,30 +67,29 @@ pub fn async_op_parse_multi_part<'b, P: OpProvider<'b>>(
 }
 
 #[convex_macro::v8_op]
-pub fn op_url_get_url_info<'b, P: OpProvider<'b>>(
+pub fn op_url_get_url_info<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     url: String,
     base: Option<String>,
 ) -> anyhow::Result<UrlInfo> {
-    let base_url = match base {
-        Some(b) => match Url::parse(&b) {
-            Ok(url) => Some(url),
-            Err(_) => anyhow::bail!(TypeError::new(format!("Invalid URL: '{b}'"))),
-        },
-        None => None,
-    };
-
-    let parsed_url = match Url::options().base_url(base_url.as_ref()).parse(&url) {
+    let parsed_url = match Url::parse(url.as_str(), base.as_deref()) {
         Ok(u) => u,
         // The URL spec (https://url.spec.whatwg.org/) dictates that JS
-        // throw a TypeError when the URL is invalid.
-        Err(_) => anyhow::bail!(TypeError::new(format!("Invalid URL: '{url}'"))),
+        // throw a TypeError when the URL is invalid. Ada's error doesn't say
+        // whether the input or the base failed, so the base is re-checked on
+        // this path only, to name it when it is the culprit.
+        Err(_) => match &base {
+            Some(base) if !Url::can_parse(base, None) => {
+                anyhow::bail!(TypeError::new(format!("Invalid URL: '{base}'")))
+            },
+            _ => anyhow::bail!(TypeError::new(format!("Invalid URL: '{url}'"))),
+        },
     };
     Ok(UrlInfo::from(parsed_url))
 }
 
 #[convex_macro::v8_op]
-pub fn op_url_get_url_search_param_pairs<'b, P: OpProvider<'b>>(
+pub fn op_url_get_url_search_param_pairs<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     query_string: String,
 ) -> anyhow::Result<Vec<(String, String)>> {
@@ -108,7 +104,7 @@ pub fn op_url_get_url_search_param_pairs<'b, P: OpProvider<'b>>(
 }
 
 #[convex_macro::v8_op]
-pub fn op_url_stringify_url_search_params<'b, P: OpProvider<'b>>(
+pub fn op_url_stringify_url_search_params<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     query_pairs: Vec<(String, String)>,
 ) -> anyhow::Result<String> {
@@ -121,63 +117,72 @@ pub fn op_url_stringify_url_search_params<'b, P: OpProvider<'b>>(
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 enum UrlInfoUpdate {
-    Hash(Option<String>),
-    Hostname(Option<String>),
+    Hash(String),
+    Hostname(String),
     Href(String),
+    Password(String),
     Protocol(String),
     Port(String),
     Pathname(String),
-    Search(Option<String>),
+    Search(String),
     SearchParams(Vec<(String, String)>),
+    Username(String),
 }
 
 #[convex_macro::v8_op]
-pub fn op_url_update_url_info<'b, P: OpProvider<'b>>(
+pub fn op_url_update_url_info<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     original_url: String,
     update: UrlInfoUpdate,
 ) -> anyhow::Result<UrlInfo> {
-    let mut parsed_url = Url::parse(&original_url)?;
+    let mut parsed_url = Url::parse(original_url.as_str(), None)
+        .map_err(|_| TypeError::new(format!("Invalid URL: '{original_url}'")))?;
 
+    // The WHATWG setters ignore values they cannot apply, so errors are dropped
+    // everywhere except `href`, whose setter throws.
     match update {
-        UrlInfoUpdate::Hash(value) => parsed_url.set_fragment(value.as_deref()),
+        UrlInfoUpdate::Hash(value) => parsed_url.set_hash(Some(&value)),
         UrlInfoUpdate::SearchParams(value) => {
             if value.is_empty() {
-                parsed_url.set_query(None)
+                parsed_url.set_search(None)
             } else {
-                parsed_url
-                    .query_pairs_mut()
-                    .clear()
+                let search = form_urlencoded::Serializer::new(String::new())
                     .extend_pairs(value)
                     .finish();
+                parsed_url.set_search(Some(&search))
             }
         },
-        UrlInfoUpdate::Hostname(value) => parsed_url.set_host(value.as_deref())?,
+        UrlInfoUpdate::Hostname(value) => {
+            _ = parsed_url.set_hostname(Some(&value));
+        },
         UrlInfoUpdate::Href(value) => {
-            parsed_url = Url::parse(&value)
-                .map_err(|_| TypeError::new(format!("Could not parse URL: {original_url}")))?;
+            parsed_url
+                .set_href(&value)
+                .map_err(|_| TypeError::new(format!("Invalid URL: '{value}'")))?;
+        },
+        UrlInfoUpdate::Password(value) => {
+            _ = parsed_url.set_password(Some(&value));
         },
         UrlInfoUpdate::Protocol(value) => {
-            // ignore errors
-            _ = parsed_url.set_scheme(&value);
+            _ = parsed_url.set_protocol(&value);
         },
-        UrlInfoUpdate::Port(port_str) => {
-            // ignore errors
-            if port_str.is_empty() {
-                _ = parsed_url.set_port(None);
-            } else if let Ok(port) = port_str.parse::<u16>() {
-                _ = parsed_url.set_port(Some(port));
-            }
+        UrlInfoUpdate::Port(value) => {
+            _ = parsed_url.set_port(Some(&value));
         },
-        UrlInfoUpdate::Pathname(value) => parsed_url.set_path(&value),
-        UrlInfoUpdate::Search(value) => parsed_url.set_query(value.as_deref()),
+        UrlInfoUpdate::Pathname(value) => {
+            _ = parsed_url.set_pathname(Some(&value));
+        },
+        UrlInfoUpdate::Search(value) => parsed_url.set_search(Some(&value)),
+        UrlInfoUpdate::Username(value) => {
+            _ = parsed_url.set_username(Some(&value));
+        },
     }
 
     Ok(UrlInfo::from(parsed_url))
 }
 
 #[convex_macro::v8_op]
-pub fn op_headers_get_mime_type<'b, P: OpProvider<'b>>(
+pub fn op_headers_get_mime_type<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     content_type: String,
 ) -> anyhow::Result<Option<MimeType>> {
@@ -195,7 +200,7 @@ pub fn op_headers_get_mime_type<'b, P: OpProvider<'b>>(
 }
 
 #[convex_macro::v8_op]
-pub fn op_headers_normalize_name<'b, P: OpProvider<'b>>(
+pub fn op_headers_normalize_name<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     name: String,
 ) -> anyhow::Result<Option<String>> {
@@ -210,7 +215,7 @@ pub fn op_headers_normalize_name<'b, P: OpProvider<'b>>(
 
 #[derive(Deserialize, Serialize)]
 struct UrlInfo {
-    scheme: String,
+    protocol: String,
     hash: String,
     host: String,
     hostname: String,
@@ -220,21 +225,23 @@ struct UrlInfo {
     search: String,
     username: String,
     password: String,
+    origin: String,
 }
 
 impl From<Url> for UrlInfo {
     fn from(value: Url) -> Self {
         UrlInfo {
-            scheme: value.scheme().to_string(),
-            hash: value[Position::BeforeFragment..Position::AfterFragment].to_string(),
-            host: value[Position::BeforeHost..Position::BeforePath].to_string(),
-            hostname: value[Position::BeforeHost..Position::AfterHost].to_string(),
-            href: value.to_string(),
-            pathname: value[Position::BeforePath..Position::AfterPath].to_string(),
-            port: value[Position::BeforePort..Position::AfterPort].to_string(),
-            search: value[Position::BeforeQuery..Position::AfterQuery].to_string(),
-            username: value.username().to_owned(),
-            password: value.password().unwrap_or_default().to_owned(),
+            protocol: value.protocol().to_string(),
+            hash: value.hash().to_string(),
+            search: value.search().to_string(),
+            host: value.host().to_string(),
+            hostname: value.hostname().to_string(),
+            href: value.href().to_string(),
+            origin: value.origin(),
+            pathname: value.pathname().to_string(),
+            port: value.port().to_string(),
+            username: value.username().to_string(),
+            password: value.password().to_string(),
         }
     }
 }

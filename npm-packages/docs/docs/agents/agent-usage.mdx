@@ -18,14 +18,17 @@ structured LLM outputs, or a myriad of other techniques via custom code.
 
 ## Basic Agent definition
 
+These examples use the [Convex AI Gateway](https://docs.convex.dev/ai-gateway).
+See [Getting Started](./getting-started.mdx) for installation and requirements.
+
 ```ts
 import { components } from "./_generated/api";
 import { Agent } from "@convex-dev/agent";
-import { openai } from "@ai-sdk/openai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
 
 const agent = new Agent(components.agent, {
   name: "Basic Agent",
-  languageModel: openai.chat("gpt-4o-mini"),
+  languageModel: convexGateway("openai/gpt-5-mini"),
 });
 ```
 
@@ -88,12 +91,12 @@ configuring the context provided.
 Note: `authorizeThreadAccess` referenced below is a function you would write to
 authenticate and authorize the user to access the thread. You can see an example
 implementation in
-[threads.ts](https://github.com/get-convex/agent/blob/main/example/convex/threads.ts).
+[threads.ts](https://github.com/convex/agent/blob/main/example/convex/threads.ts).
 
 See
-[chat/basic.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/basic.ts)
+[chat/basic.ts](https://github.com/convex/agent/blob/main/example/convex/chat/basic.ts)
 or
-[chat/streaming.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/streaming.ts)
+[chat/streaming.ts](https://github.com/convex/agent/blob/main/example/convex/chat/streaming.ts)
 for live code examples.
 
 ### Streaming text
@@ -199,23 +202,23 @@ returning a text response.
 
 ## Customizing the agent
 
-The agent by default only needs a `chat` model to be configured. However, for
+The agent by default only needs a `languageModel` to be configured. However, for
 vector search, you'll need an `embeddingModel`. A `name` is helpful to attribute
 each message to a specific agent. Other options are defaults that can be
 over-ridden at each LLM call-site.
 
 ```ts
 import { tool, stepCountIs } from "ai";
-import { openai } from "@ai-sdk/openai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
 import { z } from "zod/v3";
 import { Agent, createTool, type Config } from "@convex-dev/agent";
 import { components } from "./_generated/api";
 
 const sharedDefaults = {
   // The language model to use for the agent.
-  languageModel: openai.chat("gpt-4o-mini"),
+  languageModel: convexGateway("openai/gpt-5-mini"),
   // Embedding model to power vector search of message history (RAG).
-  embeddingModel: openai.embedding("text-embedding-3-small"),
+  embeddingModel: convexGateway.embeddingModel("openai/text-embedding-3-small"),
   // Used for fetching context messages. See https://docs.convex.dev/agents/context
   contextOptions,
   // Used for storing messages. See https://docs.convex.dev/agents/messages

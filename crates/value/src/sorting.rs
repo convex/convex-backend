@@ -254,7 +254,7 @@ pub mod sorting_decode {
                     ConvexValue::Array(elements.try_into()?)
                 },
                 OBJECT_TAG => {
-                    let mut elements = BTreeMap::new();
+                    let mut elements = vec![];
                     loop {
                         let field = if let Some(&TERMINATOR_BYTE) = reader.chunk().first() {
                             reader.get_u8();
@@ -268,9 +268,12 @@ pub mod sorting_decode {
                             read_escaped_string(reader)?.try_into()?
                         };
                         let value = Self::read_sort_key(reader)?;
-                        if elements.insert(field, value).is_some() {
-                            anyhow::bail!("Duplicate element in encoded object");
-                        }
+                        elements.push((field, value));
+                    }
+                    let len = elements.len();
+                    let elements = BTreeMap::from_iter(elements);
+                    if elements.len() != len {
+                        anyhow::bail!("Duplicate element in encoded object");
                     }
                     ConvexValue::Object(ConvexObject::try_from(elements)?)
                 },

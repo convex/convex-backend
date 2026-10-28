@@ -1,15 +1,21 @@
 import { header } from "./common.js";
-import { EnvVarMeta, generateEnvInterface } from "./server.js";
+import {
+  EnvVarMeta,
+  generateEnvInterface,
+  withPlatformEnvVars,
+} from "./server.js";
 
 export function componentServerTS(
   isRoot: boolean,
   // - undefined: not yet known (initial codegen). Emits an untyped `env` stub.
-  // - non-empty array: emit typed `Env` interface and typed `env` export.
-  // - empty array: no env vars declared. Omit `env` from generated code.
+  // - array (empty or not): emit a typed `Env` interface and typed `env`
+  //   export. The interface always includes the platform-provided env vars.
   envVars: EnvVarMeta[] | undefined,
 ): string {
-  const hasEnv = !!envVars && envVars.length > 0;
-  const envInterface = hasEnv ? generateEnvInterface(envVars!) : "";
+  const emittedEnvVars =
+    envVars === undefined ? undefined : withPlatformEnvVars(envVars);
+  const hasEnv = emittedEnvVars !== undefined;
+  const envInterface = hasEnv ? generateEnvInterface(emittedEnvVars!) : "";
 
   const result = `
   ${header(
@@ -113,7 +119,7 @@ export function componentServerTS(
    * @returns The wrapped function. Import this function from \`convex/http.js\` and route it to hook it up.
    */
   export const httpAction: HttpActionBuilder = httpActionGeneric;
-  ${hasEnv ? "export const env: Env = process.env as unknown as Env;" : envVars === undefined ? "export const env: Record<string, string | undefined> = process.env as unknown as Record<string, string | undefined>;" : ""}
+  ${hasEnv ? "export const env: Env = (globalThis as unknown as { process: { env: Env } }).process.env;" : "export const env: Record<string, string | undefined> = (globalThis as unknown as { process: { env: Record<string, string | undefined> } }).process.env;"}
 
   /**
    * A set of services for use within Convex query functions.

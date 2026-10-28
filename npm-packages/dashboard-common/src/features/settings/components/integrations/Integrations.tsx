@@ -9,6 +9,8 @@ import {
   ExceptionReportingIntegration,
   LOG_INTEGRATIONS,
   LogIntegration,
+  ANALYTICS_INTEGRATIONS,
+  AnalyticsIntegration,
 } from "@common/lib/integrationHelpers";
 
 import { Link } from "@ui/Link";
@@ -17,7 +19,7 @@ import {
   DeploymentInfoContext,
   PermissionsContext,
 } from "@common/lib/deploymentContext";
-import { Doc } from "system-udfs/convex/_generated/dataModel";
+import { Integration } from "system-udfs/convex/_system/frontend/common";
 import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
 import { PanelCard } from "./PanelCard";
 
@@ -30,15 +32,18 @@ export function Integrations({
 }: {
   team: ReturnType<DeploymentInfo["useCurrentTeam"]>;
   entitlements: ReturnType<DeploymentInfo["useTeamEntitlements"]>;
-  integrations: Doc<"_log_sinks">[];
+  integrations: Integration[];
   workosData: ReturnType<
     DeploymentInfo["workOSOperations"]["useDeploymentWorkOSEnvironment"]
   >["data"];
   onAddedIntegration?: (kind: string) => void;
 }) {
-  const { workosIntegrationEnabled } = useContext(DeploymentInfoContext);
+  const { workosIntegrationEnabled, s3ExportIntegrationEnabled } = useContext(
+    DeploymentInfoContext,
+  );
   const { useIsOperationAllowed } = useContext(PermissionsContext);
   const canWriteIntegrations = useIsOperationAllowed("WriteIntegrations");
+  const canViewData = useIsOperationAllowed("ViewData");
 
   const logStreamingEntitlementGranted = entitlements?.logStreamingEnabled;
   const streamingExportEntitlementGranted =
@@ -77,13 +82,37 @@ export function Integrations({
       } as ExceptionReportingIntegration;
     });
 
+  // Analytics export destinations live in the same table as log streams, but are
+  // gated on the streaming export entitlement rather than log streaming, and
+  // each destination rolls out behind its own flag.
+  const analyticsIntegrationEnabled: Record<
+    AnalyticsIntegration["kind"],
+    boolean
+  > = {
+    s3Export: s3ExportIntegrationEnabled,
+  };
+  const analyticsIntegrations: AnalyticsIntegration[] =
+    ANALYTICS_INTEGRATIONS.filter(
+      // A destination configured before its flag was turned back off stays
+      // listed, so it can still be edited or deleted.
+      (kind) =>
+        analyticsIntegrationEnabled[kind] ||
+        configuredIntegrationsMap[kind] !== undefined,
+    ).map(
+      (kind) =>
+        ({
+          kind,
+          existing: configuredIntegrationsMap[kind] ?? null,
+        }) as AnalyticsIntegration,
+    );
+
   const devCallouts = [];
   if (!logStreamingEntitlementGranted) {
     devCallouts.push(
       <LocalDevCallout
         key="log-streaming"
         tipText="Tip: Run this to enable log streaming locally:"
-        command={`just big-brain-tool-dev entitlement grant --team-entitlement log_streaming_enabled --team-id ${team?.id} --reason "local" true --for-real`}
+        command={`just big-brain-tool-dev entitlement grant add --team-entitlement log_streaming_enabled --team-id ${team?.id} --reason "local" true --for-real`}
       />,
     );
   }
@@ -93,7 +122,7 @@ export function Integrations({
         key="streaming-export"
         className="flex-col"
         tipText="Tip: Run this to enable streaming export locally:"
-        command={`just big-brain-tool-dev entitlement grant --team-entitlement streaming_export_enabled --team-id ${team?.id} --reason "local" true --for-real`}
+        command={`just big-brain-tool-dev entitlement grant add --team-entitlement streaming_export_enabled --team-id ${team?.id} --reason "local" true --for-real`}
       />,
     );
   }
@@ -120,6 +149,7 @@ export function Integrations({
     ...authIntegrations,
     ...exceptionReportingIntegrations,
     ...logIntegrations,
+    ...analyticsIntegrations,
   ].sort((a, b) => {
     if (a.existing !== null && b.existing === null) {
       return -1;
@@ -152,11 +182,22 @@ export function Integrations({
             <PanelCard
               key={i.kind}
               integration={i}
-              unavailableReason={logIntegrationUnvaliableReason}
+              unavailableReason={
+                i.kind === "s3Export"
+                  ? streamingExportIntegrationUnavailableReason
+                  : logIntegrationUnvaliableReason
+              }
               teamSlug={team?.slug}
               onAddedIntegration={onAddedIntegration}
               writeDisabled={!canWriteIntegrations}
               writeDisabledTip={integrationWriteTip}
+              configureDisabled={i.kind === "s3Export" && !canViewData}
+              configureDisabledTip={
+                <PermissionDeniedTip
+                  message="You do not have permission to export data from this deployment."
+                  action="deployment:data:view"
+                />
+              }
             />
           ))}
           {EXPORT_INTEGRATIONS.map((i) => (

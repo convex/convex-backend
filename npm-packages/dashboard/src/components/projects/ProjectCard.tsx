@@ -1,14 +1,8 @@
-import {
-  EyeOpenIcon,
-  TrashIcon,
-  GearIcon,
-  LayersIcon,
-} from "@radix-ui/react-icons";
+import { TrashIcon, GearIcon, LayersIcon } from "@radix-ui/react-icons";
 import { Card, CardProps } from "elements/Card";
 import { Tooltip } from "@ui/Tooltip";
 import { Loading } from "@ui/Loading";
 import { TimestampDistance } from "@common/elements/TimestampDistance";
-import { LostAccessModal } from "components/projects/modals/LostAccessModal";
 import { useDeploymentUris } from "hooks/useDeploymentUris";
 import classNames from "classnames";
 import Link from "next/link";
@@ -40,7 +34,6 @@ export function ProjectCard({
   const team = useCurrentTeam();
 
   const [deleteModal, setDeleteModal] = useState(false);
-  const [lostAccessModal, setLostAccessModal] = useState(false);
 
   const {
     prodHref,
@@ -90,12 +83,6 @@ export function ProjectCard({
       text: "Settings",
       action: openSettings,
     },
-
-    {
-      Icon: EyeOpenIcon,
-      text: "Lost Access",
-      action: () => setLostAccessModal(true),
-    },
     {
       Icon: TrashIcon,
       destructive: true,
@@ -122,7 +109,7 @@ export function ProjectCard({
       cardClassName="group animate-fadeInFromLoading"
       listItem={listItem}
       linkLabel={name?.length ? name : "Untitled Project"}
-      href={deleteModal || lostAccessModal ? undefined : cardHref}
+      href={deleteModal ? undefined : cardHref}
       dropdownItems={dropdownItems}
       overlayed={
         <div className="relative z-10 flex gap-1">
@@ -174,13 +161,6 @@ export function ProjectCard({
             team={team}
             project={project}
             onClose={() => setDeleteModal(false)}
-          />
-        )}
-        {lostAccessModal && (
-          <LostAccessModal
-            onClose={() => setLostAccessModal(false)}
-            teamSlug={team?.slug || ""}
-            projectSlug={slug}
           />
         )}
       </div>

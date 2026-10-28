@@ -1,8 +1,14 @@
+# Unreleased
+
+- Breaking change: Added the error types `InvalidPathComponentError`,
+  `InvalidModulePathError`, and `CanonicalModulePathError` replacing some uses
+  of `anyhow::Error`
+
 # 0.10.4
 
 - Optimizations to `check_valid_field_name` in `sync_types`
 - Fix for memory leak in query subscriptions
-  (https://github.com/get-convex/convex-rs/issues/15)
+  (https://github.com/convex/convex-rs/issues/15)
 - Bump rust-version minimum from 1.80.1 to 1.85
 
 # 0.10.3

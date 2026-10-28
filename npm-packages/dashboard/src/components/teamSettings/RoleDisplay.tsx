@@ -1,11 +1,14 @@
 import startCase from "lodash/startCase";
 import Link from "next/link";
-import type { TeamMemberCustomRole } from "generatedApi";
+import { cn } from "@ui/cn";
+import type { TeamMemberCustomRole } from "@convex-dev/platform/managementApi";
 
 type RoleDisplayProps = {
   role: string;
   customRoles?: TeamMemberCustomRole[] | null;
   teamSlug: string;
+  /** Right aligned where the role is read against the one beside it. */
+  align?: "left" | "right";
 };
 
 /**
@@ -15,15 +18,33 @@ type RoleDisplayProps = {
  * the team-members list and the pending-invites list so they stay visually
  * consistent.
  */
-export function RoleDisplay({ role, customRoles, teamSlug }: RoleDisplayProps) {
+export function RoleDisplay({
+  role,
+  customRoles,
+  teamSlug,
+  align = "left",
+}: RoleDisplayProps) {
+  const alignRight = align === "right";
   if (role !== "custom") {
     return (
-      <div className="text-sm text-content-primary">{startCase(role)}</div>
+      <div
+        className={cn(
+          "text-sm text-content-primary",
+          alignRight && "text-right",
+        )}
+      >
+        {startCase(role)}
+      </div>
     );
   }
   const list = customRoles ?? [];
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-1",
+        alignRight && "justify-end",
+      )}
+    >
       {list.length === 0 ? (
         <div className="text-sm text-content-primary">Custom</div>
       ) : (

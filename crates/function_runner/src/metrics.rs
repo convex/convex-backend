@@ -68,6 +68,13 @@ pub fn begin_tx_timer() -> Timer<VMHistogram> {
     Timer::new(&FUNCTION_RUNNER_BEGIN_TX_SECONDS)
 }
 
+register_convex_histogram!(MODULE_LOAD_SECONDS, "Time to load modules", &["source"]);
+pub fn module_load_timer(source: &'static str) -> Timer<VMHistogramVec> {
+    let mut timer = Timer::new_with_labels(&MODULE_LOAD_SECONDS);
+    timer.add_label(MetricLabel::new_const("source", source));
+    timer
+}
+
 register_convex_histogram!(
     MODULE_CACHE_SOURCE_SIZE_BYTES_TOTAL,
     "Size in bytes of module source code retrieved from cache",

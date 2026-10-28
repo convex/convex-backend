@@ -21,22 +21,22 @@ const meta = {
     mocked(useTeamAuditLog).mockReturnValue({
       entries: [
         {
-          action: "joinTeam",
-          actor: { member: { member_id: 2 } },
+          action: "team:join",
+          actor: { kind: "member", member_id: 2 },
           createTime: new Date("2026-03-10T14:23:00Z").getTime(),
           metadata: {},
           teamId: 2,
         },
         {
-          action: "inviteMember",
-          actor: { member: { member_id: 1 } },
+          action: "member:invite",
+          actor: { kind: "member", member_id: 1 },
           createTime: new Date("2026-03-10T14:22:00Z").getTime(),
           metadata: { noun: "member", current: { email: "pepper@convex.dev" } },
           teamId: 2,
         },
         {
-          action: "createProject",
-          actor: { member: { member_id: 1 } },
+          action: "project:create",
+          actor: { kind: "member", member_id: 1 },
           createTime: new Date("2026-03-10T14:21:00Z").getTime(),
           metadata: {
             noun: "project",
@@ -45,8 +45,8 @@ const meta = {
           teamId: 2,
         },
         {
-          action: "createDeployment",
-          actor: { member: { member_id: 1 } },
+          action: "deployment:create",
+          actor: { kind: "member", member_id: 1 },
           createTime: new Date("2026-03-10T14:20:00Z").getTime(),
           metadata: {
             current: { deploymentType: "dev", projectId: 7 },
@@ -54,15 +54,15 @@ const meta = {
           teamId: 2,
         },
         {
-          action: "createSubscription",
-          actor: { member: { member_id: 1 } },
+          action: "billing:subscription:create",
+          actor: { kind: "member", member_id: 1 },
           createTime: new Date("2026-03-10T14:19:00Z").getTime(),
           metadata: { current: { plan: "Convex Professional" } },
           teamId: 2,
         },
         {
-          action: "createTeam",
-          actor: { member: { member_id: 1 } },
+          action: "team:create",
+          actor: { kind: "member", member_id: 1 },
           createTime: new Date("2026-03-10T14:18:00Z").getTime(),
           metadata: {},
           teamId: 2,

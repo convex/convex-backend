@@ -1,7 +1,7 @@
 import { Expand } from "../type_utils.js";
 import { GenericId } from "./index.js";
 import { GenericValidator, ObjectType } from "./validator.js";
-import { JSONValue, convexToJson } from "./value.js";
+import { CommitTsPlaceholder, JSONValue, convexToJson } from "./value.js";
 
 type TableNameFromType<T> =
   T extends GenericId<infer TableName> ? TableName : string;
@@ -59,6 +59,8 @@ abstract class BaseValidator<
   abstract get json(): ValidatorJSON;
   /** @internal */
   abstract asOptional(): Validator<Type | undefined, "optional", FieldPaths>;
+  /** Allow this validated field to be absent. */
+  abstract optional(): Validator<Type | undefined, "optional", FieldPaths>;
 }
 
 /**
@@ -98,12 +100,16 @@ export class VId<
   get json(): ValidatorJSON {
     return { type: "id", tableName: this.tableName };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this field to be validated as absent. */
+  optional() {
     return new VId<Type | undefined, "optional">({
       isOptional: "optional",
       tableName: this.tableName,
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -124,11 +130,15 @@ export class VFloat64<
     // Server expects the old name `number` string instead of `float64`.
     return { type: "number" };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this field to be validated as absent. */
+  optional() {
     return new VFloat64<Type | undefined, "optional">({
       isOptional: "optional",
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -149,9 +159,41 @@ export class VInt64<
     // Server expects the old name `bigint`.
     return { type: "bigint" };
   }
+  /** Allow this validated field to be absent. */
+  optional() {
+    return new VInt64<Type | undefined, "optional">({ isOptional: "optional" });
+  }
   /** @internal */
   asOptional() {
-    return new VInt64<Type | undefined, "optional">({ isOptional: "optional" });
+    return this.optional();
+  }
+}
+
+/**
+ * The type of the `v.commitTs()` validator.
+ */
+export class VCommitTs<
+  Type = bigint | CommitTsPlaceholder,
+  IsOptional extends OptionalProperty = "required",
+> extends BaseValidator<Type, IsOptional> {
+  /**
+   * The kind of validator, `"commitTs"`.
+   */
+  readonly kind = "commitTs" as const;
+
+  /** @internal */
+  get json(): ValidatorJSON {
+    return { type: this.kind };
+  }
+  /** Allow this validated field to be absent. */
+  optional() {
+    return new VCommitTs<Type | undefined, "optional">({
+      isOptional: "optional",
+    });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -171,11 +213,15 @@ export class VBoolean<
   get json(): ValidatorJSON {
     return { type: this.kind };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this validated field to be absent. */
+  optional() {
     return new VBoolean<Type | undefined, "optional">({
       isOptional: "optional",
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -195,9 +241,13 @@ export class VBytes<
   get json(): ValidatorJSON {
     return { type: this.kind };
   }
+  /** Allow this validated field to be absent. */
+  optional() {
+    return new VBytes<Type | undefined, "optional">({ isOptional: "optional" });
+  }
   /** @internal */
   asOptional() {
-    return new VBytes<Type | undefined, "optional">({ isOptional: "optional" });
+    return this.optional();
   }
 }
 
@@ -217,11 +267,15 @@ export class VString<
   get json(): ValidatorJSON {
     return { type: this.kind };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this validated field to be absent. */
+  optional() {
     return new VString<Type | undefined, "optional">({
       isOptional: "optional",
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -241,9 +295,13 @@ export class VNull<
   get json(): ValidatorJSON {
     return { type: this.kind };
   }
+  /** Allow this validated field to be absent. */
+  optional() {
+    return new VNull<Type | undefined, "optional">({ isOptional: "optional" });
+  }
   /** @internal */
   asOptional() {
-    return new VNull<Type | undefined, "optional">({ isOptional: "optional" });
+    return this.optional();
   }
 }
 
@@ -266,11 +324,15 @@ export class VAny<
       type: this.kind,
     };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this validated field to be absent. */
+  optional() {
     return new VAny<Type | undefined, "optional", FieldPaths>({
       isOptional: "optional",
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -334,12 +396,16 @@ export class VObject<
       ),
     };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this validated field to be absent. */
+  optional() {
     return new VObject<Type | undefined, Fields, "optional", FieldPaths>({
       isOptional: "optional",
       fields: this.fields,
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 
   /**
@@ -457,12 +523,16 @@ export class VLiteral<
       value: convexToJson(this.value as string | boolean | number | bigint),
     };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this validated field to be absent. */
+  optional() {
     return new VLiteral<Type | undefined, "optional">({
       isOptional: "optional",
       value: this.value,
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -507,12 +577,16 @@ export class VArray<
       value: this.element.json,
     };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this validated field to be absent. */
+  optional() {
     return new VArray<Type | undefined, Element, "optional">({
       isOptional: "optional",
       element: this.element,
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -567,7 +641,7 @@ export class VRecord<
       throw new Error("Record validator cannot have optional values");
     }
     if (!key.isConvexValidator || !value.isConvexValidator) {
-      throw new Error("Key and value of v.record() but be validators");
+      throw new Error("Key and value of v.record() must be validators");
     }
     this.key = key;
     this.value = value;
@@ -584,13 +658,17 @@ export class VRecord<
       },
     };
   }
-  /** @internal */
-  asOptional() {
+  /** Allow this validated field to be absent. */
+  optional() {
     return new VRecord<Type | undefined, Key, Value, "optional", FieldPaths>({
       isOptional: "optional",
       key: this.key,
       value: this.value,
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -635,12 +713,16 @@ export class VUnion<
       value: this.members.map((v) => v.json),
     };
   }
-  /** @internal */
-  asOptional() {
-    return new VUnion<Type | undefined, T, "optional">({
+  /** Allow this validated field to be absent. */
+  optional() {
+    return new VUnion<Type | undefined, T, "optional", FieldPaths>({
       isOptional: "optional",
       members: this.members,
     });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
   }
 }
 
@@ -653,6 +735,8 @@ export type VOptional<T extends Validator<any, OptionalProperty, any>> =
     ? VFloat64<Type | undefined, "optional">
   : T extends VInt64<infer Type, OptionalProperty>
     ? VInt64<Type | undefined, "optional">
+  : T extends VCommitTs<infer Type, OptionalProperty>
+    ? VCommitTs<Type | undefined, "optional">
   : T extends VBoolean<infer Type, OptionalProperty>
     ? VBoolean<Type | undefined, "optional">
   : T extends VNull<infer Type, OptionalProperty>
@@ -712,6 +796,7 @@ export type Validator<
   | VString<Type, IsOptional>
   | VFloat64<Type, IsOptional>
   | VInt64<Type, IsOptional>
+  | VCommitTs<Type, IsOptional>
   | VBoolean<Type, IsOptional>
   | VNull<Type, IsOptional>
   | VAny<Type, IsOptional>
@@ -750,6 +835,7 @@ export type ValidatorJSON =
   | { type: "null" }
   | { type: "number" }
   | { type: "bigint" }
+  | { type: "commitTs" }
   | { type: "boolean" }
   | { type: "string" }
   | { type: "bytes" }

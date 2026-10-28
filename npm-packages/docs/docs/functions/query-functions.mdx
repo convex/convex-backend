@@ -110,7 +110,7 @@ query returns `undefined` **it is translated to `null`** on the client.
 ### Query context
 
 The `query` constructor enables fetching data, and other Convex features by
-passing a [QueryCtx](/generated-api/server.md#queryctx) object to the handler
+passing a [QueryCtx](/generated-api/server.mdx#queryctx) object to the handler
 function as the first parameter:
 
 <Snippet source={Context} title="convex/myFunctions.ts" />
@@ -130,9 +130,9 @@ Which part of the query context is used depends on what your query needs to do:
   Read more about [Reading Data](/database/reading-data/reading-data.mdx).
 
 - To return URLs to stored files use the `storage` field. Read more about
-  [File Storage](/file-storage.mdx).
+  [File Storage](/file-storage/overview.mdx).
 - To check user authentication use the `auth` field. Read more about
-  [Authentication](/auth.mdx).
+  [Authentication](/auth/overview.mdx).
 
 ## Splitting up query code via helpers
 
@@ -162,14 +162,14 @@ npm install @faker-js/faker
 
 ## Calling queries from clients
 
-To call a query from [React](/client/react.mdx) use the
-[`useQuery`](/client/react.mdx#fetching-data) hook along with the generated
-[`api`](/generated-api/api) object.
+To call a query from [React](/client/react/overview.mdx) use the
+[`useQuery`](/client/react/overview.mdx#fetching-data) hook along with the
+generated [`api`](/generated-api/api) object.
 
 <Snippet source={Call} title="src/MyApp.tsx" />
 
-See the [React](/client/react.mdx) client documentation for all the ways queries
-can be called.
+See the [React](/client/react/overview.mdx) client documentation for all the
+ways queries can be called.
 
 ## Caching & reactivity & consistency
 
@@ -204,5 +204,12 @@ on the Convex runtime.
 Queries have a limit to the amount of data they can read at once to guarantee
 good performance. Check out these limits in
 [Read/write limit errors](/functions/error-handling/error-handling.mdx#readwrite-limit-errors).
+
+See
+[Write performance and limits](/database/writing-data#write-performance-and-limits)
+for tools to stay within these limits: measuring document sizes, limiting
+paginated reads with `maximumBytesRead`/`maximumRowsRead`, checking headroom via
+`ctx.meta.getTransactionMetrics()`, and bounding nested `ctx.runQuery` calls
+with a `transactionLimits` option.
 
 For information on other limits, see [Limits](/production/state/limits.mdx).

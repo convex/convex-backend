@@ -35,6 +35,12 @@ Practically speaking, a component is defined in a folder containing a
  └-- …folders/files.ts  # Queries, mutations, and actions for the component.
 ```
 
+Module paths are the component's API: apps call a `send` mutation defined in
+`component/messages.ts` as `components.myComponent.messages.send`. A component
+with a single module often names it `lib.ts`. If your component has more than
+one module, name each after the object it deals with, such as `messages.ts` or
+`jobs.ts`.
+
 The component's `convex.config.ts` file configures the component's default name
 and child components.
 
@@ -86,7 +92,7 @@ share solutions to common problems with the broader developer community via the
 [Convex Components directory](https://convex.dev/components).
 
 Get started with a new project using the
-[component template](https://github.com/get-convex/templates/tree/main/template-component):
+[component template](https://github.com/convex/templates/tree/main/template-component):
 
 ```sh
 npx create-convex@latest --component
@@ -218,8 +224,11 @@ should not import from this directory with the exception of
 ### Environment variables
 
 A component's functions are isolated from the app's environment variables and
-cannot access just any value from the app's `process.env`. Instead, components
-can declare their own typed environment variables in `convex.config.ts`:
+cannot access just any value from the app's `process.env`. Only the
+[system environment variables](/production/environment-variables.mdx#system-environment-variables)
+(`CONVEX_CLOUD_URL` and `CONVEX_SITE_URL`) are available in every component
+function. For anything else, components can declare their own typed environment
+variables in `convex.config.ts`:
 
 ```ts title="component/convex.config.ts"
 import { defineComponent } from "convex/server";
@@ -307,6 +316,11 @@ return await ctx.runAction(components.sampleComponent.lib.translate, {
 
 See below for other strategies for static configuration.
 
+A component's declared environment variables are bound to the installed
+component instance and only exist at runtime. Read them inside function handlers
+rather than at module scope: module-scope code also runs during deployment
+analysis, where these values are not yet defined.
+
 ### HTTP Actions
 
 Components can define their own `http.ts` file with HTTP routes, just like the
@@ -345,9 +359,9 @@ component.use(childComponent, { httpPrefix: "/child/" });
 export default component;
 ```
 
-Within a component’s HTTP action, `process.env.CONVEX_SITE_URL` reflects the
-full URL where the component is mounted, including the `httpPrefix`. This allows
-the component to construct correct URLs for callbacks, redirects, or
+Within all of a component’s functions, `env.CONVEX_SITE_URL` reflects the full
+URL where the component is mounted, including the `httpPrefix`. This allows the
+component to construct correct URLs for callbacks, redirects, or
 self-referencing links without needing to know its mount path at build time.
 
 **Limitation:** Component HTTP actions do not have access to `ctx.auth` or the
@@ -355,7 +369,7 @@ app’s environment variables. If an HTTP handler needs to authenticate users or
 access data from the application, define the HTTP action handler in the
 component’s client code and mount it in the app’s `convex/http.ts` instead.
 There’s an example of this pattern in the
-[Twilio component](https://github.com/get-convex/twilio/blob/0bdf7fd4ee7dd46d442be3693280564eea597b68/src/client/index.ts#L71).
+[Twilio component](https://github.com/convex/twilio/blob/0bdf7fd4ee7dd46d442be3693280564eea597b68/src/client/index.ts#L71).
 
 ### Authentication via ctx.auth
 
@@ -420,24 +434,26 @@ const result = await ctx.runMutation(handle, args);
 await ctx.scheduler.runAfter(0, handle, args);
 ```
 
-[Here](https://github.com/get-convex/workpool/blob/aebe2db49fc3ec50ded6892ed27f464450b3d31e/src/component/worker.ts#L26-L28)
+[Here](https://github.com/convex/workpool/blob/aebe2db49fc3ec50ded6892ed27f464450b3d31e/src/component/worker.ts#L26-L28)
 is an example of using function handles in the
 [Workpool](https://www.convex.dev/components/workpool) component.
 
 ### Pagination
 
-The built-in `.paginate()` doesn't work in components, because of how Convex
-keeps track of reactive pagination. Therefore we recommend you use `paginator`
-from [`convex-helpers`](https://npmjs.com/package/convex-helpers) if you need
-pagination within your component.
+The built-in `.paginate()` works in components and supports reactive pagination
+with `usePaginatedQuery` from `convex/react`. Note: a query can only make one
+paginated call across all app and component `runQuery` calls. The second call
+will throw an exception.
 
-If you expose a pagination API that wants to be used with `usePaginatedQuery`,
-in a React context, use the `usePaginatedQuery` from `convex-helpers` instead of
-the default one from `convex/react`. It will have a fixed first page size until
-you hit “load more,” at which point the first page will grow if anything before
-the second page is added.
+If you need multiple paginated database queries within one query, use `stream`
+from [`convex-helpers`](https://npmjs.com/package/convex-helpers). If you expose
+a `stream`-based API that wants to be used with `usePaginatedQuery`, in a React
+context, use the `usePaginatedQuery` from `convex-helpers` instead of the
+default one from `convex/react`. It will have a fixed first page size until you
+hit “load more,” at which point the first page will grow if anything before the
+second page is added.
 
-[Here](https://github.com/get-convex/rag/blob/23fb22d593682e23d9134304e823f7532cbc7e67/src/component/chunks.ts#L437-L462)
+[Here](https://github.com/convex/rag/blob/23fb22d593682e23d9134304e823f7532cbc7e67/src/component/chunks.ts#L437-L462)
 is an example of pagination in the [RAG](https://www.convex.dev/components/rag)
 component.
 
@@ -452,16 +468,11 @@ example of using validators.
 ```ts
 import schema from "./schema";
 
-const messageDoc = schema.tables.messages.validator.extend({
-  _id: v.id("messages),
-  _creationTime: v.number(),
-});
-
 export const getLatestMessage = query({
   args: {},
-  returns: v.nullable(messageDoc),
+  returns: v.nullable(schema.doc("messages")),
   handler: async (ctx) => {
-    return await ctx.db.query("messages").order("desc).first();
+    return await ctx.db.query("messages").order("desc").first();
   },
 });
 ```
@@ -510,6 +521,7 @@ import type {
   GenericDataModel,
   GenericMutationCtx,
 } from "convex/server";
+import { env } from "./_generated/server.js";
 import type { ComponentApi } from "../component/_generated/component.js";
 
 export async function callMyFunction(
@@ -520,7 +532,7 @@ export async function callMyFunction(
   // You can create function handles, add shared utilities,
   // or do any processing that needs to run in the app's environment.
   const functionHandle = await createFunctionHandle(args.someFn);
-  const someArg = process.env.SOME_ARG;
+  const someArg = env.SOME_ARG;
   await ctx.runMutation(component.call.fn, {
     ...args,
     someArg,
@@ -627,7 +639,7 @@ This pattern is also useful for components that need to provide functions with
 specific signatures for integration purposes.
 
 Here's a real-world
-[example](https://github.com/get-convex/prosemirror-sync/blob/91e19d5e5a2a272d44f3a31c9171e111dc98676c/src/client/index.ts#L171C4-L173C6)
+[example](https://github.com/convex/prosemirror-sync/blob/91e19d5e5a2a272d44f3a31c9171e111dc98676c/src/client/index.ts#L171C4-L173C6)
 from the
 [ProseMirror component](https://www.convex.dev/components/prosemirror-sync) that
 exports ready-made functions.
@@ -665,7 +677,7 @@ export class Foo {
       FOO_AUTH_KEY?: string;
     },
   ) {
-    this.apiKey = options?.FOO_AUTH_KEY ?? process.env.FOO_AUTH_KEY!;
+    this.apiKey = options?.FOO_AUTH_KEY ?? env.FOO_AUTH_KEY;
   }
 
   async count(ctx: GenericQueryCtx<GenericDataModel>) {
@@ -705,7 +717,7 @@ run a separate build process to generate the component's `_generated` directory.
 
 The component authoring template will automatically generate the code for the
 component when running `npm run dev`. You can see the setup in the
-[template's `package.json` scripts](https://github.com/get-convex/templates/blob/main/template-component/package.json).
+[template's `package.json` scripts](https://github.com/convex/templates/blob/main/template-component/package.json).
 
 If you're setting up your own build process, you'll need to run the following
 commands with their own file watchers:
@@ -746,7 +758,7 @@ entry points to be used in your project:
   describes the component's types from the point of view of app it's used in.
 - `@your/package/test` for utilities to use the component with `convex-test`.
 
-[The template’s package.json](https://github.com/get-convex/templates/blob/main/template-component/package.json)
+[The template’s package.json](https://github.com/convex/templates/blob/main/template-component/package.json)
 does this for you, but if you're setting up your own build process, you'll need
 to set this up in your package.json.
 
@@ -772,7 +784,7 @@ package from NPM in the example app, follow the template's project structure:
 ### Publishing to NPM
 
 To publish a component on NPM, check out
-[PUBLISHING.md](https://github.com/get-convex/templates/blob/main/template-component/PUBLISHING.md).
+[PUBLISHING.md](https://github.com/convex/templates/blob/main/template-component/PUBLISHING.md).
 
 ## Testing
 
@@ -816,16 +828,78 @@ app that uses the component.
 The template component includes an example app in part for this purpose: to
 exercise the component's bundled code as it will be used by apps installing it.
 
+For focused tests, use
+[`defineTestApp`](/testing/convex-test.mdx#define-a-test-application) to define
+a small host app directly in the test. This is especially useful for testing
+client code that runs in the app's context and calls into the component. For
+example, combine exports from the
+[`makeCounterAPI` client above](#re-mounting-an-api) with a function defined in
+the test:
+
+```ts title="src/client/index.test.ts"
+import { defineSchema } from "convex/server";
+import { v } from "convex/values";
+import { defineTestApp } from "convex-test";
+import { expect, test } from "vitest";
+import componentTest from "../test.js";
+import { makeCounterAPI } from "./index.js";
+
+const app = defineTestApp({
+  schema: defineSchema({}),
+  components: {
+    counter: componentTest,
+  },
+});
+const { add, get } = makeCounterAPI(app.components.counter, {
+  auth: async () => "test-user",
+});
+
+const { api, createTest } = app.defineModules({
+  testModule: {
+    add,
+    get,
+    addAndGet: app.mutation({
+      args: { value: v.number() },
+      returns: v.number(),
+      handler: async (ctx, args): Promise<number> => {
+        await ctx.runMutation(api.testModule.add, args);
+        return await ctx.runQuery(api.testModule.get, {});
+      },
+    }),
+  },
+});
+
+test("adds to the counter through the client API", async () => {
+  const t = createTest();
+  expect(await t.mutation(api.testModule.addAndGet, { value: 3 })).toBe(3);
+  expect(await t.query(api.testModule.get, {})).toBe(3);
+});
+```
+
+Here, `componentTest` is the [test helper](#exporting-test-helpers) exported by
+your component. Each `createTest()` call registers a fresh component instance
+named `counter`. The `register` function's return type supplies the API type for
+`app.components.counter`.
+
+We recommend explicitly annotating handler return types, such as
+`Promise<number>` above, to break TypeScript inference cycles when handlers
+reference `api` inside its own definition.
+
 ### Exporting test helpers
 
 Most components export testing helpers to make it easy to register the component
-with the test instance. Here is an example from the
-[template component’s `/test` entrypoint](https://github.com/get-convex/templates/blob/main/template-component/src/test.ts):
+with the test instance. Returning the component's API also provides typed
+references for direct callers and lets `defineTestApp` infer the API:
 
 ```ts
 /// <reference types="vite/client" />
 import type { TestConvex } from "convex-test";
-import type { GenericSchema, SchemaDefinition } from "convex/server";
+import {
+  componentsGeneric,
+  type GenericSchema,
+  type SchemaDefinition,
+} from "convex/server";
+import type { ComponentApi } from "./component/_generated/component.js";
 import schema from "./component/schema.js";
 const modules = import.meta.glob("./component/**/*.ts");
 
@@ -834,11 +908,11 @@ const modules = import.meta.glob("./component/**/*.ts");
  * @param t - The test convex instance, e.g. from calling `convexTest`.
  * @param name - The name of the component, as registered in convex.config.ts.
  */
-export function register(
-  t: TestConvex<SchemaDefinition<GenericSchema, boolean>>,
-  name: string = "sampleComponent",
-) {
+export function register<
+  Schema extends SchemaDefinition<GenericSchema, boolean>,
+>(t: TestConvex<Schema>, name: string = "sampleComponent"): ComponentApi {
   t.registerComponent(name, schema, modules);
+  return componentsGeneric()[name] as unknown as ComponentApi;
 }
 export default { register, schema, modules };
 ```

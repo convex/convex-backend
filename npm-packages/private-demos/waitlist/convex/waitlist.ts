@@ -58,7 +58,7 @@ export const removeFromQueue = async (
   if (userInQueue === null) {
     return;
   }
-  await ctx.db.delete(userInQueue._id);
+  await ctx.db.delete("waitlist", userInQueue._id);
 };
 
 export const getHead = async (ctx: QueryCtx, size: number) => {

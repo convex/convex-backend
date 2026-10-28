@@ -19,7 +19,7 @@ seamlessly with pagination. They even include new documents created with a
 mutation!
 
 **Example:**
-[Search App](https://github.com/get-convex/convex-demos/tree/main/search)
+[Search App](https://github.com/convex/convex-demos/tree/main/search)
 
 To use full text search you need to:
 
@@ -32,7 +32,7 @@ powerful, open-source, full-text search library written in Rust.
 
 ## Defining search indexes
 
-Like [database indexes](/database/reading-data/indexes/indexes.md), search
+Like [database indexes](/database/reading-data/indexes/indexes.mdx), search
 indexes are a data structure that is built in advance to enable efficient
 querying. Search indexes are defined as part of your Convex
 [schema](/database/schemas.mdx).
@@ -198,8 +198,8 @@ any term that is a prefix of the original term. For example, the expression
 - `"rabbit"`
 - `"send request"`
 
-Fuzzy search matches are deprecated. After January 15, 2025, search results will
-not include `"snake"` for a typo like `"stake"`.
+Every other search term matches only identical terms. Search has no typo
+tolerance: `search("body", "stake")` does not match `"snake"`.
 
 ### Relevance order
 
@@ -234,7 +234,7 @@ Search indexes must have:
 - Up to 16 filter fields.
 
 Search indexes count against the
-[limit of 32 indexes per table](/database/reading-data/indexes/indexes.md#limits).
+[limit of 32 indexes per table](/database/reading-data/indexes/indexes.mdx#limits).
 
 Search queries can have:
 
@@ -244,6 +244,13 @@ Search queries can have:
 Additionally, search queries can scan up to 1024 results from the search index.
 
 The source of truth for these limits is our
-[source code](https://github.com/get-convex/convex-backend/blob/main/crates/search/src/constants.rs).
+[source code](https://github.com/convex/convex-backend/blob/main/crates/search/src/constants.rs).
 
 For information on other limits, see [here](/production/state/limits.mdx).
+
+## Costs
+
+Search queries are billed in
+[query-GBs](/production/state/limits.mdx#search-pricing): each query counts the
+full size of the search index it runs against, regardless of how many results it
+returns and regardless of which `filterFields` it uses.

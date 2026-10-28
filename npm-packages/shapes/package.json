@@ -16,15 +16,13 @@
     "build-esm": "tsc",
     "build-cjs": "tsc --module commonjs --outDir dist/cjs --target es2015 && echo '{\"type\": \"commonjs\"}' > dist/cjs/package.json",
     "clean": "rm -rf dist",
-    "prepare": "npm run build",
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --passWithNoTests",
     "test-esm": "node -e 'import(\"./dist/esm/index.js\")'"
   },
   "author": "Convex, Inc.",
   "license": "MIT",
   "dependencies": {
-    "zod": "^3.24.0",
-    "prettier": "3.8.1"
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "typescript": "~5.0.3",

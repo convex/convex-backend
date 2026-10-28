@@ -1,13 +1,14 @@
 import { Command } from "@commander-js/extra-typings";
-import { chalkStderr } from "chalk";
 import { oneoffContext } from "../bundler/context.js";
 import { logFinishedStep, logOutput, showSpinner } from "../bundler/log.js";
 import { loadSelectedDeploymentCredentials } from "./lib/api.js";
 import { actionDescription } from "./lib/command.js";
-import { getDeploymentSelection } from "./lib/deploymentSelection.js";
+import {
+  ensureLoggedInWithAccessToken,
+  getDeploymentSelection,
+} from "./lib/deploymentSelection.js";
 import { changedEnvVarFile } from "./lib/envvars.js";
 import {
-  CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME,
   CONVEX_DEPLOY_KEY_ENV_VAR_NAME,
   ENV_VAR_FILE_PATH,
   typedPlatformClient,
@@ -16,11 +17,14 @@ import {
 export const deploymentTokenCreate = new Command("create")
   .summary("Create an access token")
   .description(
-    `Creates a deploy key that, when set as ${chalkStderr.bold(CONVEX_DEPLOY_KEY_ENV_VAR_NAME)}, scopes all commands to the target deployment. Defaults to the current deployment if '--deployment' isn't passed\n\n` +
-      "  Print a new deploy key to stdout:           `npx convex deployment token create my-token`\n" +
-      `  Save a new deploy key in ${ENV_VAR_FILE_PATH}:        \`npx convex deployment token create my-token --save-env\`\n` +
-      "  Save a new deploy key in a custom env file: `npx convex deployment token create ci-token --save-env .env.production`\n" +
-      "  Create a key for the project's prod:        `npx convex deployment token create ci-token --deployment prod`\n",
+    [
+      `Creates a deploy key that, when set as \`${CONVEX_DEPLOY_KEY_ENV_VAR_NAME}\`, scopes all commands to the target deployment.`,
+      "",
+      "• Print a new deploy key to stdout: `npx convex deployment token create my-token`",
+      `• Save a new deploy key in \`${ENV_VAR_FILE_PATH}\`: \`npx convex deployment token create my-token --save-env\``,
+      "• Save a new deploy key in a custom env file: `npx convex deployment token create ci-token --save-env .env.production`",
+      "• Create a key for the project's prod: `npx convex deployment token create ci-token --deployment prod`",
+    ].join("\n"),
   )
   .argument("<name>", "Name for the new deploy key")
   .allowExcessArguments(false)
@@ -33,20 +37,7 @@ export const deploymentTokenCreate = new Command("create")
   .action(async (name, options) => {
     const ctx = await oneoffContext(options);
 
-    const auth = ctx.bigBrainAuth();
-    if (auth === null || auth.kind !== "accessToken") {
-      return await ctx.crash({
-        exitCode: 1,
-        errorType: "fatal",
-        printedMessage: `Creating a deploy key currently requires being logged in with a personal access token. ${
-          process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
-            ? `Unset ${CONVEX_DEPLOY_KEY_ENV_VAR_NAME}`
-            : process.env[CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME]
-              ? `Unset ${CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME}`
-              : `Run ${chalkStderr.bold("npx convex login")}`
-        } and try again.`,
-      });
-    }
+    await ensureLoggedInWithAccessToken(ctx, "Creating a deploy key");
 
     const deploymentSelection = await getDeploymentSelection(ctx, options);
     const deployment = await loadSelectedDeploymentCredentials(

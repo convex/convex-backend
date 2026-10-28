@@ -59,7 +59,7 @@ The typical approval flow involves four server functions:
    generation pauses and the `tool-approval-request` is persisted in the thread.
 3. **Submit an approval or denial** for each pending tool call.
    `approveToolCall` and `denyToolCall` work from both mutations and actions.
-4. **Continue generation** once all pending approvals have been resolved.
+4. **Continue generation** from the returned message ID.
 
 ```ts
 import { approvalAgent } from "../agents/approval";
@@ -118,7 +118,7 @@ export const submitApproval = mutation({
   },
 });
 
-// 4. Continue generation after all approvals resolved.
+// 4. Continue generation from the saved approval decision.
 //    Pass the last approval message ID as promptMessageId so the agent
 //    resumes generation from where the approval was issued.
 export const continueAfterApprovals = internalAction({
@@ -134,20 +134,54 @@ export const continueAfterApprovals = internalAction({
 });
 ```
 
-:::tip You can approve a tool call and continue generation in the same server
-function. For example, an action can call `approveToolCall` and then immediately
-call `streamText` to resume — no separate scheduling step needed. :::
+<Admonition type="tip">
+
+You can approve a tool call and continue generation in the same server function.
+For example, an action can call `approveToolCall` and then immediately call
+`streamText` to resume — no separate scheduling step needed.
+
+</Admonition>
 
 ## Handling multiple tool calls
 
 When the model calls several tools in a single step, some or all of them may
-require approval. **Every** pending approval must be resolved (approved or
-denied) before you continue generation.
+require approval. Submit decisions from the same assistant request together with
+`respondToToolCallApprovals`. The batch uses one bounded lookup and one write,
+and either every decision is saved or none are.
 
-If a new generation starts while approvals are still unresolved, the unresolved
-approvals are **automatically denied** with the reason
+```ts
+const { messageId } = await approvalAgent.respondToToolCallApprovals(ctx, {
+  threadId,
+  decisions: [
+    { approvalId: "delete-file", approved: true },
+    {
+      approvalId: "send-email",
+      approved: false,
+      reason: "Wrong recipient",
+    },
+  ],
+});
+```
+
+You may also submit and resume a subset. Sibling approvals that have not been
+decided remain pending and can be resumed later. `approveToolCall` and
+`denyToolCall` remain available for single decisions and use the same atomic
+path. For multiple decisions, use the batch method instead of looping over the
+single-decision helpers so the request history is read only once.
+
+If a partial continuation requests another approval, that newer request also
+remains pending while you resume an earlier sibling.
+
+If an unrelated generation starts while approvals are still unresolved, they are
+**automatically denied** with the reason
 `"auto-denied: new generation started"`. This prevents broken message histories
-where tool calls lack results.
+where tool calls lack results. These denials are synthetic and only added to the
+model's context for that request; they are not saved, so the approvals remain
+pending in storage.
+
+This does not apply when resuming approvals: on that continuation, earlier
+approvals that were not part of the resume are omitted from that model request.
+No response is written for them, so they remain pending in storage.
 
 ## Client-side flow
 
@@ -214,8 +248,8 @@ The `ToolUIPart` states relevant to approval are:
 For a complete working example, see:
 
 - **Agent definition:**
-  [`example/convex/agents/approval.ts`](https://github.com/get-convex/agent/blob/main/example/convex/agents/approval.ts)
+  [`example/convex/agents/approval.ts`](https://github.com/convex/agent/blob/main/example/convex/agents/approval.ts)
 - **Server functions:**
-  [`example/convex/chat/approval.ts`](https://github.com/get-convex/agent/blob/main/example/convex/chat/approval.ts)
+  [`example/convex/chat/approval.ts`](https://github.com/convex/agent/blob/main/example/convex/chat/approval.ts)
 - **React UI:**
-  [`example/ui/chat/ChatApproval.tsx`](https://github.com/get-convex/agent/blob/main/example/ui/chat/ChatApproval.tsx)
+  [`example/ui/chat/ChatApproval.tsx`](https://github.com/convex/agent/blob/main/example/ui/chat/ChatApproval.tsx)

@@ -1,0 +1,185 @@
+---
+title: "Convex Svelte"
+sidebar_label: "Overview"
+sidebar_position: 0
+description:
+  "Reactive Svelte 5 client library for Convex, with real-time subscriptions,
+  mutations, actions, pagination, auth, and SvelteKit SSR."
+pagination_next: client/svelte/reactivity
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+[Convex Svelte](https://www.npmjs.com/package/convex-svelte) is the Convex
+client library for [Svelte 5](https://svelte.dev/). It wraps the
+[`ConvexClient`](/api/classes/browser.ConvexClient) in reactive Svelte APIs, so
+your frontend code can:
+
+1. Subscribe to your [queries](/functions/query-functions.mdx) and get live
+   updates
+2. Call your [mutations](/functions/mutation-functions.mdx) and
+   [actions](/functions/actions.mdx)
+3. [Paginate](/database/pagination.mdx) through large datasets
+4. [Authenticate users](/auth/overview.mdx)
+5. [Server-side render](/client/svelte/sveltekit-server-rendering.mdx) data in
+   SvelteKit
+
+<Admonition type="info" title="Source & issues">
+
+Source: [convex/convex-svelte](https://github.com/convex/convex-svelte).
+
+<br /> Found a bug or have a feature request? Open an issue in its [issue
+tracker](https://github.com/convex/convex-svelte/issues).
+
+</Admonition>
+
+Follow the [Svelte Quickstart](/quickstart/svelte.mdx) to get started, or read
+on for the full setup.
+
+## Installation
+
+Install the Convex client and server library:
+
+<Tabs groupId="package-manager">
+<TabItem value="npm" label="npm" default>
+
+```sh
+npm install convex convex-svelte
+```
+
+</TabItem>
+<TabItem value="pnpm" label="pnpm">
+
+```sh
+pnpm add convex convex-svelte
+```
+
+</TabItem>
+<TabItem value="yarn" label="yarn">
+
+```sh
+yarn add convex convex-svelte
+```
+
+</TabItem>
+<TabItem value="bun" label="bun">
+
+```sh
+bun add convex convex-svelte
+```
+
+</TabItem>
+</Tabs>
+
+Svelte projects keep their code in `src/`, so put the Convex functions there
+too. Create a `convex.json` in your project root:
+
+```json title="convex.json"
+{
+  "functions": "src/convex/"
+}
+```
+
+Set up a Convex dev deployment:
+
+```sh
+npx convex dev
+```
+
+It prompts you to log in and create a project, saves your deployment URL, and
+creates the `src/convex/` folder for your Convex functions.
+
+## Setup
+
+On SvelteKit 3, declare `PUBLIC_CONVEX_URL` in `src/env.ts`. SvelteKit 3 only
+exposes declared variables, through `$app/env/public`:
+
+```ts title="src/env.ts"
+import { defineEnvVars } from "@sveltejs/kit/env";
+
+export const variables = defineEnvVars({
+  PUBLIC_CONVEX_URL: { public: true, static: true },
+});
+```
+
+On SvelteKit 2, skip `src/env.ts` and import the variable from
+`$env/static/public` instead. The examples in these docs use SvelteKit 3.
+
+Call `setupConvex()` once in a root layout component, such as `+layout.svelte`.
+It creates a [`ConvexClient`](/api/classes/browser.ConvexClient) and stores it
+in Svelte context, so child components can use it. The client belongs to the
+app: it stays open while the app runs (remounts and HMR reuse the same
+connection) and connects to a single deployment URL. To close it explicitly, for
+example in tests, call `closeConvex()`.
+
+```svelte title="src/routes/+layout.svelte"
+<script lang="ts">
+  import { setupConvex } from "convex-svelte";
+  import { PUBLIC_CONVEX_URL } from "$app/env/public"; // SvelteKit 2: "$env/static/public"
+
+  const client = setupConvex(PUBLIC_CONVEX_URL);
+</script>
+```
+
+`setupConvex()` returns the `ConvexClient`, which you can use in the layout for
+mutations or actions, for example in an auth nav bar. In child components and
+`.ts` files, get it with `getConvexClient()`, see
+[Client access](/client/svelte/reactivity.mdx#client-access).
+
+To configure the [`ConvexClient`](/api/classes/browser.ConvexClient), pass
+`ConvexClientOptions` as the second argument. With the
+[SvelteKit server rendering setup](/client/svelte/sveltekit-server-rendering.mdx#universal-hooks),
+`initConvex()` creates the client instead, so pass the options there:
+`setupConvex()` then ignores its own.
+
+<Admonition type="info" title="Without SvelteKit">
+
+With plain Vite and Svelte, set `VITE_CONVEX_URL` in your `.env` file and pass
+`import.meta.env.VITE_CONVEX_URL` to `setupConvex()`.
+
+</Admonition>
+
+## Fetching data
+
+Use `useQuery()` to subscribe to a Convex query. When the data changes on the
+server, the component updates.
+
+```svelte title="src/routes/+page.svelte"
+<script lang="ts">
+  import { useQuery } from "convex-svelte";
+  import { api } from "../convex/_generated/api.js";
+
+  const messages = useQuery(api.messages.list, () => ({ searchWords: [] }));
+</script>
+
+{#if messages.isLoading}
+  Loading...
+{:else if messages.error != null}
+  failed to load: {messages.error.toString()}
+{:else}
+  <ul>
+    {#each messages.data as message}
+      <li>
+        <span>{message.author}</span>
+        <span>{message.body}</span>
+      </li>
+    {/each}
+  </ul>
+{/if}
+```
+
+[Queries, Mutations & Actions](/client/svelte/reactivity.mdx) covers the rest of
+the reactive API: query options, skipping, mutations, actions, optimistic
+updates, pagination, and the client outside of components.
+
+## Next steps
+
+- [Queries, Mutations & Actions](/client/svelte/reactivity.mdx): the reactive
+  API
+- [Authentication](/client/svelte/authentication.mdx): connect an auth provider
+- [SvelteKit Server Rendering](/client/svelte/sveltekit-server-rendering.mdx):
+  server rendering with `convexLoad`
+- [Why server-side rendering with Convex?](/client/svelte/why-server-rendering.mdx):
+  where the time goes on the first page load
+- [Troubleshooting](/client/svelte/troubleshooting.mdx): common errors

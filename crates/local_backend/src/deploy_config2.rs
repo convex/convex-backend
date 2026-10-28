@@ -4,11 +4,17 @@ use std::{
 };
 
 use application::deploy_config::{
+    ComponentSchemaPrediction,
     EvaluatePushResponse,
+    EvaluateSchemaPredictionResponse,
     FinishPushDiff,
+    IndexChangePrediction,
+    IndexPrediction,
     SchemaStatusJson,
+    StagedValidatorState,
     StartPushRequest,
     StartPushResponse,
+    TablePrediction,
 };
 use axum::{
     debug_handler,
@@ -21,25 +27,20 @@ use common::{
         SerializedAuthInfo,
     },
     bootstrap_model::components::definition::SerializedComponentDefinitionMetadata,
+    execution_context::RequestMetadata,
     http::{
         extract::{
             Json,
             MtState,
         },
+        ExtractRequestMetadata,
         HttpResponseError,
     },
+    schemas::TableValidationOutcome,
 };
 use errors::{
     ErrorMetadata,
     ErrorMetadataAnyhowExt,
-};
-use fastrace::{
-    collector::EventRecord,
-    prelude::{
-        SpanId,
-        SpanRecord,
-        TraceId,
-    },
 };
 use model::{
     auth::types::AuthDiff,
@@ -52,18 +53,34 @@ use model::{
         type_checking::SerializedCheckedComponent,
         types::SerializedEvaluatedComponentDefinition,
     },
-    deployment_audit_log::types::PushMessage,
+    deployment_audit_log::{
+        developer_index_config::{
+            SerializedDeveloperIndexConfig,
+            SerializedNamedDeveloperIndexConfig,
+        },
+        types::PushMessage,
+    },
     external_packages::types::ExternalDepsPackageId,
     modules::module_versions::SerializedAnalyzedModule,
     source_packages::types::SourcePackage,
 };
+use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
+    Deserializer,
     Serialize,
 };
 use serde_json::Value as JsonValue;
+use serde_with::{
+    base64::{
+        Base64,
+        UrlSafe,
+    },
+    formats::Unpadded,
+    serde_as,
+    DeserializeAs,
+};
 use value::{
-    base64,
     ConvexObject,
     DeveloperDocumentId,
 };
@@ -189,6 +206,122 @@ pub struct SerializedEvaluatePushResponse {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SerializedEvaluateSchemaResponse {
+    /// Keyed by component path; "" is the root component.
+    component_schema_evaluations: BTreeMap<String, SerializedComponentSchemaPrediction>,
+    new_component_definitions: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializedComponentSchemaPrediction {
+    definition_path: String,
+    schema_validation: bool,
+    tables: Vec<SerializedTablePrediction>,
+    indexes: Vec<SerializedIndexPrediction>,
+    discarded_staged_validators: Vec<SerializedDiscardedStagedValidator>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializedDiscardedStagedValidator {
+    table_name: String,
+    state: StagedValidatorState,
+    replaced: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializedTablePrediction {
+    name: String,
+    outcome: TableValidationOutcome,
+    num_docs: u64,
+    size_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    staged: Option<StagedValidatorState>,
+    can_skip_after_staged_validation: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializedIndexPrediction {
+    #[serde(flatten)]
+    index: SerializedNamedDeveloperIndexConfig,
+    change: IndexChangePrediction,
+    needs_backfill: bool,
+    num_docs: u64,
+}
+
+impl TryFrom<EvaluateSchemaPredictionResponse> for SerializedEvaluateSchemaResponse {
+    type Error = anyhow::Error;
+
+    fn try_from(value: EvaluateSchemaPredictionResponse) -> Result<Self, Self::Error> {
+        Ok(Self {
+            component_schema_evaluations: value
+                .component_schema_evaluations
+                .into_iter()
+                .map(|(path, prediction)| Ok((String::from(path), prediction.try_into()?)))
+                .collect::<anyhow::Result<_>>()?,
+            new_component_definitions: value
+                .new_component_definitions
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        })
+    }
+}
+
+impl TryFrom<ComponentSchemaPrediction> for SerializedComponentSchemaPrediction {
+    type Error = anyhow::Error;
+
+    fn try_from(value: ComponentSchemaPrediction) -> Result<Self, Self::Error> {
+        Ok(Self {
+            definition_path: String::from(value.definition_path),
+            schema_validation: value.schema_validation,
+            tables: value.tables.into_iter().map(Into::into).collect(),
+            indexes: value.indexes.into_iter().map(Into::into).collect(),
+            discarded_staged_validators: value
+                .discarded_staged_validators
+                .into_iter()
+                .map(|discarded| SerializedDiscardedStagedValidator {
+                    table_name: discarded.table_name.to_string(),
+                    state: discarded.state,
+                    replaced: discarded.replaced,
+                })
+                .collect(),
+        })
+    }
+}
+
+impl From<TablePrediction> for SerializedTablePrediction {
+    fn from(value: TablePrediction) -> Self {
+        Self {
+            name: String::from(value.name),
+            outcome: value.outcome,
+            num_docs: value.num_docs,
+            size_bytes: value.size_bytes,
+            staged: value.staged,
+            can_skip_after_staged_validation: value.can_skip_after_staged_validation,
+        }
+    }
+}
+
+impl From<IndexPrediction> for SerializedIndexPrediction {
+    fn from(value: IndexPrediction) -> Self {
+        Self {
+            index: SerializedNamedDeveloperIndexConfig {
+                name: value.name.to_string(),
+                index_config: SerializedDeveloperIndexConfig::from(value.config),
+            },
+            change: value.change,
+            needs_backfill: value.needs_backfill,
+            num_docs: value.num_docs,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnalyzedComponent {
     definition: SerializedComponentDefinitionMetadata,
     schema: Option<JsonValue>,
@@ -245,6 +378,29 @@ pub async fn evaluate_push(
     Ok(Json(SerializedEvaluatePushResponse::try_from(resp)?))
 }
 
+// Predicts, without side effects, the schema validation and index backfill
+// work that pushing this config would trigger: which tables must be walked
+// (and why the others can skip), with document counts and sizes, and which
+// indexes need backfill. Unlike `evaluate_push`, only the schema bundles are
+// evaluated; modules are neither analyzed nor uploaded.
+pub async fn evaluate_schema(
+    MtState(st): MtState<LocalAppState>,
+    Json(req): Json<StartPushRequest>,
+) -> Result<impl IntoResponse, HttpResponseError> {
+    let identity = must_be_admin_from_key(
+        st.application.app_auth(),
+        st.instance_name.clone(),
+        req.admin_key.clone(),
+    )
+    .await?;
+    identity.require_operation(keybroker::DeploymentOp::Deploy)?;
+    let config = req.into_project_config().map_err(|e| {
+        anyhow::Error::new(ErrorMetadata::bad_request("InvalidConfig", e.to_string()))
+    })?;
+    let resp = st.application.evaluate_schema_prediction(&config).await?;
+    Ok(Json(SerializedEvaluateSchemaResponse::try_from(resp)?))
+}
+
 const DEFAULT_SCHEMA_TIMEOUT_MS: u32 = 10_000;
 
 #[derive(Deserialize)]
@@ -290,6 +446,7 @@ pub struct FinishPushRequest {
 /// Internal version that returns the commit timestamp for use by conductor
 pub async fn finish_push_internal(
     st: &LocalAppState,
+    request_metadata: RequestMetadata,
     req: FinishPushRequest,
 ) -> anyhow::Result<(SerializedFinishPushDiff, Option<common::types::Timestamp>)> {
     let identity = must_be_admin_from_key(
@@ -313,7 +470,7 @@ pub async fn finish_push_internal(
 
     let (resp, ts) = st
         .application
-        .finish_push(identity, start_push, message)
+        .finish_push(identity, request_metadata, start_push, message)
         .await
         .map_err(|e| e.wrap_error_message(|msg| format!("Hit an error while pushing:\n{msg}")))?;
     Ok((SerializedFinishPushDiff::try_from(resp)?, Some(ts)))
@@ -321,9 +478,10 @@ pub async fn finish_push_internal(
 
 pub async fn finish_push(
     MtState(st): MtState<LocalAppState>,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(req): Json<FinishPushRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let (diff, _ts) = finish_push_internal(&st, req).await?;
+    let (diff, _ts) = finish_push_internal(&st, request_metadata, req).await?;
     Ok(Json(diff))
 }
 
@@ -337,7 +495,7 @@ pub struct ReportPushCompletedRequest {
 pub async fn report_push_completed(
     st: LocalAppState,
     req: ReportPushCompletedRequest,
-) -> anyhow::Result<Vec<SpanRecord>> {
+) -> anyhow::Result<Vec<SerializedCompletedSpan>> {
     let identity = must_be_admin_from_key(
         st.application.app_auth(),
         st.instance_name.clone(),
@@ -345,12 +503,7 @@ pub async fn report_push_completed(
     )
     .await?;
     identity.require_operation(keybroker::DeploymentOp::Deploy)?;
-    let spans = req
-        .spans
-        .into_iter()
-        .map(|s| s.try_into())
-        .collect::<anyhow::Result<Vec<SpanRecord>>>()?;
-    Ok(spans)
+    Ok(req.spans)
 }
 
 #[debug_handler]
@@ -391,87 +544,45 @@ impl TryFrom<FinishPushDiff> for SerializedFinishPushDiff {
     }
 }
 
+#[serde_as]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SerializedCompletedSpan {
-    trace_id: String,
-    parent_id: String,
-    span_id: String,
-    begin_time_unix_ns: String,
-    duration_ns: String,
-    name: String,
-    properties: BTreeMap<String, String>,
-    events: Vec<SerializedEventRecord>,
+pub struct SerializedCompletedSpan {
+    #[serde_as(as = "LittleEndian<Base64<UrlSafe, Unpadded>>")]
+    pub trace_id: u128,
+    #[serde_as(as = "LittleEndian<Base64<UrlSafe, Unpadded>>")]
+    pub parent_id: u64,
+    #[serde_as(as = "LittleEndian<Base64<UrlSafe, Unpadded>>")]
+    pub span_id: u64,
+    #[serde_as(as = "LittleEndian<Base64<UrlSafe, Unpadded>>")]
+    pub begin_time_unix_ns: u64,
+    #[serde_as(as = "LittleEndian<Base64<UrlSafe, Unpadded>>")]
+    pub duration_ns: u64,
+    pub name: String,
+    pub properties: BTreeMap<String, String>,
+    pub events: Vec<SerializedEventRecord>,
 }
 
-impl TryFrom<SerializedCompletedSpan> for SpanRecord {
-    type Error = anyhow::Error;
+#[serde_as]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializedEventRecord {
+    pub name: String,
+    #[serde_as(as = "LittleEndian<Base64<UrlSafe, Unpadded>>")]
+    pub timestamp_unix_ns: u64,
+    pub properties: BTreeMap<String, String>,
+}
 
-    fn try_from(value: SerializedCompletedSpan) -> Result<Self, Self::Error> {
-        let trace_id_buf = base64::decode_urlsafe(&value.trace_id)?;
-        let trace_id = u128::from_le_bytes(trace_id_buf[..].try_into()?);
+struct LittleEndian<A>(std::marker::PhantomData<A>);
 
-        let parent_id_buf = base64::decode_urlsafe(&value.parent_id)?;
-        let parent_id = u64::from_le_bytes(parent_id_buf[..].try_into()?);
-
-        let span_id_buf = base64::decode_urlsafe(&value.span_id)?;
-        let span_id = u64::from_le_bytes(span_id_buf[..].try_into()?);
-
-        let begin_time_unix_ns_buf = base64::decode_urlsafe(&value.begin_time_unix_ns)?;
-        let begin_time_unix_ns = u64::from_le_bytes(begin_time_unix_ns_buf[..].try_into()?);
-
-        let duration_ns_buf = base64::decode_urlsafe(&value.duration_ns)?;
-        let duration_ns = u64::from_le_bytes(duration_ns_buf[..].try_into()?);
-
-        let properties = value
-            .properties
-            .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
-            .collect::<Vec<_>>();
-
-        let events = value
-            .events
-            .into_iter()
-            .map(|e| e.try_into())
-            .collect::<anyhow::Result<_>>()?;
-
-        Ok(Self {
-            trace_id: TraceId(trace_id),
-            parent_id: SpanId(parent_id),
-            span_id: SpanId(span_id),
-            begin_time_unix_ns,
-            duration_ns,
-            name: value.name.into(),
-            properties,
-            events,
-            links: vec![],
-        })
+impl<'de, A: DeserializeAs<'de, [u8; 16]>> DeserializeAs<'de, u128> for LittleEndian<A> {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<u128, D::Error> {
+        A::deserialize_as(deserializer).map(u128::from_le_bytes)
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SerializedEventRecord {
-    name: String,
-    timestamp_unix_ns: String,
-    properties: BTreeMap<String, String>,
-}
-
-impl TryFrom<SerializedEventRecord> for EventRecord {
-    type Error = anyhow::Error;
-
-    fn try_from(value: SerializedEventRecord) -> Result<Self, Self::Error> {
-        let timestamp_unix_ns_buf = base64::decode_urlsafe(&value.timestamp_unix_ns)?;
-        let timestamp_unix_ns = u64::from_le_bytes(timestamp_unix_ns_buf[..].try_into()?);
-        let properties = value
-            .properties
-            .into_iter()
-            .map(|(k, v)| (k.into(), v.into()))
-            .collect::<Vec<_>>();
-        Ok(Self {
-            name: value.name.into(),
-            timestamp_unix_ns,
-            properties,
-        })
+impl<'de, A: DeserializeAs<'de, [u8; 8]>> DeserializeAs<'de, u64> for LittleEndian<A> {
+    fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        A::deserialize_as(deserializer).map(u64::from_le_bytes)
     }
 }

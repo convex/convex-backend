@@ -1,6 +1,4 @@
 use std::{
-    cmp,
-    collections::BTreeMap,
     iter,
     mem,
     ops::{
@@ -10,15 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use bitvec::{
-    order::Lsb0,
-    vec::BitVec,
-};
 use sucds::{
-    int_vectors::{
-        Access,
-        DacsOpt,
-    },
     mii_sequences::{
         EliasFano,
         EliasFanoBuilder,
@@ -27,7 +17,6 @@ use sucds::{
 };
 use tantivy::{
     fieldnorm::FieldNormReader,
-    query::Bm25Weight,
     Score,
 };
 use xorf::{
@@ -39,56 +28,34 @@ use super::{
     bitset64::Bitset64,
     PreparedMemoryPostingListQuery,
 };
-use crate::{
-    constants::MAX_POSITIONS_PER_MATCHED_TERM,
-    memory_index::term_table::TermId,
-    query::TermListBitsetQuery,
-    FieldPosition,
-};
+use crate::memory_index::term_table::TermId;
 
 /// Memory-efficient structure for storing the terms in a document, including
 /// terms within both search and filter fields. This structure is conceptually a
-/// `BTreeMap<TermId, Vec<Position>>`.
+/// `BTreeMap<TermId, Frequency>`.
 ///
-/// Provides efficient methods for accessing terms, their frequencies, and the
-/// positions at which they occur at within a field. This is useful for
-/// calculating BM25 statistics and other ranking statistics for search.
+/// Provides efficient methods for accessing terms and their frequencies within
+/// a field. This is useful for calculating BM25 statistics and other ranking
+/// statistics for search.
 ///
 /// # Construction
 /// In search, a `Document` is conceptually a `BTreeMap<FieldId, Vec<TermId>>`
 /// where each `FieldId` corresponds to either a filter field or search field.
-/// We can represent each `Vec<Term>` as a map of positional information, so
-/// this becomes a `BTreeMap<FieldId, BTreeMap<TermId, Vec<Positions>>`.
 /// Since `TermId`s are unique across `FieldId`s (due to uniqueness of how
 /// filter field terms are represented), we can flatten this into one
-/// `BTreeMap<TermId, Vec<Positions>>`.
+/// `BTreeMap<TermId, Frequency>`.
 ///
 /// To represent this `BTreeMap`, we start by splitting it into two parallel
 /// lists:
 ///
 /// terms: btree_map.keys().collect();   // sorted by term_id!
-/// freqs: btree_map.values().count();   // we store this as a sorted list of
+/// freqs: btree_map.values().collect(); // we store this as a sorted list of
 /// cumulative frequencies
 ///
 /// Then, we can compress these two lists, assuming that (1) the difference
 /// between adjacent term IDs in `terms` is small and (2) the frequencies are
 /// generally small themselves. Both of these arrays are monotonically
 /// increasing integer arrays, so we use `sucds`'s Elias Fano array datatype.
-///
-/// # Representing Positions
-/// To represent positions, we also store and compress a positions array which
-/// is just the positions of each term in the terms array concatenated together:
-///
-/// positions: btree_map.values().flatten().collect()
-///
-/// To fetch the positions for a given term, we need two pieces of information:
-/// (1) the length of the term's positions subarray
-/// (2) the starting offset of the term's positions subarray
-///
-/// (1) is just the frequency which we already can calculate. (2) is the
-/// cumulative frequency of that term, which is how we store frequencies in the
-/// first place. This info lets us efficiently skip through `positions` to read
-/// the term's subarray.
 ///
 /// # Queries
 /// The simplest queries `TermList::iter_*` iterate over the terms or
@@ -128,33 +95,29 @@ struct NonemptyTermList {
 
     terms: EliasFano,
     cumulative_freqs: EliasFano,
-    positions: DacsOpt,
 }
 
 impl TermList {
-    pub fn new(mut terms_and_positions: Vec<(TermId, FieldPosition)>) -> anyhow::Result<Self> {
-        // Step 1: Accumulate parallel lists of the unique sorted term IDs, their
-        // frequencies, and their positions.
-        terms_and_positions.sort_unstable();
+    pub fn new(mut term_ids: Vec<TermId>) -> anyhow::Result<Self> {
+        // Step 1: Accumulate parallel lists of the unique sorted term IDs and
+        // their frequencies.
+        term_ids.sort_unstable();
 
-        let Some((greatest_term_id, _)) = terms_and_positions.last() else {
+        let Some(greatest_term_id) = term_ids.last() else {
             return Ok(TermList { inner: None });
         };
         let mut terms_builder =
-            EliasFanoBuilder::new(*greatest_term_id as usize + 1, terms_and_positions.len())?;
+            EliasFanoBuilder::new(*greatest_term_id as usize + 1, term_ids.len())?;
 
         let mut cumulative_freqs_builder =
-            EliasFanoBuilder::new(terms_and_positions.len() + 1, terms_and_positions.len())?;
+            EliasFanoBuilder::new(term_ids.len() + 1, term_ids.len())?;
         let mut freqs_sum = 0;
 
-        let mut term_u64s = Vec::with_capacity(terms_and_positions.len());
+        let mut term_u64s = Vec::with_capacity(term_ids.len());
 
-        let mut position_u32s = Vec::with_capacity(terms_and_positions.len());
         let mut prev_term = None;
 
-        for (term_id, position) in terms_and_positions {
-            position_u32s.push(u32::from(position));
-
+        for term_id in term_ids {
             if let Some((prev_term, ref mut prev_freq)) = prev_term
                 && prev_term == term_id
             {
@@ -182,15 +145,10 @@ impl TermList {
         let terms = terms_builder.build().enable_rank();
         let cumulative_freqs = cumulative_freqs_builder.build();
 
-        // Taken from their docs as a reasonable, bounded compression level.
-        let max_levels = Some(2);
-        let positions = DacsOpt::from_slice(&position_u32s, max_levels)?;
-
         let inner = NonemptyTermList {
             term_filter,
             terms,
             cumulative_freqs,
-            positions,
         };
         Ok(Self {
             inner: Some(Arc::new(inner)),
@@ -231,35 +189,11 @@ impl TermList {
         self.iter_terms().zip(self.iter_freqs())
     }
 
-    pub fn matches(&self, query: &TermListBitsetQuery) -> bool {
+    pub fn matches(&self, query: &PreparedMemoryPostingListQuery) -> bool {
         let Some(ref inner) = self.inner else {
             return false;
         };
-
-        let sorted_terms = query.sorted_terms.as_slice();
-        let intersection_ids = &query.intersection_terms;
-        let union_ids = &query.union_terms;
-
-        if !inner.term_filter_matches(sorted_terms, intersection_ids, union_ids) {
-            return false;
-        }
-
-        // Build up a bitset of which terms match.
-        let mut matches = BitVec::<usize, Lsb0>::repeat(false, sorted_terms.len());
-        for (i, _) in inner.term_matches(sorted_terms) {
-            matches.set(i, true);
-        }
-
-        // Check that all of the intersection bits and any of the union bits are set.
-        intersection_ids.iter_ones().all(|i| matches[i])
-            && union_ids.iter_ones().any(|i| matches[i])
-    }
-
-    pub fn matches2(&self, query: &PreparedMemoryPostingListQuery) -> bool {
-        let Some(ref inner) = self.inner else {
-            return false;
-        };
-        if !inner.term_filter_matches2(query) {
+        if !inner.term_filter_matches(query) {
             return false;
         }
         // Build up a bitset of which terms match.
@@ -275,13 +209,13 @@ impl TermList {
         all_intersection && any_union
     }
 
-    pub fn matches2_with_score(
+    pub fn matches_with_score(
         &self,
         query: &PreparedMemoryPostingListQuery,
         num_search_tokens: u32,
     ) -> Option<Score> {
         let inner = self.inner.as_ref()?;
-        if !inner.term_filter_matches2(query) {
+        if !inner.term_filter_matches(query) {
             return None;
         }
 
@@ -309,77 +243,6 @@ impl TermList {
         (all_intersection && any_union).then_some(score)
     }
 
-    // Check if a query matches the given document, and compute its BM25 score if
-    // so.
-    //
-    // Arguments:
-    // * sorted_terms: Sorted list of all term IDs in the query.
-    // * term_weights: `Bm25Weight`s for each union query term.
-    //
-    // Bitsets of indexes into `sorted_terms`:
-    // * is_intersection: Which terms are part of the intersection query?
-    // * is_union: Which terms are part of the union query?
-    //
-    pub fn matches_with_score_and_positions(
-        &self,
-        query: &TermListBitsetQuery,
-        term_weights: &[Bm25Weight],
-        fieldnorm: u32,
-    ) -> Option<(Score, BTreeMap<TermId, Vec<u32>>)> {
-        let inner = self.inner.as_ref()?;
-
-        let sorted_terms = query.sorted_terms.as_slice();
-        let intersection_ids = &query.intersection_terms;
-        let union_ids = &query.union_terms;
-
-        if !inner.term_filter_matches(sorted_terms, intersection_ids, union_ids) {
-            return None;
-        }
-
-        let fieldnorm_id = FieldNormReader::fieldnorm_to_id(fieldnorm);
-        let mut matches = BitVec::<usize, Lsb0>::repeat(false, sorted_terms.len());
-        let mut score = 0.;
-        let mut union_idx = 0;
-        let mut positions = BTreeMap::new();
-
-        for (i, pos) in inner.term_matches(sorted_terms) {
-            matches.set(i, true);
-            if !union_ids[i] {
-                continue;
-            }
-            let term_freq = inner.cumulative_freqs.delta(pos).unwrap();
-            let positions_end = inner.cumulative_freqs.select(pos).unwrap();
-            let positions_start = positions_end - term_freq;
-
-            // Bound number of positions we consider.
-            let num_positions = cmp::min(term_freq, MAX_POSITIONS_PER_MATCHED_TERM);
-            let mut term_positions = Vec::with_capacity(num_positions);
-            for i in 0..num_positions {
-                term_positions.push(inner.positions.access(positions_start + i).unwrap() as u32);
-            }
-            positions.insert(sorted_terms[i], term_positions);
-
-            // Compute which index into `term_weights` we're at by counting the number of
-            // bits in `is_union` set before our current position.
-            let union_rank = union_ids.as_bitslice()[..i].count_ones();
-            let candidate_score = term_weights[union_rank].score(fieldnorm_id, term_freq as u32);
-
-            // Apply the scoring.
-            let boost = query.union_id_boosts[union_idx];
-            union_idx += 1;
-            score += candidate_score * boost;
-        }
-
-        // but they're still necessary, especially for very large documents with
-        // high false positive rate.
-        if intersection_ids.iter_ones().any(|i| !matches[i])
-            || !union_ids.iter_ones().any(|i| matches[i])
-        {
-            return None;
-        }
-        Some((score, positions))
-    }
-
     pub fn heap_allocations(&self) -> TermListBytes {
         let Some(ref inner) = self.inner else {
             return TermListBytes::ZERO;
@@ -388,7 +251,6 @@ impl TermList {
             fingerprints_bytes: inner.term_filter.fingerprints.len() * mem::size_of::<u16>(),
             terms_bytes: inner.terms.size_in_bytes(),
             freqs_bytes: inner.cumulative_freqs.size_in_bytes(),
-            positions_bytes: inner.positions.size_in_bytes(),
         }
     }
 }
@@ -396,26 +258,7 @@ impl TermList {
 impl NonemptyTermList {
     // Check if the query approximately matches the document set with the
     // possibility of false positives.
-    fn term_filter_matches(
-        &self,
-        sorted_terms: &[TermId],
-        is_intersection: &BitVec,
-        is_union: &BitVec,
-    ) -> bool {
-        let any_intersection_missing = is_intersection
-            .iter_ones()
-            .map(|i| sorted_terms[i] as u64)
-            .any(|term_id| !self.term_filter.contains(&term_id));
-        if any_intersection_missing {
-            return false;
-        }
-        is_union
-            .iter_ones()
-            .map(|i| sorted_terms[i] as u64)
-            .any(|term_id| self.term_filter.contains(&term_id))
-    }
-
-    fn term_filter_matches2(&self, query: &PreparedMemoryPostingListQuery) -> bool {
+    fn term_filter_matches(&self, query: &PreparedMemoryPostingListQuery) -> bool {
         let any_intersection_missing = query
             .intersection_terms()
             .map(|t| t as u64)
@@ -466,7 +309,6 @@ pub struct TermListBytes {
     pub fingerprints_bytes: usize,
     pub terms_bytes: usize,
     pub freqs_bytes: usize,
-    pub positions_bytes: usize,
 }
 
 impl AddAssign for TermListBytes {
@@ -474,7 +316,6 @@ impl AddAssign for TermListBytes {
         self.fingerprints_bytes += rhs.fingerprints_bytes;
         self.terms_bytes += rhs.terms_bytes;
         self.freqs_bytes += rhs.freqs_bytes;
-        self.positions_bytes += rhs.freqs_bytes;
     }
 }
 
@@ -483,7 +324,6 @@ impl SubAssign for TermListBytes {
         self.fingerprints_bytes -= rhs.fingerprints_bytes;
         self.terms_bytes -= rhs.terms_bytes;
         self.freqs_bytes -= rhs.freqs_bytes;
-        self.positions_bytes -= rhs.freqs_bytes;
     }
 }
 
@@ -492,10 +332,9 @@ impl TermListBytes {
         fingerprints_bytes: 0,
         terms_bytes: 0,
         freqs_bytes: 0,
-        positions_bytes: 0,
     };
 
     pub fn bytes(&self) -> usize {
-        self.fingerprints_bytes + self.terms_bytes + self.freqs_bytes + self.positions_bytes
+        self.fingerprints_bytes + self.terms_bytes + self.freqs_bytes
     }
 }

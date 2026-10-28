@@ -10,6 +10,7 @@ use common::http::{
         Json,
         MtState,
     },
+    ExtractRequestMetadata,
     HttpResponseError,
     RequestDestination,
 };
@@ -21,6 +22,7 @@ use model::{
     },
     deployment_audit_log::types::DeploymentAuditLogEvent,
 };
+use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
     Serialize,
@@ -65,6 +67,7 @@ pub struct UpdateCanonicalUrlRequest {
 pub async fn update_canonical_url(
     State(st): State<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(request): Json<UpdateCanonicalUrlRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
     identity.require_operation(keybroker::DeploymentOp::WriteEnvironmentVariables)?;
@@ -94,7 +97,12 @@ pub async fn update_canonical_url(
     }
 
     st.application
-        .commit_with_audit_log_events(tx, audit_log_events, "update_canonical_url")
+        .commit_with_audit_log_events(
+            tx,
+            audit_log_events,
+            request_metadata,
+            "update_canonical_url",
+        )
         .await?;
 
     Ok(StatusCode::OK)

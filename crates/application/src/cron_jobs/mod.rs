@@ -1,5 +1,8 @@
 use std::{
-    collections::HashSet,
+    collections::{
+        BTreeMap,
+        HashSet,
+    },
     sync::Arc,
     time::Duration,
 };
@@ -42,6 +45,7 @@ use database::{
     BootstrapComponentsModel,
     Database,
     Transaction,
+    WriteSource,
 };
 use errors::{
     ErrorMetadata,
@@ -75,15 +79,19 @@ use model::{
 use sentry::SentryFutureExt;
 use sync_types::Timestamp;
 use tokio::sync::mpsc;
+use udf::validation::ValidatedUdfOutcome;
 use usage_tracking::FunctionUsageTracker;
 use value::{
     JsonPackedValue,
+    PendingValue,
     ResolvedDocumentId,
-    TableNamespace,
 };
 
 use crate::{
-    application_function_runner::ApplicationFunctionRunner,
+    application_function_runner::{
+        ApplicationFunctionRunner,
+        PermitTimeout,
+    },
     function_log::FunctionExecutionLog,
 };
 
@@ -92,6 +100,9 @@ mod metrics;
 const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(15);
 pub(crate) const CRON_COMITTING: &str = "cron_committing";
+pub(crate) const CRON_JOB_EXECUTING: &str = "cron_job_executing";
+pub(crate) const CRON_JOB_EXECUTED: &str = "cron_job_executed";
+pub(crate) const CRON_JOB_SUCCEEDED: &str = "cron_job_succeeded";
 
 // Truncate result and log lines for cron job logs since they are only
 // used for the dashboard
@@ -147,6 +158,7 @@ impl<RT: Runtime> CronJobExecutor<RT> {
             match executor.run_once().await {
                 Ok(()) => backoff.reset(),
                 Err(mut e) => {
+                    metrics::log_cron_job_executor_error();
                     // Only report OCCs that happen repeatedly
                     if !e.is_occ() || (backoff.failures() as usize) > *UDF_EXECUTOR_OCC_MAX_RETRIES
                     {
@@ -161,6 +173,7 @@ impl<RT: Runtime> CronJobExecutor<RT> {
     }
 
     async fn run_once(&mut self) -> anyhow::Result<()> {
+        metrics::log_cron_job_executor_poll();
         let mut tx = self.context.database.begin(Identity::Unknown(None)).await?;
         let backend_state = BackendStateModel::new(&mut tx).get_backend_state().await?;
         let is_backend_stopped = backend_state.is_stopped();
@@ -173,19 +186,24 @@ impl<RT: Runtime> CronJobExecutor<RT> {
             self.query_and_start_jobs(&mut tx).await?
         };
 
+        metrics::log_running_jobs(self.running_job_ids.len());
+
         let next_job_future = if let Some(next_job_ts) = self.next_job_ready_time {
             let now = self.context.rt.generate_timestamp()?;
             Either::Left(if next_job_ts < now {
                 metrics::log_cron_job_execution_lag(now - next_job_ts);
+                metrics::log_cron_job_backlog(now - next_job_ts);
                 // If we're behind, re-run this loop every 5 seconds to log the gauge above and
                 // track how far we're behind in our metrics.
                 self.context.rt.wait(Duration::from_secs(5))
             } else {
                 metrics::log_cron_job_execution_lag(Duration::from_secs(0));
+                metrics::log_cron_job_backlog(Duration::ZERO);
                 self.context.rt.wait(next_job_ts - now)
             })
         } else {
             metrics::log_cron_job_execution_lag(Duration::from_secs(0));
+            metrics::log_cron_job_backlog(Duration::ZERO);
             Either::Right(std::future::pending())
         };
 
@@ -197,6 +215,7 @@ impl<RT: Runtime> CronJobExecutor<RT> {
         select_biased! {
             job_id = self.job_finished_rx.recv().fuse() => {
                 if let Some(job_id) = job_id {
+                    self.context.rt.pause_client().wait(CRON_JOB_EXECUTED).await;
                     self.running_job_ids.remove(&job_id);
                 } else {
                     anyhow::bail!("Job results channel closed, this is unexpected!");
@@ -278,6 +297,7 @@ impl<RT: Runtime> CronJobContext<RT> {
                 .await;
             match result {
                 Ok(result) => {
+                    self.rt.pause_client().wait(CRON_JOB_SUCCEEDED).await;
                     metrics::log_cron_job_success(function_backoff.failures());
                     return result;
                 },
@@ -307,14 +327,12 @@ impl<RT: Runtime> CronJobContext<RT> {
             .new_transaction_for_job_state(&job, usage_tracker.clone())
             .await?
         else {
-            // Continue without running function since the job state has changed
             return Ok(job.id);
         };
         let (_, component_path) = self.get_job_component(&mut tx, job.id).await?;
         tracing::debug!("Executing {:?}!", job.cron_spec.udf_path);
 
-        // Since we don't specify the function type in the cron, we have to use
-        // the analyzed result.
+        // Cron specs omit the function type; use the current module definition.
         let path = CanonicalizedComponentFunctionPath {
             component: component_path,
             udf_path: job.cron_spec.udf_path.clone(),
@@ -336,8 +354,10 @@ impl<RT: Runtime> CronJobContext<RT> {
                 self.handle_mutation(tx, job, usage_tracker, mutation_retry_count)
                     .await?
             },
-            UdfType::Action => self.handle_action(tx, job, usage_tracker).await?,
-            udf_type => {
+            UdfType::Action => {
+                self.handle_action(tx, job, usage_tracker).await?;
+            },
+            UdfType::Query | UdfType::HttpAction => {
                 anyhow::bail!(
                     "Cron trying to execute {} which is a {} function. This should have been \
                      checked during analyze.",
@@ -346,13 +366,24 @@ impl<RT: Runtime> CronJobContext<RT> {
                 );
             },
         };
-
         Ok(job_id)
     }
 
-    fn truncate_result(&self, result: JsonPackedValue) -> anyhow::Result<CronJobResult> {
-        let value = result.unpack()?;
-        let mut value_str = value.to_string();
+    fn truncate_result(
+        &self,
+        result: JsonPackedValue<PendingValue>,
+        udf_path: &CanonicalizedComponentFunctionPath,
+    ) -> anyhow::Result<CronJobResult> {
+        let value = result.unpack().map_err(|e| {
+            e.wrap_error_message(|msg| {
+                format!("Cron job {} result invalid: {msg}", udf_path.debug_str())
+            })
+        })?;
+        let mut value_str = match &value {
+            PendingValue::Concrete(value) => value.to_string(),
+            // TODO: implement Display for PendingValue
+            pending => serde_json::to_string(&pending.to_uncommitted_json_serializable())?,
+        };
         if value_str.len() <= CRON_LOG_MAX_RESULT_LENGTH {
             Ok(CronJobResult::Default(value))
         } else {
@@ -390,11 +421,10 @@ impl<RT: Runtime> CronJobContext<RT> {
         tx: &mut Transaction<RT>,
         job_id: ResolvedDocumentId,
     ) -> anyhow::Result<(ComponentId, ComponentPath)> {
-        let namespace = tx.table_mapping().tablet_namespace(job_id.tablet_id)?;
-        let component = match namespace {
-            TableNamespace::Global => ComponentId::Root,
-            TableNamespace::ByComponent(id) => ComponentId::Child(id),
-        };
+        let component = tx
+            .table_mapping()
+            .tablet_namespace(job_id.tablet_id)?
+            .into();
         let component_path = BootstrapComponentsModel::new(tx).must_component_path(component)?;
         Ok((component, component_path))
     }
@@ -406,6 +436,7 @@ impl<RT: Runtime> CronJobContext<RT> {
         usage_tracker: FunctionUsageTracker,
         mutation_retry_count: usize,
     ) -> anyhow::Result<()> {
+        let permit = self.runner.acquire_mutation_permit().await;
         let start = self.rt.monotonic_now();
         let identity = tx.inert_identity();
         let caller = FunctionCaller::Cron;
@@ -424,19 +455,84 @@ impl<RT: Runtime> CronJobContext<RT> {
         CronModel::new(&mut tx, component)
             .prepare_insert_cron_job_log(&job)
             .await?;
-        let mutation_result = self
-            .runner
-            .run_mutation_no_udf_log(
-                tx,
-                PublicFunctionPath::Component(path.clone()),
-                job.cron_spec.udf_args.clone(),
-                caller.allowed_visibility(),
-                context.clone(),
-                None,
-            )
-            .await;
-        let (mut tx, mut outcome) = match mutation_result {
-            Ok(r) => r,
+        let mutation_result =
+            if let Fault::Error(e) = self.rt.pause_client().wait(CRON_JOB_EXECUTING).await {
+                tracing::info!("Injected error before running mutation");
+                Err(e)
+            } else {
+                self.runner
+                    .run_mutation_no_udf_log(
+                        tx,
+                        permit,
+                        PublicFunctionPath::Component(path.clone()),
+                        job.cron_spec.udf_args.clone(),
+                        caller.allowed_visibility(),
+                        context.clone(),
+                        None,
+                    )
+                    .await
+            };
+        let (stats, execution_time, outcome) = match mutation_result {
+            Ok((mut tx, mut outcome)) => {
+                let stats = tx.take_stats();
+                let execution_time = start.elapsed();
+                if let Ok(ref result) = outcome.result {
+                    let truncated_result = self.truncate_result(result.clone(), &path)?;
+                    let status = CronJobStatus::Success(truncated_result);
+                    CronModel::new(&mut tx, component)
+                        .insert_cron_job_log(
+                            &job,
+                            status,
+                            self.truncate_log_lines(outcome.log_lines.clone()),
+                            execution_time.as_secs_f64(),
+                        )
+                        .await?;
+                    self.complete_job_run(
+                        identity.clone(),
+                        &mut tx,
+                        &job,
+                        UdfType::Mutation,
+                        context.clone(),
+                        Some(mutation_retry_count),
+                    )
+                    .await?;
+                    let commit_result = if let Fault::Error(e) =
+                        self.rt.pause_client().wait(CRON_COMITTING).await
+                    {
+                        tracing::info!("Injected error before committing mutation");
+                        Err(e)
+                    } else {
+                        self.database
+                            .commit_with_write_source(tx, WriteSource::mutation(path.clone()))
+                            .await
+                    };
+                    if let Err(err) = commit_result {
+                        if err.is_deterministic_user_error() {
+                            outcome.result = Err(JsError::from_error(err));
+                        } else if let Some(occ_info) = err.occ_info() {
+                            self.function_log
+                                .log_mutation_occ_error(
+                                    outcome,
+                                    stats,
+                                    execution_time,
+                                    caller,
+                                    usage_tracker,
+                                    context,
+                                    occ_info,
+                                    None,
+                                    mutation_retry_count,
+                                    mutation_retry_count,
+                                    true,
+                                )
+                                .await;
+                            return Err(err);
+                        } else {
+                            return Err(err);
+                        }
+                    }
+                }
+                (stats, execution_time, outcome)
+            },
             Err(e) => {
                 if e.short_msg() == "TooManyWrites" {
                     self.function_log
@@ -453,6 +549,21 @@ impl<RT: Runtime> CronJobContext<RT> {
                             true,
                         )
                         .await?;
+                    return Err(e);
+                } else if e.is_deterministic_user_error() {
+                    // A deterministic user error fails the same way on every attempt. Synthesize a
+                    // failed outcome so the failure path below records the run
+                    // and advances to the next scheduled run instead of
+                    // retrying it like a transient system error.
+                    let outcome = ValidatedUdfOutcome::from_error(
+                        JsError::from_error(e),
+                        path,
+                        job.cron_spec.udf_args.clone(),
+                        identity.clone(),
+                        self.rt.clone(),
+                        None,
+                    )?;
+                    (BTreeMap::new(), start.elapsed(), outcome)
                 } else {
                     self.function_log
                         .log_mutation_system_error(
@@ -467,68 +578,10 @@ impl<RT: Runtime> CronJobContext<RT> {
                             mutation_retry_count,
                         )
                         .await?;
+                    return Err(e);
                 }
-                return Err(e);
             },
         };
-        let stats = tx.take_stats();
-        let execution_time = start.elapsed();
-        let execution_time_f64 = execution_time.as_secs_f64();
-        let truncated_log_lines = self.truncate_log_lines(outcome.log_lines.clone());
-
-        if let Ok(ref result) = outcome.result {
-            let truncated_result = self.truncate_result(result.clone())?;
-            let status = CronJobStatus::Success(truncated_result);
-            CronModel::new(&mut tx, component)
-                .insert_cron_job_log(
-                    &job,
-                    status,
-                    truncated_log_lines.clone(),
-                    execution_time_f64,
-                )
-                .await?;
-            self.complete_job_run(
-                identity.clone(),
-                &mut tx,
-                &job,
-                UdfType::Mutation,
-                context.clone(),
-                Some(mutation_retry_count),
-            )
-            .await?;
-            let commit_result =
-                if let Fault::Error(e) = self.rt.pause_client().wait(CRON_COMITTING).await {
-                    tracing::info!("Injected error before committing mutation");
-                    Err(e)
-                } else {
-                    self.database
-                        .commit_with_write_source(tx, "cron_commit_mutation")
-                        .await
-                };
-            if let Err(err) = commit_result {
-                if err.is_deterministic_user_error() {
-                    outcome.result = Err(JsError::from_error(err));
-                } else if let Some(occ_info) = err.occ_info() {
-                    self.function_log
-                        .log_mutation_occ_error(
-                            outcome,
-                            stats,
-                            execution_time,
-                            caller,
-                            usage_tracker,
-                            context,
-                            occ_info,
-                            None,
-                            mutation_retry_count,
-                            true,
-                        )
-                        .await;
-                    return Err(err);
-                } else {
-                    return Err(err);
-                }
-            }
-        }
         if let Err(ref e) = outcome.result {
             // UDF failed due to developer error. It is not safe to commit the
             // transaction it executed in. We should remove the job in a new
@@ -543,7 +596,12 @@ impl<RT: Runtime> CronJobContext<RT> {
             let mut model = CronModel::new(&mut tx, component);
             let status = CronJobStatus::Err(e.to_string());
             model
-                .insert_cron_job_log(&job, status, truncated_log_lines, execution_time_f64)
+                .insert_cron_job_log(
+                    &job,
+                    status,
+                    self.truncate_log_lines(outcome.log_lines.clone()),
+                    execution_time.as_secs_f64(),
+                )
                 .await?;
             self.complete_job_run(
                 identity,
@@ -582,11 +640,10 @@ impl<RT: Runtime> CronJobContext<RT> {
         job: CronJob,
         usage_tracker: FunctionUsageTracker,
     ) -> anyhow::Result<()> {
-        let namespace = tx.table_mapping().tablet_namespace(job.id.tablet_id)?;
-        let component = match namespace {
-            TableNamespace::Global => ComponentId::Root,
-            TableNamespace::ByComponent(id) => ComponentId::Child(id),
-        };
+        let component = tx
+            .table_mapping()
+            .tablet_namespace(job.id.tablet_id)?
+            .into();
         let identity = tx.identity().clone();
         let (_, component_path) = self.get_job_component(&mut tx, job.id).await?;
         let caller = FunctionCaller::Cron;
@@ -627,6 +684,7 @@ impl<RT: Runtime> CronJobContext<RT> {
                         caller,
                         usage_tracker.clone(),
                         context.clone(),
+                        PermitTimeout::WaitIndefinitely,
                     )
                     .await?;
                 let execution_time_f64 = completion.execution_time.as_secs_f64();
@@ -634,7 +692,8 @@ impl<RT: Runtime> CronJobContext<RT> {
 
                 let status = match completion.outcome.result.clone() {
                     Ok(result) => {
-                        let truncated_result = self.truncate_result(result)?;
+                        let truncated_result =
+                            self.truncate_result(result.into(), &completion.outcome.path)?;
                         CronJobStatus::Success(truncated_result)
                     },
                     Err(e) => CronJobStatus::Err(e.to_string()),
@@ -767,13 +826,10 @@ impl<RT: Runtime> CronJobContext<RT> {
             // Continue without updating since the job state has changed
             return Ok(());
         };
-        let namespace = tx
+        let component = tx
             .table_mapping()
-            .tablet_namespace(expected_state.id.tablet_id)?;
-        let component = match namespace {
-            TableNamespace::Global => ComponentId::Root,
-            TableNamespace::ByComponent(id) => ComponentId::Child(id),
-        };
+            .tablet_namespace(expected_state.id.tablet_id)?
+            .into();
         let mut model = CronModel::new(&mut tx, component);
         model
             .insert_cron_job_log(expected_state, status, log_lines, execution_time)
@@ -804,17 +860,18 @@ impl<RT: Runtime> CronJobContext<RT> {
     ) -> anyhow::Result<()> {
         let now = self.rt.generate_timestamp()?;
         let prev_ts = job.next_ts;
-        let mut next_ts = compute_next_ts(&job.cron_spec, Some(prev_ts), now)?;
+        let mut next_ts = compute_next_ts(&job.cron_spec, Some(prev_ts), now, &mut self.rt.rng())?;
         let mut num_skipped = 0;
         let first_skipped_ts = next_ts;
         let (component, component_path) = self.get_job_component(tx, job.id).await?;
         let mut model = CronModel::new(tx, component);
         while next_ts < now {
             num_skipped += 1;
-            next_ts = compute_next_ts(&job.cron_spec, Some(next_ts), now)?;
+            next_ts = compute_next_ts(&job.cron_spec, Some(next_ts), now, &mut self.rt.rng())?;
         }
         if num_skipped > 0 {
             let job_id = job.id.developer_id;
+            let job_name = &job.name;
             tracing::info!(
                 "Skipping {num_skipped} run(s) of job {job_id} because multiple scheduled runs \
                  are in the past"
@@ -830,8 +887,8 @@ impl<RT: Runtime> CronJobContext<RT> {
                             &anyhow::anyhow!(ErrorMetadata::bad_request(
                                 "SkippingPastScheduledRuns",
                                 format!(
-                                    "Skipping {num_skipped} run(s) of job {job_id} because \
-                                     multiple scheduled runs are in the past"
+                                    "Skipping {num_skipped} run(s) of cron job '{job_name}' \
+                                     because multiple scheduled runs are in the past"
                                 )
                             )),
                             CanonicalizedComponentFunctionPath {
@@ -857,8 +914,8 @@ impl<RT: Runtime> CronJobContext<RT> {
                     let err = anyhow::anyhow!(ErrorMetadata::bad_request(
                         "SkippingPastScheduledRuns",
                         format!(
-                            "Skipping {num_skipped} run(s) of job {job_id} because multiple \
-                             scheduled runs are in the past"
+                            "Skipping {num_skipped} run(s) of cron job '{job_name}' because \
+                             multiple scheduled runs are in the past"
                         )
                     ));
                     self.function_log

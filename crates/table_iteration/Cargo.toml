@@ -1,0 +1,34 @@
+[package]
+name = "table_iteration"
+version = "0.1.0"
+authors = ["Convex, Inc. <no-reply@convex.dev>"]
+edition = "2024"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
+
+[lib]
+doctest = false
+
+[features]
+testing = ["common/testing", "errors/testing", "metrics/testing", "value/testing"]
+
+[dependencies]
+anyhow = { workspace = true }
+common = { workspace = true }
+errors = { workspace = true }
+fastrace = { workspace = true }
+futures = { workspace = true }
+futures-async-stream = { workspace = true }
+metrics = { workspace = true }
+prometheus = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+value = { workspace = true }
+
+[dev-dependencies]
+common = { workspace = true, features = ["testing"] }
+errors = { workspace = true, features = ["testing"] }
+metrics = { workspace = true, features = ["testing"] }
+value = { workspace = true, features = ["testing"] }
+
+[lints]
+workspace = true

@@ -62,24 +62,35 @@ codegen_convex_serialization!(FunctionHandleMetadata, SerializedFunctionHandleMe
 
 pub const FUNCTION_HANDLE_PREFIX: &str = "function://";
 
-#[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub struct FunctionHandle(DeveloperDocumentId);
+#[derive(Debug, Clone)]
+pub struct FunctionHandle {
+    id: DeveloperDocumentId,
+    /// The name of the function, serialized as a fragment:
+    /// `function://<id>#<name>`. Only the id matters when resolving the
+    /// function; the name is purely advisory. Legacy function handles may lack
+    /// the function name.
+    name: Option<CanonicalizedUdfPath>,
+}
 
 impl FunctionHandle {
-    pub fn new(handle_id: DeveloperDocumentId) -> Self {
-        Self(handle_id)
+    pub fn new(id: DeveloperDocumentId, name: Option<CanonicalizedUdfPath>) -> Self {
+        Self { id, name }
     }
 }
 
 impl From<FunctionHandle> for DeveloperDocumentId {
     fn from(handle: FunctionHandle) -> Self {
-        handle.0
+        handle.id
     }
 }
 
 impl From<FunctionHandle> for String {
     fn from(handle: FunctionHandle) -> Self {
-        format!("{}{}", FUNCTION_HANDLE_PREFIX, String::from(handle.0))
+        let id = String::from(handle.id);
+        match handle.name {
+            Some(name) => format!("{FUNCTION_HANDLE_PREFIX}{id}#{}", name.strip()),
+            None => format!("{FUNCTION_HANDLE_PREFIX}{id}"),
+        }
     }
 }
 
@@ -90,6 +101,13 @@ impl FromStr for FunctionHandle {
         let Some(suffix) = s.strip_prefix(FUNCTION_HANDLE_PREFIX) else {
             anyhow::bail!("Invalid function handle {s}");
         };
-        Ok(Self(suffix.parse()?))
+        let (id, name) = match suffix.split_once('#') {
+            Some((id, fragment)) => (id, fragment.parse::<CanonicalizedUdfPath>().ok()),
+            None => (suffix, None),
+        };
+        Ok(Self {
+            id: id.parse()?,
+            name,
+        })
     }
 }

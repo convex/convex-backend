@@ -19,6 +19,7 @@ use common::{
         AllowedVisibility,
         ConvexOrigin,
         FunctionCaller,
+        QueryInvocation,
         RepeatableTimestamp,
     },
     RequestContext,
@@ -105,6 +106,7 @@ pub trait ApplicationApi: Send + Sync {
         caller: FunctionCaller,
         ts: ExecuteQueryTimestamp,
         journal: Option<SerializedQueryJournal>,
+        invocation: Option<QueryInvocation>,
     ) -> anyhow::Result<RedactedQueryReturn>;
 
     /// Execute an admin query for a particular component. This method is used
@@ -120,6 +122,7 @@ pub trait ApplicationApi: Send + Sync {
         caller: FunctionCaller,
         ts: ExecuteQueryTimestamp,
         journal: Option<SerializedQueryJournal>,
+        invocation: Option<QueryInvocation>,
     ) -> anyhow::Result<RedactedQueryReturn>;
 
     /// Execute a public mutation on the root app.
@@ -281,6 +284,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
         caller: FunctionCaller,
         ts: ExecuteQueryTimestamp,
         journal: Option<SerializedQueryJournal>,
+        invocation: Option<QueryInvocation>,
     ) -> anyhow::Result<RedactedQueryReturn> {
         anyhow::ensure!(
             caller.allowed_visibility() == AllowedVisibility::PublicOnly,
@@ -298,6 +302,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             ts,
             journal,
             caller,
+            invocation.unwrap_or(QueryInvocation::Fresh),
         )
         .await
     }
@@ -312,6 +317,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
         caller: FunctionCaller,
         ts: ExecuteQueryTimestamp,
         journal: Option<SerializedQueryJournal>,
+        invocation: Option<QueryInvocation>,
     ) -> anyhow::Result<RedactedQueryReturn> {
         anyhow::ensure!(
             path.component.is_root() || identity.is_admin() || identity.is_system(),
@@ -329,6 +335,7 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
             ts,
             journal,
             caller,
+            invocation.unwrap_or(QueryInvocation::Fresh),
         )
         .await
     }
@@ -551,6 +558,26 @@ impl<RT: Runtime> ApplicationApi for Application<RT> {
 #[async_trait]
 pub trait SubscriptionClient: Send + Sync {
     async fn subscribe(&self, token: Token) -> anyhow::Result<Arc<dyn SubscriptionTrait>>;
+}
+
+/// A remote subscription stream stopped for a condition that a new sync session
+/// can retry.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+#[error("subscription stream became unavailable")]
+pub struct RecoverableSubscriptionStreamFailure;
+
+pub fn mark_recoverable_subscription_stream_failure(mut error: anyhow::Error) -> anyhow::Error {
+    if error
+        .downcast_ref::<RecoverableSubscriptionStreamFailure>()
+        .is_none()
+    {
+        error = error.context(RecoverableSubscriptionStreamFailure);
+    }
+    error
+}
+
+pub fn is_recoverable_subscription_stream_failure(error: &anyhow::Error) -> bool {
+    error.is::<RecoverableSubscriptionStreamFailure>()
 }
 
 struct ApplicationSubscriptionClient<RT: Runtime> {

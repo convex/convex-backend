@@ -20,7 +20,7 @@ use crate::{
 /// function by our V8 layer before it has had its returns validator run. It
 /// slightly differs from `UdfExecution`, which is what we store in memory for
 /// logs.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum FunctionOutcome {
     Query(UdfOutcome),
     Mutation(UdfOutcome),

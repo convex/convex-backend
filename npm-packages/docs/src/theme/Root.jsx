@@ -1,6 +1,5 @@
-import { logEvent } from "convex-analytics";
 import React, { useEffect } from "react";
-import Analytics from "../components/Analytics/Analytics";
+import { WebAnalyticsProvider } from "@convex-internal/web-analytics/react";
 
 import { Toaster } from "sonner";
 
@@ -12,10 +11,6 @@ import "@fontsource/inter/700.css";
 import "@fontsource/inter/800.css";
 
 function Root({ children }) {
-  useEffect(() => {
-    logEvent("view doc load", { path: location.pathname });
-  }, []);
-
   // Scroll the active sidebar item into view in case
   // it's below fold.
   useEffect(() => {
@@ -36,11 +31,10 @@ function Root({ children }) {
   }, []);
 
   return (
-    <>
+    <WebAnalyticsProvider>
       {children}
-      <Analytics />
       <Toaster />
-    </>
+    </WebAnalyticsProvider>
   );
 }
 

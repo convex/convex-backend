@@ -98,3 +98,65 @@ pub fn log_http_service_max_concurrent_requests(
         .with_label_values(&[service_name])
         .set(max_concurrent_requests as i64);
 }
+
+register_convex_histogram!(
+    INDEX_RETENTION_DELETE_CHUNK_SECONDS,
+    "Time for index retention to delete one chunk"
+);
+pub fn index_retention_delete_chunk_timer() -> Timer<VMHistogram> {
+    Timer::new(&INDEX_RETENTION_DELETE_CHUNK_SECONDS)
+}
+
+register_convex_counter!(
+    INDEX_RETENTION_SCANNED_DOCUMENT_TOTAL,
+    "Count of documents scanned by index retention",
+    &["tombstone", "prev_rev"]
+);
+pub fn log_index_retention_scanned_document(is_tombstone: bool, has_prev_rev: bool) {
+    log_counter_with_labels(
+        &INDEX_RETENTION_SCANNED_DOCUMENT_TOTAL,
+        1,
+        vec![
+            StaticMetricLabel::new(
+                "tombstone",
+                if is_tombstone {
+                    "is_tombstone"
+                } else {
+                    "is_document"
+                },
+            ),
+            StaticMetricLabel::new(
+                "prev_rev",
+                if has_prev_rev {
+                    "has_prev_rev"
+                } else {
+                    "no_prev_rev"
+                },
+            ),
+        ],
+    )
+}
+
+register_convex_counter!(
+    RETENTION_EXPIRED_INDEX_ENTRY_TOTAL,
+    "Number of index entries expired by retention",
+    &["reason"]
+);
+pub fn log_retention_expired_index_entry(is_tombstone: bool, is_key_change_tombstone: bool) {
+    log_counter_with_labels(
+        &RETENTION_EXPIRED_INDEX_ENTRY_TOTAL,
+        1,
+        vec![StaticMetricLabel::new(
+            "reason",
+            if is_tombstone {
+                if is_key_change_tombstone {
+                    "key_change_tombstone"
+                } else {
+                    "tombstone"
+                }
+            } else {
+                "overwritten"
+            },
+        )],
+    )
+}

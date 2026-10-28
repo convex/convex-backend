@@ -21,7 +21,6 @@ export interface ModuleFunction extends FileTreeItem {
   udfType: UdfType;
   visibility: Visibility;
   file: { name: string; identifier: string };
-  args: string;
 }
 
 export interface File extends FileTreeItem {

@@ -42,9 +42,10 @@ for (const entrypoint of [
   allOk &&= ok;
 }
 
-if (!(await entrypointHasCycles("server"))) {
-  process.exit(1);
-} else {
-  console.log("No import cycles found in server.");
-  process.exit(0);
+for (const entrypoint of ["server", "browser"]) {
+  if (!(await entrypointHasCycles(entrypoint))) {
+    process.exit(1);
+  }
+  console.log(`No import cycles found in ${entrypoint}.`);
 }
+process.exit(0);

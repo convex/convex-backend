@@ -7,7 +7,14 @@ import {
   MenuItem as HeadlessMenuItem,
   Portal,
 } from "@headlessui/react";
-import { PopperChildrenProps, usePopper } from "react-popper";
+import {
+  useFloating,
+  autoUpdate,
+  offset as offsetMiddleware,
+  flip,
+  shift,
+  Placement,
+} from "@floating-ui/react";
 import classNames from "classnames";
 import { Button, ButtonProps } from "@ui/Button";
 import { Key, KeyboardShortcut } from "@ui/KeyboardShortcut";
@@ -16,7 +23,7 @@ import { Tooltip, TooltipSide } from "@ui/Tooltip";
 export type MenuProps = {
   children: React.ReactElement | (React.ReactElement | null)[];
   buttonProps: ButtonProps;
-  placement?: PopperChildrenProps["placement"];
+  placement?: Placement;
   offset?: number;
 };
 
@@ -29,16 +36,11 @@ export function Menu({
   const [referenceElement, setReferenceElement] =
     useState<HTMLButtonElement | null>(null);
   const [popperElement, setPopperElement] = useState<HTMLElement | null>();
-  const { styles, attributes } = usePopper(referenceElement, popperElement, {
+  const { floatingStyles } = useFloating({
     placement,
-    modifiers: offset
-      ? [
-          {
-            name: "offset",
-            options: { offset: [0, offset] },
-          },
-        ]
-      : [],
+    middleware: [offsetMiddleware(offset), flip(), shift()],
+    whileElementsMounted: autoUpdate,
+    elements: { reference: referenceElement, floating: popperElement },
   });
 
   return (
@@ -71,9 +73,8 @@ export function Menu({
           <Portal>
             <HeadlessMenuItems
               ref={setPopperElement}
-              style={styles.popper}
-              {...attributes.popper}
-              className="z-50 flex max-h-[20rem] flex-col gap-1 overflow-auto rounded-lg border bg-background-secondary py-2 text-sm whitespace-nowrap shadow-md"
+              style={floatingStyles}
+              className="z-50 flex max-h-128 flex-col gap-1 overflow-auto rounded-lg border bg-background-secondary py-2 text-sm whitespace-nowrap shadow-md focus:outline-hidden"
             >
               {children}
             </HeadlessMenuItems>

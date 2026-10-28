@@ -43,6 +43,8 @@ use common::{
 use database::{
     BootstrapComponentsModel,
     Database,
+    IndexBackfillTable,
+    IndexModel,
     ResolvedQuery,
     SystemMetadataModel,
     TableModel,
@@ -91,6 +93,7 @@ use crate::system_table_cleanup::metrics::log_tablet_hard_deleted;
 mod metrics;
 
 const MAX_ORPHANED_TABLE_NAMESPACE_AGE: Duration = Duration::from_days(2);
+const MAX_INDEX_BACKFILLS_PER_RUN: usize = 1000;
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
@@ -146,6 +149,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
 
             self.cleanup_hidden_tables().await?;
             self.cleanup_orphaned_table_namespaces().await?;
+            self.cleanup_index_backfills().await?;
             self.cleanup_expired_exports().await?;
             self.cleanup_unused_source_packages().await?;
 
@@ -250,6 +254,39 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
             tracing::info!("Deleted {num_deleted} hidden tables");
         }
 
+        Ok(())
+    }
+
+    async fn cleanup_index_backfills(&self) -> anyhow::Result<()> {
+        let mut tx = self.database.begin(Identity::system()).await?;
+        let unfinished_index_ids = IndexModel::new(&mut tx)
+            .get_all_indexes()?
+            .filter(|index| index.config.is_backfilling() || index.config.is_backfilled())
+            .map(|index| index.id().developer_id)
+            .collect::<BTreeSet<_>>();
+
+        let mut num_deleted = 0;
+        let index = SystemIndex::<IndexBackfillTable>::by_id();
+        let mut query = tx.query_system(TableNamespace::Global, &index)?.build();
+        while let Some(backfill) = query.next().await? {
+            if unfinished_index_ids.contains(&backfill.index_id) {
+                continue;
+            }
+            SystemMetadataModel::new_global(query.tx())
+                .delete(backfill.id())
+                .await?;
+            num_deleted += 1;
+            if num_deleted >= MAX_INDEX_BACKFILLS_PER_RUN {
+                break;
+            }
+        }
+
+        if num_deleted > 0 {
+            self.database
+                .commit_with_write_source(tx, "system_table_cleanup")
+                .await?;
+            tracing::info!("Deleted {num_deleted} finished index backfills");
+        }
         Ok(())
     }
 
@@ -476,7 +513,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
         let mut num_deleted = 0;
         'deletes: for namespace in tx
             .table_mapping()
-            .namespaces_for_name(SourcePackagesTable::table_name())
+            .namespaces_for_name(&SourcePackagesTable::TABLE_NAME)
         {
             let mut source_package_ids: BTreeSet<SourcePackageId> = BTreeSet::new();
             for module in ModuleModel::new(&mut tx)

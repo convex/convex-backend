@@ -2,8 +2,7 @@
   "name": "component-tests",
   "version": "0.0.0",
   "dependencies": {
-    "convex": "workspace:*",
-    "prettier": "3.8.1"
+    "convex": "workspace:*"
   },
   "devDependencies": {
     "typescript": "~5.0.3",

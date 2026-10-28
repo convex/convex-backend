@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { env, query } from "./_generated/server";
 import { LinkTable } from "./schema";
 
 export const loadOne = query({
@@ -13,7 +13,7 @@ export const loadOne = query({
     v.null(),
   ),
   handler: async (ctx, { normalizedId, token }) => {
-    if (token === "" || token !== process.env.CONVEX_AUTH_TOKEN) {
+    if (token === "" || token !== env.CONVEX_AUTH_TOKEN) {
       throw new Error("Invalid authorization token");
     }
     return await ctx.db

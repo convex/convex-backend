@@ -1,16 +1,17 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
 import { mocked } from "storybook/test";
-import { DailyPerTagMetricsByProject } from "hooks/usageMetrics";
-import { useUsageTeamDailyCallsByTagByProject } from "hooks/usageMetrics";
+import { DailyPerTagMetricsByProjectAndClass } from "hooks/usageMetrics";
+import { useFunctionCallsPerDayByProjectAndClass } from "hooks/usageMetrics";
 import { useProjectById } from "api/projects";
 import { FunctionCallsUsage } from "components/billing/TeamUsage";
 
-const rows: DailyPerTagMetricsByProject[] = [...Array(14).keys()].map(
+const rows: DailyPerTagMetricsByProjectAndClass[] = [...Array(14).keys()].map(
   (dayIndex) => {
     const ds = `2026-02-${(dayIndex + 1).toString().padStart(2, "0")}`;
     return {
       ds,
       projectId: 1 as number | "_rest",
+      deploymentClass: "s16",
       metrics: [
         { tag: "query", value: (dayIndex + 1) * 80_000 },
         { tag: "mutation", value: (dayIndex + 1) * 30_000 },
@@ -20,12 +21,13 @@ const rows: DailyPerTagMetricsByProject[] = [...Array(14).keys()].map(
   },
 );
 
-const rows2: DailyPerTagMetricsByProject[] = [...Array(14).keys()].map(
+const rows2: DailyPerTagMetricsByProjectAndClass[] = [...Array(14).keys()].map(
   (dayIndex) => {
     const ds = `2026-02-${(dayIndex + 1).toString().padStart(2, "0")}`;
     return {
       ds,
       projectId: 2 as number | "_rest",
+      deploymentClass: "s16",
       metrics: [
         { tag: "query", value: (14 - dayIndex) * 50_000 },
         { tag: "mutation", value: (14 - dayIndex) * 20_000 },
@@ -54,7 +56,7 @@ const meta = {
     componentPrefix: null,
   },
   beforeEach: () => {
-    mocked(useUsageTeamDailyCallsByTagByProject).mockReturnValue({
+    mocked(useFunctionCallsPerDayByProjectAndClass).mockReturnValue({
       data: [...rows, ...rows2],
       error: undefined,
     });
@@ -64,9 +66,9 @@ const meta = {
           ? {
               id: 1,
               teamId: 2,
+              teamSlug: "my-team",
               name: "my-cute-app",
               slug: "my-cute-app",
-              isDemo: false,
               createTime: Date.now(),
               prodDeploymentName: "musical-otter-456",
               devDeploymentName: "happy-capybara-123",
@@ -75,9 +77,9 @@ const meta = {
             ? {
                 id: 2,
                 teamId: 2,
+                teamSlug: "my-team",
                 name: "my-cool-app",
                 slug: "my-cool-app",
-                isDemo: false,
                 createTime: Date.now(),
                 prodDeploymentName: "clever-fox-789",
                 devDeploymentName: "swift-penguin-012",

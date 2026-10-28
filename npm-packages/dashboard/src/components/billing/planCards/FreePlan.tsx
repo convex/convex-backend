@@ -52,7 +52,7 @@ export function FreePlan({
         saleHeader="No credit card required"
         action={
           !subscription ? (
-            <p className="flex h-[2.125rem] items-center px-0.5 font-semibold">
+            <p className="flex h-8.5 items-center px-0.5 font-semibold">
               Current Plan
             </p>
           ) : typeof subscription.endDate === "number" ? (

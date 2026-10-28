@@ -66,28 +66,6 @@ pub fn persistence_args_from_cluster_url(
                 multitenant: false,
             })
         },
-        DbDriverTag::PostgresMultitenant(_) => {
-            let maybe_schema = cluster_url
-                .query_pairs()
-                .find(|(k, _)| k == "search_path")
-                .map(|(_, v)| v.to_string())
-                .unwrap_or_default();
-            let schema = if !maybe_schema.is_empty() {
-                maybe_schema
-            } else {
-                // Default to the `public` schema if not provided.
-                // Technically we'd work fine with this being empty (we query current_schema()
-                // when opening a connection to fill in the value, but would prefer to avoid
-                // doing that on every connection)
-                "public".to_string()
-            };
-            adjust_postgres_url(&mut cluster_url, require_ssl, require_leader);
-            Ok(PersistenceArgs::Postgres {
-                url: cluster_url,
-                schema: Some(schema),
-                multitenant: true,
-            })
-        },
         DbDriverTag::MySql(_) => {
             // NOTE: We do not set any database so we can reuse connections between
             // database. The persistence layer will select the correct database.
@@ -97,22 +75,6 @@ pub fn persistence_args_from_cluster_url(
                     .append_pair("require_ssl", "true")
                     .append_pair("verify_ca", "true");
             }
-            let db_name = deployment_name.replace('-', "_");
-            Ok(PersistenceArgs::MySql {
-                url: cluster_url,
-                db_name,
-                multitenant: false,
-                require_leader,
-            })
-        },
-        DbDriverTag::MySqlAwsIam(_) => {
-            // NOTE: We do not set any database so we can reuse connections between
-            // database. The persistence layer will select the correct database.
-            // always require SSL
-            cluster_url
-                .query_pairs_mut()
-                .append_pair("require_ssl", "true")
-                .append_pair("verify_ca", "false");
             let db_name = deployment_name.replace('-', "_");
             Ok(PersistenceArgs::MySql {
                 url: cluster_url,

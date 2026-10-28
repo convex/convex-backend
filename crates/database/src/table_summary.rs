@@ -33,7 +33,7 @@ use common::{
     query::Order,
     runtime::Runtime,
     types::{
-        IndexId,
+        IndexRef,
         RepeatableReason,
         RepeatableTimestamp,
         Timestamp,
@@ -41,8 +41,10 @@ use common::{
     value::{
         ConvexObject,
         JsonInteger,
+        NamespacedTableMapping,
         Size,
         TableMapping,
+        TableName,
         TabletId,
     },
 };
@@ -52,10 +54,7 @@ use futures::{
     TryStreamExt,
 };
 use serde::Deserialize;
-use serde_json::{
-    json,
-    Value as JsonValue,
-};
+use serde_json::Value as JsonValue;
 use shape_inference::{
     CountedShape,
     ProdConfig,
@@ -72,10 +71,99 @@ use crate::{
     TableIterator,
 };
 
+/// Document count and byte size of the documents in a table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableCount {
+    num_values: u64,
+    total_size: u64,
+}
+
+impl TableCount {
+    pub fn empty() -> Self {
+        Self {
+            num_values: 0,
+            total_size: 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.num_values == 0 && self.total_size == 0
+    }
+
+    pub fn num_values(&self) -> u64 {
+        self.num_values
+    }
+
+    pub fn total_size(&self) -> u64 {
+        self.total_size
+    }
+
+    pub fn insert(&mut self, object: &ConvexObject) {
+        self.num_values += 1;
+        self.total_size += object.size() as u64;
+    }
+
+    pub fn remove(&mut self, object: &ConvexObject) -> anyhow::Result<()> {
+        self.num_values = self
+            .num_values
+            .checked_sub(1)
+            .context("num_values went negative?")?;
+        self.total_size = self
+            .total_size
+            .checked_sub(object.size() as u64)
+            .context("total_size went negative?")?;
+        Ok(())
+    }
+}
+
+/// Inferred shape of the documents in a table.
+/// TODO: Add `ts` that the shape is valid at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableShape {
+    inferred_type: CountedShape<ProdConfig>,
+}
+
+impl fmt::Display for TableShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.inferred_type)
+    }
+}
+
+impl TableShape {
+    pub fn empty() -> Self {
+        Self {
+            inferred_type: Shape::empty(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inferred_type.is_empty()
+    }
+
+    pub fn inferred_type(&self) -> &CountedShape<ProdConfig> {
+        &self.inferred_type
+    }
+
+    pub fn insert(&mut self, object: &ConvexObject) {
+        self.inferred_type = self.inferred_type.insert(object);
+    }
+
+    pub fn remove(&mut self, object: &ConvexObject) -> anyhow::Result<()> {
+        self.inferred_type = self.inferred_type.remove(object)?;
+        Ok(())
+    }
+
+    /// Drop the tracked shape while preserving the document count, replacing it
+    /// with an `Unknown` shape of the given size.
+    pub fn reset(&mut self, num_values: u64) {
+        self.inferred_type = CountedShape::new(ShapeEnum::Unknown, num_values);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableSummary {
-    inferred_type: CountedShape<ProdConfig>,
-    total_size: u64,
+    count: TableCount,
+    shape: TableShape,
 }
 
 impl fmt::Display for TableSummary {
@@ -83,7 +171,7 @@ impl fmt::Display for TableSummary {
         write!(
             f,
             "TableSummary {{ inferred_type: {}, total_size: {} }}",
-            self.inferred_type, self.total_size
+            self.shape.inferred_type, self.count.total_size
         )
     }
 }
@@ -91,48 +179,52 @@ impl fmt::Display for TableSummary {
 impl TableSummary {
     pub fn empty() -> Self {
         Self {
-            inferred_type: Shape::empty(),
-            total_size: 0,
+            count: TableCount::empty(),
+            shape: TableShape::empty(),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.inferred_type.is_empty() && self.total_size == 0
+        self.count.is_empty() && self.shape.is_empty()
+    }
+
+    pub fn count(&self) -> &TableCount {
+        &self.count
+    }
+
+    pub fn shape(&self) -> &TableShape {
+        &self.shape
+    }
+
+    pub fn into_shape(self) -> TableShape {
+        self.shape
     }
 
     pub fn total_size(&self) -> u64 {
-        self.total_size
+        self.count.total_size()
     }
 
     pub fn num_values(&self) -> u64 {
-        *self.inferred_type.num_values()
+        self.count.num_values()
     }
 
     pub fn inferred_type(&self) -> &CountedShape<ProdConfig> {
-        &self.inferred_type
+        self.shape.inferred_type()
     }
 
-    pub fn insert(&self, object: &ConvexObject) -> Self {
-        let total_size = self.total_size + object.size() as u64;
-        Self {
-            inferred_type: self.inferred_type.insert(object),
-            total_size,
-        }
+    pub fn insert(&mut self, object: &ConvexObject) {
+        self.count.insert(object);
+        self.shape.insert(object);
     }
 
-    pub fn remove(&self, object: &ConvexObject) -> anyhow::Result<Self> {
-        let size = object.size() as u64;
-        Ok(Self {
-            inferred_type: self.inferred_type.remove(object)?,
-            total_size: self
-                .total_size
-                .checked_sub(size)
-                .context("total_size went negative?")?,
-        })
+    pub fn remove(&mut self, object: &ConvexObject) -> anyhow::Result<()> {
+        self.shape.remove(object)?;
+        self.count.remove(object)?;
+        Ok(())
     }
 
     pub fn reset_shape(&mut self) {
-        self.inferred_type = CountedShape::new(ShapeEnum::Unknown, self.num_values());
+        self.shape.reset(self.count.num_values());
     }
 
     pub fn persistence_key() -> PersistenceGlobalKey {
@@ -142,10 +234,16 @@ impl TableSummary {
 
 impl From<&TableSummary> for JsonValue {
     fn from(summary: &TableSummary) -> Self {
-        json!({
-            "totalSize": JsonInteger::encode(summary.total_size as i64),
-            "inferredTypeWithOptionalFields": JsonValue::from(&summary.inferred_type)
-        })
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "totalSize".into(),
+            JsonInteger(summary.count.total_size as i64).into(),
+        );
+        object.insert(
+            "inferredTypeWithOptionalFields".into(),
+            JsonValue::from(&summary.shape.inferred_type),
+        );
+        object.into()
     }
 }
 
@@ -164,9 +262,16 @@ impl TryFrom<JsonValue> for TableSummary {
                     Some(v) => CountedShape::<ProdConfig>::json_deserialize_value(v)?,
                     None => anyhow::bail!("Missing field inferredTypeWithOptionalFields"),
                 };
+                // The document count is derived from the shape's own counter on
+                // load; from here on it is maintained authoritatively in
+                // `TableCount`.
+                let num_values = *inferred_type.num_values();
                 Ok(TableSummary {
-                    inferred_type,
-                    total_size,
+                    count: TableCount {
+                        num_values,
+                        total_size,
+                    },
+                    shape: TableShape { inferred_type },
                 })
             },
             _ => anyhow::bail!("Wrong type of json value for TableSummaryJson"),
@@ -178,6 +283,78 @@ impl TryFrom<JsonValue> for TableSummary {
 pub struct TableSummarySnapshot {
     pub tables: BTreeMap<TabletId, TableSummary>,
     pub ts: Timestamp,
+}
+
+/// The inferred shapes of every table, as of a timestamp.
+#[derive(Debug, Clone)]
+pub struct TableShapes {
+    pub tables: BTreeMap<TabletId, TableShape>,
+    /// Timestamp of the snapshot these shapes are accurate for
+    pub ts: Timestamp,
+}
+
+impl TableShapes {
+    pub fn tablet_shape(&self, tablet: &TabletId) -> Option<&TableShape> {
+        self.tables.get(tablet)
+    }
+
+    /// Shape for a table resolved against the given (possibly newer) table
+    /// mapping. `None` when the table doesn't resolve or was created after
+    /// `ts`, i.e. no shape has been computed for it yet.
+    pub fn table_shape(
+        &self,
+        mapping: &NamespacedTableMapping,
+        table: &TableName,
+    ) -> Option<&TableShape> {
+        let table_id = mapping.id(table).ok()?;
+        self.tables.get(&table_id.tablet_id)
+    }
+}
+
+impl From<TableSummarySnapshot> for TableShapes {
+    fn from(snapshot: TableSummarySnapshot) -> Self {
+        Self {
+            tables: snapshot
+                .tables
+                .into_iter()
+                .map(|(tablet, summary)| (tablet, summary.into_shape()))
+                .collect(),
+            ts: snapshot.ts,
+        }
+    }
+}
+
+/// A [`TableSummarySnapshot`] filtered to tables that exist: counts and shapes
+/// together, exact at a single timestamp.
+///
+/// This is for offline tools (`db-info`, `db-verifier`) that load summaries
+/// via `DatabaseSnapshot::load_table_summaries`. The live `Snapshot` holds
+/// only counts (`TableCounts`); live shape readers use the asynchronously
+/// published [`TableShapes`] instead.
+#[derive(Clone)]
+pub struct TableSummaries {
+    pub tables: BTreeMap<TabletId, TableSummary>,
+}
+
+impl TableSummaries {
+    pub fn new(
+        TableSummarySnapshot { tables, ts: _ }: TableSummarySnapshot,
+        table_mapping: &TableMapping,
+    ) -> Self {
+        Self {
+            tables: tables
+                .into_iter()
+                .filter(|(table_id, _table_summary)| table_mapping.tablet_id_exists(*table_id))
+                .collect(),
+        }
+    }
+
+    pub fn tablet_summary(&self, table: &TabletId) -> TableSummary {
+        self.tables
+            .get(table)
+            .cloned()
+            .unwrap_or_else(TableSummary::empty)
+    }
 }
 
 impl TableSummarySnapshot {
@@ -202,13 +379,18 @@ impl TableSummarySnapshot {
 
 impl From<&TableSummarySnapshot> for JsonValue {
     fn from(snapshot: &TableSummarySnapshot) -> Self {
-        json!({
-            "tables": snapshot.tables
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "tables".into(),
+            snapshot
+                .tables
                 .iter()
                 .map(|(k, v)| (k.to_string(), JsonValue::from(v)))
-                .collect::<serde_json::Map<String, JsonValue>>(),
-            "ts": JsonInteger::encode(snapshot.ts.into()),
-        })
+                .collect::<serde_json::Map<String, JsonValue>>()
+                .into(),
+        );
+        object.insert("ts".into(), JsonInteger(snapshot.ts.into()).into());
+        object.into()
     }
 }
 
@@ -273,7 +455,7 @@ impl<RT: Runtime> TableSummaryWriter<RT> {
         snapshot_ts: Timestamp,
         table_iterator: impl Fn() -> TableIterator<RT>,
         table_mapping: &TableMapping,
-        by_id_indexes: &BTreeMap<TabletId, IndexId>,
+        by_id_indexes: &BTreeMap<TabletId, IndexRef>,
     ) -> anyhow::Result<TableSummarySnapshot> {
         let mut snapshot = BTreeMap::new();
         for (tablet_id, ..) in table_mapping.iter() {
@@ -297,13 +479,25 @@ impl<RT: Runtime> TableSummaryWriter<RT> {
         futures::pin_mut!(revision_stream);
         let mut summary = TableSummary::empty();
         while let Some(rev) = revision_stream.try_next().await? {
-            summary = summary.insert(rev.value.value());
-            let num_values = summary.inferred_type.num_values();
+            summary.insert(rev.value.value());
+            let num_values = summary.num_values();
             if num_values % 10000 == 0 {
                 tracing::info!("Collecting table summary with {num_values} documents")
             }
         }
         Ok(summary)
+    }
+
+    /// Compute a fresh table summary from the last persisted checkpoint,
+    /// persist it as the new checkpoint, and publish its shapes to the
+    /// [`Database`]'s in-memory store. Returns the checkpoint's timestamp.
+    pub async fn checkpoint(&self) -> anyhow::Result<Timestamp> {
+        let snapshot = self.compute_from_last_checkpoint().await?;
+        let ts = snapshot.ts;
+        tracing::info!("Writing table summary checkpoint at ts {ts}");
+        write_snapshot(self.persistence.as_ref(), &snapshot).await?;
+        self.database.publish_table_shapes(snapshot.into());
+        Ok(ts)
     }
 
     pub async fn compute_from_last_checkpoint(&self) -> anyhow::Result<TableSummarySnapshot> {
@@ -329,6 +523,11 @@ impl<RT: Runtime> TableSummaryWriter<RT> {
     }
 }
 
+/// Persist a table summary checkpoint. On a live deployment, use
+/// [`TableSummaryWriter::checkpoint`] instead so the checkpoint's shapes are
+/// also published to the in-memory store; this free function exists for
+/// tooling (e.g. cluster migration) that writes to a persistence with no
+/// running `Database`.
 pub async fn write_snapshot(
     persistence: &dyn Persistence,
     snapshot: &TableSummarySnapshot,
@@ -388,7 +587,7 @@ pub async fn bootstrap<RT: Runtime>(
     let (base_snapshot, base_snapshot_ts) = match stored_snapshot {
         Some(base) => base,
         None => {
-            let by_id_indexes = index_registry.by_id_indexes();
+            let by_id_indexes = index_registry.by_id_indexes()?;
             let base_snapshot = TableSummaryWriter::<RT>::collect_snapshot(
                 *recent_ts,
                 || {
@@ -512,10 +711,10 @@ fn add_revision(
         TableSummary::empty,
     );
     if let Some(old_document) = revision_pair.prev_document() {
-        *summary = summary.remove(old_document.value())?;
+        summary.remove(old_document.value())?;
     }
     if let Some(new_document) = revision_pair.document() {
-        *summary = summary.insert(new_document.value());
+        summary.insert(new_document.value());
     }
     Ok(())
 }

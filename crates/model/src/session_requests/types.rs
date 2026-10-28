@@ -17,6 +17,7 @@ use common::{
 use value::{
     ConvexObject,
     JsonPackedValue,
+    PendingValue,
 };
 
 /// Identifier for a single request in a session
@@ -92,7 +93,7 @@ pub enum SessionRequestOutcome {
     // In case of mutation, the session request is recorded atomically with
     // performing the mutation. There are no record for incomplete mutations.
     Mutation {
-        result: JsonPackedValue,
+        result: JsonPackedValue<PendingValue>,
         log_lines: LogLines,
     },
 }

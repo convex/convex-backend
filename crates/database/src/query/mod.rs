@@ -41,7 +41,7 @@ use futures::{
     future::BoxFuture,
     FutureExt,
 };
-use indexing::backend_in_memory_indexes::BatchKey;
+use indexing::index_reader::BatchKey;
 use maplit::btreemap;
 use value::{
     val,

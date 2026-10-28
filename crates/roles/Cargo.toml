@@ -1,0 +1,37 @@
+[package]
+name = "roles"
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-FSL-1.1-Apache-2.0"
+
+[lib]
+doctest = false
+
+[features]
+testing = [
+    "common/testing",
+    "errors/testing",
+    "keybroker/testing",
+    "big_brain_private_api_types/testing",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+big_brain_private_api_types = { workspace = true }
+common = { workspace = true }
+errors = { workspace = true }
+keybroker = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+strum = { workspace = true }
+utoipa = { workspace = true }
+
+[dev-dependencies]
+big_brain_private_api_types = { workspace = true, features = ["testing"] }
+common = { workspace = true, features = ["testing"] }
+errors = { workspace = true, features = ["testing"] }
+keybroker = { workspace = true, features = ["testing"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

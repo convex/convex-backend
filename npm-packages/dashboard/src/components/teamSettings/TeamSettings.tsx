@@ -19,7 +19,11 @@ import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { useCallback, useState } from "react";
 import startCase from "lodash/startCase";
 import { OpenInVercel } from "components/OpenInVercel";
-import { TeamForm } from "./TeamForm";
+import { TeamNameForm } from "./TeamNameForm";
+import { TeamSlugForm } from "./TeamSlugForm";
+import { TeamIdSheet } from "./TeamIdSheet";
+import { DefaultRegionForm } from "./DefaultRegionForm";
+import { TEAM_SETTINGS_SECTIONS } from "lib/sectionAnchors";
 
 export function TeamSettings({ team }: { team: TeamResponse }) {
   const updateTeam = useUpdateTeam(team.id);
@@ -59,8 +63,23 @@ export function TeamSettings({ team }: { team: TeamResponse }) {
   return (
     <>
       <h2>Team Settings</h2>
-      <TeamForm team={team} onUpdateTeam={updateTeam} canUpdate={canUpdate} />
-      <Sheet>
+      <TeamNameForm
+        team={team}
+        onUpdateTeam={updateTeam}
+        canUpdate={canUpdate}
+      />
+      <TeamSlugForm
+        team={team}
+        onUpdateTeam={updateTeam}
+        canUpdate={canUpdate}
+      />
+      <TeamIdSheet team={team} />
+      <DefaultRegionForm
+        team={team}
+        onUpdateTeam={updateTeam}
+        canUpdate={canUpdate}
+      />
+      <Sheet id={TEAM_SETTINGS_SECTIONS.deleteTeam.id}>
         <h3 className="mb-4">Delete Team</h3>
         <p className="mb-4">
           Permanently deletes this team.{" "}
@@ -93,8 +112,6 @@ export function TeamSettings({ team }: { team: TeamResponse }) {
             variant="danger"
             onClick={() => setShowDeleteTeamModal(true)}
             disabled={
-              // TODO: what to do about team lifecycle and Expo?
-              !!team.managedBy ||
               !canDelete ||
               !teams ||
               teams.length === 1 ||

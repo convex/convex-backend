@@ -26,7 +26,6 @@ use deno_core::{
     v8::{
         self,
         scope,
-        scope_with_context,
     },
     ModuleSpecifier,
 };
@@ -52,22 +51,27 @@ use value::NamespacedTableMapping;
 
 use super::ModuleCodeCacheResult;
 use crate::{
+    context_cache::ContextCache,
     environment::{
         helpers::syscall_error::{
             syscall_description_for_error,
             syscall_name_for_error,
         },
         AsyncOpRequest,
-        IsolateEnvironment,
+        JsEnvironment,
+        OpProvider,
+        SyscallProvider,
     },
     helpers,
     isolate::{
         Isolate,
         CONVEX_SCHEME,
     },
+    module_cache::V8ModuleSource,
     request_scope::RequestScope,
     strings,
     timeout::Timeout,
+    ConcurrencyPermit,
 };
 
 pub struct SchemaEnvironment {
@@ -77,7 +81,7 @@ pub struct SchemaEnvironment {
     unix_timestamp: UnixTimestamp,
 }
 
-impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
+impl OpProvider for SchemaEnvironment {
     fn trace(&mut self, _level: LogLevel, messages: Vec<String>) -> anyhow::Result<()> {
         tracing::warn!(
             "Unexpected Console access at schema evaluation time: {}",
@@ -102,17 +106,11 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
     }
 
     fn performance_now(&mut self) -> anyhow::Result<Duration> {
-        anyhow::bail!(ErrorMetadata::bad_request(
-            "NoPerformanceInSchema",
-            "The Performance API is not supported when evaluating schema"
-        ))
+        Ok(Duration::ZERO)
     }
 
     fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
-        anyhow::bail!(ErrorMetadata::bad_request(
-            "NoPerformanceInSchema",
-            "The Performance API is not supported when evaluating schema"
-        ))
+        Ok(self.unix_timestamp)
     }
 
     fn get_environment_variable(
@@ -131,12 +129,14 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
             "Getting the table mapping unsupported when evaluating schema"
         ))
     }
+}
 
+impl<RT: Runtime> SyscallProvider<RT> for SchemaEnvironment {
     async fn lookup_source(
         &mut self,
         path: &str,
         _timeout: &mut Timeout<RT>,
-    ) -> anyhow::Result<Option<(Arc<FullModuleSource>, ModuleCodeCacheResult)>> {
+    ) -> anyhow::Result<Option<(Arc<V8ModuleSource>, ModuleCodeCacheResult)>> {
         if path != "schema.js" {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "NoImportModuleInSchema",
@@ -144,10 +144,10 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
             ))
         }
         Ok(Some((
-            Arc::new(FullModuleSource {
+            Arc::new(V8ModuleSource::new(FullModuleSource {
                 source: self.schema_bundle.clone(),
                 source_map: self.source_map.clone(),
-            }),
+            })),
             ModuleCodeCacheResult::noop(),
         )))
     }
@@ -158,12 +158,21 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
             format!("Syscall {name} unsupported when evaluating schema")
         ));
     }
+}
+
+impl<RT: Runtime> JsEnvironment<RT> for SchemaEnvironment {
+    type AsyncResolver = v8::Global<v8::PromiseResolver>;
+    type SyscallProvider = Self;
+
+    fn syscall_provider(&mut self) -> &mut Self::SyscallProvider {
+        self
+    }
 
     fn start_async_syscall(
         &mut self,
         name: String,
         _args: JsonValue,
-        _resolver: v8::Global<v8::PromiseResolver>,
+        _resolver: Self::AsyncResolver,
     ) -> anyhow::Result<()> {
         anyhow::bail!(ErrorMetadata::bad_request(
             format!("No{}InSchema", syscall_name_for_error(&name)),
@@ -177,7 +186,7 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
     fn start_async_op(
         &mut self,
         request: AsyncOpRequest,
-        _resolver: v8::Global<v8::PromiseResolver>,
+        _resolver: Self::AsyncResolver,
     ) -> anyhow::Result<()> {
         anyhow::bail!(ErrorMetadata::bad_request(
             format!("No{}InSchema", request.name_for_error()),
@@ -199,9 +208,9 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
 
 impl SchemaEnvironment {
     pub async fn evaluate_schema<RT: Runtime>(
-        client_id: String,
         isolate: &mut Isolate<RT>,
-        v8_context: v8::Global<v8::Context>,
+        context_cache: &mut ContextCache,
+        permit: ConcurrencyPermit,
         schema_bundle: ModuleSource,
         source_map: Option<SourceMap>,
         rng_seed: [u8; 32],
@@ -214,11 +223,13 @@ impl SchemaEnvironment {
             rng,
             unix_timestamp,
         };
-        let client_id = Arc::new(client_id);
-        let (handle, state, mut timeout) = isolate.start_request(client_id, environment).await?;
-        scope_with_context!(let context_scope, isolate.isolate(), v8_context);
-        let mut isolate_context =
-            RequestScope::new(context_scope, handle.clone(), state, false).await?;
+        let (handle, state, mut timeout) = isolate
+            .start_request(context_cache, permit, environment)
+            .await?;
+        scope!(let handle_scope, isolate.isolate());
+        let v8_context = context_cache.get_or_create_fresh_context(handle_scope);
+        let context_scope = &mut v8::ContextScope::new(handle_scope, v8_context);
+        let mut isolate_context = RequestScope::new(context_scope, handle.clone(), state, false)?;
         let handle = isolate_context.handle();
         let result = Self::run_evaluate_schema(&mut isolate_context, &mut timeout).await;
 
@@ -233,7 +244,7 @@ impl SchemaEnvironment {
         drop(isolate_context);
         drop(timeout);
 
-        handle.take_termination_error(None, "schema")??;
+        handle.take_termination_error("schema")??;
         result
     }
 

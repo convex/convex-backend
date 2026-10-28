@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use anyhow::Context as _;
 use common::{
     self,
     document::ParsedDocument,
@@ -11,7 +14,7 @@ use database::{
 use errors::ErrorMetadata;
 use value::{
     ConvexValue,
-    ResolvedDocumentId,
+    DeveloperDocumentId,
     TableName,
     TableNamespace,
 };
@@ -30,15 +33,13 @@ use types::{
     LOG_SINKS_LIMIT,
 };
 
-pub static LOG_SINKS_TABLE: TableName = TableName::const_new("_log_sinks");
+pub const LOG_SINKS_TABLE: TableName = TableName::const_new("_log_sinks");
 
 pub struct LogSinksTable;
 impl SystemTable for LogSinksTable {
     type Metadata = LogSinksRow;
 
-    fn table_name() -> &'static TableName {
-        &LOG_SINKS_TABLE
-    }
+    const TABLE_NAME: TableName = LOG_SINKS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -52,6 +53,38 @@ pub struct LogSinksModel<'a, RT: Runtime> {
 impl<'a, RT: Runtime> LogSinksModel<'a, RT> {
     pub fn new(tx: &'a mut Transaction<RT>) -> Self {
         Self { tx }
+    }
+
+    async fn must_get_including_tombstoned(
+        &mut self,
+        id: DeveloperDocumentId,
+    ) -> anyhow::Result<ParsedDocument<LogSinksRow>> {
+        Ok(Arc::unwrap_or_clone(
+            self.tx
+                .get_system::<LogSinksTable>(TableNamespace::Global, id)
+                .await?
+                .with_context(|| {
+                    ErrorMetadata::not_found(
+                        "LogStreamDoesntExist",
+                        format!("No log stream with the given id {id} exists for this deployment."),
+                    )
+                })?,
+        ))
+    }
+
+    pub async fn must_get(
+        &mut self,
+        id: DeveloperDocumentId,
+    ) -> anyhow::Result<ParsedDocument<LogSinksRow>> {
+        let doc = self.must_get_including_tombstoned(id).await?;
+        anyhow::ensure!(
+            doc.status != SinkState::Tombstoned,
+            ErrorMetadata::not_found(
+                "LogStreamDoesntExist",
+                format!("No log stream with the given id {id} exists for this deployment."),
+            )
+        );
+        Ok(doc)
     }
 
     pub async fn get_by_provider(
@@ -114,12 +147,13 @@ impl<'a, RT: Runtime> LogSinksModel<'a, RT> {
 
     pub async fn patch_status(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         status: SinkState,
     ) -> anyhow::Result<()> {
+        let doc = self.must_get_including_tombstoned(id).await?;
         SystemMetadataModel::new_global(self.tx)
             .patch(
-                id,
+                doc.id(),
                 patch_value!("status" => Some(ConvexValue::Object(status.try_into()?)))?,
             )
             .await?;
@@ -128,32 +162,43 @@ impl<'a, RT: Runtime> LogSinksModel<'a, RT> {
 
     pub async fn patch_config(
         &mut self,
-        id: ResolvedDocumentId,
+        id: DeveloperDocumentId,
         config: SinkConfig,
     ) -> anyhow::Result<()> {
+        let doc = self.must_get(id).await?;
         SystemMetadataModel::new_global(self.tx)
             .patch(
-                id,
+                doc.id(),
                 patch_value!("config" => Some(ConvexValue::Object(config.try_into()?)))?,
             )
             .await?;
         Ok(())
     }
 
-    pub async fn mark_for_removal(&mut self, id: ResolvedDocumentId) -> anyhow::Result<()> {
-        self.patch_status(id, SinkState::Tombstoned).await?;
-        Ok(())
+    pub async fn mark_for_removal(&mut self, id: DeveloperDocumentId) -> anyhow::Result<()> {
+        self.patch_status(id, SinkState::Tombstoned).await
     }
 
     pub async fn add_or_update(
         &mut self,
         config: SinkConfig,
-    ) -> anyhow::Result<ResolvedDocumentId> {
+    ) -> anyhow::Result<DeveloperDocumentId> {
         let sink_type = config.sink_type();
         let row = LogSinksRow {
             status: SinkState::Pending,
             config,
         };
+
+        let existing = self.get_by_provider(sink_type.clone()).await?;
+        // Check within the insert transaction so concurrent creates cannot
+        // replace an export and restart it.
+        anyhow::ensure!(
+            existing.is_none() || sink_type != SinkType::S3Export,
+            ErrorMetadata::conflict(
+                "LogStreamAlreadyExists",
+                "An S3 export already exists. Delete it before creating a new one.",
+            )
+        );
 
         // Filter to non-tombstoned log sinks
         let sinks = self
@@ -170,14 +215,14 @@ impl<'a, RT: Runtime> LogSinksModel<'a, RT> {
             .into());
         }
 
-        if let Some(row) = self.get_by_provider(sink_type.clone()).await? {
-            self.mark_for_removal(row.id()).await?;
+        if let Some(row) = existing {
+            self.mark_for_removal(row.developer_id()).await?;
         }
 
         let id = SystemMetadataModel::new_global(self.tx)
             .insert(&LOG_SINKS_TABLE, row.try_into()?)
             .await?;
-        Ok(id)
+        Ok(id.developer_id)
     }
 
     // It's generally not safe to delete an existing sink without marking it
@@ -199,7 +244,7 @@ impl<'a, RT: Runtime> LogSinksModel<'a, RT> {
         let providers = self.get_all().await?;
 
         for sink in providers {
-            self.patch_status(sink.id(), SinkState::Tombstoned).await?;
+            self.mark_for_removal(sink.developer_id()).await?;
         }
         Ok(())
     }

@@ -22,10 +22,13 @@ use database::{
     Database,
     SystemMetadataModel,
     Token,
+    MAX_OCC_FAILURES,
 };
+use errors::ErrorMetadataAnyhowExt as _;
 use exports::{
     interface::ExportProvider,
     ExportComponents,
+    FILE_STORAGE_EXPORT_TOO_LARGE_SHORT_MSG,
 };
 use futures::{
     Future,
@@ -169,6 +172,21 @@ impl<RT: Runtime> ExportWorker<RT> {
                         tracing::info!("Export {} canceled", export.id());
                         return Ok(());
                     }
+                    if e.short_msg() == FILE_STORAGE_EXPORT_TOO_LARGE_SHORT_MSG {
+                        log_export_failed(&e);
+                        tracing::warn!(
+                            "Export {} failed because its file storage exceeded the limit",
+                            export.id()
+                        );
+                        if let Err(e) = self.mark_failed(export.id().to_owned()).await {
+                            if e.is::<ExportCanceled>() {
+                                tracing::info!("Export {} canceled", export.id());
+                                return Ok(());
+                            }
+                            return Err(e);
+                        }
+                        return Ok(());
+                    }
                     log_export_failed(&e);
                     report_error(&mut e).await;
                     let delay = self.backoff.fail(&mut self.runtime.rng());
@@ -177,6 +195,40 @@ impl<RT: Runtime> ExportWorker<RT> {
                 },
             }
         }
+    }
+
+    async fn mark_failed(&self, id: ResolvedDocumentId) -> anyhow::Result<()> {
+        self.database
+            .execute_with_occ_retries(
+                Identity::system(),
+                FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
+                "export_worker_mark_failed",
+                |tx| {
+                    async move {
+                        let export: ParsedDocument<Export> =
+                            tx.get(id).await?.context(ExportCanceled)?.parse()?;
+                        if let Export::Canceled { .. } = *export {
+                            anyhow::bail!(ExportCanceled);
+                        }
+                        let start_ts = match *export {
+                            Export::InProgress { start_ts, .. } => start_ts,
+                            _ => anyhow::bail!("Can only fail an in-progress export"),
+                        };
+                        let failed_export = export
+                            .into_value()
+                            .failed(start_ts, *tx.begin_timestamp())?;
+                        SystemMetadataModel::new_global(tx)
+                            .replace(id, failed_export.try_into()?)
+                            .await?;
+                        Ok(())
+                    }
+                    .boxed()
+                    .into()
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     async fn export_and_mark_complete(
@@ -216,6 +268,7 @@ impl<RT: Runtime> ExportWorker<RT> {
                 .execute_with_occ_retries(
                     Identity::system(),
                     FunctionUsageTracker::new(),
+                    MAX_OCC_FAILURES,
                     what,
                     move |tx| {
                         let f = f.clone();
@@ -341,6 +394,7 @@ impl<RT: Runtime> ExportWorker<RT> {
             .execute_with_occ_retries(
                 Identity::system(),
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "export_worker_mark_complete",
                 |tx| {
                     let object_key = object_key.clone();

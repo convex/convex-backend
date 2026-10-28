@@ -21,7 +21,7 @@ You may drag-and-drop the column headers in each table to visually re-order the
 data.
 
 A readonly view of the data page is available in the
-[command line](/cli.md#display-data-from-tables).
+[command line](/cli/reference/data.mdx).
 
 ```sh
 npx convex data [table]
@@ -76,7 +76,7 @@ option.
 />
 
 This opens the same UI used for
-[running your deployed functions](/dashboard/deployments/functions.md#running-functions),
+[running your deployed functions](/dashboard/deployments/functions.mdx#running-functions),
 but with the “Custom test query" option selected, which lets you edit the source
 code for the query. This source code will be sent to your deployment and
 executed when you click on the “Run Custom Query" button.
@@ -206,17 +206,6 @@ need to redeploy your convex functions (by running `npx convex deploy` or
 `npx convex dev` for production or development, respectively) to recreate the
 indexes.
 
-## Generating a schema
-
-At the bottom-left of the page is a "Generate Schema" button which you can click
-to have Convex generate a [schema](/database/schemas.mdx) of all your documents
-within this table.
-
-<Screenshot
-  story="docs/pages/project/deployment/Data#Generate Schema"
-  alt="Generate Schema button"
-/>
-
 ## View the schema of a table
 
 The "Schema" button can be found by clicking on the `⋮` overflow menu at the top
@@ -225,13 +214,17 @@ of the data page.
 This button will open a panel showing the saved and generated
 [schemas](/database/schemas.mdx) associated with the selected table.
 
+To see the [schema](/database/schemas.mdx) of your whole deployment, including
+the relationships between tables, use the
+[Schema page](/dashboard/deployments/schema.mdx).
+
 ## View the indexes of a table
 
 The "Indexes" button can be found by clicking on the `⋮` overflow menu at the
 top of the data page.
 
 This button will open a panel showing the
-[indexes](/database/reading-data/indexes/indexes.md) associated with the
+[indexes](/database/reading-data/indexes/indexes.mdx) associated with the
 selected table.
 
 Indexes that have not completed backfilling will be accompanied by a loading

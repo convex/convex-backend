@@ -23,15 +23,13 @@ use crate::{
 
 pub mod types;
 
-pub static BACKEND_INFO_TABLE: TableName = TableName::const_new("_backend_info");
+pub const BACKEND_INFO_TABLE: TableName = TableName::const_new("_backend_info");
 
 pub struct BackendInfoTable;
 impl SystemTable for BackendInfoTable {
     type Metadata = BackendInfoPersisted;
 
-    fn table_name() -> &'static TableName {
-        &BACKEND_INFO_TABLE
-    }
+    const TABLE_NAME: TableName = BACKEND_INFO_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -113,6 +111,25 @@ impl<'a, RT: Runtime> BackendInfoModel<'a, RT> {
             ErrorMetadata::forbidden(
                 "LogStreamingNotEnabled",
                 "Log streaming is not available on your current subscription. See https://www.convex.dev/plans to upgrade."
+            )
+        );
+        Ok(())
+    }
+
+    pub async fn is_custom_audit_logs_in_log_streams_allowed(&mut self) -> anyhow::Result<bool> {
+        let backend_info = self.get().await?;
+        Ok(backend_info
+            .and_then(|bi| bi.custom_audit_logs_in_log_streams_config_enabled)
+            .unwrap_or(false))
+    }
+
+    pub async fn ensure_custom_audit_logs_in_log_streams_allowed(&mut self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.is_custom_audit_logs_in_log_streams_allowed().await?,
+            ErrorMetadata::forbidden(
+                "CustomAuditLogsInLogStreamsNotEnabled",
+                "Subscribing a log stream to the custom_audit topic is not available on your \
+                 current subscription. See https://www.convex.dev/plans to upgrade."
             )
         );
         Ok(())

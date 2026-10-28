@@ -1,12 +1,12 @@
 {
   "name": "@convex-dev/eslint-plugin",
-  "version": "2.0.0",
+  "version": "5.0.1",
   "license": "Apache-2.0",
   "type": "module",
   "homepage": "https://docs.convex.dev/eslint",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/@convex-dev/eslint-plugin"
   },
   "scripts": {
@@ -14,16 +14,17 @@
     "test": "vitest run && node src/scripts/version-check.mjs",
     "test:types": "tsc --noEmit",
     "test:watch": "vitest",
-    "prepare": "tshy",
-    "prepublishOnly": "node src/scripts/version-check.mjs",
+    "prepublishOnly": "node src/scripts/version-check.mjs && npm run build",
     "prepack": "node src/scripts/dont-publish-alpha-as-latest.mjs"
   },
   "dependencies": {
+    "@typescript-eslint/parser": "~8.58.0",
     "@typescript-eslint/types": "~8.58.0",
-    "@typescript-eslint/utils": "~8.58.0"
+    "@typescript-eslint/utils": "~8.58.0",
+    "typescript": "^5.9.2"
   },
   "peerDependencies": {
-    "convex": "^1.39.1"
+    "convex": "^1.43.0"
   },
   "devDependencies": {
     "@eslint/js": "~9.39.0",
@@ -34,9 +35,8 @@
     "eslint": "^9.37.0",
     "globals": "~17.4.0",
     "tshy": "^3.0.0",
-    "typescript": "^5.9.2",
     "typescript-eslint": "^8.45.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.0"
   },
   "tshy": {
     "dialects": [
@@ -48,7 +48,9 @@
       "./package.json": "./package.json"
     },
     "exclude": [
-      "src/**/*.test.ts"
+      "src/**/*.test.ts",
+      "src/test/helpers.ts",
+      "src/test/fixtures/**"
     ],
     "selfLink": false
   },

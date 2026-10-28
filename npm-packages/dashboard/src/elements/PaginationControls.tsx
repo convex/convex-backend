@@ -30,8 +30,7 @@ interface CursorPaginationControlsProps {
   pageSizeOptions?: readonly Option<number>[];
 }
 
-interface CursorPaginationControlsPropsWithDiscriminator
-  extends CursorPaginationControlsProps {
+interface CursorPaginationControlsPropsWithDiscriminator extends CursorPaginationControlsProps {
   isCursorBasedPagination: true;
 }
 

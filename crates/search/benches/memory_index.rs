@@ -1,4 +1,3 @@
-#![feature(never_type)]
 #![feature(try_blocks)]
 #![feature(try_blocks_heterogeneous)]
 
@@ -23,21 +22,13 @@ use common::{
         CreationTime,
         ResolvedDocument,
     },
-    query::{
-        InternalSearch,
-        InternalSearchFilterExpression,
-        SearchVersion,
-    },
     types::{
-        IndexName,
         Timestamp,
         WriteTimestamp,
     },
 };
 use divan::counter::BytesCount;
 use search::{
-    build_term_weights,
-    query::CompiledQuery,
     MemoryTextIndex,
     TantivySearchIndexSchema,
 };
@@ -63,18 +54,9 @@ struct SearchDocument {
     text: String,
 }
 
-#[derive(Deserialize)]
-struct Query {
-    name: String,
-    query: String,
-}
-
 struct Dataset {
     schema: TantivySearchIndexSchema,
     loaded: BTreeMap<String, Vec<(InternalId, CreationTime, ResolvedDocument, usize)>>,
-
-    indexes: BTreeMap<String, MemoryTextIndex>,
-    queries: BTreeMap<String, CompiledQuery>,
 }
 
 impl Dataset {
@@ -91,8 +73,6 @@ impl Dataset {
             tablet_id: TabletId(alloc_id()),
             table_number: TableNumber::try_from(123).expect("Could not create table number"),
         };
-        let index_name: IndexName = "messages.by_body".parse()?;
-        let Ok(index_name) = index_name.map_table(&|_| Ok::<_, !>(table_id.tablet_id));
         let config = TextIndexSpec {
             search_field: "body".parse()?,
             filter_fields: BTreeSet::new(),
@@ -122,51 +102,7 @@ impl Dataset {
             loaded.insert(dataset.to_string(), documents);
         }
 
-        let f = File::open(format!("{path}/queries.jsonl"))?;
-        let f = BufReader::new(f);
-        let mut queries = vec![];
-        for line in f.lines() {
-            let q: Query = serde_json::from_str(&line?)?;
-            queries.push(q);
-        }
-        queries.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut compiled = BTreeMap::new();
-        for q in queries {
-            let internal_search = InternalSearch {
-                index_name: index_name.clone(),
-                table_name: "messages".parse()?,
-                filters: vec![InternalSearchFilterExpression::Search(
-                    "body".parse()?,
-                    q.query,
-                )],
-            };
-            let (compiled_query, _) = schema.compile(&internal_search, SearchVersion::V1)?;
-            compiled.insert(q.name, compiled_query);
-        }
-
-        let mut indexes = BTreeMap::new();
-        for (name, documents) in &loaded {
-            let mut index = MemoryTextIndex::new(WriteTimestamp::Committed(Timestamp::MIN));
-            for (internal_id, creation_time, document, _) in documents {
-                let terms = schema.index_into_terms(document).unwrap();
-                index
-                    .update(
-                        *internal_id,
-                        WriteTimestamp::Pending,
-                        None,
-                        Some((terms, *creation_time)),
-                    )
-                    .unwrap();
-            }
-            indexes.insert(name.clone(), index);
-        }
-
-        Ok(Dataset {
-            schema,
-            loaded,
-            queries: compiled,
-            indexes,
-        })
+        Ok(Dataset { schema, loaded })
     }
 }
 
@@ -212,35 +148,6 @@ fn load(bencher: divan::Bencher, dataset_name: &str) {
         }
         index
     });
-}
-
-fn query_args() -> impl Iterator<Item = String> {
-    let queries = ["common", "infrequent", "long", "nonexistent", "phrase"];
-    dataset_args().flat_map(move |n| queries.into_iter().map(move |q| format!("{n}:{q}")))
-}
-
-#[divan::bench(
-    args = query_args(),
-    max_time = 2,
-)]
-fn query(bencher: divan::Bencher, name: &str) {
-    let (dataset_name, query_name) = name.split_once(':').unwrap();
-    let dataset = &*DATASET;
-    let index = &dataset.indexes[dataset_name];
-    let query = &dataset.queries[query_name];
-
-    let snapshot_ts = Timestamp::MIN;
-    let stats_diff = index
-        .bm25_statistics_diff(
-            snapshot_ts,
-            &query.text_query.iter().map(|q| q.term().clone()).collect(),
-        )
-        .unwrap();
-    let (shortlist, ids) = index.bound_and_evaluate_query_terms(&query.text_query);
-    let term_list_query = index.build_term_list_bitset_query(query, &shortlist, &ids);
-    let term_weights = build_term_weights(&shortlist, &ids, &term_list_query, stats_diff).unwrap();
-
-    bencher.bench(|| index.query(snapshot_ts, &term_list_query, &ids, &term_weights));
 }
 
 fn main() {

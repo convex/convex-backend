@@ -10,7 +10,7 @@ use common::{
     document::{
         DeveloperDocument,
         PackedDocument,
-        ResolvedDocument,
+        PendingDocument,
     },
     query::CursorPosition,
     runtime::Runtime,
@@ -21,14 +21,14 @@ use common::{
     version::Version,
 };
 use errors::ErrorMetadata;
-use indexing::backend_in_memory_indexes::{
+use indexing::index_reader::{
     BatchKey,
     RangeRequest,
 };
 use itertools::Itertools;
 use value::{
-    ConvexObject,
     DeveloperDocumentId,
+    PendingValue,
     ResolvedDocumentId,
     TableName,
     TableNamespace,
@@ -143,8 +143,9 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
     pub async fn insert(
         &mut self,
         table: TableName,
-        value: ConvexObject,
+        value: impl Into<PendingValue> + Send,
     ) -> anyhow::Result<DeveloperDocumentId> {
+        let value = value.into();
         self.require_active_component().await?;
         if self.tx.virtual_system_mapping().is_virtual_table(&table) {
             anyhow::bail!(ErrorMetadata::bad_request(
@@ -184,7 +185,7 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
             .table_mapping()
             .namespace(self.namespace)
             .name_to_id_user_input()(table)?;
-        let document = ResolvedDocument::new(
+        let document = PendingDocument::new(
             ResolvedDocumentId::new(
                 table_id.tablet_id,
                 DeveloperDocumentId::new(table_id.table_number, internal_id),
@@ -192,8 +193,7 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
             creation_time,
             value,
         )?;
-        document.check_user_size()?;
-        let document_id = self.tx.insert_document(document).await?;
+        let document_id = self.tx.insert_pending_document(document).await?;
 
         Ok(document_id.into())
     }
@@ -206,7 +206,7 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
         &mut self,
         id: DeveloperDocumentId,
         value: PatchValue,
-    ) -> anyhow::Result<DeveloperDocument> {
+    ) -> anyhow::Result<PendingDocument> {
         if self.tx.is_system(self.namespace, id.table())
             && !(self.tx.identity.is_admin() || self.tx.identity.is_system())
         {
@@ -217,14 +217,7 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
         let id_ = self.tx.resolve_developer_id(&id, self.namespace)?;
 
         let new_document = self.tx.patch_inner(id_, value).await?;
-
-        // Check the size of the patched document.
-        if !self.tx.is_system(self.namespace, id.table()) {
-            new_document.check_user_size()?;
-        }
-
-        let developer_document = new_document.to_developer();
-        Ok(developer_document)
+        Ok(new_document)
     }
 
     /// Replace the document with the given value.
@@ -233,8 +226,8 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
     pub async fn replace(
         &mut self,
         id: DeveloperDocumentId,
-        value: ConvexObject,
-    ) -> anyhow::Result<DeveloperDocument> {
+        value: impl Into<PendingValue> + Send,
+    ) -> anyhow::Result<PendingDocument> {
         if self.tx.is_system(self.namespace, id.table())
             && !(self.tx.identity.is_admin() || self.tx.identity.is_system())
         {
@@ -244,11 +237,7 @@ impl<'a, RT: Runtime> UserFacingModel<'a, RT> {
         let id_ = self.tx.resolve_developer_id(&id, self.namespace)?;
 
         let new_document = self.tx.replace_inner(id_, value).await?;
-        if !self.tx.is_system(self.namespace, id.table()) {
-            new_document.check_user_size()?;
-        }
-        let developer_document = new_document.to_developer();
-        Ok(developer_document)
+        Ok(new_document)
     }
 
     /// Delete the document at the given path -- called from user facing APIs

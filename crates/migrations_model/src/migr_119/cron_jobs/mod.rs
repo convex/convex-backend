@@ -41,7 +41,7 @@ use crate::migr_119::cron_jobs::types::{
 
 pub mod types;
 
-pub static CRON_JOBS_TABLE: TableName = TableName::const_new("_cron_jobs");
+pub const CRON_JOBS_TABLE: TableName = TableName::const_new("_cron_jobs");
 
 // Used to find next jobs to execute for crons.
 #[allow(dead_code)] // TODO: remove
@@ -59,7 +59,7 @@ static CRON_JOBS_NEXT_TS_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "nextTs".parse().expect("invalid nextTs field"));
 
 #[allow(dead_code)] // TODO: remove
-pub static CRON_JOB_LOGS_TABLE: TableName = TableName::const_new("_cron_job_logs");
+pub const CRON_JOB_LOGS_TABLE: TableName = TableName::const_new("_cron_job_logs");
 
 #[allow(dead_code)] // TODO: remove
 pub static CRON_JOB_LOGS_INDEX_BY_NAME_TS: LazyLock<SystemIndex<CronJobLogsTable>> =
@@ -77,7 +77,7 @@ pub static CRON_JOB_LOGS_NAME_FIELD: LazyLock<FieldPath> =
 static CRON_JOB_LOGS_TS_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "ts".parse().expect("invalid ts field"));
 
-pub static CRON_NEXT_RUN_TABLE: TableName = TableName::const_new("_cron_next_run");
+pub const CRON_NEXT_RUN_TABLE: TableName = TableName::const_new("_cron_next_run");
 
 pub static CRON_NEXT_RUN_INDEX_BY_NEXT_TS: LazyLock<SystemIndex<CronNextRunTable>> =
     LazyLock::new(|| SystemIndex::new("by_next_ts", [&CRON_NEXT_RUN_NEXT_TS_FIELD]).unwrap());
@@ -96,10 +96,7 @@ impl SystemTable for CronJobsTable {
     type Metadata = CronJob;
 
     const FOR_MIGRATION: bool = true;
-
-    fn table_name() -> &'static TableName {
-        &CRON_JOBS_TABLE
-    }
+    const TABLE_NAME: TableName = CRON_JOBS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![
@@ -115,10 +112,7 @@ impl SystemTable for CronJobLogsTable {
     type Metadata = CronJobLog;
 
     const FOR_MIGRATION: bool = true;
-
-    fn table_name() -> &'static TableName {
-        &CRON_JOB_LOGS_TABLE
-    }
+    const TABLE_NAME: TableName = CRON_JOB_LOGS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![CRON_JOB_LOGS_INDEX_BY_NAME_TS.clone()]
@@ -131,10 +125,7 @@ impl SystemTable for CronNextRunTable {
     type Metadata = CronNextRun;
 
     const FOR_MIGRATION: bool = true;
-
-    fn table_name() -> &'static TableName {
-        &CRON_NEXT_RUN_TABLE
-    }
+    const TABLE_NAME: TableName = CRON_NEXT_RUN_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![

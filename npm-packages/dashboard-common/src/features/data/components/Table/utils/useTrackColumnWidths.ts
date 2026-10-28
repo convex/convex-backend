@@ -1,13 +1,14 @@
 import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
 import { useEffect } from "react";
-import { TableState } from "react-table";
+import { Table } from "@tanstack/react-table";
 import { usePrevious } from "react-use";
 
-export const useTrackColumnWidths = (
-  state: TableState<object>,
+export const useTrackColumnWidths = <TData>(
+  table: Table<TData>,
   localStorageKey: string,
 ) => {
-  const { isResizingColumn } = state.columnResizing;
+  const { isResizingColumn } = table.getState().columnSizingInfo;
+  const { columnSizing } = table.getState();
   const [savedWidths, setSavedWidths] = useGlobalLocalStorage<
     | {
         columnWidths: { [key: string]: number };
@@ -25,8 +26,7 @@ export const useTrackColumnWidths = (
       setSavedWidths({
         columnWidths: {
           ...(savedWidths?.columnWidths || {}),
-          [wasResizingColumn]:
-            state.columnResizing.columnWidths[wasResizingColumn],
+          [wasResizingColumn]: columnSizing[wasResizingColumn],
         },
       });
     }
@@ -35,9 +35,12 @@ export const useTrackColumnWidths = (
     wasResizingColumn,
     savedWidths,
     setSavedWidths,
-    state.columnResizing.columnWidths,
+    columnSizing,
     localStorageKey,
   ]);
 
-  return () => setSavedWidths(undefined);
+  return () => {
+    setSavedWidths(undefined);
+    table.resetColumnSizing();
+  };
 };

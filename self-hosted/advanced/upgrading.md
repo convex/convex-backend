@@ -28,12 +28,12 @@ directly, instead of trying to migrate in-place.
 
 1. Take down external traffic to your backend.
 2. Export your database with `npx convex export`.
-3. Save your environment variables with `npx convex env list` (or via
-   dashboard).
+3. Save your environment variables with
+   `npx convex env list --include-values > .env.convex` (or via dashboard).
 4. Upgrade the backend docker image.
 5. Import from your backup with `npx convex import --replace-all`.
-6. Bring back your environment variables with `npx convex env set` (or via
-   dashboard)
+6. Bring back your environment variables with
+   `npx convex env set --force --from-file .env.convex` (or via dashboard)
 7. Bring back external traffic to your backend.
 
 Given that exports/imports can be expensive if you have a lot of data, this can

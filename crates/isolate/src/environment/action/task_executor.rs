@@ -1,6 +1,9 @@
 use std::{
     collections::BTreeMap,
-    sync::Arc,
+    sync::{
+        Arc,
+        OnceLock,
+    },
     time::Duration,
 };
 
@@ -24,6 +27,7 @@ use common::{
     types::{
         ConvexOrigin,
         DeploymentMetadata,
+        HttpActionRoute,
     },
 };
 use errors::ErrorMetadata;
@@ -52,6 +56,7 @@ use usage_tracking::FunctionUsageTracker;
 use crate::{
     environment::{
         action::{
+            service_token::ServiceTokenCache,
             task::{
                 TaskId,
                 TaskRequest,
@@ -89,7 +94,9 @@ pub struct TaskExecutor<RT: Runtime> {
     pub udf_path: CanonicalizedUdfPath,
     pub component_path: ComponentPath,
     pub convex_origin_override: Arc<Mutex<Option<ConvexOrigin>>>,
+    pub http_action_route: Arc<OnceLock<HttpActionRoute>>,
     pub deployment: DeploymentMetadata,
+    pub(crate) service_token: Arc<ServiceTokenCache>,
 }
 
 impl<RT: Runtime> TaskExecutor<RT> {
@@ -210,7 +217,7 @@ impl<RT: Runtime> TaskExecutor<RT> {
             _ => None,
         };
         if let Some(user_identity) = user_identity {
-            return user_identity.try_into();
+            return Arc::unwrap_or_clone(user_identity).try_into();
         }
         Ok(JsonValue::Null)
     }

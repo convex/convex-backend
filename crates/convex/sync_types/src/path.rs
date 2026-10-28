@@ -8,25 +8,44 @@ use crate::{
     FunctionName,
 };
 
-pub fn check_valid_path_component(s: &str) -> anyhow::Result<()> {
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidPathComponentError {
+    #[error("Path component is too long ({length} > maximum {MAX_IDENTIFIER_LEN}): {prefix}...")]
+    TooLong { length: usize, prefix: String },
+    #[error(
+        "Path component {component} can only contain alphanumeric characters, underscores, or \
+         periods."
+    )]
+    InvalidCharacter { component: String },
+    #[error("Path component {component} must have at least one alphanumeric character.")]
+    MissingAlphanumeric { component: String },
+}
+
+pub fn check_valid_path_component(s: &str) -> Result<(), InvalidPathComponentError> {
     if s.len() > MAX_IDENTIFIER_LEN {
-        anyhow::bail!(
-            "Path component is too long ({} > maximum {}): {}...",
-            s.len(),
-            MAX_IDENTIFIER_LEN,
-            &s[..s.len().min(MAX_IDENTIFIER_LEN)]
-        );
+        return Err(InvalidPathComponentError::TooLong {
+            length: s.len(),
+            prefix: s
+                .chars()
+                .scan(0, |bytes, c| {
+                    *bytes += c.len_utf8();
+                    (*bytes <= MAX_IDENTIFIER_LEN).then_some(c)
+                })
+                .collect(),
+        });
     }
     if !s
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
     {
-        anyhow::bail!(
-            "Path component {s} can only contain alphanumeric characters, underscores, or periods."
-        );
+        return Err(InvalidPathComponentError::InvalidCharacter {
+            component: s.to_owned(),
+        });
     }
     if !s.chars().any(|c| c.is_ascii_alphanumeric()) {
-        anyhow::bail!("Path component {s} must have at least one alphanumeric character.");
+        return Err(InvalidPathComponentError::MissingAlphanumeric {
+            component: s.to_owned(),
+        });
     }
     Ok(())
 }
@@ -35,7 +54,7 @@ pub fn check_valid_path_component(s: &str) -> anyhow::Result<()> {
 pub struct PathComponent(String);
 
 impl FromStr for PathComponent {
-    type Err = anyhow::Error;
+    type Err = InvalidPathComponentError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         check_valid_path_component(s)?;

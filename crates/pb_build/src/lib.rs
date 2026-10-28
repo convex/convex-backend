@@ -12,30 +12,6 @@ use std::{
 use prost::Message;
 use tonic_prost_build::FileDescriptorSet;
 
-pub fn set_protoc_path() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("protoc");
-    let include_path = std::fs::canonicalize(root.join("include"))
-        .expect("Failed to canonicalize protoc include path");
-    unsafe { std::env::set_var("PROTOC_INCLUDE", include_path) };
-    if std::env::var_os("PROTOC").is_none() {
-        let protoc_binary_name = if cfg!(target_os = "macos") {
-            "protoc-macos-universal"
-        } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-            "protoc-linux-aarch64"
-        } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-            "protoc-linux-x86_64"
-        } else if cfg!(all(target_os = "windows")) {
-            // works on arm too
-            "protoc-windows-x86_64"
-        } else {
-            panic!("no protoc binary available for this architecture");
-        };
-        let binary_path = std::fs::canonicalize(root.join(protoc_binary_name))
-            .expect("Failed to canonicalize protoc path");
-        unsafe { std::env::set_var("PROTOC", binary_path) };
-    }
-}
-
 fn find_packages(proto_dir: &Path) -> Result<Vec<String>> {
     let mut packages = vec![];
     for dent in std::fs::read_dir(proto_dir)? {
@@ -50,7 +26,6 @@ fn find_packages(proto_dir: &Path) -> Result<Vec<String>> {
 }
 
 pub fn pb_build(features: Vec<&'static str>, extra_includes: Vec<&'static str>) -> Result<()> {
-    set_protoc_path();
     println!("cargo:rerun-if-changed=protos");
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let mut packages = find_packages(Path::new("protos/"))?;

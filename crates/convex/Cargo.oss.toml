@@ -7,16 +7,16 @@ edition = "2021"
 rust-version = "1.85"
 resolver = "2"
 license = "Apache-2.0"
-repository = "https://github.com/get-convex/convex-rs"
+repository = "https://github.com/convex/convex-rs"
 homepage = "https://www.convex.dev/"
 
 [features]
 default = [ "native-tls-vendored" ]
+rustls-tls-native-roots = [ "tokio-tungstenite/rustls-tls-native-roots" ]
+testing = [ "convex_sync_types/testing", "proptest", "proptest-derive", "parking_lot" ]
 native-tls = [ "tokio-tungstenite/native-tls" ]
 native-tls-vendored = [ "tokio-tungstenite/native-tls-vendored" ]
-rustls-tls-native-roots = [ "tokio-tungstenite/rustls-tls-native-roots" ]
 rustls-tls-webpki-roots = [ "tokio-tungstenite/rustls-tls-webpki-roots" ]
-testing = [ "convex_sync_types/testing", "proptest", "proptest-derive", "parking_lot" ]
 
 [dependencies]
 anyhow = { version = "1" }
@@ -32,7 +32,7 @@ proptest-derive = { optional = true, version = "0.5.0" }
 rand = { version = "0.9" }
 serde_json = { features = [ "float_roundtrip", "preserve_order", "raw_value" ], version = "1" }
 thiserror = { version = "2" }
-tokio = { features = [ "full" ], version = "1.47.1" }
+tokio = { features = [ "full" ], version = "1.53.1" }
 tokio-stream = { features = [ "io-util", "sync" ], version = "0.1" }
 tokio-tungstenite = { features = [ "url" ], version = "0.28.0" }
 tracing = { version = "0.1" }
@@ -52,6 +52,8 @@ tracing-subscriber = { features = [ "env-filter" ], version = "0.3.17" }
 
 [lints.rust]
 unused_extern_crates = "warn"
+unused_features = "allow"
+unexpected_cfgs = { level = "warn", check-cfg = [ "cfg(rust_analyzer)" ] }
 
 [lints.clippy]
 await_holding_lock = "warn"
@@ -67,5 +69,6 @@ single_match = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 upper_case_acronyms = "allow"
-useless_format = "allow"
 useless_vec = "allow"
+collapsible_match = "allow"
+chunks_exact_to_as_chunks = "allow"

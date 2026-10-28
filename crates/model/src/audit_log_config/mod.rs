@@ -1,3 +1,4 @@
+use anyhow::Context;
 use common::{
     document::ParsedDocument,
     runtime::Runtime,
@@ -10,7 +11,6 @@ use database::{
 use errors::ErrorMetadata;
 use value::{
     ConvexValue,
-    ResolvedDocumentId,
     TableName,
     TableNamespace,
 };
@@ -23,15 +23,13 @@ use crate::{
 pub mod types;
 use types::AuditLogConfig;
 
-pub static AUDIT_LOG_CONFIG_TABLE: TableName = TableName::const_new("_audit_log_config");
+pub const AUDIT_LOG_CONFIG_TABLE: TableName = TableName::const_new("_audit_log_config");
 
 pub struct AuditLogConfigTable;
 impl SystemTable for AuditLogConfigTable {
     type Metadata = AuditLogConfig;
 
-    fn table_name() -> &'static TableName {
-        &AUDIT_LOG_CONFIG_TABLE
-    }
+    const TABLE_NAME: TableName = AUDIT_LOG_CONFIG_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -66,7 +64,7 @@ impl<'a, RT: Runtime> AuditLogConfigModel<'a, RT> {
     }
 
     /// Get the current audit log config, if one exists.
-    pub async fn get(&mut self) -> anyhow::Result<Option<ParsedDocument<AuditLogConfig>>> {
+    async fn get(&mut self) -> anyhow::Result<Option<ParsedDocument<AuditLogConfig>>> {
         let result = self
             .tx
             .query_system(
@@ -80,18 +78,21 @@ impl<'a, RT: Runtime> AuditLogConfigModel<'a, RT> {
     }
 
     /// Get the existing config row ID, or create a new row with defaults.
-    async fn get_or_create(&mut self) -> anyhow::Result<ResolvedDocumentId> {
+    pub async fn get_or_create(&mut self) -> anyhow::Result<ParsedDocument<AuditLogConfig>> {
         if let Some(existing) = self.get().await? {
-            Ok(existing.id())
+            Ok(existing)
         } else {
             let config = AuditLogConfig {
                 firehose_stream_name: None,
-                include_in_log_streams: false,
             };
-            let id = SystemMetadataModel::new_global(self.tx)
+            let _ = SystemMetadataModel::new_global(self.tx)
                 .insert(&AUDIT_LOG_CONFIG_TABLE, config.try_into()?)
                 .await?;
-            Ok(id)
+            let doc = self
+                .get()
+                .await?
+                .context("Expected audit log config to exist")?;
+            Ok(doc)
         }
     }
 
@@ -105,12 +106,12 @@ impl<'a, RT: Runtime> AuditLogConfigModel<'a, RT> {
         if let Some(name) = &firehose_stream_name {
             validate_audit_log_firehose_stream_name(name, deployment_name)?;
         }
-        let id = self.get_or_create().await?;
+        let config = self.get_or_create().await?;
         let value = firehose_stream_name
             .map(ConvexValue::try_from)
             .transpose()?;
         SystemMetadataModel::new_global(self.tx)
-            .patch(id, patch_value!("firehoseStreamName" => value)?)
+            .patch(config.id(), patch_value!("firehoseStreamName" => value)?)
             .await?;
         Ok(())
     }

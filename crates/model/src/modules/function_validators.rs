@@ -16,6 +16,8 @@ use value::{
     ConvexArray,
     ConvexValue,
     NamespacedTableMapping,
+    PendingValue,
+    MAX_COMMIT_TS,
 };
 
 /**
@@ -48,19 +50,16 @@ impl ArgsValidator {
                         return Ok(Some(JsError::from_message(error_message)));
                     },
                 };
-                let object_arg = match single_arg {
-                    ConvexValue::Object(o) => o,
-                    _ => {
-                        let error_message = format!(
-                            "Expected to receive an object as the function's argument. Instead \
-                             received: {single_arg}"
-                        );
-                        return Ok(Some(JsError::from_message(error_message)));
-                    },
-                };
+                if !matches!(single_arg, ConvexValue::Object(_)) {
+                    let error_message = format!(
+                        "Expected to receive an object as the function's argument. Instead \
+                         received: {single_arg}"
+                    );
+                    return Ok(Some(JsError::from_message(error_message)));
+                }
 
                 let validation_error = Validator::Object(object_validator.clone()).check_value(
-                    &ConvexValue::Object(object_arg.clone()),
+                    single_arg,
                     table_mapping,
                     virtual_system_mapping,
                 );
@@ -72,6 +71,22 @@ impl ArgsValidator {
             },
         };
         Ok(result)
+    }
+
+    /// Validates pending args by resolving commit timestamps to
+    /// `MAX_COMMIT_TS`
+    pub fn check_pending_args(
+        &self,
+        args: Vec<PendingValue>,
+        table_mapping: &NamespacedTableMapping,
+        virtual_system_mapping: &VirtualSystemMapping,
+    ) -> anyhow::Result<Option<JsError>> {
+        let projected = args
+            .into_iter()
+            .map(|arg| arg.into_resolved(MAX_COMMIT_TS))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .and_then(ConvexArray::try_from)?;
+        self.check_args(&projected, table_mapping, virtual_system_mapping)
     }
 }
 
@@ -150,6 +165,21 @@ impl ReturnsValidator {
                 }
             },
         }
+    }
+
+    /// Validates pending values by resolving commit timestamps to
+    /// `MAX_COMMIT_TS`
+    pub fn check_pending_output(
+        &self,
+        output: &PendingValue,
+        table_mapping: &NamespacedTableMapping,
+        virtual_system_mapping: &VirtualSystemMapping,
+    ) -> anyhow::Result<Option<JsError>> {
+        if !self.needs_validation() {
+            return Ok(None);
+        }
+        let projected = output.resolve(MAX_COMMIT_TS)?;
+        Ok(self.check_output(&projected, table_mapping, virtual_system_mapping))
     }
 }
 

@@ -36,7 +36,7 @@ export const save = internalMutation({
     // Delete existing entries
     const existing = await ctx.db.query("cursorRules").collect();
     for (const entry of existing) {
-      await ctx.db.delete(entry._id);
+      await ctx.db.delete("cursorRules", entry._id);
     }
 
     // Insert new entry
@@ -45,6 +45,6 @@ export const save = internalMutation({
       version,
       hash: await hashSha256(content),
     });
-    return (await ctx.db.get(doc))!;
+    return (await ctx.db.get("cursorRules", doc))!;
   },
 });

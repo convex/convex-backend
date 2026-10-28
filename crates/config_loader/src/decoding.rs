@@ -151,3 +151,32 @@ impl<T: ProstMessage> ConfigDecoder for TextProtoDecoder<T> {
         Ok(message.transcode_to()?)
     }
 }
+
+/// Decodes a base64-encoded binary Prost message: standard-alphabet base64 of
+/// the message's wire-format bytes, with any surrounding whitespace trimmed.
+/// Empty or all-whitespace input decodes to the message's default value.
+#[derive(Clone)]
+pub struct Base64ProtoDecoder<T> {
+    _type: PhantomData<fn() -> T>,
+}
+
+impl<T> Base64ProtoDecoder<T> {
+    pub const fn new() -> Self {
+        Self { _type: PhantomData }
+    }
+}
+
+impl<T> Default for Base64ProtoDecoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: ProstMessage> ConfigDecoder for Base64ProtoDecoder<T> {
+    type Output = T;
+
+    fn decode(&self, contents: Vec<u8>) -> anyhow::Result<T> {
+        let bytes = base64::decode(contents.trim_ascii())?;
+        Ok(T::decode(&bytes[..])?)
+    }
+}

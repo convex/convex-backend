@@ -10,7 +10,7 @@ use value::{
 
 use crate::types::TableName;
 
-pub static TABLES_TABLE: TableName = TableName::const_new("_tables");
+pub const TABLES_TABLE: TableName = TableName::const_new("_tables");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TableState {

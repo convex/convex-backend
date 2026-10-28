@@ -4,25 +4,32 @@ import {
   WrenchIcon,
 } from "@heroicons/react/24/outline";
 import { CaretSortIcon, GearIcon, Pencil2Icon } from "@radix-ui/react-icons";
-import { useCurrentDeployment, useDeployments } from "api/deployments";
+import {
+  useCurrentDeployment,
+  useDeploymentByName,
+  useDeployments,
+} from "api/deployments";
 import { useCurrentTeam, useTeamEntitlements, useTeamMembers } from "api/teams";
 import { useProfile } from "api/profile";
 import { useRememberLastViewedDeploymentForProject } from "hooks/useLastViewed";
 import { cn } from "@ui/cn";
 import { useRouter } from "next/router";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import { ProjectDetails, DeploymentResponse, TeamResponse } from "generatedApi";
+import { ProjectDetails } from "generatedApi";
 import { Button } from "@ui/Button";
-import { ContextMenu } from "@common/features/data/components/ContextMenu";
-import { DeploymentMenuOptions } from "components/header/ProjectSelector/DeploymentMenuOptions";
 import { useCurrentProject } from "api/projects";
 import { useContext, useRef, useState, useEffect } from "react";
+import {
+  useCommandPaletteAnchor,
+  useCommandPaletteOpen,
+  useOpenCommandPalette,
+} from "elements/CommandPalette";
+import { usePaletteAnalytics } from "elements/CommandPalette/analytics";
 import {
   PROVISION_DEV_PAGE_NAME,
   PROVISION_PROD_PAGE_NAME,
 } from "@common/lib/deploymentContext";
 import { deploymentTypeColorClasses } from "@common/lib/deploymentTypeColorClasses";
-import { useHotkeys } from "react-hotkeys-hook";
 import { useListVanityDomains } from "api/vanityDomains";
 import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
@@ -32,11 +39,9 @@ import { useContainerWidth } from "../hooks/useContainerWidth";
 
 function DeploymentDomainInfo({
   deployment,
-  deployments,
   whoseName,
 }: {
   deployment: PlatformDeploymentResponse;
-  deployments: PlatformDeploymentResponse[];
   whoseName: string | null;
 }) {
   const team = useCurrentTeam();
@@ -64,7 +69,6 @@ function DeploymentDomainInfo({
     <DeploymentLabel
       deployment={deployment}
       whoseName={whoseName}
-      deployments={deployments}
       vanityUrl={
         vanityDomain?.verificationTime ? vanityDomain.domain : undefined
       }
@@ -75,30 +79,47 @@ function DeploymentDomainInfo({
 function DeploymentLabelWrapper({
   deployment,
   whoseName,
-  deployments,
   deploymentName,
 }: {
   deployment: PlatformDeploymentResponse;
   whoseName: string | null;
-  deployments: PlatformDeploymentResponse[];
   deploymentName: string;
 }) {
   return (
-    <DeploymentProvider deploymentName={deploymentName}>
-      <DeploymentDomainInfo
-        deployment={deployment}
-        whoseName={whoseName}
-        deployments={deployments}
-      />
+    <DeploymentProvider
+      deploymentName={deploymentName}
+      deploymentUrl={
+        deployment.kind === "cloud" ? deployment.deploymentUrl : undefined
+      }
+    >
+      <DeploymentDomainInfo deployment={deployment} whoseName={whoseName} />
     </DeploymentProvider>
   );
 }
 
-// TODO(ENG-10340) Use references here to disambiguate non-default dev/prod deployments
 export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
   const router = useRouter();
 
-  const deployment = useCurrentDeployment();
+  const deploymentName =
+    typeof router.query.deploymentName === "string"
+      ? router.query.deploymentName
+      : undefined;
+  // The project's whole deployment list is what the switcher menu needs; this
+  // label only needs the deployment the URL names, so fetch that one directly
+  // rather than leaving the header empty until the list lands. The by-name
+  // endpoint only serves cloud deployments, so local ones wait for the list.
+  const { deployments } = useDeployments(project.id);
+  const fetchByName =
+    deployments === undefined && !deploymentName?.startsWith("local-");
+  const deploymentFromName = useDeploymentByName(
+    fetchByName ? deploymentName : undefined,
+  );
+  const fallbackDeployment =
+    deploymentFromName?.projectId === project.id &&
+    deploymentFromName?.name === deploymentName
+      ? deploymentFromName
+      : undefined;
+  const deployment = useCurrentDeployment() ?? fallbackDeployment;
   const member = useProfile();
 
   useRememberLastViewedDeploymentForProject(project.slug, deployment?.name);
@@ -132,77 +153,14 @@ export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
   const team = useCurrentTeam();
   const currentProject = useCurrentProject();
 
-  const { deployments: deploymentData } = useDeployments(currentProject?.id);
-  const deployments = deploymentData || [];
-  const projectSlug = currentProject?.slug;
-  const selectedTeamSlug = team?.slug;
-  const projectsURI = `/t/${selectedTeamSlug}/${projectSlug}`;
-  const currentView = router.asPath.split("/").slice(5).join("/");
-  const devDeployments = deployments.filter(
-    (d) => d.deploymentType === "dev" && d.creator === member?.id,
-  );
-  const defaultProd = deployments.find(
-    (d) => d.kind === "cloud" && d.deploymentType === "prod" && d.isDefault,
-  );
-
-  // Hotkeys
-  useHotkeys(
-    "ctrl+alt+1",
-    () => {
-      if (defaultProd) {
-        void router.push(`${projectsURI}/${defaultProd.name}/${currentView}`);
-      } else {
-        void router.push(`${projectsURI}/${PROVISION_PROD_PAGE_NAME}`);
-      }
-    },
-    [defaultProd, projectsURI, currentView],
-  );
-  useHotkeys(
-    devDeployments.length === 0 ? [`ctrl+alt+2`] : [],
-    () => {
-      void router.push(`${projectsURI}/${PROVISION_DEV_PAGE_NAME}`);
-    },
-    [devDeployments, projectsURI],
-  );
-  useHotkeys(
-    Array.from({ length: devDeployments.length }, (_, idx) => [
-      `ctrl+alt+${idx + 2}`,
-    ]).flat(),
-    (event, handler) => {
-      const keyStr = handler.keys?.[0] || "";
-      if (keyStr) {
-        const devIdx = parseInt(keyStr.split("+").pop() || "", 10) - 2;
-        if (devIdx >= 0 && devIdx < devDeployments.length) {
-          void router.push(
-            `${projectsURI}/${devDeployments[devIdx].name}/${currentView}`,
-          );
-        }
-      }
-    },
-    [devDeployments, projectsURI, currentView],
-  );
-  useHotkeys(
-    "ctrl+alt+s",
-    () => {
-      void router.push(`${projectsURI}/settings`);
-    },
-    [projectsURI],
-  );
-
   return isProjectSettings ? (
     team && currentProject ? (
-      <DeploymentLabelProjectSettings
-        team={team}
-        currentProject={currentProject}
-        deployments={deployments}
-      />
+      <DeploymentLabelProjectSettings currentProject={currentProject} />
     ) : null
   ) : isProvisionPage ? (
     team && currentProject ? (
       <DeploymentLabelProvisionDeployment
-        team={team}
         currentProject={currentProject}
-        deployments={deployments}
         isProvisionProd={isProvisionProd}
       />
     ) : null
@@ -210,7 +168,6 @@ export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
     <DeploymentLabelWrapper
       deployment={deployment}
       whoseName={whoseName}
-      deployments={deployments}
       deploymentName={deployment.name}
     />
   );
@@ -219,18 +176,16 @@ export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
 export function DeploymentLabel({
   whoseName,
   deployment,
-  deployments,
   vanityUrl,
 }: {
   deployment: PlatformDeploymentResponse;
-  deployments: PlatformDeploymentResponse[];
   whoseName: string | null;
   vanityUrl?: string;
 }) {
   const team = useCurrentTeam();
   const project = useCurrentProject();
-  const { openMenu, closeMenu, menuTarget, buttonRef } =
-    useContextMenuTrigger();
+  const { openMenu, buttonRef, selected } =
+    useDeploymentSwitcherTrigger(project);
 
   const [containerRef, containerWidth] = useContainerWidth<HTMLDivElement>();
 
@@ -240,7 +195,6 @@ export function DeploymentLabel({
   const [showDomain, setShowDomain] = useState(
     containerWidth > DOMAIN_SHOW_THRESHOLD,
   );
-  const prevShowDomain = useRef(showDomain);
 
   useEffect(() => {
     if (showDomain && containerWidth < DOMAIN_HIDE_THRESHOLD) {
@@ -249,7 +203,6 @@ export function DeploymentLabel({
     if (!showDomain && containerWidth > DOMAIN_SHOW_THRESHOLD) {
       setShowDomain(true);
     }
-    prevShowDomain.current = showDomain;
   }, [containerWidth, showDomain]);
 
   // Estimate minimum widths (adjust as needed)
@@ -258,8 +211,6 @@ export function DeploymentLabel({
   const minNameWidth = 120;
   const padding = 48; // for icons, gaps, caret, etc.
 
-  // Decide what to show
-  const showType = true;
   const showName =
     containerWidth > minTypeWidth + minDomainWidth + minNameWidth + padding;
 
@@ -279,41 +230,37 @@ export function DeploymentLabel({
         id="select-deployment"
         data-testid="select-deployment"
         className={cn(
-          "flex h-[2.3125rem] items-center gap-2 truncate rounded-full border text-sm font-medium transition-opacity hover:opacity-80",
-          menuTarget && "opacity-80",
+          "flex h-9.25 items-center gap-2 truncate rounded-full border text-sm font-medium transition-opacity hover:opacity-80",
+          selected && "opacity-80",
           "focus-visible:ring-1 focus-visible:ring-border-selected focus-visible:outline-hidden",
           deploymentTypeColorClasses(deployment.deploymentType),
         )}
         type="button"
         ref={buttonRef}
         aria-haspopup="menu"
-        aria-expanded={!!menuTarget}
+        aria-expanded={selected}
         tabIndex={0}
         onClick={openMenu}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") openMenu(e as any);
         }}
       >
-        <div className="flex h-full w-full animate-fadeInFromLoading cursor-pointer items-center gap-1 px-4">
-          {showType && (
-            <>
-              {deployment.deploymentType === "dev" ? (
-                <CommandLineIcon className="size-4 min-w-4" />
-              ) : deployment.deploymentType === "prod" ? (
-                <SignalIcon className="size-4 min-w-4" />
-              ) : deployment.deploymentType === "preview" ? (
-                <Pencil2Icon className="size-4 min-w-4" />
-              ) : deployment.deploymentType === "custom" ? (
-                <WrenchIcon className="size-4 min-w-4" />
-              ) : null}
-              <span className="max-w-24 truncate sm:contents">
-                {getDeploymentLabel({
-                  deployment,
-                  whoseName,
-                })}
-              </span>
-            </>
-          )}
+        <div className="flex size-full animate-fadeInFromLoading cursor-pointer items-center gap-1 px-4">
+          {deployment.deploymentType === "dev" ? (
+            <CommandLineIcon className="size-4 min-w-4" />
+          ) : deployment.deploymentType === "prod" ? (
+            <SignalIcon className="size-4 min-w-4" />
+          ) : deployment.deploymentType === "preview" ? (
+            <Pencil2Icon className="size-4 min-w-4" />
+          ) : deployment.deploymentType === "custom" ? (
+            <WrenchIcon className="size-4 min-w-4" />
+          ) : null}
+          <span className="max-w-24 truncate sm:contents">
+            {getDeploymentLabel({
+              deployment,
+              whoseName,
+            })}
+          </span>
           {showDomain && deployment.kind === "cloud" && vanityUrl && (
             <>
               <span
@@ -363,13 +310,6 @@ export function DeploymentLabel({
               "bg-transparent",
             )}
           />
-          <ContextMenu target={menuTarget} onClose={closeMenu}>
-            <DeploymentMenuOptions
-              team={team}
-              project={project}
-              deployments={deployments}
-            />
-          </ContextMenu>
         </div>
       </Button>
     </div>
@@ -377,16 +317,12 @@ export function DeploymentLabel({
 }
 
 export function DeploymentLabelProjectSettings({
-  team,
   currentProject,
-  deployments,
 }: {
-  team: TeamResponse;
   currentProject: ProjectDetails;
-  deployments: PlatformDeploymentResponse[];
 }) {
-  const { openMenu, closeMenu, menuTarget, buttonRef } =
-    useContextMenuTrigger();
+  const { openMenu, buttonRef, selected } =
+    useDeploymentSwitcherTrigger(currentProject);
 
   return (
     <div
@@ -396,16 +332,16 @@ export function DeploymentLabelProjectSettings({
       <Button
         variant="unstyled"
         className={cn(
-          "flex h-[2.3125rem] items-center gap-2 rounded-full px-3",
+          "flex h-9.25 items-center gap-2 rounded-full px-3",
           "border bg-background-secondary text-content-primary",
           "truncate text-sm font-medium transition-opacity hover:bg-background-tertiary",
-          menuTarget && "border-border-selected bg-background-tertiary",
+          selected && "border-border-selected bg-background-tertiary",
         )}
         ref={buttonRef}
         tabIndex={0}
         role="button"
         aria-haspopup="menu"
-        aria-expanded={!!menuTarget}
+        aria-expanded={selected}
         onClick={openMenu}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") openMenu(e as any);
@@ -414,31 +350,20 @@ export function DeploymentLabelProjectSettings({
         <GearIcon className="size-4 min-w-4" />
         <span className="max-w-24 truncate sm:contents">Project settings</span>
         <CaretSortIcon className="ml-auto size-5 bg-transparent" />
-        <ContextMenu target={menuTarget} onClose={closeMenu}>
-          <DeploymentMenuOptions
-            team={team}
-            project={currentProject}
-            deployments={deployments}
-          />
-        </ContextMenu>
       </Button>
     </div>
   );
 }
 
 export function DeploymentLabelProvisionDeployment({
-  team,
   currentProject,
-  deployments,
   isProvisionProd,
 }: {
-  team: TeamResponse;
   currentProject: ProjectDetails;
-  deployments: PlatformDeploymentResponse[];
   isProvisionProd: boolean;
 }) {
-  const { openMenu, closeMenu, menuTarget, buttonRef } =
-    useContextMenuTrigger();
+  const { openMenu, buttonRef, selected } =
+    useDeploymentSwitcherTrigger(currentProject);
 
   return (
     <div
@@ -448,10 +373,11 @@ export function DeploymentLabelProvisionDeployment({
       <Button
         variant="unstyled"
         className={cn(
-          "flex h-[2.3125rem] items-center gap-2 rounded-full px-3",
+          "flex h-9.25 items-center gap-2 rounded-full px-3",
           "border border-dashed",
           "truncate text-sm font-medium transition-opacity hover:opacity-80",
-          menuTarget && "opacity-80",
+          selected && "opacity-80",
+          // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- eslint-plugin-better-tailwindcss v4 incorrectly identifies "prod"/"dev" as class names
           deploymentTypeColorClasses(isProvisionProd ? "prod" : "dev"),
           "[--bg-opacity:50%]",
         )}
@@ -459,7 +385,7 @@ export function DeploymentLabelProvisionDeployment({
         tabIndex={0}
         role="button"
         aria-haspopup="menu"
-        aria-expanded={!!menuTarget}
+        aria-expanded={selected}
         onClick={openMenu}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") openMenu(e as any);
@@ -474,13 +400,6 @@ export function DeploymentLabelProvisionDeployment({
           {isProvisionProd ? "Production" : "Development (Cloud)"}
         </span>
         <CaretSortIcon className="ml-auto size-5 bg-transparent" />
-        <ContextMenu target={menuTarget} onClose={closeMenu}>
-          <DeploymentMenuOptions
-            team={team}
-            project={currentProject}
-            deployments={deployments}
-          />
-        </ContextMenu>
       </Button>
     </div>
   );
@@ -490,7 +409,7 @@ export function getDeploymentLabel({
   deployment,
   whoseName,
 }: {
-  deployment: PlatformDeploymentResponse | DeploymentResponse;
+  deployment: PlatformDeploymentResponse;
   whoseName: string | null; // null = mine
 }): string {
   if (
@@ -523,19 +442,34 @@ export function getDeploymentLabel({
   }
 }
 
-function useContextMenuTrigger() {
+function useDeploymentSwitcherTrigger(
+  project: ProjectDetails | null | undefined,
+) {
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const [menuTarget, setMenuTarget] = useState<{ x: number; y: number } | null>(
-    null,
-  );
-  const openMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    if (buttonRef.current) {
-      const rect = buttonRef.current.getBoundingClientRect();
-      setMenuTarget({ x: rect.left, y: rect.bottom });
-    }
-  };
-  const closeMenu = () => setMenuTarget(null);
+  const openCommandPalette = useOpenCommandPalette();
+  const [isPaletteOpen] = useCommandPaletteOpen();
+  const [paletteAnchor] = useCommandPaletteAnchor();
+  const { trackOpened } = usePaletteAnalytics();
 
-  return { openMenu, closeMenu, menuTarget, buttonRef };
+  return {
+    buttonRef,
+    openMenu: (e: React.MouseEvent) => {
+      e.preventDefault();
+      const button = buttonRef.current;
+      if (!button || !project) {
+        return;
+      }
+      trackOpened("deployment-selector");
+      const rect = button.getBoundingClientRect();
+      openCommandPalette({
+        pages: [{ type: "deployments", project }],
+        anchor: {
+          left: rect.left,
+          top: rect.bottom + 8,
+          source: "deployment-switcher",
+        },
+      });
+    },
+    selected: isPaletteOpen && paletteAnchor?.source === "deployment-switcher",
+  };
 }

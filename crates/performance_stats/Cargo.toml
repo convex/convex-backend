@@ -23,6 +23,9 @@ tikv-jemallocator = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(all(target_arch = "aarch64", target_os = "linux"))'.dependencies]
+tikv-jemalloc-sys = { workspace = true, features = ["profiling_frameptr"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 jemalloc_pprof = { workspace = true }
 

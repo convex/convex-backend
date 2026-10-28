@@ -199,7 +199,7 @@ function ShowArgsPanelWithArgs({
   setShowArgs: React.Dispatch<React.SetStateAction<boolean>>;
 }) {
   const udfArgsParsed: JSONValue[] = JSON.parse(
-    Buffer.from(udfArgs).toString("utf8"),
+    new TextDecoder().decode(udfArgs),
   );
   return (
     <DetailPanel

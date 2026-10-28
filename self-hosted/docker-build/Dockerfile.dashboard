@@ -17,15 +17,29 @@ NODE_VERSION=$(cat /nvmrc | tr -d 'v\n')
 apt-get install -y --no-install-recommends nodejs=${NODE_VERSION}-1nodesource1
 EOF
 
-RUN --mount=type=cache,target=/root/.npm npm install -g @microsoft/rush@5
 WORKDIR /app
+# `npm-packages/convex`'s build script is a `uv run --script`, so provision uv via
+# mise (version + checksum from mise.toml/mise.lock; mise's own version from
+# min_version) and put it on PATH for the turbo build below.
+COPY mise.toml mise.lock ./
+ENV MISE_INSTALL_PATH="/usr/local/bin/mise" \
+    MISE_DATA_DIR="/mise" \
+    MISE_CONFIG_DIR="/mise" \
+    MISE_CACHE_DIR="/mise/cache"
+RUN curl -fsSL https://mise.run | MISE_VERSION="v$(sed -nE 's/^min_version = "([^"]+)"/\1/p' mise.toml)" sh \
+    && mise trust && mise install --locked uv \
+    && ln -s "$(mise which uv)" /usr/local/bin/uv
+# pnpm/turbo come pinned from scripts/package-lock.json, so release builds
+# always use the exact vetted versions.
+COPY scripts ./scripts
+RUN --mount=type=cache,target=/root/.npm npm ci --prefix scripts
+ENV PATH="/app/scripts/node_modules/.bin:$PATH"
 COPY ./npm-packages ./npm-packages
 # Install dependencies and build
-WORKDIR /app/npm-packages/dashboard-self-hosted
-RUN rush install
+WORKDIR /app/npm-packages
+RUN pnpm install --frozen-lockfile
 ENV NODE_ENV=production
-RUN rush build -t dashboard-self-hosted
-RUN rush-pnpm deploy --legacy --filter=dashboard-self-hosted --prod /tmp/deploy
+RUN turbo run build --filter=dashboard-self-hosted...
 
 FROM ubuntu:noble
 
@@ -45,9 +59,15 @@ EOF
 
 RUN groupadd --system --gid 1001 nodejs
 RUN useradd --system --uid 1001 --gid nodejs nextjs
-COPY --from=build --chown=nextjs:nodejs /tmp/deploy/ /app/
-WORKDIR /app
-RUN cp /app/.next/standalone/server.js .
+COPY --from=build --chown=nextjs:nodejs \
+    /app/npm-packages/dashboard-self-hosted/.next/standalone/ /app/
+COPY --from=build --chown=nextjs:nodejs \
+    /app/npm-packages/dashboard-self-hosted/.next/static/ \
+    /app/dashboard-self-hosted/.next/static/
+COPY --from=build --chown=nextjs:nodejs \
+    /app/npm-packages/dashboard-self-hosted/public/ \
+    /app/dashboard-self-hosted/public/
+WORKDIR /app/dashboard-self-hosted
 USER nextjs
 EXPOSE 6791
 ENV PORT=6791

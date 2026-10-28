@@ -15,6 +15,6 @@ create TypeScript types specific to the app's data model.
 Run:
 
 ```
-just rush install
+just install-js
 npm run dev
 ```

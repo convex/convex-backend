@@ -3,7 +3,7 @@ name = "text-importer"
 version = "0.1.0"
 description = "Vector importer script"
 authors = [{ name = "Convex, Inc.", email = "no-reply@convex.dev" }]
-requires-python = "~=3.13.0"
+requires-python = "==3.14.*"
 dependencies = [
     "python-dotenv>=1.0.0,<2",
     "convex>=0.6.0,<0.7",

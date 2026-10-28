@@ -10,13 +10,15 @@
 #![feature(impl_trait_in_fn_trait_return)]
 #![feature(ptr_metadata)]
 #![feature(exit_status_error)]
+#![feature(vec_deque_extract_if)]
 
 mod array_buffer_allocator;
 pub mod bundled_js;
 pub mod client;
 mod concurrency_limiter;
+pub mod context_cache;
 mod context_local_state;
-mod convert_v8;
+pub mod convert_v8;
 pub mod environment;
 pub mod error;
 mod execution_scope;
@@ -28,11 +30,11 @@ pub mod isolate_worker;
 pub mod metrics;
 pub mod module_cache;
 pub mod module_map;
-mod ops;
+pub mod ops;
 mod request_scope;
 pub mod strings;
 mod termination;
-mod timeout;
+pub mod timeout;
 mod udf_runtime;
 
 pub use self::{
@@ -51,7 +53,6 @@ pub use self::{
         deserialize_udf_custom_error,
         deserialize_udf_result,
         format_uncaught_error,
-        UdfArgsJson,
     },
     isolate::IsolateHeapStats,
     metrics::{
@@ -59,5 +60,13 @@ pub use self::{
         log_source_map_token_lookup_failed,
     },
     request_scope::RequestScope,
-    timeout::Timeout,
+    termination::{
+        ContextId,
+        ExecutionHandle,
+        OutOfMemoryError,
+    },
+    timeout::{
+        start_cooperative_request,
+        Timeout,
+    },
 };

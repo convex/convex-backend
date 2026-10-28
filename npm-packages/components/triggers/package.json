@@ -8,7 +8,7 @@
     "build:cjs": "tsc --project ./commonjs.json && echo '{\\n  \"type\": \"commonjs\"\\n}' > dist/commonjs/package.json",
     "typecheck": "tsc --noEmit",
     "dev": "convex dev",
-    "prepare": "npm run build"
+    "prepublishOnly": "npm run build"
   },
   "files": [
     "dist",
@@ -49,7 +49,6 @@
     "convex": "workspace:*"
   },
   "devDependencies": {
-    "prettier": "3.8.1",
     "@types/node": "^18.17.0",
     "typescript": "~5.0.3"
   },

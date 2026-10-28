@@ -1,0 +1,43 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  // turbo hashes each package's own files plus its resolved dependency
+  // versions, so root-level config is invisible to it. pnpm-workspace.yaml
+  // carries `overrides` and `autoInstallPeers`, which change what gets
+  // installed and therefore what every package builds against.
+  "globalDependencies": ["pnpm-workspace.yaml"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [
+        "dist/**",
+        "build/**",
+        ".next/**",
+        "!.next/cache/**",
+        "out/**"
+      ],
+      "env": ["NODE_ENV"]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "outputs": []
+    },
+    "test-esm": {
+      "dependsOn": ["build"],
+      "outputs": []
+    },
+    // Deps that expose only `dist/` (convex, shapes, id-encoding, the
+    // @convex-dev/* packages) are unresolvable until `build` runs, and
+    // installing no longer runs it. `dev` is uncached, so pass the whole
+    // environment through rather than making every server declare its vars.
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true,
+      "interactive": true,
+      "passThroughEnv": ["*"]
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

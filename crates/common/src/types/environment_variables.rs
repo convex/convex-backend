@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     collections::BTreeMap,
     str::FromStr,
     sync::LazyLock,
@@ -26,6 +27,12 @@ pub struct EnvVarName(String);
 impl From<EnvVarName> for String {
     fn from(value: EnvVarName) -> Self {
         value.0
+    }
+}
+
+impl Borrow<str> for EnvVarName {
+    fn borrow(&self) -> &str {
+        &self.0
     }
 }
 

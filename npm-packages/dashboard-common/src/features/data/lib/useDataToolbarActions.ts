@@ -4,10 +4,7 @@ import { ConvexError } from "convex/values";
 import { useMutation } from "convex/react";
 import udfs from "@common/udfs";
 import { Id } from "system-udfs/convex/_generated/dataModel";
-import {
-  useInvalidateShapes,
-  useDeleteTables,
-} from "@common/features/data/lib/api";
+import { useDeleteTables } from "@common/features/data/lib/api";
 import { useNents } from "@common/lib/useNents";
 import { toast } from "@common/lib/utils";
 import { useContext } from "react";
@@ -43,7 +40,6 @@ export function useDataToolbarActions({
   deleteRows: (rowIds: Set<string>) => Promise<void>;
 } {
   const { captureException } = useContext(DeploymentInfoContext);
-  const invalidateShapes = useInvalidateShapes();
 
   const documentAdd = useMutation(udfs.addDocument.default);
   const { selectedNent } = useNents();
@@ -61,7 +57,6 @@ export function useDataToolbarActions({
       throw error;
     }
     handleAddDocuments();
-    await invalidateShapes();
     onDocumentsAdded?.(documents.length);
   };
 
@@ -111,7 +106,6 @@ export function useDataToolbarActions({
         toast("error", resp.error);
       } else {
         toast("success", "Table deleted.");
-        await invalidateShapes();
       }
     } catch (err: any) {
       captureException(err);
@@ -139,7 +133,6 @@ export function useDataToolbarActions({
             rowIds.size === 1 ? "document" : "documents"
           }.`,
         );
-        await invalidateShapes();
         clearSelectedRows();
         loadMore();
       }

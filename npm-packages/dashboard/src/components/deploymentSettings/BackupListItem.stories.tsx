@@ -44,6 +44,7 @@ const targetDeployment: PlatformDeploymentResponse = {
 const meta = {
   component: BackupListItem,
   args: {
+    teamId: 1,
     backup,
     restoring: false,
     someBackupInProgress: false,
@@ -56,7 +57,7 @@ const meta = {
     canCreate: true,
     canImport: true,
     canDelete: true,
-    getZipExportUrl: () => "",
+    downloadZipExport: async () => {},
     maxCloudBackups: 2,
     progressMessage: null,
   },

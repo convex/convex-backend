@@ -1,64 +1,103 @@
 import { Combobox, Option } from "@ui/Combobox";
 import { DateRangePicker } from "@common/elements/DateRangePicker";
-import startCase from "lodash/startCase";
 import { endOfToday, startOfDay } from "date-fns";
 import sortBy from "lodash/sortBy";
 import type { DateRange } from "react-day-picker";
-import { AuditLogAction, MemberResponse } from "generatedApi";
+import { AuditLogAction } from "api/auditLog";
+import { MemberResponse } from "generatedApi";
 
-// TODO: Replace with a generated type once we can generate enum
-// values
 const AUDIT_LOG_ACTIONS = [
-  "joinTeam",
-  "createTeam",
-  "updateTeam",
-  "deleteTeam",
-  "createProject",
-  "updateProject",
-  "deleteProject",
-  "createProjectEnvironmentVariable",
-  "updateProjectEnvironmentVariable",
-  "deleteProjectEnvironmentVariable",
-  "createDeployment",
-  "deleteDeployment",
-  "updateDeployment",
-  "inviteMember",
-  "cancelMemberInvitation",
-  "updateMemberRole",
-  "updateMemberProjectRole",
-  "removeMember",
-  "updatePaymentMethod",
-  "updateBillingContact",
-  "updateBillingAddress",
-  "createSubscription",
-  "cancelSubscription",
-  "resumeSubscription",
-  "createCustomDomain",
-  "deleteCustomDomain",
-  "createTeamAccessToken",
-  "updateTeamAccessToken",
-  "deleteTeamAccessToken",
-  "createProjectAccessToken",
-  "updateProjectAccessToken",
-  "deleteProjectAccessToken",
-  "createDeploymentAccessToken",
-  "updateDeploymentAccessToken",
-  "deleteDeploymentAccessToken",
-  "startManualCloudBackup",
-  "deleteCloudBackup",
-  "restoreFromCloudBackup",
-  "configurePeriodicBackup",
-  "disablePeriodicBackup",
-  "disableTeamExceedingSpendingLimits",
-  "setSpendingLimit",
-] as const;
+  "team:join",
+  "team:create",
+  "team:update",
+  "team:delete",
+  "team:token:create",
+  "team:token:update",
+  "team:token:delete",
+  "team:token:view",
+  "team:domain:create",
+  "team:domain:delete",
+  "team:disableExceedingSpendingLimits",
+  "team:applyReferralCode",
+  "project:create",
+  "project:transfer",
+  "project:receive",
+  "project:update",
+  "project:delete",
+  "project:updateMemberRole",
+  "project:token:create",
+  "project:token:update",
+  "project:token:delete",
+  "project:token:view",
+  "defaultEnvironmentVariable:create",
+  "defaultEnvironmentVariable:update",
+  "defaultEnvironmentVariable:delete",
+  "deployment:create",
+  "deployment:delete",
+  "deployment:update",
+  "deployment:transfer",
+  "deployment:receive",
+  "deployment:token:create",
+  "deployment:token:update",
+  "deployment:token:delete",
+  "deployment:token:view",
+  "deployment:customDomain:create",
+  "deployment:customDomain:delete",
+  "deployment:backups:create",
+  "deployment:backups:import",
+  "deployment:backups:configurePeriodic",
+  "deployment:backups:disablePeriodic",
+  "deployment:backups:delete",
+  "member:invite",
+  "member:cancelInvitation",
+  "member:remove",
+  "member:updateRole",
+  "member:token:createWithSsoAccess",
+  "billing:paymentMethod:update",
+  "billing:contact:update",
+  "billing:address:update",
+  "billing:subscription:create",
+  "billing:subscription:resume",
+  "billing:subscription:cancel",
+  "billing:subscription:changePlan",
+  "billing:spendingLimit:update",
+  "oauthApplication:create",
+  "oauthApplication:update",
+  "oauthApplication:delete",
+  "oauthApplication:verify",
+  "oauthApplication:generateClientSecret",
+  "integration:workos:team:create",
+  "integration:workos:team:disconnect",
+  "integration:workos:team:inviteMember",
+  "integration:workos:environment:create",
+  "integration:workos:environment:delete",
+  "integration:workos:environment:retrieveCredentials",
+  "integration:workos:projectEnvironment:create",
+  "integration:workos:projectEnvironment:delete",
+  "integration:workos:projectEnvironment:retrieveCredentials",
+  "sso:enable",
+  "sso:disable",
+  "sso:update",
+  "member:loginWithSso",
+  "directorySync:enable",
+  "directorySync:disable",
+  "directorySync:updateGroupMapping",
+  "directorySync:deleteGroupMapping",
+  "customRole:create",
+  "customRole:update",
+  "customRole:delete",
+] as const satisfies readonly AuditLogAction[];
+
+// Assert that AUDIT_LOG_ACTIONS is exhaustive
+type AssertSubset<Sub extends Super, Super> = Sub;
+type _AllActionsListed = AssertSubset<
+  AuditLogAction,
+  (typeof AUDIT_LOG_ACTIONS)[number]
+>;
 
 const actionOptions: Option<AuditLogAction | "all_actions">[] = [
   { label: "All actions", value: "all_actions" },
-  ...AUDIT_LOG_ACTIONS.map((action) => ({
-    label: startCase(action),
-    value: action,
-  })),
+  ...AUDIT_LOG_ACTIONS.map((action) => ({ label: action, value: action })),
 ];
 
 export function AuditLogToolbar({
@@ -90,7 +129,7 @@ export function AuditLogToolbar({
   const beforeMinDateTooltip =
     auditLogRetentionDays === -1
       ? null
-      : `Deployment history is preserved for ${auditLogRetentionDays} days.`;
+      : `Audit logs are preserved for ${auditLogRetentionDays} days.`;
   const maxEndDate = endOfToday();
 
   const startDate =

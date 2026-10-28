@@ -8,7 +8,14 @@
 //! ```text
 //! footer = fletcher16( [ VInt(table_number) ] [ internal ID ] ) ^ version
 //! ```
-use std::str::FromStr;
+use std::{
+    array::from_fn,
+    simd::{
+        num::SimdUint as _,
+        u8x16,
+    },
+    str::FromStr,
+};
 
 use thiserror::Error;
 
@@ -70,7 +77,7 @@ impl DeveloperDocumentId {
         let f1 = fletcher16(&buf[..pos]);
 
         buf[pos..(pos + 16)].copy_from_slice(&self.internal_id());
-        let f2 = fletcher16(&self.internal_id());
+        let f2 = fletcher16_simd(&self.internal_id().0);
         pos += 16;
 
         let footer = fletcher16_combine(f1, f2, 16) ^ VERSION;
@@ -262,10 +269,17 @@ fn vint_decode(buf: &[u8]) -> Result<(u32, usize), VintDecodeError> {
 fn fletcher16(buf: &[u8]) -> u16 {
     let mut c0 = 0u8;
     let mut c1 = 0u8;
-    for (i, byte) in buf.iter().enumerate() {
+    for byte in buf {
         c0 = c0.wrapping_add(*byte);
-        c1 = c1.wrapping_add(byte.wrapping_mul((buf.len() - i) as u8));
+        c1 = c1.wrapping_add(c0);
     }
+    ((c1 as u16) << 8) | (c0 as u16)
+}
+// Specialized version of fletcher16
+fn fletcher16_simd(buf: &[u8; 16]) -> u16 {
+    let data = u8x16::from_array(*buf);
+    let c0 = data.reduce_sum();
+    let c1 = (data * u8x16::from_array(from_fn(|i| 16 - i as u8))).reduce_sum();
     ((c1 as u16) << 8) | (c0 as u16)
 }
 // Combine two fletcher16 checksums:

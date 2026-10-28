@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
 use anyhow::Context;
-use convex::Value as ConvexValue;
 use fivetran_common::fivetran_sdk::value_type::Inner as FivetranValue;
 use prost_types::Timestamp;
 use serde_json::Value as JsonValue;
+use value::{
+    export::ValueFormat,
+    ConvexValue,
+};
 
 fn timestamp_from_ms(ms_since_unix_epoch: f64) -> Timestamp {
     let ms_in_s = 1000.0;
@@ -22,10 +25,10 @@ fn to_fivetran_value(value: ConvexValue) -> FivetranValue {
         ConvexValue::Int64(value) => FivetranValue::Long(value),
         ConvexValue::Float64(value) => FivetranValue::Double(value),
         ConvexValue::Boolean(value) => FivetranValue::Bool(value),
-        ConvexValue::String(value) => FivetranValue::String(value),
-        ConvexValue::Bytes(value) => FivetranValue::Binary(value),
-        ConvexValue::Array(_) | ConvexValue::Object(_) => {
-            FivetranValue::Json(value.export().to_string())
+        ConvexValue::String(value) => FivetranValue::String(value.into()),
+        ConvexValue::Bytes(value) => FivetranValue::Binary(value.into()),
+        value @ (ConvexValue::Array(_) | ConvexValue::Object(_)) => {
+            FivetranValue::Json(value.export(ValueFormat::ConvexCleanJSON).to_string())
         },
     }
 }
@@ -49,7 +52,10 @@ fn to_fivetran_field(
                 )?;
                 FivetranValue::UtcDatetime(timestamp_from_ms(milliseconds))
             } else {
-                let convex_value = ConvexValue::try_from(field_value).context("Invalid Convex value")?;
+                // The data sync API emits `ValueFormat::ConvexExportJSON`, of
+                // which this is the inverse.
+                let convex_value = ConvexValue::from_clean_lossless(field_value)
+                    .context("Invalid Convex value")?;
                 to_fivetran_value(convex_value)
             };
 

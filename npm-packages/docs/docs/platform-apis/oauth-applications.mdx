@@ -38,20 +38,27 @@ project. You may add up to 20 redirect URIs, including ones pointing to
 [localhost](http://localhost) for testing.
 
 Once you've created your application, it will be in the "Unverified" state. In
-the Unverified state, you'll be able to obtain application tokens for your own
-team, but not for other teams. We recommend testing your application in the
-Unverified state before requesting verification.
+the Unverified state, your application can be authorized by up to 100 distinct
+Convex teams, which lets you test and roll out your application before
+requesting verification. Once your application reaches 100 connected teams, no
+additional teams will be able to authorize it until it is verified. Verifying
+your application removes this limit. The number of teams that have authorized
+your application, and how close it is to the limit, is shown next to the
+application in your
+[Team Settings](https://dashboard.convex.dev/team/settings/applications/oauth-apps).
 
 You may request verification by clicking the ⋮ button next to your application,
 and clicking "Request Verification".
 
 ### Verification requirements
 
-To have your application be verified and be accessible for all Convex users, it
-must meet the following criteria:
+To have your application be verified and be accessible for an unlimited number
+of Convex teams, it must meet the following criteria:
 
 - The application description has an explanation of the capabilities and planned
   future capabilities of your application.
+- You provide a link to your live application. A working integration is required
+  for verification.
 - The application name, redirect URIs, and content of the redirect URIs do not
   attempt to misrepresent another organization, business, or entity.
 - The listed redirect URIs belong to your organization.

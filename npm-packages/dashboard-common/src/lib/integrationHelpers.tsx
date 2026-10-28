@@ -1,12 +1,14 @@
 import { Infer } from "convex/values";
 import { ReactNode } from "react";
-import { Doc, Id } from "system-udfs/convex/_generated/dataModel";
+import * as Yup from "yup";
 import {
   DatadogSiteLocation,
   ExportIntegrationType,
   ImportIntegrationType,
+  Integration,
   IntegrationConfig,
   IntegrationType,
+  RedactedS3ExportConfig,
 } from "system-udfs/convex/_system/frontend/common";
 import {
   axiomConfig,
@@ -18,6 +20,7 @@ import {
 } from "system-udfs/convex/schema";
 import { Link } from "@ui/Link";
 import classNames from "classnames";
+import { ArchiveBoxIcon } from "@heroicons/react/24/outline";
 import { WebhookIcon } from "@common/elements/icons";
 import { DatadogLogo } from "@common/lib/logos/DatadogLogo";
 import { AxiomLogo } from "@common/lib/logos/AxiomLogo";
@@ -27,7 +30,20 @@ import { AirbyteLogo } from "@common/lib/logos/AirbyteLogo";
 import { FivetranLogo } from "@common/lib/logos/FivetranLogo";
 import { WorkosLogo } from "./logos/WorkosLogo";
 
-export type SinkStatus = Doc<"_log_sinks">["status"];
+// A configured integration narrowed to a single kind, as `listConfiguredSinks`
+// returns it. Derives fields from the schema.
+type LogSinkDoc<T extends IntegrationConfig["type"]> = Omit<
+  Integration,
+  "config"
+> & { config: Extract<IntegrationConfig, { type: T }> };
+
+export const topicsValidationSchema = Yup.array()
+  .nullable()
+  .test(
+    "non-empty-topics",
+    "Select at least one topic.",
+    (value) => value === null || value === undefined || value.length > 0,
+  );
 
 export const LOG_INTEGRATIONS = [
   "axiom",
@@ -36,7 +52,7 @@ export const LOG_INTEGRATIONS = [
   "postHogLogs",
 ] as const;
 export const EXC_INTEGRATIONS = ["sentry", "postHogErrorTracking"] as const;
-export const AUTH_INTEGRATIONS = ["workos"] as const;
+export const ANALYTICS_INTEGRATIONS = ["s3Export"] as const;
 export const EXPORT_INTEGRATIONS: ExportIntegrationType[] = ["fivetran"];
 export const IMPORT_INTEGRATIONS: ImportIntegrationType[] = ["airbyte"];
 
@@ -47,62 +63,24 @@ export type LogIntegrationConfig =
   | Infer<typeof postHogLogsConfig>;
 
 export type LogIntegration =
-  | {
-      kind: "datadog";
-      existing: {
-        _id: Id<"_log_sinks">;
-        _creationTime: number;
-        status: SinkStatus;
-        config: Infer<typeof datadogConfig>;
-      } | null;
-    }
-  | {
-      kind: "axiom";
-      existing: {
-        _id: Id<"_log_sinks">;
-        _creationTime: number;
-        status: SinkStatus;
-        config: Infer<typeof axiomConfig>;
-      } | null;
-    }
-  | {
-      kind: "webhook";
-      existing: {
-        _id: Id<"_log_sinks">;
-        _creationTime: number;
-        status: SinkStatus;
-        config: Infer<typeof webhookConfig>;
-      } | null;
-    }
-  | {
-      kind: "postHogLogs";
-      existing: {
-        _id: Id<"_log_sinks">;
-        _creationTime: number;
-        status: SinkStatus;
-        config: Infer<typeof postHogLogsConfig>;
-      } | null;
-    };
+  | { kind: "datadog"; existing: LogSinkDoc<"datadog"> | null }
+  | { kind: "axiom"; existing: LogSinkDoc<"axiom"> | null }
+  | { kind: "webhook"; existing: LogSinkDoc<"webhook"> | null }
+  | { kind: "postHogLogs"; existing: LogSinkDoc<"postHogLogs"> | null };
 
 export type ExceptionReportingIntegration =
-  | {
-      kind: "sentry";
-      existing: {
-        _id: Id<"_log_sinks">;
-        _creationTime: number;
-        status: SinkStatus;
-        config: Infer<typeof sentryConfig>;
-      } | null;
-    }
+  | { kind: "sentry"; existing: LogSinkDoc<"sentry"> | null }
   | {
       kind: "postHogErrorTracking";
-      existing: {
-        _id: Id<"_log_sinks">;
-        _creationTime: number;
-        status: SinkStatus;
-        config: Infer<typeof postHogErrorTrackingConfig>;
-      } | null;
+      existing: LogSinkDoc<"postHogErrorTracking"> | null;
     };
+
+export type AnalyticsIntegration = {
+  kind: "s3Export";
+  existing: LogSinkDoc<"s3Export"> | null;
+};
+
+export type AnalyticsIntegrationConfig = RedactedS3ExportConfig;
 
 export type ExceptionReportingIntegrationConfig =
   | Infer<typeof sentryConfig>
@@ -177,6 +155,19 @@ export function integrationToLogo(
           />
         ),
       };
+    case "s3Export":
+      return {
+        logo: (
+          <div
+            className={classNames(
+              "flex items-center justify-center rounded-sm border",
+              sizeClass,
+            )}
+          >
+            <ArchiveBoxIcon className={small ? "size-4" : "size-7"} />
+          </div>
+        ),
+      };
     case "airbyte":
       return {
         logo: (
@@ -219,7 +210,11 @@ export function integrationToLogo(
 }
 
 export function integrationUsingLegacyFormat(
-  config: LogIntegrationConfig | ExceptionReportingIntegrationConfig | null,
+  config:
+    | LogIntegrationConfig
+    | ExceptionReportingIntegrationConfig
+    | AnalyticsIntegrationConfig
+    | null,
 ) {
   if (config === null) {
     return false;
@@ -235,9 +230,9 @@ export function integrationUsingLegacyFormat(
       return config.version !== "2";
     case "postHogLogs":
     case "postHogErrorTracking":
+    case "s3Export":
       return false;
     default: {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       config satisfies never;
       return false;
     }
@@ -258,19 +253,6 @@ export const LOG_STREAMS_DESCRIPTION = (
   </div>
 );
 
-export const EXCEPTION_REPORTING_DESCRIPTION = (
-  <div>
-    <p>
-      Configure and monitor exception reporting integrations within this
-      deployment.
-    </p>
-    <p>
-      Exceptions thrown from your Convex functions will be reported to your
-      configured integrations.
-    </p>
-  </div>
-);
-
 export const STREAMING_EXPORT_DESCRIPTION = (
   <div>
     <p>Set up streaming export with a third party connector platform.</p>{" "}
@@ -287,6 +269,16 @@ export const STREAMING_EXPORT_DESCRIPTION = (
       Learn more
     </Link>
     .
+  </div>
+);
+
+export const ANALYTICS_EXPORT_DESCRIPTION = (
+  <div>
+    <p>
+      Export this deployment's change log to an S3 bucket you own as Apache
+      Iceberg tables, queryable from Athena, Snowflake, Databricks, and other
+      engines through AWS Glue.
+    </p>
   </div>
 );
 
@@ -322,13 +314,6 @@ export type IntegrationUnavailableReason =
   | "CannotManageDeployment"
   | "LocalDeployment";
 
-export const UNAVAILABLE_TOOLTIP_TEXT = {
-  MissingEntitlement: "This integration requires the Pro plan.",
-  CannotManageDeployment:
-    "You do not have permission to manage integrations in this deployment.",
-  LocalDeployment: "You cannot manage integrations in a local deployment.",
-};
-
 export function configToUrl(config: IntegrationConfig): string {
   const kind = config.type;
   switch (kind) {
@@ -354,8 +339,9 @@ export function configToUrl(config: IntegrationConfig): string {
       );
       return `${etHost}/error_tracking`;
     }
+    case "s3Export":
+      return `https://s3.console.aws.amazon.com/s3/buckets/${config.bucket}?region=${encodeURIComponent(config.region)}`;
     default:
-      // eslint-disable-next-line no-case-declarations
       kind satisfies never;
       throw new Error(`Unrecognized integration type ${kind}`);
   }
@@ -390,6 +376,8 @@ export const integrationName = (kind: IntegrationType) => {
       return "PostHog Logs";
     case "postHogErrorTracking":
       return "PostHog Error Tracking";
+    case "s3Export":
+      return "AWS S3";
     default:
       return kind.charAt(0).toUpperCase() + kind.slice(1);
   }

@@ -16,6 +16,10 @@ use application::{
     valid_identifier::ValidIdentifier,
 };
 use axum::response::IntoResponse;
+use chrono::{
+    DateTime,
+    Utc,
+};
 use common::{
     self,
     components::ComponentPath,
@@ -24,19 +28,24 @@ use common::{
             Json,
             MtState,
         },
+        ExtractRequestMetadata,
         HttpResponseError,
     },
-    schemas::json::DatabaseSchemaJson,
+    schemas::json::{
+        DatabaseSchemaJson,
+        TableDefinitionJson,
+    },
 };
 use errors::ErrorMetadata;
-use fivetran_destination::api_types::{
-    BatchWriteRow,
-    CreateTableArgs,
-    DeleteType,
-    TruncateTableArgs,
-};
 use http::StatusCode;
-use model::snapshot_imports::types::ImportRequestor;
+use model::{
+    fivetran_import::{
+        BatchWriteRow,
+        DeleteType,
+    },
+    snapshot_imports::types::ImportRequestor,
+};
+use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
     Serialize,
@@ -122,6 +131,12 @@ pub async fn get_schema(
     }))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTableArgs {
+    table_definition: TableDefinitionJson,
+}
+
 pub async fn fivetran_create_table(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
@@ -145,6 +160,7 @@ pub struct ClearTableArgs {
 pub async fn clear_tables(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(ClearTableArgs { table_names }): Json<ClearTableArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
     identity.require_operation(keybroker::DeploymentOp::ImportBackups)?;
@@ -165,6 +181,7 @@ pub async fn clear_tables(
         .application
         .clear_tables(
             &identity,
+            request_metadata,
             table_names,
             ImportRequestor::StreamingImport,
             usage.clone(),
@@ -175,6 +192,14 @@ pub async fn clear_tables(
     drop(usage);
 
     Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TruncateTableArgs {
+    table_name: String,
+    delete_before: Option<DateTime<Utc>>,
+    delete_type: DeleteType,
 }
 
 /// Truncates the given table.
@@ -193,6 +218,7 @@ pub async fn clear_tables(
 pub async fn fivetran_truncate_table(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(TruncateTableArgs {
         table_name,
         delete_before,
@@ -210,6 +236,7 @@ pub async fn fivetran_truncate_table(
         st.application
             .clear_tables(
                 &identity,
+                request_metadata,
                 vec![(ComponentPath::root(), table_name.0)],
                 ImportRequestor::StreamingImport,
                 usage.clone(),

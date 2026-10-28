@@ -5,6 +5,7 @@ import { Modal } from "@ui/Modal";
 
 export function ConfirmationDialog({
   onClose,
+  onBeforeClose,
   onConfirm,
   validationText,
   confirmText,
@@ -16,6 +17,7 @@ export function ConfirmationDialog({
   error,
 }: {
   onClose: () => void;
+  onBeforeClose?: () => boolean;
   onConfirm: () => Promise<void>;
   disableCancel?: boolean;
   disableConfirm?: boolean;
@@ -24,7 +26,7 @@ export function ConfirmationDialog({
   dialogTitle: ReactNode;
   dialogBody: ReactNode;
   variant?: "primary" | "danger" | "neutral" | "unstyled";
-  error?: string;
+  error?: ReactNode;
 }) {
   const [validation, setValidation] = useState("");
   const [isConfirming, setIsConfirming] = useState(false);
@@ -48,7 +50,12 @@ export function ConfirmationDialog({
       : false;
 
   return (
-    <Modal title={dialogTitle} onClose={onClose} size="sm">
+    <Modal
+      title={dialogTitle}
+      onClose={onClose}
+      onBeforeClose={onBeforeClose}
+      size="sm"
+    >
       <div className="pb-3">
         {dialogBody}{" "}
         {validationText && (
@@ -79,7 +86,15 @@ export function ConfirmationDialog({
       </div>
       <div className="flex w-full gap-2">
         <div className="grow">&nbsp;</div>
-        <Button variant="neutral" onClick={onClose} disabled={disableCancel}>
+        <Button
+          variant="neutral"
+          onClick={() => {
+            if (!onBeforeClose || onBeforeClose()) {
+              onClose();
+            }
+          }}
+          disabled={disableCancel}
+        >
           Cancel
         </Button>
         <Button

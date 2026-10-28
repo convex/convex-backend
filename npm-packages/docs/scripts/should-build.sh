@@ -39,7 +39,11 @@ if [ "$CONTEXT" = "deploy-preview" ]; then
   # main. This answers "does this PR touch docs?" without being affected by
   # stale CACHED_COMMIT_REF values or unrelated changes on main.
   echo "Mode:    deploy-preview (merge-base with origin/main)"
-  git fetch origin main --depth=1 2>/dev/null
+  # Fetch main's full history so merge-base can reach the PR's fork point. Avoid
+  # --depth=1: it grafts main's tip shallow, leaving merge-base nothing to find.
+  # --unshallow recovers an already-shallow cache; on a complete repo it errors
+  # and falls through to a normal fetch.
+  git fetch origin main --unshallow 2>/dev/null || git fetch origin main 2>/dev/null
   base=$(git merge-base HEAD origin/main 2>/dev/null)
 else
   # Branch deploy (main, docs-prod): compare against the last successfully

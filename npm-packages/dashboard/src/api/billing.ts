@@ -1,7 +1,11 @@
 import { useRef } from "react";
-import type { InvoiceResponse } from "generatedApi";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+import type { CreditResponse, InvoiceResponse } from "generatedApi";
 import { BILLING_RESOURCE, Permissioned } from "lib/permissions";
-import { useHasCustomRolePermission } from "./roles";
+import {
+  useHasCustomRolePermission,
+  useIsCurrentMemberTeamAdmin,
+} from "./roles";
 import { useBBMutation, useBBQuery } from "./api";
 
 // Subscription info is readable by all team members; but some details may not be available depending on whether the member has `billing:view`.
@@ -16,9 +20,28 @@ export function useTeamOrbSubscription(teamId?: number) {
     swrOptions: { refreshInterval: 0, keepPreviousData: false },
   });
   if (error) {
-    return { isLoading, subscription: null };
+    return { isLoading, subscription: null, hasError: true };
   }
-  return { isLoading, subscription };
+  return { isLoading, subscription, hasError: false };
+}
+
+export function useTeamPrices(teamId: number) {
+  const { dashboardShowCashUsage } = useLaunchDarkly();
+  const canView = useHasCustomRolePermission(
+    teamId,
+    "billing:view",
+    BILLING_RESOURCE,
+    true,
+  );
+  const result = useBBQuery({
+    path: "/teams/{team_id}/get_prices",
+    pathParams: {
+      team_id:
+        dashboardShowCashUsage && canView === true ? teamId.toString() : "",
+    },
+    swrOptions: { keepPreviousData: false },
+  });
+  return { ...result, canView };
 }
 
 export function useCreateSetupIntent(teamId: number) {
@@ -165,12 +188,15 @@ export function useListInvoices(
   hasMore: boolean;
   isRefreshing: boolean;
 }> {
-  const canView = useHasCustomRolePermission(
+  const isTeamAdmin = useIsCurrentMemberTeamAdmin();
+  const canViewCustom = useHasCustomRolePermission(
     teamId,
     "billing:invoices:view",
     BILLING_RESOURCE,
-    true,
+    false,
   );
+  const canView =
+    canViewCustom === undefined ? undefined : isTeamAdmin || canViewCustom;
   const { data, isLoading } = useBBQuery({
     path: "/teams/{team_id}/list_invoices",
     pathParams: {
@@ -216,7 +242,6 @@ export function useListPlans(teamId?: number) {
     swrOptions: { refreshInterval: 0 },
   });
   if (error) {
-    // eslint-disable-next-line @typescript-eslint/only-throw-error
     throw error;
   }
   return { plans: data?.plans, isLoading };
@@ -244,6 +269,48 @@ export function useGetCurrentSpend(
   }
   if (isLoading) return { status: "loading" };
   return { status: "ok", data: { totalCents: data?.totalCents } };
+}
+
+type CreditsResult = Permissioned<CreditResponse[]> & {
+  refreshCredits: () => Promise<void>;
+};
+
+export function useListCredits(teamId: number | null): CreditsResult {
+  const canView = useHasCustomRolePermission(
+    teamId ?? undefined,
+    "billing:view",
+    BILLING_RESOURCE,
+    true,
+  );
+  const { data, isLoading, mutate } = useBBQuery({
+    path: "/teams/{team_id}/list_credits",
+    pathParams: {
+      team_id: canView === true ? (teamId?.toString() ?? "") : "",
+    },
+    // Credits are granted out of band and don't change over the life of a page
+    // view, so don't poll Orb for them.
+    swrOptions: { refreshInterval: 0 },
+  });
+  const refreshCredits = async () => {
+    await mutate();
+  };
+  if (canView === undefined) {
+    return { status: "loading", refreshCredits } as const;
+  }
+  if (canView === false) {
+    return {
+      status: "denied",
+      deniedAction: "billing:view",
+      refreshCredits,
+    } as const;
+  }
+  if (isLoading) return { status: "loading", refreshCredits } as const;
+  // The response is paged-shaped, but the server returns every credit today.
+  return {
+    status: "ok",
+    data: data?.items ?? [],
+    refreshCredits,
+  } as const;
 }
 
 export type SpendingLimits = {

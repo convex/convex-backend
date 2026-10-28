@@ -57,7 +57,7 @@ use crate::{
     COMPONENT_DEFINITIONS_TABLE,
 };
 
-pub static COMPONENTS_TABLE: TableName = TableName::const_new("_components");
+pub const COMPONENTS_TABLE: TableName = TableName::const_new("_components");
 
 pub static COMPONENTS_BY_PARENT_INDEX: LazyLock<SystemIndex<ComponentsTable>> =
     LazyLock::new(|| SystemIndex::new("by_parent_and_name", [&PARENT_FIELD, &NAME_FIELD]).unwrap());
@@ -69,9 +69,7 @@ pub struct ComponentsTable;
 impl SystemTable for ComponentsTable {
     type Metadata = ComponentMetadata;
 
-    fn table_name() -> &'static TableName {
-        &COMPONENTS_TABLE
-    }
+    const TABLE_NAME: TableName = COMPONENTS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![COMPONENTS_BY_PARENT_INDEX.clone()]

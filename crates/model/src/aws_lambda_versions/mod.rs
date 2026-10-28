@@ -1,30 +1,20 @@
-use anyhow::Context;
+use std::sync::Arc;
+
 use common::{
-    document::{
-        ParseDocument,
-        ParsedDocument,
-    },
-    query::{
-        Expression,
-        Order,
-        Query,
-    },
+    document::ParsedDocument,
     runtime::Runtime,
 };
 use database::{
-    ResolvedQuery,
     SystemMetadataModel,
     Transaction,
 };
 use value::{
-    val,
     TableName,
     TableNamespace,
 };
 
 use self::types::AwsLambdaVersion;
 use crate::{
-    backend_info::BackendInfoModel,
     source_packages::types::SourcePackageId,
     SystemIndex,
     SystemTable,
@@ -32,15 +22,13 @@ use crate::{
 
 pub mod types;
 
-pub static AWS_LAMBDA_VERSIONS_TABLE: TableName = TableName::const_new("_aws_lambda_versions");
+pub const AWS_LAMBDA_VERSIONS_TABLE: TableName = TableName::const_new("_aws_lambda_versions");
 
 pub struct AwsLambdaVersionsTable;
 impl SystemTable for AwsLambdaVersionsTable {
     type Metadata = AwsLambdaVersion;
 
-    fn table_name() -> &'static TableName {
-        &AWS_LAMBDA_VERSIONS_TABLE
-    }
+    const TABLE_NAME: TableName = AWS_LAMBDA_VERSIONS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -55,16 +43,6 @@ pub struct AwsLambdaVersionsModel<'a, RT: Runtime> {
 impl<'a, RT: Runtime> AwsLambdaVersionsModel<'a, RT> {
     pub fn new(lambda_name: String, tx: &'a mut Transaction<RT>) -> Self {
         Self { lambda_name, tx }
-    }
-
-    #[allow(unused)]
-    pub async fn requested_provision_concurrency(&mut self) -> anyhow::Result<i32> {
-        Ok(BackendInfoModel::new(self.tx)
-            .get()
-            .await
-            .context("Get Backend Info failed")?
-            .map(|bi| bi.provision_concurrency)
-            .unwrap_or(0))
     }
 
     pub async fn mark_deployed(&mut self, new_version: AwsLambdaVersion) -> anyhow::Result<()> {
@@ -84,28 +62,31 @@ impl<'a, RT: Runtime> AwsLambdaVersionsModel<'a, RT> {
     }
 
     pub async fn latest_version(&mut self) -> anyhow::Result<Option<AwsLambdaVersion>> {
-        Ok(self
-            .latest_version_document()
-            .await?
-            .map(|v| v.into_value()))
+        Ok(self.latest_version_document().await?.map(|v| (**v).clone()))
     }
 
     pub async fn latest_version_document(
         &mut self,
-    ) -> anyhow::Result<Option<ParsedDocument<AwsLambdaVersion>>> {
+    ) -> anyhow::Result<Option<Arc<ParsedDocument<AwsLambdaVersion>>>> {
         // Do a full table scan on lambda versions table. Good enough
         // because table is small. If it were bigger, we'd want index on lambda_name
-        let mut query = ResolvedQuery::new(
-            self.tx,
-            TableNamespace::Global,
-            Query::full_table_scan(AWS_LAMBDA_VERSIONS_TABLE.clone(), Order::Desc).filter(
-                Expression::field_eq_literal("lambdaName".parse()?, val!(self.lambda_name.clone())),
-            ),
-        )?;
-        let document = query.expect_at_most_one(self.tx).await?;
-        document
-            .map(ParseDocument::<AwsLambdaVersion>::parse)
-            .transpose()
+        let mut query = self
+            .tx
+            .query_system(
+                TableNamespace::Global,
+                &SystemIndex::<AwsLambdaVersionsTable>::by_creation_time(),
+            )?
+            .all()
+            .await?
+            .into_iter()
+            .filter(|doc| doc.lambda_name == self.lambda_name);
+        let doc = query.next();
+        anyhow::ensure!(
+            query.next().is_none(),
+            "found more than one lambda version for {}",
+            self.lambda_name
+        );
+        Ok(doc)
     }
 
     /// Determines if we should route execute requests to static lambda or not.
@@ -119,7 +100,7 @@ impl<'a, RT: Runtime> AwsLambdaVersionsModel<'a, RT> {
     pub async fn static_lambda_ready(
         &mut self,
         source_pkg_id: &SourcePackageId,
-    ) -> anyhow::Result<Option<AwsLambdaVersion>> {
+    ) -> anyhow::Result<Option<Arc<ParsedDocument<AwsLambdaVersion>>>> {
         // Fetch static lambda version
         let static_version = self.latest_version_document().await?;
 
@@ -128,7 +109,7 @@ impl<'a, RT: Runtime> AwsLambdaVersionsModel<'a, RT> {
             let source_package_id = static_version.package_desc.as_static()?;
             let should_use_static = source_package_id.as_ref() == Some(source_pkg_id);
 
-            Ok(should_use_static.then(|| static_version.into_value()))
+            Ok(should_use_static.then_some(static_version))
         } else {
             Ok(None)
         }

@@ -16,6 +16,7 @@ import { maximumRowsRead } from "system-udfs/convex/_system/paginationLimits";
 import { useNents } from "@common/lib/useNents";
 import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { filterParamForQuery } from "@common/features/data/lib/useTableFilters";
 
 const DEFAULT_DATA_PAGE_SIZE = 25;
 const dataPageInactivityTimeMinutes = 1;
@@ -35,7 +36,9 @@ export function useDataPageSize(componentId: string | null, tableName: string) {
 export const useQueryFilteredTable = (tableName: string) => {
   const router = useRouter();
 
-  const filters = (router.query.filters as string) || null;
+  const rawFilters = (router.query.filters as string) || null;
+  // Only forward a well-formed param to the backend.
+  const filters = useMemo(() => filterParamForQuery(rawFilters), [rawFilters]);
 
   const isPaused = useIdle(dataPageInactivityTimeMinutes * 1000 * 60, false);
 

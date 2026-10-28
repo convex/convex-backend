@@ -1,10 +1,13 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { mocked } from "storybook/test";
-import { ProjectDetails, TeamResponse } from "generatedApi";
+import { TeamResponse } from "generatedApi";
 import { useCurrentTeam } from "api/teams";
 import { useCurrentProject } from "api/projects";
 import { DeploymentLabel } from "./DeploymentDisplay";
-import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
+import {
+  PlatformDeploymentResponse,
+  ProjectResponse,
+} from "@convex-dev/platform/managementApi";
 
 // Mock data
 const mockTeam: TeamResponse = {
@@ -16,13 +19,13 @@ const mockTeam: TeamResponse = {
   referralCode: "CODE123",
 };
 
-const mockProject: ProjectDetails = {
+const mockProject: ProjectResponse = {
   id: 1,
   name: "Test Project",
   slug: "test-project",
   teamId: 1,
+  teamSlug: "test-team",
   createTime: Date.now(),
-  isDemo: false,
 };
 
 function createCloudDeployment(
@@ -113,14 +116,6 @@ const nonDefaultProdDeployment = createCloudDeployment({
   reference: "prod/shard-1",
 });
 
-const allDeployments = [
-  prodDeployment,
-  devDeployment,
-  localDevDeployment,
-  previewDeployment,
-  customDeployment,
-];
-
 const meta = {
   component: DeploymentLabel,
   render: (args) => <DeploymentLabel {...args} />,
@@ -137,7 +132,6 @@ type Story = StoryObj<typeof meta>;
 export const Production: Story = {
   args: {
     deployment: prodDeployment,
-    deployments: allDeployments,
     whoseName: null,
   },
 };
@@ -145,7 +139,6 @@ export const Production: Story = {
 export const ProductionWithVanityUrl: Story = {
   args: {
     deployment: prodDeployment,
-    deployments: allDeployments,
     whoseName: null,
     vanityUrl: "api.myapp.com",
   },
@@ -154,7 +147,6 @@ export const ProductionWithVanityUrl: Story = {
 export const DevelopmentCloud: Story = {
   args: {
     deployment: devDeployment,
-    deployments: allDeployments,
     whoseName: null,
   },
 };
@@ -162,7 +154,6 @@ export const DevelopmentCloud: Story = {
 export const DevelopmentCloudTeammate: Story = {
   args: {
     deployment: devDeployment,
-    deployments: allDeployments,
     whoseName: "Jane Doe",
   },
 };
@@ -170,7 +161,6 @@ export const DevelopmentCloudTeammate: Story = {
 export const DevelopmentLocal: Story = {
   args: {
     deployment: localDevDeployment,
-    deployments: allDeployments,
     whoseName: null,
   },
 };
@@ -178,7 +168,6 @@ export const DevelopmentLocal: Story = {
 export const Preview: Story = {
   args: {
     deployment: previewDeployment,
-    deployments: allDeployments,
     whoseName: null,
   },
 };
@@ -186,7 +175,6 @@ export const Preview: Story = {
 export const Custom: Story = {
   args: {
     deployment: customDeployment,
-    deployments: allDeployments,
     whoseName: null,
   },
 };
@@ -194,7 +182,6 @@ export const Custom: Story = {
 export const NonDefaultDev: Story = {
   args: {
     deployment: nonDefaultDevDeployment,
-    deployments: allDeployments,
     whoseName: null,
   },
 };
@@ -202,7 +189,6 @@ export const NonDefaultDev: Story = {
 export const NonDefaultProd: Story = {
   args: {
     deployment: nonDefaultProdDeployment,
-    deployments: allDeployments,
     whoseName: null,
   },
 };

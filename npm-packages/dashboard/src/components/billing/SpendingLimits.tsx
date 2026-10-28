@@ -50,9 +50,9 @@ export function spendingLimitsSchema({
   const disableSchema = baseSchema.test(
     "is-greater-than-current-spending",
     currentSpending !== undefined
-      ? `The spend limit must be greater than the spending in the current billing cycle (${formatUsd(currentSpending.totalCents / 100)}). ${
+      ? `The disable threshold must be greater than the spending in the current billing cycle (${formatUsd(currentSpending.totalCents / 100)}). ${
           currentSpending.nextBillingPeriodStart
-            ? `You will be able to lower your spending limit at the start of the next billing cycle (${formatDate(
+            ? `You will be able to lower it at the start of the next billing cycle (${formatDate(
                 currentSpending.nextBillingPeriodStart,
               )} at midnight UTC).`
             : ""
@@ -69,7 +69,7 @@ export function spendingLimitsSchema({
     spendingLimitDisableThresholdUsd: disableSchema,
     spendingLimitWarningThresholdUsd: baseSchema.test(
       "is-less-than-spend-limit",
-      "The warning threshold must be less than the spend limit.",
+      "The warning threshold must be less than the disable threshold.",
       function isLessThanSpendLimitValidator(warningThreshold) {
         const { parent } = this;
         const disableThreshold = parent.spendingLimitDisableThresholdUsd;
@@ -229,7 +229,7 @@ export function SpendingLimits() {
       )}
       <SpendLimitInput
         formKey="spendingLimitDisableThresholdUsd"
-        label="Limit usage spending to"
+        label="Disable projects when spending exceeds"
         accessibleInputLabel="Disable Threshold"
         description={
           spendingLimitDisableThresholdUsd !== null && (
@@ -243,7 +243,8 @@ export function SpendingLimits() {
                 <strong className="font-semibold">
                   all of your team’s projects will be disabled
                 </strong>{" "}
-                until you increase the spend limit.
+                until you raise this threshold. This is not a hard cap: usage
+                recorded before your projects are disabled is still billed.
               </span>
             </span>
           )

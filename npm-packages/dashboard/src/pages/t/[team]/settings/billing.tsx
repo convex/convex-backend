@@ -25,10 +25,13 @@ import { Loading } from "@ui/Loading";
 import { planNameMap } from "components/billing/planCards/PlanCard";
 import { OpenInVercel } from "components/OpenInVercel";
 import startCase from "lodash/startCase";
+import { PromoCodeModalContainer } from "components/billing/PromoCodeModal";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 
 export { getServerSideProps } from "lib/ssr";
 
 function Billing({ team }: { team: TeamResponse }) {
+  const { promos } = useLaunchDarkly();
   const { subscription: orbSub, isLoading: isOrbSubLoading } =
     useTeamOrbSubscription(team.id);
 
@@ -48,10 +51,8 @@ function Billing({ team }: { team: TeamResponse }) {
   const canChangePlan = hasAdminPermissions || canChangePlanCustom === true;
   const myProfile = useProfile();
   const orbPlans = useListPlans(team.id);
-  const selectedPlan = orbPlans.plans?.find((p) =>
-    router.query.source === "chef"
-      ? p.planType === "CONVEX_STARTER_PLUS"
-      : p.id === router.query.upgradePlan,
+  const selectedPlan = orbPlans.plans?.find(
+    (p) => p.id === router.query.upgradePlan,
   );
 
   const newPlanName = selectedPlan?.planType
@@ -60,9 +61,16 @@ function Billing({ team }: { team: TeamResponse }) {
 
   const showUpgrade =
     selectedPlan && orbSub?.plan.id !== selectedPlan.id && canChangePlan;
+  const promoCode =
+    typeof router.query.promoCode === "string"
+      ? router.query.promoCode
+      : undefined;
 
   return (
     <div className="-mx-6 flex grow flex-col">
+      {promos && promoCode !== undefined && (
+        <PromoCodeModalContainer code={promoCode} initialTeam={team} />
+      )}
       <div className="sticky top-0 z-10 -mt-6 flex items-center gap-2 bg-background-primary p-6">
         {showUpgrade && (
           <Button
@@ -104,7 +112,7 @@ function Billing({ team }: { team: TeamResponse }) {
           {!isOrbSubLoading && orbSub !== undefined ? (
             <div
               className={cn(
-                "flex h-full min-h-0 w-full gap-6 transition-transform duration-500 motion-reduce:transition-none",
+                "flex size-full min-h-0 gap-6 transition-transform duration-500 motion-reduce:transition-none",
                 showUpgrade
                   ? "-translate-x-[calc(100%+1.5rem)]"
                   : "translate-x-0",
@@ -112,7 +120,7 @@ function Billing({ team }: { team: TeamResponse }) {
             >
               <div
                 className={cn(
-                  "scrollbar flex w-full shrink-0 grow flex-col gap-4 overflow-y-auto px-6 pr-2",
+                  "scrollbar flex w-full shrink-0 grow flex-col gap-4 overflow-y-auto px-6 pr-2 pb-6",
                   showUpgrade ? "pointer-events-none select-none" : "",
                 )}
                 // @ts-expect-error https://github.com/facebook/react/issues/17157
@@ -140,7 +148,7 @@ function Billing({ team }: { team: TeamResponse }) {
                   />
                   <LocalDevCallout
                     tipText="Tip: Run this to enable audit logs locally:"
-                    command={`just big-brain-tool-dev entitlement grant --team-entitlement audit_log_retention_days --team-id ${team.id} --reason "local" 90 --for-real`}
+                    command={`just big-brain-tool-dev entitlement grant add --team-entitlement audit_log_retention_days --team-id ${team.id} --reason "local" 90 --for-real`}
                   />
                 </div>
               </div>
@@ -161,7 +169,6 @@ function Billing({ team }: { team: TeamResponse }) {
                       team={team}
                       numMembers={members?.length || 1}
                       plan={selectedPlan}
-                      isChef={router.query.source === "chef"}
                       onUpgradeComplete={() => {
                         void router.push(
                           {
@@ -180,7 +187,7 @@ function Billing({ team }: { team: TeamResponse }) {
               </div>
             </div>
           ) : (
-            <Loading className="mx-6 h-full w-full" />
+            <Loading className="mx-6 size-full" />
           )}
         </div>
       </ErrorBoundary>

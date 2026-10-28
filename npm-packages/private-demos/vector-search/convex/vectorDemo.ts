@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import {
   query,
   action,
+  env,
   internalMutation,
   internalQuery,
 } from "./_generated/server";
@@ -16,10 +17,7 @@ export type SearchResult = {
 };
 
 export async function embed(text: string): Promise<number[]> {
-  const key = process.env.OPENAI_KEY;
-  if (!key) {
-    throw new Error("OPENAI_KEY environment variable not set!");
-  }
+  const key = env.OPENAI_KEY;
   const req = { input: text, model: "text-embedding-ada-002" };
   const resp = await fetch("https://api.openai.com/v1/embeddings", {
     method: "POST",
@@ -101,7 +99,7 @@ export const fetchResults = internalQuery({
   handler: async (ctx, args) => {
     const out: SearchResult[] = [];
     for (const result of args.results) {
-      const doc = await ctx.db.get(result._id);
+      const doc = await ctx.db.get("foods", result._id);
       if (!doc) {
         continue;
       }

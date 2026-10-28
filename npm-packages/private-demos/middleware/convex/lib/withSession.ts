@@ -25,7 +25,9 @@ const addSession = async (
   ctx: SessionRequiredContext,
   args: ObjectType<typeof sessionValidator>,
 ): Promise<ContextWithSession> => {
-  const session = args.sessionId ? await ctx.db.get(args.sessionId) : null;
+  const session = args.sessionId
+    ? await ctx.db.get("sessions", args.sessionId)
+    : null;
   if (!session) {
     throw new Error(
       "Session must be initialized first. " +
@@ -77,7 +79,9 @@ const addOptionalSession = async (
   ctx: OptionalSessionRequiredContext,
   args: ObjectType<typeof optionalSessionValidator>,
 ): Promise<OptionalSessionTransformedContext> => {
-  const session = args.sessionId ? await ctx.db.get(args.sessionId) : null;
+  const session = args.sessionId
+    ? await ctx.db.get("sessions", args.sessionId)
+    : null;
   return { session };
 };
 // ----------------------------------------------------------------------

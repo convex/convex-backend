@@ -10,6 +10,7 @@ message ValidatedPathAndArgs {
   optional string npm_version = 3;
   optional ComponentPath component_path = 4;
   optional string component_id = 5;
+  optional bool reuse_context = 6;
 }
 
 message ValidatedHttpPath {
@@ -17,6 +18,7 @@ message ValidatedHttpPath {
   optional ComponentPath component_path = 22;
   optional string component_id = 3;
   optional string npm_version = 4;
+  optional bool reuse_context = 5;
 }
 
 message ComponentPath {
@@ -45,12 +47,18 @@ message DocumentUpdate {
   ResolvedDocument new_document = 2;
 }
 
-message DocumentUpdateWithPrevTs {
+message PendingDocument{
+  ResolvedDocumentId id = 1;
+  optional double creation_time = 2;
+  optional bytes value = 3;
+}
+
+message PendingDocumentUpdate {
   ResolvedDocumentId id = 3;
   ResolvedDocument old_document = 1;
   // `old_ts` should be present iff `old_document` is present
   optional uint64 old_ts = 4;
-  ResolvedDocument new_document = 2;
+  PendingDocument new_document = 2;
 }
 
 message TabletIdAndTableNumber {
@@ -209,5 +217,14 @@ message ExecuteQueryTimestamp {
   oneof ts {
     google.protobuf.Empty latest = 1;
     uint64 at = 2;
+  }
+}
+
+// The reason why a query is being run.
+message QueryInvocation {
+  oneof invocation {
+    google.protobuf.Empty fresh = 1;
+    google.protobuf.Empty invalidation = 2;
+    google.protobuf.Empty identity_change = 3;
   }
 }

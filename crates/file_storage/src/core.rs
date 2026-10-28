@@ -12,18 +12,33 @@ use common::{
         ComponentId,
         ComponentPath,
     },
+    document::{
+        ParseDocument,
+        ParsedDocument,
+        PendingDocument,
+    },
     http::RequestDestination,
+    knobs::{
+        UDF_FILE_STORAGE_DOWNLOAD_TIMEOUT,
+        UDF_FILE_STORAGE_UPLOAD_TIMEOUT,
+    },
+    pause::Fault,
     runtime::{
         Runtime,
         UnixTimestamp,
+        WithTimeout,
     },
     sha256::Sha256Digest,
     types::{
         ConvexOrigin,
+        ObjectKey,
         StorageUuid,
     },
 };
-use database::Transaction;
+use database::{
+    PendingFileUpload,
+    Transaction,
+};
 use errors::{
     ErrorMetadata,
     ErrorMetadataAnyhowExt,
@@ -35,6 +50,7 @@ use futures::{
     },
     Stream,
     StreamExt,
+    TryStreamExt,
 };
 use futures_async_stream::stream;
 use headers::{
@@ -68,6 +84,7 @@ use usage_tracking::{
 };
 use value::{
     id_v6::DeveloperDocumentId,
+    ResolvedDocumentId,
     TableNamespace,
 };
 
@@ -77,9 +94,14 @@ use crate::{
         log_get_file_chunk_size,
         GetFileType,
     },
+    FileDownloads,
     FileStorage,
     FileStream,
     TransactionalFileStorage,
+    DOWNLOAD_FILE,
+    FILE_DOWNLOAD_FAILED_SHORT_MSG,
+    FILE_UPLOAD_FAILED_SHORT_MSG,
+    UPLOAD_PENDING_FILE,
 };
 
 const MAX_CHUNK_SIZE: usize = 32 * 1024;
@@ -183,20 +205,20 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
             .collect()
     }
 
+    /// Deletes a file's `_file_storage` entry, returning the id of its row.
     pub async fn delete(
         &self,
         tx: &mut Transaction<RT>,
         namespace: TableNamespace,
         storage_id: FileStorageId,
-    ) -> anyhow::Result<()> {
-        let success = self._delete(tx, namespace, storage_id.clone()).await?;
-        if !success {
+    ) -> anyhow::Result<ResolvedDocumentId> {
+        let Some(id) = self._delete(tx, namespace, storage_id.clone()).await? else {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "StorageIdNotFound",
                 format!("storage id {storage_id} not found"),
             ));
-        }
-        Ok(())
+        };
+        Ok(id)
     }
 
     pub async fn get_file_entry(
@@ -225,6 +247,7 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
             .collect()
     }
 
+    #[fastrace::trace]
     pub async fn get_file_stream(
         &self,
         component_path: ComponentPath,
@@ -273,11 +296,10 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
         get_file_type: GetFileType,
     ) -> anyhow::Result<FileStream> {
         let FileStorageEntry {
-            storage_id,
             storage_key,
-            sha256,
             size,
             content_type,
+            ..
         } = file;
 
         let content_type = content_type.as_ref().map(|ct| ct.parse()).transpose()?;
@@ -294,13 +316,7 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
         let content_length = ContentLength(storage_get_stream.content_length as u64);
 
         let call_tracker = usage_tracker
-            .track_storage_call(
-                component_path.clone(),
-                "get range",
-                storage_id,
-                content_type.clone(),
-                sha256,
-            )
+            .track_storage_call(component_path.clone(), "get range", content_type.clone())
             .await;
 
         Ok(FileStream {
@@ -364,18 +380,18 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
         tx: &mut Transaction<RT>,
         namespace: TableNamespace,
         storage_id: FileStorageId,
-    ) -> anyhow::Result<bool> {
-        let did_delete = FileStorageModel::new(tx, namespace)
+    ) -> anyhow::Result<Option<ResolvedDocumentId>> {
+        let deleted = FileStorageModel::new(tx, namespace)
             .delete_file(storage_id, Identity::system())
-            .await?
-            .is_some();
-        Ok(did_delete)
+            .await?;
+        Ok(deleted.map(|entry| entry.id()))
     }
 
     /// `upload_file` just uploads a file to storage. It does not save the file
     /// in the _file_storage system table and it does not count towards
     /// usage. The caller is responsible to call `store_file_entry` to
     /// actually persist the entry and manually account for usage.
+    #[fastrace::trace]
     pub async fn upload_file(
         &self,
         content_length: Option<ContentLength>,
@@ -422,6 +438,136 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
         Ok(entry)
     }
 
+    /// Uploads the files stored by the transaction
+    #[fastrace::trace]
+    pub async fn upload_pending_files(
+        &self,
+        tx: &mut Transaction<RT>,
+        usage_tracker: &dyn StorageUsageTracker,
+    ) -> anyhow::Result<()> {
+        let pending = tx.get_pending_file_uploads()?;
+        let writes = tx.writes().as_flat()?;
+        let mut files = vec![];
+        for (id, upload) in pending {
+            let new_document = writes
+                .get(&id)
+                .and_then(|update| update.new_document.as_ref())
+                .with_context(|| format!("Pending upload for missing _file_storage entry {id}"))?;
+            let PendingDocument::Concrete(document) = new_document else {
+                anyhow::bail!("_file_storage entry {id} has a pending body");
+            };
+            let entry: ParsedDocument<FileStorageEntry> = document.clone().parse()?;
+            files.push((entry.into_value(), upload));
+        }
+        self.rt
+            .with_timeout(
+                "upload_pending_files",
+                *UDF_FILE_STORAGE_UPLOAD_TIMEOUT,
+                futures::future::try_join_all(
+                    files
+                        .iter()
+                        .map(|(entry, upload)| self.upload_pending_file(entry, upload)),
+                ),
+            )
+            .await
+            .context(ErrorMetadata::overloaded(
+                FILE_UPLOAD_FAILED_SHORT_MSG,
+                "Failed to upload the files this mutation stored. Try again later.",
+            ))?;
+        for (entry, upload) in files {
+            Self::track_pending_file_usage(entry, upload.component_path, usage_tracker).await?;
+        }
+        tx.mark_files_uploaded()
+    }
+
+    async fn upload_pending_file(
+        &self,
+        entry: &FileStorageEntry,
+        upload: &PendingFileUpload,
+    ) -> anyhow::Result<()> {
+        let timer = metrics::store_file_timer();
+        if let Fault::Error(e) = self.rt.pause_client().wait(UPLOAD_PENDING_FILE).await {
+            return Err(e);
+        }
+        self.storage
+            .put_object(entry.storage_key.clone(), upload.bytes.clone())
+            .await
+            .with_context(|| format!("Failed to upload file {}", entry.storage_id))?;
+        timer.finish();
+        Ok(())
+    }
+
+    async fn track_pending_file_usage(
+        entry: FileStorageEntry,
+        component_path: ComponentPath,
+        usage_tracker: &dyn StorageUsageTracker,
+    ) -> anyhow::Result<()> {
+        let content_type = entry
+            .content_type
+            .as_ref()
+            .map(|ct| ct.parse())
+            .transpose()?;
+        usage_tracker
+            .track_storage_call(component_path.clone(), "store", content_type)
+            .await
+            .track_storage_ingress(component_path, "store".to_string(), entry.size as u64)
+            .await;
+        Ok(())
+    }
+
+    #[fastrace::trace]
+    pub async fn download_files(
+        &self,
+        downloads: &FileDownloads,
+        files: Vec<(ComponentPath, FileStorageEntry)>,
+        usage_tracker: impl StorageUsageTracker + Clone + 'static,
+    ) -> anyhow::Result<()> {
+        let remaining = UDF_FILE_STORAGE_DOWNLOAD_TIMEOUT.saturating_sub(downloads.download_time());
+        let start = self.rt.monotonic_now();
+        let result = self
+            .rt
+            .with_timeout(
+                "download_files",
+                remaining,
+                futures::future::try_join_all(files.into_iter().map(|(component_path, entry)| {
+                    self.download_file(component_path, entry, usage_tracker.clone())
+                })),
+            )
+            .await;
+        downloads.add_download_time(start.elapsed());
+        let files = result.context(ErrorMetadata::overloaded(
+            FILE_DOWNLOAD_FAILED_SHORT_MSG,
+            "Failed to download the files this mutation read. Try again later.",
+        ))?;
+        downloads.insert(files);
+        Ok(())
+    }
+
+    async fn download_file(
+        &self,
+        component_path: ComponentPath,
+        entry: FileStorageEntry,
+        usage_tracker: impl StorageUsageTracker + Clone + 'static,
+    ) -> anyhow::Result<(ObjectKey, Bytes)> {
+        if let Fault::Error(e) = self.rt.pause_client().wait(DOWNLOAD_FILE).await {
+            return Err(e);
+        }
+        let storage_key = entry.storage_key.clone();
+        let size = entry.size;
+        let chunks: Vec<Bytes> = self
+            .get_file_stream(component_path, entry, usage_tracker)
+            .await?
+            .try_collect()
+            .await?;
+        let contents = Bytes::from(chunks.concat());
+        anyhow::ensure!(
+            contents.len() as i64 == size,
+            "Downloaded {} bytes of {storage_key:?}, expected {size}",
+            contents.len(),
+        );
+        Ok((storage_key, contents))
+    }
+
     /// Stores a file entry generated by upload_file(). The caller is
     /// responsible to track usage. If you are outside of the
     /// isolate environment, it is recommended to use FileStorage::store_file
@@ -431,15 +577,15 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
         tx: &mut Transaction<RT>,
         namespace: TableNamespace,
         entry: FileStorageEntry,
-    ) -> anyhow::Result<DeveloperDocumentId> {
-        let system_doc_id = FileStorageModel::new(tx, namespace)
+    ) -> anyhow::Result<(ResolvedDocumentId, DeveloperDocumentId)> {
+        let system_id = FileStorageModel::new(tx, namespace)
             .store_file(entry)
             .await?;
         let virtual_id = tx
             .virtual_system_mapping()
-            .system_resolved_id_to_virtual_developer_id(system_doc_id)?;
+            .system_resolved_id_to_virtual_developer_id(system_id)?;
 
-        Ok(virtual_id)
+        Ok((system_id, virtual_id))
     }
 }
 
@@ -468,19 +614,17 @@ impl<RT: Runtime> FileStorage<RT> {
         entry: FileStorageEntry,
         usage_tracker: &dyn StorageUsageTracker,
     ) -> anyhow::Result<DeveloperDocumentId> {
-        let storage_id = entry.storage_id.clone();
         let size = entry.size;
         let content_type = entry
             .content_type
             .as_ref()
             .map(|ct| ct.parse())
             .transpose()?;
-        let sha256 = entry.sha256.clone();
 
         // Start/Complete transaction after the slow upload process
         // to avoid OCC risk.
         let mut tx = self.database.begin(Identity::system()).await?;
-        let virtual_id = self
+        let (_, virtual_id) = self
             .transactional_file_storage
             .store_file_entry(&mut tx, namespace, entry)
             .await?;
@@ -490,13 +634,7 @@ impl<RT: Runtime> FileStorage<RT> {
             .await?;
 
         usage_tracker
-            .track_storage_call(
-                component_path.clone(),
-                "store",
-                storage_id,
-                content_type,
-                sha256,
-            )
+            .track_storage_call(component_path.clone(), "store", content_type)
             .await
             .track_storage_ingress(component_path, "store".to_string(), size as u64)
             .await;

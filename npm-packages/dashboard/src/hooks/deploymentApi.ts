@@ -10,46 +10,54 @@ import { Id } from "system-udfs/convex/_generated/dataModel";
 import { logDeploymentEvent } from "convex-analytics";
 import { reportHttpError } from "hooks/fetching";
 import { ConnectedDeploymentContext } from "@common/lib/deploymentContext";
-import { AuthorizeArgs, AuthorizeResponse } from "generatedApi";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 
-export const deviceTokenDeploymentAuth = async (
-  accessTokenArgs: {
-    name: string;
-    teamId: number;
-    deploymentId: number | null;
-    projectId: number | null;
-    permissions: string[] | null;
-  },
-  accessToken: string,
-  createAccessToken: (body: AuthorizeArgs) => Promise<AuthorizeResponse>,
-): Promise<
-  | { adminKey: string; ok: true }
-  | { ok: false; errorMessage: string; errorCode: string }
-> => {
-  const data = await createAccessToken({
-    authnToken: accessToken,
-    deviceName: accessTokenArgs.name,
-    teamId: accessTokenArgs.teamId,
-    deploymentId: accessTokenArgs.deploymentId,
-    projectId: accessTokenArgs.projectId,
-    permissions: accessTokenArgs.permissions,
-  });
+// The response is a `Content-Disposition: attachment`, so clicking a link to it
+// starts a download instead of navigating away from the dashboard.
+function startDownload(url: string) {
+  const link = document.createElement("a");
+  link.href = url;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
 
-  return { adminKey: data.accessToken, ok: true };
-};
-
-export function useGetZipExport(
+// A download is a plain navigation, which can't carry an `Authorization`
+// header, so the credential has to travel in the URL. Under the
+// `ephemeralZipExportToken` flag we mint a short-lived token scoped to this one
+// snapshot instead of putting the long-lived admin key there.
+export function useDownloadZipExport(
   format: CompletedExport["format"],
-): (snapshotId: Id<"_exports">) => string {
+): (snapshotId: Id<"_exports">) => Promise<void> {
   const deploymentUrl = useDeploymentUrl();
   const adminKey = useAdminKey();
-  return (snapshotId: Id<"_exports">) => {
-    const params = new URLSearchParams({ adminKey });
-    if (format?.format === "zip") {
-      return `${deploymentUrl}/api/export/zip/${snapshotId}?${params}`;
-    }
-    throw new Error("expected zip");
-  };
+  const authHeader = useDeploymentAuthHeader();
+  const { ephemeralZipExportToken } = useLaunchDarkly();
+  return useCallback(
+    async (snapshotId: Id<"_exports">) => {
+      if (format?.format !== "zip") {
+        throw new Error("expected zip");
+      }
+      const exportUrl = `${deploymentUrl}/api/export/zip/${snapshotId}`;
+      if (!ephemeralZipExportToken) {
+        startDownload(`${exportUrl}?${new URLSearchParams({ adminKey })}`);
+        return;
+      }
+      const res = await fetch(`${exportUrl}/token`, {
+        method: "POST",
+        headers: { Authorization: authHeader },
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        reportHttpError("POST", res.url, err);
+        toast("error", err.message);
+        return;
+      }
+      const { token } = await res.json();
+      startDownload(`${exportUrl}?${new URLSearchParams({ token })}`);
+    },
+    [deploymentUrl, adminKey, authHeader, format, ephemeralZipExportToken],
+  );
 }
 
 export function useCancelImport(): (
@@ -74,6 +82,25 @@ export function useCancelImport(): (
       }
     },
     [deploymentUrl, adminKey],
+  );
+}
+
+export function useCancelExport(): (id: Id<"_exports">) => Promise<void> {
+  const deploymentUrl = useDeploymentUrl();
+  const authHeader = useDeploymentAuthHeader();
+  return useCallback(
+    async (id: Id<"_exports">) => {
+      const res = await fetch(`${deploymentUrl}/api/export/cancel/${id}`, {
+        method: "POST",
+        headers: { Authorization: authHeader },
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        reportHttpError("POST", res.url, err);
+        toast("error", err.message);
+      }
+    },
+    [deploymentUrl, authHeader],
   );
 }
 

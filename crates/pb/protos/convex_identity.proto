@@ -60,6 +60,10 @@ enum DeploymentOperation {
   DEPLOYMENT_OPERATION_RUN_INTERNAL_ACTIONS = 20;
   DEPLOYMENT_OPERATION_RUN_TEST_QUERY = 21;
   DEPLOYMENT_OPERATION_VIEW_AUDIT_LOG = 22;
+  DEPLOYMENT_OPERATION_VIEW_USAGE_LIMITS = 23;
+  DEPLOYMENT_OPERATION_WRITE_USAGE_LIMITS = 24;
+  DEPLOYMENT_OPERATION_VIEW_USAGE = 25;
+  DEPLOYMENT_OPERATION_USE_AI_GATEWAY = 26;
 }
 
 message AdminIdentity {
@@ -72,6 +76,9 @@ message AdminIdentity {
   bool is_read_only = 6;
   // Operations this identity is allowed to perform.
   repeated DeploymentOperation allowed_operations = 7;
+  optional google.protobuf.Timestamp validated_at = 8;
+  optional uint64 token_id = 9;
+  optional string app_client_id = 10;
 }
 
 message UserIdentity {

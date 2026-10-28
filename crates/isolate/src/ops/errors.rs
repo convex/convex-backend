@@ -12,16 +12,18 @@ use deno_core::v8::{
     scope,
 };
 
-use super::OpProvider;
+use super::V8OpProvider;
 use crate::{
     environment::UncatchableDeveloperError,
+    error::source_mapped_stack,
     strings,
 };
 
-pub(crate) fn throw_uncatchable_developer_error<'b, P: OpProvider<'b>>(
+/// Gather the current stack trace and construct a JsError.
+pub(crate) fn uncatchable_developer_error<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     message: String,
-) -> anyhow::Result<!> {
+) -> JsError {
     let frame_data: anyhow::Result<Vec<FrameData>> = try_anyhow!({
         let mut scope = provider.scope();
         scope!(let scope, &mut scope);
@@ -40,8 +42,9 @@ pub(crate) fn throw_uncatchable_developer_error<'b, P: OpProvider<'b>>(
         let frame_data_json = frame_data_json.to_rust_string_lossy(scope);
         serde_json::from_str(&frame_data_json)?
     });
-    let js_error = JsError::from_frames(
-        message.clone(),
+    report_error_sync(&mut anyhow::anyhow!("UncatchableDeveloperError: {message}"));
+    JsError::from_frames(
+        message,
         match frame_data {
             Ok(data) => data,
             Err(mut e) => {
@@ -51,35 +54,26 @@ pub(crate) fn throw_uncatchable_developer_error<'b, P: OpProvider<'b>>(
         },
         None,
         |s| provider.lookup_source_map(s),
-    );
-    report_error_sync(&mut anyhow::anyhow!(format!(
-        "UncatchableDeveloperError: {}",
-        message
-    )));
-    anyhow::bail!(UncatchableDeveloperError { js_error })
+    )
 }
 
 #[convex_macro::v8_op]
-pub fn op_throw_uncatchable_developer_error<'b, P: OpProvider<'b>>(
-    provider: &mut P,
+pub fn op_throw_uncatchable_developer_error<'b, P: V8OpProvider<'b>>(
+    _provider: &mut P,
     message: String,
 ) -> anyhow::Result<()> {
-    throw_uncatchable_developer_error(provider, message)?;
+    anyhow::bail!(UncatchableDeveloperError { message })
 }
 
 /// Do source mapping to find the stack trace for an error.
 /// NOTE if a UDF throws an error, we call this op and then separately do
 /// source mapping again so the yielded error has structured frame data.
 #[convex_macro::v8_op]
-pub fn op_error_stack<'b, P: OpProvider<'b>>(
+pub fn op_error_stack<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
     frame_data: Vec<FrameData>,
 ) -> anyhow::Result<String> {
-    let js_error = JsError::from_frames(String::new(), frame_data, None, |s| {
+    Ok(source_mapped_stack(frame_data, |s| {
         provider.lookup_source_map(s)
-    });
-    Ok(js_error
-        .frames
-        .expect("JsError::from_frames has frames=None")
-        .to_string())
+    }))
 }

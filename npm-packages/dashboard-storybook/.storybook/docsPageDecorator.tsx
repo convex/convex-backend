@@ -1,5 +1,5 @@
 import { DeploymentInfoProvider } from "../../dashboard/src/providers/DeploymentInfoProvider";
-import { ReactNode, useContext, useEffect } from "react";
+import { useContext, useEffect } from "react";
 import { DecoratorFunction } from "storybook/internal/types";
 import { ReactRenderer } from "@storybook/nextjs";
 import { mocked, fn } from "storybook/test";
@@ -15,6 +15,7 @@ import {
 import {
   useProjectBySlug,
   useCurrentProject,
+  useCurrentProjectWithStatus,
   usePaginatedProjects,
   useProjectById,
 } from "../../dashboard/src/api/projects";
@@ -48,7 +49,6 @@ import {
   useDeploymentByName,
   useDeploymentRegions,
 } from "../../dashboard/src/api/deployments";
-import { deploymentAuth } from "../../dashboard/src/lib/deploymentAuth";
 import { useTeamUsageState } from "../../dashboard/src/api/usage";
 import { useReferralState } from "../../dashboard/src/api/referrals";
 import { usePostHog } from "../../dashboard/src/hooks/usePostHog";
@@ -57,10 +57,10 @@ import {
   useListCloudBackupsIfAvailable,
 } from "../../dashboard/src/api/backups";
 import {
-  useCreateTeamAccessToken,
   useDeployKeys,
   useDeleteDeployKey,
 } from "../../dashboard/src/api/accessTokens";
+import { useCreateTeamAccessToken } from "../../dashboard/src/api/teamAccessTokens";
 import {
   useCreateVanityDomain,
   useDeleteVanityDomain,
@@ -74,9 +74,11 @@ import { mockConvexReactClient } from "../../dashboard-common/src/lib/mockConvex
 import udfs from "../../dashboard-common/src/udfs";
 import { ConvexProvider } from "convex/react";
 import { DeploymentDashboardLayout } from "../../dashboard-common/src/layouts/DeploymentDashboardLayout";
+import { CommandPalette } from "../../dashboard/src/elements/CommandPalette";
 import {
   ConnectedDeploymentContext,
   DeploymentInfoContext,
+  MaybeConnectedDeploymentContext,
 } from "../../dashboard-common/src/lib/deploymentContext";
 import { useTableShapes } from "../../dashboard-common/src/lib/deploymentApi";
 
@@ -175,7 +177,6 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
     teamId: mockTeam.id,
     name: "My amazing app",
     slug: "my-amazing-app",
-    isDemo: false,
     createTime: Date.now(),
     prodDeploymentName: "musical-otter-456",
     devDeploymentName: "happy-capybara-123",
@@ -184,9 +185,16 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
   const shouldMockCurrentDeployment = title.startsWith(
     "docs/pages/project/deployment/",
   );
-  const deploymentTypeOverride = (
-    context.parameters as { docsPage?: { deploymentType?: "dev" | "prod" } }
-  )?.docsPage?.deploymentType;
+  const docsPageParams = (
+    context.parameters as {
+      docsPage?: {
+        deploymentType?: "dev" | "prod";
+        launchDarkly?: Partial<ReturnType<typeof useLaunchDarkly>>;
+        entitlements?: Partial<ReturnType<typeof useTeamEntitlements>>;
+      };
+    }
+  )?.docsPage;
+  const deploymentTypeOverride = docsPageParams?.deploymentType;
   const activeDeployment =
     deploymentTypeOverride === "prod"
       ? STORYBOOK_PROD_DEPLOYMENT
@@ -196,6 +204,7 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
     customDomainsEnabled: true,
     customRolesEnabled: false,
     deploymentClassSelectionEnabled: false,
+    directorySyncEnabled: false,
     logStreamingEnabled: true,
     managementApiEnabled: true,
     maxChefTokens: 50_000_000,
@@ -212,6 +221,7 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
     teamMaxFileBandwidth: 53_687_091_200,
     teamMaxFileStorage: 107_374_182_400,
     teamMaxFunctionCalls: 25_000_000,
+    teamMaxSearchQueries: 50_000,
     teamMaxVectorBandwidth: 10_737_418_240,
     teamMaxVectorStorage: 1_073_741_824,
   };
@@ -259,7 +269,10 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
     isLoading: false,
   });
   mocked(useProfile).mockReturnValue(mockProfile);
-  mocked(useTeamEntitlements).mockReturnValue(mockTeamEntitlements);
+  mocked(useTeamEntitlements).mockReturnValue({
+    ...mockTeamEntitlements,
+    ...docsPageParams?.entitlements,
+  });
   mocked(useProjectBySlug).mockReturnValue(
     shouldMockCurrentProject ? mockProject : undefined,
   );
@@ -268,6 +281,10 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
       ? (mockProject as ReturnType<typeof useCurrentProject>)
       : undefined,
   );
+  mocked(useCurrentProjectWithStatus).mockReturnValue({
+    project: shouldMockCurrentProject ? mockProject : undefined,
+    isLoading: false,
+  });
   mocked(useProjectById).mockImplementation(() => ({
     project: mockProject,
     isLoading: false,
@@ -347,17 +364,11 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
   mocked(useLaunchDarkly).mockReturnValue({
     ...flagDefaults,
     enableStatuspageWidget: false,
+    ...docsPageParams?.launchDarkly,
   });
   mocked(useCurrentDeployment).mockReturnValue(
     shouldMockCurrentDeployment ? activeDeployment : undefined,
   );
-  mocked(deploymentAuth).mockImplementation(async (deploymentName) => {
-    return {
-      ok: true,
-      deploymentUrl: `https://${deploymentName}.convex.cloud`,
-      adminKey: "STORYBOOK-FAKE-KEY",
-    };
-  });
   mocked(useDeploymentByName).mockReturnValue(undefined);
   mocked(useDeploymentRegions).mockReturnValue({
     regions: [
@@ -412,10 +423,16 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
       _creationTime: 0,
       state: "running" as const,
     }))
+    .registerQueryFake(udfs.backendState.backendState, () => ({
+      system: "none" as const,
+      usage_limit: "none" as const,
+      user: "none" as const,
+    }))
     .registerQueryFake(udfs.modules.listForAllComponents, () => [])
     .registerQueryFake(udfs.getSchemas.default, () => ({}))
     .registerQueryFake(udfs.listConfiguredSinks.default, () => [])
     .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
+    .registerQueryFake(udfs.getTableMapping.default, () => ({}))
     .registerQueryFake(udfs.deploymentEvents.lastPushEvent, () => null)
     .registerQueryFake(udfs.fileStorageV2.numFiles, () => 0)
     .registerQueryFake(udfs.tableSize.sizeOfAllTables, () => 0);
@@ -473,15 +490,39 @@ function DocsShell({
     setAccessToken("storybook-docs-token");
   }, [setAccessToken]);
 
+  // The command palette reads the connected deployment through
+  // useMaybeConnectedDeployment (MaybeConnectedDeploymentContext), not
+  // ConnectedDeploymentContext, so provide both from the same mock.
+  const maybeConnectedDeployment = mockConnectedDeployment && {
+    deployment: mockConnectedDeployment.deployment,
+    deploymentName: mockConnectedDeployment.deployment.deploymentName,
+    loading: false,
+    errorKind: "None" as const,
+  };
+
   const pageContents = (
     <div className="flex h-screen flex-col">
+      {/* Mirror _app.tsx: on deployment pages the palette mounts inside the
+          deployment providers so it can query the connected deployment;
+          elsewhere it mounts at the top level. */}
+      {!deployment && <CommandPalette />}
       <DashboardHeader />
       <div className="flex-1 overflow-auto">
-        {deployment && mockConnectedDeployment && mockClient ? (
+        {deployment &&
+        mockConnectedDeployment &&
+        maybeConnectedDeployment &&
+        mockClient ? (
           <ConnectedDeploymentContext.Provider value={mockConnectedDeployment}>
-            <ConvexProvider client={mockClient}>
-              <DeploymentLayoutWhenReady>{children}</DeploymentLayoutWhenReady>
-            </ConvexProvider>
+            <MaybeConnectedDeploymentContext.Provider
+              value={maybeConnectedDeployment}
+            >
+              <ConvexProvider client={mockClient}>
+                <CommandPalette />
+                <DeploymentLayoutWhenReady>
+                  {children}
+                </DeploymentLayoutWhenReady>
+              </ConvexProvider>
+            </MaybeConnectedDeploymentContext.Provider>
           </ConnectedDeploymentContext.Provider>
         ) : (
           children
@@ -516,8 +557,8 @@ function DocsShell({
 }
 
 // DeploymentInfoProvider renders children without the context on the first
-// render (before the async deploymentAuth resolves). Guard against calling
-// DeploymentDashboardLayout until the context is available.
+// render, before it has resolved the deployment's URL and admin key. Guard
+// against calling DeploymentDashboardLayout until the context is available.
 function DeploymentLayoutWhenReady({
   children,
 }: React.PropsWithChildren<object>) {

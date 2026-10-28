@@ -25,3 +25,16 @@ message StorageToken {
   }
   optional string component_id = 4;
 }
+
+message ExportDownloadToken {
+  // Time of issue, measured in seconds since the epoch.
+  uint64 issued_s = 1;
+  // The snapshot identifier (export document ID or snapshot timestamp) that
+  // this token authorizes downloading.
+  string snapshot_id = 2;
+  // The actor that requested the download, recorded so each download can be
+  // attributed (e.g. for audit logging): the member and/or the access token
+  // that authenticated the request. Both unset for system actors.
+  optional uint64 member_id = 3;
+  optional uint64 token_id = 4;
+}

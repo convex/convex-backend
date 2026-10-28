@@ -9,12 +9,11 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "next": "^15.5.18",
+    "next": "^15.5.28",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
     "convex": "workspace:*",
-    "@auth0/auth0-react": "2.15.1",
-    "prettier": "3.8.1"
+    "@auth0/auth0-react": "2.15.1"
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "workspace:*",
@@ -28,6 +27,6 @@
     "eslint": "^9.37.0",
     "eslint-config-next": "^15.5.4",
     "typescript": "~5.0.3",
-    "vite": "^6.4.2"
+    "vite": "^6.4.4"
   }
 }

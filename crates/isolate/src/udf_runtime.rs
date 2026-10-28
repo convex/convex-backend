@@ -98,11 +98,20 @@ fn create_base_snapshot() -> v8::StartupData {
         crypto_key_prototype.set_with_attr(
             symbol_tostringtag.into(),
             strings::CryptoKey.create(scope).unwrap().into(),
-            v8::PropertyAttribute::DONT_ENUM,
+            v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::READ_ONLY,
         );
 
         let crypto_key_private = v8::ObjectTemplate::new(scope);
         assert!(crypto_key_private.set_internal_field_count(1));
+
+        let text_decoder = v8::FunctionTemplate::new(scope, illegal_constructor);
+        text_decoder.set_class_name(strings::TextDecoder.create(scope).unwrap());
+        assert!(text_decoder
+            .instance_template(scope)
+            .set_internal_field_count(1));
+
+        let text_decoder_private = v8::ObjectTemplate::new(scope);
+        assert!(text_decoder_private.set_internal_field_count(1));
 
         let context_scope = &mut v8::ContextScope::new(scope, context);
 
@@ -152,6 +161,24 @@ fn create_base_snapshot() -> v8::StartupData {
                 context_scope,
                 private_crypto_key_key,
                 crypto_key_private_instance.into(),
+            );
+        }
+
+        {
+            // The TextDecoder template is only stashed in a private, not
+            // exported as a global, since `08_text_encoding.ts` defines the
+            // public TextDecoder class itself.
+            let text_decoder_key = strings::TextDecoder.create(context_scope).unwrap();
+            let private_text_decoder_key =
+                v8::Private::for_api(context_scope, Some(text_decoder_key));
+            let text_decoder_private_instance = text_decoder_private
+                .new_instance(context_scope)
+                .expect("instantiate TextDecoderPrivate");
+            assert!(text_decoder_private_instance.set_internal_field(0, text_decoder.into()));
+            global.set_private(
+                context_scope,
+                private_text_decoder_key,
+                text_decoder_private_instance.into(),
             );
         }
 

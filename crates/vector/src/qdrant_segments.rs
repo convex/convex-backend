@@ -15,6 +15,7 @@ use std::{
     },
 };
 
+use anyhow::Context;
 use atomic_refcell::AtomicRefCell;
 use common::{
     deleted_bitset::DeletedBitset,
@@ -51,6 +52,7 @@ use qdrant_segment::{
         },
         plain_payload_index::PlainIndex,
         struct_payload_index::StructPayloadIndex,
+        PayloadIndex,
         VectorIndexEnum,
     },
     payload_storage::on_disk_payload_storage::OnDiskPayloadStorage,
@@ -70,6 +72,7 @@ use qdrant_segment::{
         HnswConfig,
         Indexes,
         PayloadStorageType,
+        PointIdType,
         SegmentConfig,
         SegmentType,
         VectorDataConfig,
@@ -80,10 +83,17 @@ use qdrant_segment::{
     vector_storage::VectorStorage,
 };
 use rocksdb::DB;
+use serde_json::Value as JsonValue;
+use uuid::Uuid;
+use value::base64;
 
-use crate::id_tracker::{
-    VectorMemoryIdTracker,
-    VectorStaticIdTracker,
+use crate::{
+    id_tracker::{
+        VectorMemoryIdTracker,
+        VectorStaticIdTracker,
+    },
+    metrics,
+    qdrant_index::TIMESTAMP_FIELD,
 };
 
 const UUID_TABLE_FILENAME: &str = "uuids.table";
@@ -265,6 +275,91 @@ pub fn merge_disk_segments_hnsw(
     merge_disk_segments(segments, tmp_path, disk_path, segment_config)
 }
 
+/// Reads the `_ts` (revision timestamp) a point's payload was written with,
+/// used to pick which duplicate copy to keep.
+fn read_point_ts(segment: &Segment, internal_id: u32) -> anyhow::Result<u64> {
+    let payload = segment.payload_index.borrow().payload(internal_id)?;
+    let ts = payload
+        .0
+        .get(TIMESTAMP_FIELD)
+        .and_then(JsonValue::as_str)
+        .and_then(|ts_b64| base64::decode_urlsafe(ts_b64).ok())
+        .and_then(|ts_bytes| <[u8; 8]>::try_from(&ts_bytes[..]).ok())
+        .map(u64::from_le_bytes)
+        .context("Missing _ts field")?;
+    Ok(ts)
+}
+
+/// Resolves documents that are live (non-deleted) in more than one of the input
+/// segments by keeping the newest copy (by `_ts`) and marking the older copies
+/// deleted in their (in-memory) deleted bitsets.
+///
+/// This should be a no-op: each document is supposed to live in exactly one
+/// segment. But a historical flusher bug could leave the stale copy of an
+/// *updated* document live in an older segment while its new copy lived in a
+/// newer one.
+fn resolve_duplicate_points(
+    segments: &[(Option<UntarredVectorDiskSegmentPaths>, &Segment)],
+) -> anyhow::Result<()> {
+    // Cheap first pass over just the id trackers: find external ids that are
+    // live in more than one segment.
+    let mut locations: HashMap<Uuid, Vec<(usize, u32)>> = HashMap::new();
+    for (segment_idx, (_paths, segment)) in segments.iter().enumerate() {
+        let id_tracker = segment.id_tracker.borrow();
+        for internal_id in id_tracker.iter_ids() {
+            let Some(PointIdType::Uuid(uuid)) = id_tracker.external_id(internal_id) else {
+                anyhow::bail!("Segment point {internal_id} has no external UUID");
+            };
+            locations
+                .entry(uuid)
+                .or_default()
+                .push((segment_idx, internal_id));
+        }
+    }
+
+    let mut num_deduped = 0;
+    for (uuid, copies) in locations {
+        if copies.len() < 2 {
+            continue;
+        }
+        // Only read payloads (to compare timestamps) for the rare duplicates.
+        let mut newest: Option<(u64, usize, u32)> = None;
+        for &(segment_idx, internal_id) in &copies {
+            let ts = read_point_ts(segments[segment_idx].1, internal_id)?;
+            if newest.map(|(latest_ts, ..)| ts > latest_ts).unwrap_or(true) {
+                newest = Some((ts, segment_idx, internal_id));
+            }
+        }
+        let (_, keep_segment_idx, keep_internal_id) =
+            newest.expect("`copies` is non-empty so `newest` is always set");
+        for &(segment_idx, internal_id) in &copies {
+            if segment_idx == keep_segment_idx && internal_id == keep_internal_id {
+                continue;
+            }
+            // Soft-delete the stale copy so `update_from` (which only copies
+            // live points via `iter_ids`) excludes it from the merge.
+            segments[segment_idx]
+                .1
+                .id_tracker
+                .borrow_mut()
+                .drop(PointIdType::Uuid(uuid))?;
+            num_deduped += 1;
+        }
+        tracing::info!(
+            "Resolved duplicate vector document {uuid} present in {} segments; kept the newest \
+             copy and deleted {} stale copies. This indicates segments poisoned by a past flusher \
+             bug.",
+            copies.len(),
+            copies.len() - 1,
+        );
+    }
+
+    if num_deduped > 0 {
+        metrics::log_compaction_deduped_documents(num_deduped);
+    }
+    Ok(())
+}
+
 pub fn merge_disk_segments(
     segments: Vec<(Option<UntarredVectorDiskSegmentPaths>, &Segment)>,
     tmp_path: &Path,
@@ -282,6 +377,8 @@ pub fn merge_disk_segments(
     std::fs::create_dir(segment_tmp_dir_path.clone())?;
     let snapshot_tmp_path = tmp_path.join("snapshot_tmp");
     std::fs::create_dir(snapshot_tmp_path.clone())?;
+
+    resolve_duplicate_points(&segments)?;
 
     let mut segment_builder =
         SegmentBuilder::new(&tmp_segment_path, &segment_tmp_dir_path, &segment_config)?;

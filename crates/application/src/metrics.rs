@@ -1,7 +1,15 @@
+use std::time::{
+    SystemTime,
+    UNIX_EPOCH,
+};
+
+use errors::ErrorMetadataAnyhowExt as _;
 use metrics::{
     log_counter_with_labels,
     log_distribution_with_labels,
+    log_gauge_with_labels,
     register_convex_counter,
+    register_convex_gauge,
     register_convex_histogram,
     StaticMetricLabel,
     StatusTimer,
@@ -83,4 +91,135 @@ register_convex_histogram!(
 );
 pub fn table_summary_bootstrap_timer() -> StatusTimer {
     StatusTimer::new(&TABLE_SUMMARY_BOOTSTRAP_SECONDS)
+}
+
+register_convex_histogram!(
+    S3_EXPORT_SYNC_DURATION_SECONDS,
+    "Duration of S3 export provider sync calls, including service discovery and connection setup",
+    &STATUS_LABEL
+);
+pub fn s3_export_sync_timer() -> StatusTimer {
+    StatusTimer::new(&S3_EXPORT_SYNC_DURATION_SECONDS)
+}
+
+register_convex_counter!(
+    S3_EXPORT_WORKER_FAILED_TOTAL,
+    "Number of failed S3 export worker iterations, including sync and cursor persistence failures",
+    &STATUS_LABEL
+);
+pub fn log_s3_export_worker_failed(e: &anyhow::Error) {
+    log_counter_with_labels(
+        &S3_EXPORT_WORKER_FAILED_TOTAL,
+        1,
+        vec![StaticMetricLabel::new(
+            "status",
+            e.metric_status_label_value(),
+        )],
+    );
+}
+
+register_convex_gauge!(
+    S3_EXPORT_NEXT_SYNC_DUE_TIMESTAMP_SECONDS,
+    "Unix time by which a deployment's S3 export is due to sync again",
+    &["instance_name"]
+);
+
+register_convex_gauge!(
+    S3_EXPORT_SNAPSHOT_SYNCED_TABLES,
+    "Tables finished so far by a deployment's initial S3 export snapshot",
+    &["instance_name"]
+);
+
+/// One deployment's S3 export gauges. Dropping this removes the series, so a
+/// deployment that leaves this process does not look stalled.
+pub struct S3ExportGauges {
+    instance_name: String,
+}
+
+impl S3ExportGauges {
+    pub fn new(instance_name: String) -> Self {
+        Self { instance_name }
+    }
+
+    fn labels(&self) -> Vec<StaticMetricLabel> {
+        vec![StaticMetricLabel::new(
+            "instance_name",
+            self.instance_name.clone(),
+        )]
+    }
+
+    /// Sets the due time only while the series is unset. A retry after a
+    /// failed page keeps the earlier due time, so an export that keeps failing
+    /// becomes overdue.
+    pub fn start(&self, now: SystemTime) {
+        let gauge =
+            S3_EXPORT_NEXT_SYNC_DUE_TIMESTAMP_SECONDS.with_label_values(&[&self.instance_name]);
+        if gauge.get() == 0.0 {
+            gauge.set(unix_seconds(now));
+        }
+    }
+
+    pub fn set_next_sync_due(&self, due: SystemTime) {
+        log_gauge_with_labels(
+            &S3_EXPORT_NEXT_SYNC_DUE_TIMESTAMP_SECONDS,
+            unix_seconds(due),
+            self.labels(),
+        );
+    }
+
+    /// `None` once the initial snapshot is done.
+    pub fn set_snapshot_tables_synced(&self, tables: Option<u64>) {
+        match tables {
+            Some(tables) => log_gauge_with_labels(
+                &S3_EXPORT_SNAPSHOT_SYNCED_TABLES,
+                tables as f64,
+                self.labels(),
+            ),
+            None => {
+                let _ =
+                    S3_EXPORT_SNAPSHOT_SYNCED_TABLES.remove_label_values(&[&self.instance_name]);
+            },
+        }
+    }
+
+    pub fn clear(&self) {
+        let _ =
+            S3_EXPORT_NEXT_SYNC_DUE_TIMESTAMP_SECONDS.remove_label_values(&[&self.instance_name]);
+        self.set_snapshot_tables_synced(None);
+    }
+}
+
+impl Drop for S3ExportGauges {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+fn unix_seconds(time: SystemTime) -> f64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
+// Joins the `app_metrics_seed_*` family (conductor emits the rest) so it
+// lands on the existing "Usage Limit Seeds" Grafana dashboard.
+register_convex_counter!(
+    APP_METRICS_SEED_COMPARISON_TOTAL,
+    "Seed buckets compared against the in-memory usage meter, by comparison kind",
+    &["metric", "resolution", "kind"],
+);
+pub fn log_app_metrics_seed_comparison(
+    metric: &'static str,
+    resolution: &'static str,
+    kind: &'static str,
+) {
+    log_counter_with_labels(
+        &APP_METRICS_SEED_COMPARISON_TOTAL,
+        1,
+        vec![
+            StaticMetricLabel::new("metric", metric),
+            StaticMetricLabel::new("resolution", resolution),
+            StaticMetricLabel::new("kind", kind),
+        ],
+    );
 }

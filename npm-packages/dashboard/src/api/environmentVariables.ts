@@ -3,11 +3,6 @@ import { SWRConfiguration } from "swr";
 import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
 import { useManagementApiMutation, useManagementApiQuery } from "api/api";
 
-export type ProjectEnvironmentVariable = {
-  name: string;
-  value: string;
-};
-
 export function useProjectEnvironmentVariables(
   projectId?: number,
   refreshInterval?: SWRConfiguration["refreshInterval"],

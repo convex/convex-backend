@@ -7,7 +7,9 @@ license = "LicenseRef-FSL-1.1-Apache-2.0"
 [package.metadata.cargo-machete]
 ignored = [
     # Prost/Tonic required via tonic macro
+    "pb_extras",
     "prost-types",
+    "tonic-prost",
     # Build dependencies not understood
     "pb_build",
 ]

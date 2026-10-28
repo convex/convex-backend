@@ -20,7 +20,7 @@ export function TeamMemberLink({
   return (
     <Link
       target="_blank"
-      className="rounded hover:underline focus-visible:outline-2 focus-visible:outline-border-selected"
+      className="rounded-sm hover:underline focus-visible:outline-2 focus-visible:outline-border-selected"
       href={`/t/${team?.slug}/settings/members#${memberId}`}
     >
       {name}

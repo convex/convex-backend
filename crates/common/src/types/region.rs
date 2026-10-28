@@ -18,6 +18,10 @@ enum RegionNameForDocs {
     AwsUsEast1,
     #[schema(rename = "aws-eu-west-1")]
     AwsEuWest1,
+    #[schema(rename = "aws-ca-central-1")]
+    AwsCaCentral1,
+    #[schema(rename = "aws-ap-southeast-2")]
+    AwsApSoutheast2,
 }
 
 static DEFAULT_REGION_NAME: LazyLock<RegionName> = LazyLock::new(|| "aws-us-east-1".into());

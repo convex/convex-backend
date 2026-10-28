@@ -5,7 +5,6 @@ use std::{
 };
 
 use fxhash::FxHasher32;
-use pb_build::set_protoc_path;
 
 // Make sure to select a rev off the `production` branch of the sdk
 // https://github.com/fivetran/fivetran_sdk/tree/production
@@ -22,7 +21,6 @@ const FILES: &[&str] = &[
 const FILE_HASH: u64 = 1411440539;
 
 fn main() -> Result<()> {
-    set_protoc_path();
     let protos_dir = PathBuf::from(format!("./fivetran_sdk/{REV}"));
 
     let mut proto_files = Vec::new();

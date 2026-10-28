@@ -287,6 +287,21 @@ impl VectorIndexManager {
             (Some(prev_version), Some(next_version)) => {
                 let prev_metadata: ParsedDocument<IndexMetadata<_>> = prev_version.parse()?;
                 let next_metadata: ParsedDocument<IndexMetadata<_>> = next_version.parse()?;
+                // We can truncate in-memory indexes as we backfill since we know everything
+                // through last_segment_ts is now on disk. Prevents unbounded growth of
+                // in-memory indexes.
+                if let IndexConfig::Vector {
+                    on_disk_state: VectorIndexState::Backfilling(next_backfill_state),
+                    ..
+                } = &next_metadata.config
+                    && let Some(cursor) = &next_backfill_state.cursor
+                {
+                    let last_segment_ts = cursor.last_segment_ts;
+                    self.indexes
+                        .update(&id.internal_id().into(), None, |memory_index| {
+                            memory_index.truncate(last_segment_ts.succ()?)
+                        })?;
+                }
                 let (old_snapshot, new_snapshot, staged) =
                     match (&prev_metadata.config, &next_metadata.config) {
                         (
@@ -602,6 +617,23 @@ impl VectorIndexManager {
     pub fn in_memory_sizes(&self) -> Vec<(IndexId, usize)> {
         if let IndexState::Ready(ref indexes) = self.indexes {
             indexes.iter().map(|(id, (_, s))| (*id, s.size())).collect()
+        } else {
+            vec![]
+        }
+    }
+
+    /// In-memory index sizes used to decide whether to reject writes that are
+    /// too large. Excludes backfilling indexes: they aren't queryable, their
+    /// in-memory contents are kept bounded by the backfill flusher (which
+    /// truncates the memory index as it persists progress), and they should
+    /// never block writes to the table.
+    pub fn flushable_in_memory_index_sizes(&self) -> Vec<(IndexId, usize)> {
+        if let IndexState::Ready(ref indexes) = self.indexes {
+            indexes
+                .iter()
+                .filter(|(_, (state, _))| !matches!(state, VectorIndexState::Backfilling(_)))
+                .map(|(id, (_, s))| (*id, s.size()))
+                .collect()
         } else {
             vec![]
         }

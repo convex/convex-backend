@@ -1,4 +1,8 @@
-import { TeamResponse, InvitationResponse, TeamMember } from "generatedApi";
+import { TeamResponse } from "generatedApi";
+import {
+  InvitationResponse,
+  TeamMember,
+} from "@convex-dev/platform/managementApi";
 
 import { Sheet } from "@ui/Sheet";
 import { LoadingTransition } from "@ui/Loading";
@@ -16,7 +20,6 @@ import { MEMBER_RESOURCE } from "lib/permissions";
 import { useRemoveTeamMember, useTeamEntitlements } from "api/teams";
 import { useProfile } from "api/profile";
 import { useCancelInvite, useCreateInvite } from "api/invitations";
-import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import sortBy from "lodash/sortBy";
 import { TeamMemberInviteListItem } from "./TeamMemberInviteListItem";
 import { TeamMemberListItem } from "./TeamMemberListItem";
@@ -88,10 +91,9 @@ export function TeamMemberList({
   const canCancelInvite = isTeamAdmin || canCancelInviteCustom;
 
   const entitlements = useTeamEntitlements(team.id);
-  const { customRoles: customRolesFlag } = useLaunchDarkly();
   const customRolesEnabled = entitlements?.customRolesEnabled ?? false;
   const { data: customRolesData } = useListCustomRoles(
-    customRolesFlag && customRolesEnabled ? team.id : undefined,
+    customRolesEnabled ? team.id : undefined,
   );
   const customRoles = customRolesData?.items ?? [];
 
@@ -104,7 +106,7 @@ export function TeamMemberList({
       <Sheet className="min-w-[20rem]">
         <div className="mb-4 flex w-full items-center justify-between gap-2">
           <h3 className="grow">Team Members</h3>
-          <div className="w-[12rem]">
+          <div className="w-48">
             <TextInput
               type="search"
               id="memberSearch"
@@ -127,7 +129,6 @@ export function TeamMemberList({
                   myProfile={profile}
                   customRoles={customRoles}
                   customRolesEnabled={customRolesEnabled}
-                  customRolesVisible={customRolesFlag}
                   onChangeRole={onChangeRole}
                   onRemoveMember={onRemoveMember}
                   canUpdateRole={canUpdateRole}
@@ -157,7 +158,6 @@ export function TeamMemberList({
                     myProfile={profile}
                     customRoles={customRoles}
                     customRolesEnabled={customRolesEnabled}
-                    customRolesVisible={customRolesFlag}
                     onChangeRole={onChangeRole}
                     onRemoveMember={onRemoveMember}
                     canUpdateRole={canUpdateRole}
@@ -177,7 +177,7 @@ export function TeamMemberList({
         <Sheet>
           <div className="mb-4 flex w-full items-center justify-between gap-2">
             <h3 className="grow">Pending Invitations</h3>
-            <div className="w-[12rem]">
+            <div className="w-48">
               <TextInput
                 type="search"
                 id="inviteSearch"

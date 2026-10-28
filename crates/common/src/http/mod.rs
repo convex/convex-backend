@@ -196,15 +196,10 @@ pub struct HttpRequest {
 
 impl From<HttpRequest> for HttpRequestStream {
     fn from(value: HttpRequest) -> Self {
-        let body: Pin<
-            Box<dyn Stream<Item = anyhow::Result<bytes::Bytes>> + Sync + Send + 'static>,
-        > = if let Some(b) = value.body {
-            Box::pin(futures::stream::once(
-                async move { Ok::<_, anyhow::Error>(b) },
-            ))
-        } else {
-            Box::pin(futures::stream::empty())
-        };
+        let body = value.body.map(|b| {
+            Box::pin(futures::stream::once(async move { Ok(b) }))
+                as Pin<Box<dyn Stream<Item = anyhow::Result<bytes::Bytes>> + Sync + Send>>
+        });
 
         Self {
             headers: value.headers,
@@ -232,7 +227,14 @@ pub struct HttpRequestStream {
     pub headers: HeaderMap,
     pub url: Url,
     pub method: Method,
-    pub body: Pin<Box<dyn Stream<Item = anyhow::Result<bytes::Bytes>> + Sync + Send + 'static>>,
+    /// The request body, or `None` for a body-less request such as a plain GET.
+    /// This distinction must be preserved end-to-end: a body-less request has
+    /// to be sent without a body so it is framed correctly over HTTP/2 (see
+    /// the `fetch` impl in `fetch.rs`). It deliberately cannot be recovered
+    /// by inspecting the stream, because the stream may be a full-duplex
+    /// body whose first chunk is only produced after the response headers
+    /// arrive.
+    pub body: Option<Pin<Box<dyn Stream<Item = anyhow::Result<bytes::Bytes>> + Sync + Send>>>,
     pub signal: Pin<Box<dyn Future<Output = ()> + Sync + Send + 'static>>,
 }
 
@@ -332,32 +334,6 @@ impl HttpResponseStream {
             request_size: self.request_size.load(Ordering::Relaxed),
         })
     }
-}
-
-/// Transforms a common::http::HttpResponseStream into a
-/// anyhow::Result<HttpResponseStream>, categorizing HTTP status code errors
-/// into the ErrorMetadata data model. If no such status code is extractable,
-/// the error is left uncategorized with ErrorMetadata.
-pub fn categorize_http_response_stream(
-    response: HttpResponseStream,
-) -> anyhow::Result<HttpResponseStream> {
-    if !(response.status.is_server_error() || response.status.is_client_error()) {
-        return Ok(response);
-    };
-
-    let canonical_reason = response.status.canonical_reason().unwrap_or("Unknown");
-    let Some(em) =
-        ErrorMetadata::from_http_status_code(response.status, "RequestFailed", canonical_reason)
-    else {
-        anyhow::bail!(
-            "Http request to {:?} failed with status code {} {}",
-            response.url,
-            response.status,
-            canonical_reason,
-        );
-    };
-
-    Err(em.into())
 }
 
 /// `HttpError` is used as a vehicle for getting client facing error messages
@@ -510,6 +486,17 @@ impl RouteMapper for NoopRouteMapper {
     }
 }
 
+fn concurrency_metric_name(service_name: &str, namespace: &str) -> String {
+    let name = format!(
+        "{}_http_service_concurrent_requests",
+        service_name.replace('-', "_")
+    );
+    // The registry already prefixes metrics with the executable name.
+    name.strip_prefix(&format!("{namespace}_"))
+        .unwrap_or(&name)
+        .to_owned()
+}
+
 /// Router + Middleware for a Convex service
 pub struct ConvexHttpService {
     router: Router,
@@ -535,10 +522,7 @@ impl ConvexHttpService {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrency));
         let semaphore_ = semaphore.clone();
         let concurrency_gauge = PullingGauge::new(
-            format!(
-                "{}_http_service_concurrent_requests",
-                service_name.replace('-', "_")
-            ),
+            concurrency_metric_name(service_name, &SERVICE_NAME),
             "The number of currently outstanding requests on the ConvexHttpService",
             Box::new(move || (max_concurrency - semaphore_.available_permits()) as f64),
         )
@@ -830,6 +814,14 @@ pub async fn stats_middleware<RM: RouteMapper>(
 
 pub struct InstanceNameExt(pub String);
 
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PaginationMetadata {
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
 #[derive(ToSchema, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd)]
 #[serde(rename_all = "camelCase")]
 pub enum RequestDestination {
@@ -862,6 +854,17 @@ impl std::fmt::Display for RequestDestination {
 pub struct ResolvedHostname {
     pub deployment_name: String,
     pub destination: RequestDestination,
+    pub source: ResolvedHostnameSource,
+}
+
+/// How the deployment was resolved, so default-domain restrictions can
+/// distinguish built-in aliases from registered custom domains and local
+/// routing.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ResolvedHostnameSource {
+    DefaultDomain,
+    CustomDomain,
+    Local,
 }
 
 pub const CONVEX_DOMAIN_REGEX_INSTANCE_CAPTURE: &str = "instance";
@@ -885,6 +888,7 @@ pub fn resolve_convex_domain(uri: &Uri) -> anyhow::Result<Option<ResolvedHostnam
         return Ok(Some(ResolvedHostname {
             deployment_name,
             destination,
+            source: ResolvedHostnameSource::DefaultDomain,
         }));
     }
     Ok(None)
@@ -925,6 +929,7 @@ impl<S: Sync> FromRequestParts<S> for ExtractResolvedHostname {
         Ok(ExtractResolvedHostname(ResolvedHostname {
             deployment_name: ::std::env::var("CONVEX_SITE").unwrap_or_default(),
             destination: RequestDestination::ConvexCloud,
+            source: ResolvedHostnameSource::Local,
         }))
     }
 }
@@ -1087,40 +1092,6 @@ where
     }
 }
 
-#[allow(clippy::declare_interior_mutable_const)]
-pub const CONVEX_CHEF_DEPLOY_SECRET_HEADER: HeaderName =
-    HeaderName::from_static("convex-chef-deploy-secret");
-
-pub struct ExtractChefDeploySecret(pub String);
-
-fn chef_deploy_secret_from_req_parts(
-    parts: &mut axum::http::request::Parts,
-) -> anyhow::Result<String> {
-    parts
-        .headers
-        .get(CONVEX_CHEF_DEPLOY_SECRET_HEADER)
-        .and_then(|h| h.to_str().ok().map(|s| s.to_string()))
-        .context(ErrorMetadata::bad_request(
-            "InvalidChefDeploySecret",
-            "convex-chef-deploy-secret header is not set",
-        ))
-}
-
-impl<S> FromRequestParts<S> for ExtractChefDeploySecret
-where
-    S: Send + Sync,
-{
-    type Rejection = HttpResponseError;
-
-    async fn from_request_parts(
-        parts: &mut axum::http::request::Parts,
-        _state: &S,
-    ) -> Result<Self, Self::Rejection> {
-        let shared_secret = chef_deploy_secret_from_req_parts(parts)?;
-        Ok(Self(shared_secret))
-    }
-}
-
 pub const TRACEPARENT_HEADER_STR: &str = "traceparent";
 pub const TRACEPARENT_HEADER: HeaderName = HeaderName::from_static(TRACEPARENT_HEADER_STR);
 
@@ -1184,7 +1155,7 @@ fn is_high_volume_path(path: &str) -> bool {
     path == "/instance_version"
         || path == "/instance_name"
         || path == "/get_backend_info"
-        || path == "/get_deployment_state"
+        || path == "/get_system_stop_state"
         || path == "/api/shapes2"
         || path == "/api/actions/query"
         || path == "/api/actions/mutation"
@@ -1192,6 +1163,7 @@ fn is_high_volume_path(path: &str) -> bool {
         || path == "/api/stream_function_logs"
         || path == "/api/app_metrics/stream_function_logs"
         || path == "/"
+        || path == "/health"
 }
 
 /// Emit an HTTP access log line. Used by both the normal completion path
@@ -1369,6 +1341,8 @@ pub async fn metrics() -> Result<impl IntoResponse, HttpResponseError> {
         ))
         .into());
     }
+    // Idempotent; starts the sweeper on the first scrape.
+    ::metrics::spawn_sweep_task(None);
     let encoder = TextEncoder::new();
     let metrics = CONVEX_METRICS_REGISTRY.gather();
     let output = encoder

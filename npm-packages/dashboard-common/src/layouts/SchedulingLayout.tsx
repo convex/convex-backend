@@ -15,8 +15,7 @@ export function SchedulingLayout({ children }: { children: React.ReactNode }) {
     <div className="flex h-full flex-col">
       <div className="flex w-full items-center gap-4 bg-background-secondary px-6 pt-4">
         <h3>Schedules</h3>
-        {/* Negative margin accounting for the margin on NentSwitcher */}
-        <div className="-mb-4 w-fit min-w-60">
+        <div className="w-fit min-w-60">
           <NentSwitcher />
         </div>
       </div>

@@ -1,7 +1,7 @@
 ---
 title: "Custom Roles"
 slug: "custom-roles"
-sidebar_position: 2
+sidebar_position: 3
 sidebar_class_name: "convex-sidebar-beta-badge"
 description:
   "Define fine-grained permission policies for your Convex team using custom
@@ -121,7 +121,7 @@ statement.
   matches every project.
 - `=` binds a selector attribute to a value, like `id=42`. Project, deployment,
   and member IDs can be looked up through the
-  [Platform API](/platform-apis.mdx).
+  [Platform API](/platform-apis/overview.mdx).
 - `,` separates multiple selectors on the same kind. **Multiple selectors are
   OR'd**: `deployment:type=prod,creator=5` matches any deployment that is either
   a production deployment _or_ created by member 5.
@@ -679,7 +679,7 @@ valid Custom Roles.
     "resourceSpecifier": {
       "type": "string",
       "minLength": 1,
-      "pattern": "^(team:\\*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*)?|project:(\\*|id=[^,:]+|slug=[^,:]+)(,(\\*|id=[^,:]+|slug=[^,:]+))*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*|:deployment:(\\*|id=[^,:]+|type=[^,:]+|creator=(self|[0-9]+))(,(\\*|id=[^,:]+|type=[^,:]+|creator=(self|[0-9]+)))*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*)?|:defaultEnvironmentVariable:\\*)?|member:(\\*|id=[^,:]+)(,(\\*|id=[^,:]+))*|customRole:\\*|billing:\\*|oauthApplication:\\*|sso:\\*|integration:\\*)$"
+      "pattern": "^(team:\\*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*)?|project:(\\*|id=[^,:]+|slug=[^,:]+)(,(\\*|id=[^,:]+|slug=[^,:]+))*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*|:deployment:(\\*|id=[^,:]+|type=[^,:]+|creator=(self|[0-9]+))(,(\\*|id=[^,:]+|type=[^,:]+|creator=(self|[0-9]+)))*(:token:(\\*|creator=(self|[0-9]+))(,(\\*|creator=(self|[0-9]+)))*)?|:defaultEnvironmentVariable:\\*)?|member:\\*|customRole:\\*|billing:\\*|oauthApplication:\\*|sso:\\*|integration:\\*)$"
     }
   }
 }

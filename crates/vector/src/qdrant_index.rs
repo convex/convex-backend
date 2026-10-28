@@ -116,7 +116,7 @@ use crate::{
     MAX_VECTOR_RESULTS,
 };
 
-const TIMESTAMP_FIELD: &str = "_ts";
+pub(crate) const TIMESTAMP_FIELD: &str = "_ts";
 
 #[derive(Clone, Debug)]
 pub struct QdrantSchema {

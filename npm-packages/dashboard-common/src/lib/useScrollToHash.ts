@@ -2,7 +2,7 @@ import { useEffect, type RefObject } from "react";
 
 export function useScrollToHash<T extends HTMLElement>(
   hash: string,
-  targetRef: RefObject<T>,
+  targetRef: RefObject<T | null>,
 ) {
   useEffect(() => {
     if (typeof window === "undefined") {

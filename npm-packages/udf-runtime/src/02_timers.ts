@@ -6,6 +6,8 @@ import { performAsyncOp } from "./syscall";
 
 const ACTIVE_TIMERS = new Map();
 
+let nextTimerId = 1;
+
 const setTimeout = (
   handler: (...args: any[]) => void,
   timeoutMs: number,
@@ -40,7 +42,7 @@ const timerInitialization = (
   if (typeof handler === "string") {
     throwNotImplementedMethodError("code string argument", name);
   }
-  const id = previousId ?? unusedTimerId();
+  const id = previousId ?? nextTimerId++;
   // TODO(CX-4532) calculate nesting level and use it to lower bound timeout.
   timeoutMs = timeoutMs ? Number(timeoutMs) : 0;
   if (timeoutMs < 0) {
@@ -79,16 +81,6 @@ const runAfterTimeout = (
 
     task();
   });
-};
-
-const unusedTimerId = () => {
-  while (true) {
-    const id =
-      1 + Math.floor(Math.random() * Math.max(1000, ACTIVE_TIMERS.size * 2));
-    if (!ACTIVE_TIMERS.has(id)) {
-      return id;
-    }
-  }
 };
 
 export const setupTimers = (global) => {

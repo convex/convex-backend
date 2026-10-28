@@ -1,21 +1,6 @@
 import { api } from "./_generated/api";
 import { internalMutation, type MutationCtx } from "./_generated/server";
 
-if (!process.env.TOGETHER_API_KEY) {
-  const deploymentName = process.env.CONVEX_CLOUD_URL?.slice(8).replace(
-    ".convex.cloud",
-    "",
-  );
-  throw new Error(
-    "\n  Missing TOGETHER_API_KEY in environment variables.\n\n" +
-      "  Get one at https://together.ai/\n\n" +
-      "  Paste it on the Convex dashboard:\n" +
-      "  https://dashboard.convex.dev/d/" +
-      deploymentName +
-      "/settings?var=TOGETHER_API_KEY",
-  );
-}
-
 const seedMessages = [
   ["Omar", "Hey there!", 0],
   ["Arya", "What's up? Have a good weekend?", 1000],

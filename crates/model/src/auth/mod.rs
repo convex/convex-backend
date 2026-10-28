@@ -32,15 +32,13 @@ use crate::{
 
 pub mod types;
 
-pub static AUTH_TABLE: TableName = TableName::const_new("_auth");
+pub const AUTH_TABLE: TableName = TableName::const_new("_auth");
 
 pub struct AuthTable;
 impl SystemTable for AuthTable {
     type Metadata = AuthInfoPersisted;
 
-    fn table_name() -> &'static TableName {
-        &AUTH_TABLE
-    }
+    const TABLE_NAME: TableName = AUTH_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]

@@ -29,7 +29,7 @@ export function EmptySection({
         {Icon && (
           <div
             className={cn(
-              "mb-4 flex aspect-square h-[2.625rem] shrink-0 items-center justify-center rounded-lg bg-util-accent bg-gradient-to-tr shadow-md",
+              "mb-4 flex aspect-square h-10.5 shrink-0 items-center justify-center rounded-lg bg-util-accent bg-linear-to-tr shadow-md",
               color === "yellow" && "from-yellow-200 to-util-brand-yellow",
               color === "red" &&
                 // eslint-disable-next-line no-restricted-syntax
@@ -39,7 +39,7 @@ export function EmptySection({
               color === "none" && "bg-transparent shadow-none",
             )}
           >
-            <Icon className="h-6 w-6 text-white" />
+            <Icon className="size-6 text-white" />
           </div>
         )}
         <h2 className="mx-2 mb-2">{header}</h2>

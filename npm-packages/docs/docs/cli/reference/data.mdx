@@ -1,0 +1,86 @@
+---
+sidebar_position: 10
+title: "npx convex data"
+sidebar_label: "npx convex data"
+description: "List tables and print data from your database"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex data`
+
+Inspect your Convex deployment's database.
+
+- List tables: <CodeWithCopyButton text={"npx convex data"} />
+- List documents in a table: <CodeWithCopyButton text={"npx convex data tableName"} />
+
+By default, this inspects your dev deployment.
+
+This works with system tables, such as `_storage`, in addition to your own tables.
+
+## Syntax
+
+```sh
+npx convex data [options] [table]
+```
+
+## Arguments
+
+<dl>
+<dt>`[table]`</dt>
+<dd>
+
+If specified, list documents in this table.
+
+</dd>
+</dl>
+
+## Options
+
+<dl>
+<dt>`--limit <n>`</dt>
+<dd>
+
+List only the `n` the most recently created documents.
+
+</dd>
+<dt>`--order <choice>`</dt>
+<dd>
+
+Order the documents by their `_creationTime`.
+
+</dd>
+<dt>`--component <path>`</dt>
+<dd>
+
+Path to the component (e.g. "workflow" or "workflow/workpool")
+
+</dd>
+<dt>`--format <format>`</dt>
+<dd>
+
+Format to print the data in. This flag is only required if the filename is missing an extension.
+- jsonArray (aka json): print the data as a JSON array of objects.
+- jsonLines (aka jsonl): print the data as a JSON object per line.
+- pretty: print the data in a human-readable format.
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Inspect the database in this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Inspect the database in a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

@@ -1,4 +1,8 @@
-import { FunctionReference, OptionalRestArgs } from "../server/api.js";
+import {
+  FunctionReference,
+  FunctionReference_future,
+  OptionalRestArgs,
+} from "../server/api.js";
 import { Id } from "../values/value.js";
 
 /**
@@ -12,6 +16,17 @@ export type SchedulableFunctionReference = FunctionReference<
   "mutation" | "action",
   "public" | "internal"
 >;
+
+// What the scheduling methods accept. This is kept separate from the exported
+// `SchedulableFunctionReference` so that alias keeps describing a plain
+// reference. Existing code depending on it can still forward it to anything
+// typed with `FunctionReference` or read its `_args`. This alias is
+// module-local so that a consumer's declaration file inlines it instead of
+// importing it from a path that is not part of the package's public entry
+// points.
+type SchedulableFunctionReferenceCompat =
+  | SchedulableFunctionReference
+  | FunctionReference_future<"mutation" | "action", "public" | "internal">;
 
 /**
  * An interface to schedule Convex functions to run in the future.
@@ -78,13 +93,13 @@ export interface Scheduler {
    * @param delayMs - Delay in milliseconds. Must be non-negative. If the delay
    * is zero, the scheduled function will be due to execute immediately after the
    * scheduling one completes.
-   * @param functionReference - A {@link FunctionReference} for the function
-   * to schedule.
+   * @param functionReference - A {@link FunctionReference} or
+   * {@link FunctionReference_future} for the function to schedule.
    * @param args - Arguments to call the scheduled functions with.
    * @returns The ID of the scheduled function in the `_scheduled_functions`
    * system table. Use this to cancel it later if needed.
    **/
-  runAfter<FuncRef extends SchedulableFunctionReference>(
+  runAfter<FuncRef extends SchedulableFunctionReferenceCompat>(
     delayMs: number,
     functionReference: FuncRef,
     ...args: OptionalRestArgs<FuncRef>
@@ -110,13 +125,13 @@ export interface Scheduler {
    * If the timestamp is in the past, the scheduled function will be due to
    * execute immediately after the scheduling one completes. The timestamp can't
    * be more than five years in the past or more than five years in the future.
-   * @param functionReference - A {@link FunctionReference} for the function
-   * to schedule.
+   * @param functionReference - A {@link FunctionReference} or
+   * {@link FunctionReference_future} for the function to schedule.
    * @param args - Arguments to call the scheduled functions with.
    * @returns The ID of the scheduled function in the `_scheduled_functions`
    * system table.
    **/
-  runAt<FuncRef extends SchedulableFunctionReference>(
+  runAt<FuncRef extends SchedulableFunctionReferenceCompat>(
     timestamp: number | Date,
     functionReference: FuncRef,
     ...args: OptionalRestArgs<FuncRef>

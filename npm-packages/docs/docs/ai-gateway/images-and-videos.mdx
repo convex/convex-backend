@@ -1,0 +1,167 @@
+---
+title: "Images and videos"
+sidebar_position: 5
+description:
+  "Generate images and videos from Convex actions with the AI Gateway"
+---
+
+Generate images and videos from an [action](/functions/actions.mdx) with
+`convexGateway`. For installation and authentication, see
+[Getting started](/ai-gateway/setup.mdx#vercel-ai-sdk).
+
+The examples below run inside an action handler.
+
+## Generate images
+
+<Admonition type="caution" title="Image generation is in alpha">
+
+The request and response format may change during alpha.
+
+</Admonition>
+
+```ts
+import { generateImage } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+const { images } = await generateImage({
+  model: convexGateway.imageModel("openai/gpt-image-1"),
+  prompt: "A mountain lake at sunrise",
+});
+```
+
+The gateway generates images from a text prompt. It does not support image
+editing with input images or a mask.
+
+## Generate videos
+
+<Admonition type="caution" title="Video generation is in alpha">
+
+The request and response format may change during alpha.
+
+</Admonition>
+
+```ts
+import { experimental_generateVideo as generateVideo } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+const { video, providerMetadata } = await generateVideo({
+  model: convexGateway.videoModel("google/veo-3.1"),
+  prompt: "A camera pan across a mountain lake",
+  duration: 8,
+  aspectRatio: "16:9",
+  resolution: "1280x720",
+});
+
+const bytes = video.uint8Array;
+const cost = providerMetadata?.convexGateway?.cost;
+```
+
+The call waits for the video, then downloads it. It fails if generation takes
+longer than about five minutes, and the download limit is 64 MiB. Use
+[async videos](#async-videos) for longer jobs. Save `video.uint8Array` in
+[file storage](/file-storage/store-files.mdx).
+
+The AI SDK splits `n > 1` into separate requests. Cancelling a request does not
+cancel generation. A timeout or lost response can still incur a charge.
+
+An image in the prompt becomes the first frame. Set `frameImages` to choose
+frames, `inputReferences` to pass image, audio, or video references, and
+`generateAudio` to include audio. `fps` is unsupported and returns a warning.
+
+`providerOptions.convexGateway` accepts `resolution` (such as `720p`),
+`generate_audio`, `frame_images`, and `input_references`. Standard SDK options
+take precedence. Supported values depend on the model.
+
+## Async videos
+
+Use `experimental_startVideo` when the action should return before the video is
+ready. If the gateway returns "Asynchronous video generation is not configured",
+contact Convex support.
+
+Completion callbacks are best effort. Save the operation handle so you can check
+status if a callback is missed.
+
+For local development, omit `webhookUrl` and use the
+[status and download methods](#retrieve-the-video). Callbacks require a cloud
+deployment's HTTPS `convex.site` URL; localhost URLs are not accepted.
+
+Create a job in your database before submitting the request. Pass its ID as
+`requestId` so the callback handler can look up the job.
+
+```ts
+import { experimental_startVideo as startVideo } from "ai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
+
+async function startJob(requestId: string) {
+  const modelId = "google/veo-3.1";
+  const started = await startVideo({
+    model: convexGateway.videoModel(modelId),
+    prompt: "A camera pan across a mountain lake",
+    duration: 8,
+    webhookUrl: `${process.env.CONVEX_SITE_URL}/video-complete?requestId=${requestId}`,
+    maxRetries: 0,
+  });
+
+  return {
+    modelId,
+    operation: started.operation,
+    inferenceId: started.providerMetadata?.convexGateway?.inferenceId,
+    webhookSecret: started.providerMetadata?.convexGateway?.webhookSecret,
+  };
+}
+```
+
+Save the returned fields on the job before the action returns. Keep
+`webhookSecret` private. `maxRetries: 0` prevents automatic submission retries:
+a lost response can still mean a paid job was accepted. Callback URLs must use
+the deployment's own HTTPS `<deployment>.convex.site` origin; redirects are
+rejected. If `CONVEX_SITE_URL` uses a custom domain, use the deployment's
+default `convex.site` origin in the example instead.
+
+### Receive a callback
+
+In an [HTTP action](/functions/http-actions.mdx), load the job using `requestId`
+and verify the raw request body:
+
+```ts
+import { verifyVideoWebhook } from "@convex-dev/ai-sdk-provider";
+
+const event = await verifyVideoWebhook({
+  body: await request.text(),
+  signature: request.headers.get("x-convex-video-signature"),
+  secret: savedJob.webhookSecret,
+});
+
+if (event.id !== savedJob.inferenceId) {
+  return new Response("Wrong job", { status: 400 });
+}
+```
+
+Save the event in a mutation. Check `(event.id, event.status)` in that mutation
+so repeated callbacks update the job once. For `completed`, schedule an action
+to download the video. `failed`, `cancelled`, and `expired` are terminal errors.
+
+Return 204 after saving the event. If the job's secret has not been saved yet,
+return a non-2xx response. Respond within 8 seconds, or the delivery fails. A
+failed delivery may not be retried, so check unfinished jobs with
+[status](#retrieve-the-video) periodically.
+
+### Retrieve the video
+
+In a later action, use the saved operation to check status and download:
+
+```ts
+const model = convexGateway.videoModel(savedJob.modelId);
+const status = await model.getStatus({ operation: savedJob.operation });
+
+if (status.status === "completed") {
+  const result = await model.download({ operation: savedJob.operation });
+  const video = result.videos[0];
+  const cost = result.providerMetadata?.convexGateway?.cost;
+}
+```
+
+`getStatus` returns `pending`, `completed`, or `error`. When the status is
+`error`, the `error` field contains the error message. Save the downloaded video
+in file storage; each `download` call fetches it again. Operations expire after
+seven days. The provider may retain the video for less time.

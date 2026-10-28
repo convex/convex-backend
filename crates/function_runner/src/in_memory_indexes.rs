@@ -1,5 +1,4 @@
 use std::{
-    cmp,
     collections::BTreeMap,
     sync::Arc,
 };
@@ -23,12 +22,14 @@ use common::{
     interval::Interval,
     knobs::{
         FUNRUN_INDEX_CACHE_CONCURRENCY,
+        FUNRUN_INDEX_CACHE_QUEUE_SIZE,
         FUNRUN_INDEX_CACHE_SIZE,
     },
     query::Order,
     runtime::Runtime,
     types::{
         IndexId,
+        IndexRef,
         RepeatableTimestamp,
     },
     virtual_system_mapping::VirtualSystemMapping,
@@ -48,18 +49,14 @@ use database::{
     COMPONENTS_TABLE,
     SCHEMAS_TABLE,
 };
-use futures::{
-    FutureExt,
-    TryStreamExt,
-};
+use futures::TryStreamExt;
 use indexing::{
-    backend_in_memory_indexes::{
-        DatabaseIndexSnapshot,
+    database_index_snapshot::DatabaseIndexSnapshot,
+    in_memory_indexes::{
         InMemoryIndexes,
-        IndexReader,
         MemoryDocument,
-        SystemDocument,
     },
+    index_reader::IndexReader,
     index_registry::IndexRegistry,
 };
 use keybroker::Identity;
@@ -100,7 +97,7 @@ fn make_transaction<RT: Runtime>(
     let id_generator = TransactionIdGenerator::new(&rt)?;
     // The transaction timestamp might be few minutes behind if the backend
     // has been idle. Make sure creation time is always recent.
-    let creation_time = CreationTime::try_from(cmp::max(*ts, rt.generate_timestamp()?))?;
+    let creation_time = CreationTime::for_transaction(*ts, rt.generate_timestamp()?)?;
     let transaction_index =
         TransactionIndex::new(index_registry, database_index_snapshot, text_index_snapshot);
     Ok(Transaction::new(
@@ -153,7 +150,7 @@ pub(crate) struct InMemoryIndexCache<RT: Runtime> {
 
 #[fastrace::trace]
 async fn load_index(
-    index_id: IndexId,
+    index: IndexRef,
     index_reader: Arc<dyn IndexReader>,
     tablet_id: TabletId,
     table_name: String,
@@ -161,23 +158,14 @@ async fn load_index(
     let _timer = load_index_timer(&table_name);
     let mut size = 0;
     let index_map: BTreeMap<Vec<u8>, _> = index_reader
-        .index_scan(index_id, tablet_id, Interval::all(), Order::Asc, usize::MAX)
+        .index_scan(index, tablet_id, Interval::all(), Order::Asc, usize::MAX)
         .map_ok(|entry| {
             let doc = entry.value;
             // This doesn't take into account the future size of the cached
             // SystemDocument, so the cache will use more memory than its
             // nominal size
             size += entry.key.heap_size() + doc.heap_size();
-            (
-                entry.key.0,
-                (
-                    entry.ts,
-                    MemoryDocument {
-                        packed_document: doc,
-                        cached_system_document: SystemDocument::new(),
-                    },
-                ),
-            )
+            (entry.key.0, (entry.ts, MemoryDocument::new(doc)))
         })
         .try_collect()
         .await?;
@@ -190,14 +178,14 @@ async fn load_index(
 
 #[fastrace::trace]
 async fn load_unpacked_index(
-    index_id: IndexId,
+    index: IndexRef,
     index_reader: &Arc<dyn IndexReader>,
     tablet_id: TabletId,
     table_name: &str,
 ) -> anyhow::Result<(Vec<PackedDocument>, u64)> {
     let _timer = load_index_timer(table_name);
     let documents: Vec<PackedDocument> = index_reader
-        .index_scan(index_id, tablet_id, Interval::all(), Order::Asc, usize::MAX)
+        .index_scan(index, tablet_id, Interval::all(), Order::Asc, usize::MAX)
         .map_ok(|entry| entry.value)
         .try_collect()
         .await?;
@@ -220,6 +208,7 @@ impl<RT: Runtime> InMemoryIndexCache<RT> {
                 rt.clone(),
                 *FUNRUN_INDEX_CACHE_SIZE,
                 *FUNRUN_INDEX_CACHE_CONCURRENCY,
+                *FUNRUN_INDEX_CACHE_QUEUE_SIZE,
                 "funrun_index_cache",
             ),
             rt,
@@ -234,34 +223,31 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
     #[fastrace::trace]
     async fn get_or_load(
         &self,
-        index_id: IndexId,
+        index: IndexRef,
         tablet_id: TabletId,
         table_name: TableName,
     ) -> anyhow::Result<Option<Arc<IndexCacheValue>>> {
         let Some(key) = self
             .backend_last_modified
-            .get(&index_id)
+            .get(&index.id())
             .map(|ts| IndexCacheKey {
                 deployment_name: self.deployment_name.clone(),
-                index_id,
+                index_id: index.id(),
                 last_modified: *ts,
             })
         else {
             return Ok(None);
         };
-        let table_name = table_name.to_string();
         let cache_value_result = self
             .cache
-            .get(
-                key,
+            .get(&key, || {
                 load_index(
-                    index_id,
+                    index,
                     self.index_reader.clone(),
                     tablet_id,
-                    table_name.clone(),
+                    table_name.to_string(),
                 )
-                .boxed(),
-            )
+            })
             .await
             .map(Some);
         log_funrun_index_cache_get(&table_name);
@@ -288,7 +274,7 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
         }
         let tables_last_modified = *self
             .backend_last_modified
-            .get(&tables_by_id)
+            .get(&tables_by_id.id())
             .context("_tables not configured to be in-memory")?;
         const NAME: &str = "_table_registry";
         log_funrun_index_cache_get(NAME);
@@ -296,11 +282,11 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
         let table_registry = self
             .cache
             .get(
-                Key {
+                &Key {
                     deployment_name: self.deployment_name.clone(),
                     tables_last_modified,
                 },
-                async move {
+                || async move {
                     let (documents, size) =
                         load_unpacked_index(tables_by_id, &index_reader, tables_tablet_id, NAME)
                             .await?;
@@ -313,8 +299,7 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
                     // so just approximate its size using the size of the
                     // documents it was made from.
                     Ok(WithSize(registry, size))
-                }
-                .boxed(),
+                },
             )
             .await?;
         Ok((tables_last_modified, table_registry.0.clone()))
@@ -340,7 +325,7 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
         }
         let indexes_last_modified = *self
             .backend_last_modified
-            .get(&index_by_id)
+            .get(&index_by_id.id())
             .context("_index not configured to be in-memory")?;
         const NAME: &str = "_index_registry";
         log_funrun_index_cache_get(NAME);
@@ -349,14 +334,14 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
         let index_registry = self
             .cache
             .get(
-                Key {
+                &Key {
                     deployment_name: self.deployment_name.clone(),
                     // We use the max of the two timestamps as our cache key
                     // because it's "as if" `load_unpacked_index` is reading at
                     // that timestamp.
                     last_modified: table_registry.0.max(indexes_last_modified),
                 },
-                async move {
+                || async move {
                     let (documents, size) =
                         load_unpacked_index(index_by_id, &index_reader, index_tablet_id, NAME)
                             .await?;
@@ -366,8 +351,7 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
                     )?;
                     DatabaseSnapshot::<RT>::verify_invariants(&table_registry.1, &index_registry)?;
                     Ok(WithSize(index_registry, size))
-                }
-                .boxed(),
+                },
             )
             .await?;
         Ok((indexes_last_modified, index_registry.0.clone()))
@@ -393,10 +377,11 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
             .namespace(TableNamespace::Global)
             .id(&COMPONENTS_TABLE)?
             .tablet_id;
-        let components_by_id = index_registry.1.must_get_by_id(component_tablet_id)?.id();
+        let components_by_id =
+            IndexRef::try_from(index_registry.1.must_get_by_id(component_tablet_id)?)?;
         let components_last_modified = *self
             .backend_last_modified
-            .get(&components_by_id)
+            .get(&components_by_id.id())
             .context("_components not configured to be in-memory")?;
         const NAME: &str = "_component_registry";
         log_funrun_index_cache_get(NAME);
@@ -404,14 +389,14 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
         let component_registry = self
             .cache
             .get(
-                Key {
+                &Key {
                     deployment_name: self.deployment_name.clone(),
                     last_modified: table_registry
                         .0
                         .max(index_registry.0)
                         .max(components_last_modified),
                 },
-                async move {
+                || async move {
                     let (documents, size) = load_unpacked_index(
                         components_by_id,
                         &index_reader,
@@ -424,8 +409,7 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
                         documents.into_iter().map(|d| d.parse()).try_collect()?,
                     )?;
                     Ok(WithSize(component_registry, size))
-                }
-                .boxed(),
+                },
             )
             .await?;
         Ok((components_last_modified, component_registry.0.clone()))
@@ -467,30 +451,29 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
             let namespace = component_id.into();
             let schema_tablet =
                 table_mapping.namespace(namespace).name_to_tablet()(SCHEMAS_TABLE.clone())?;
-            let index_id = index_registry.1.must_get_by_id(schema_tablet)?.id();
+            let index = IndexRef::try_from(index_registry.1.must_get_by_id(schema_tablet)?)?;
             let schemas_last_modified = *self
                 .backend_last_modified
-                .get(&index_id)
+                .get(&index.id())
                 .context("_schemas not configured to be in-memory")?;
             last_modified_ts = last_modified_ts.max(schemas_last_modified);
-            schema_tables.push((namespace, schema_tablet, index_id));
+            schema_tables.push((namespace, schema_tablet, index));
             log_funrun_index_cache_get(NAME);
         }
         let index_reader = self.index_reader.clone();
         let schema_registry = self
             .cache
             .get(
-                Key {
+                &Key {
                     deployment_name: self.deployment_name.clone(),
                     last_modified: last_modified_ts,
                 },
-                async move {
+                || async move {
                     let mut size = 0;
                     let mut schema_docs = BTreeMap::new();
-                    for (namespace, schema_tablet, index_id) in schema_tables {
+                    for (namespace, schema_tablet, index) in schema_tables {
                         let (component_documents, component_size) =
-                            load_unpacked_index(index_id, &index_reader, schema_tablet, NAME)
-                                .await?;
+                            load_unpacked_index(index, &index_reader, schema_tablet, NAME).await?;
                         schema_docs.insert(
                             namespace,
                             component_documents
@@ -502,8 +485,7 @@ impl<RT: Runtime> FunctionRunnerInMemoryIndexes<RT> {
                     }
                     let schema_registry = SchemaRegistry::bootstrap(schema_docs);
                     Ok(WithSize(schema_registry, size))
-                }
-                .boxed(),
+                },
             )
             .await?;
         Ok((last_modified_ts, schema_registry.0.clone()))
@@ -625,13 +607,13 @@ pub(crate) struct FunctionRunnerInMemoryIndexes<RT: Runtime> {
 impl<RT: Runtime> InMemoryIndexes for FunctionRunnerInMemoryIndexes<RT> {
     async fn range(
         &self,
-        index_id: IndexId,
+        index: IndexRef,
         interval: &Interval,
         order: Order,
         tablet_id: TabletId,
         table_name: TableName,
     ) -> anyhow::Result<Option<Vec<(IndexKeyBytes, Timestamp, MemoryDocument)>>> {
-        let Some(index_map) = self.get_or_load(index_id, tablet_id, table_name).await? else {
+        let Some(index_map) = self.get_or_load(index, tablet_id, table_name).await? else {
             return Ok(None);
         };
         let range = order

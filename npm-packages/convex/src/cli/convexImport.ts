@@ -11,10 +11,16 @@ import { getDeploymentSelection } from "./lib/deploymentSelection.js";
 export const convexImport = new Command("import")
   .summary("Import data from a file to your deployment")
   .description(
-    "Import data from a file to your Convex deployment.\n\n" +
-      "  From a snapshot: `npx convex import snapshot.zip`\n" +
-      "  For a single table: `npx convex import --table tableName file.json`\n\n" +
+    [
+      "Import data from a file to your Convex deployment.",
+      "",
+      "• From a snapshot: `npx convex import snapshot.zip`",
+      "• For a single table: `npx convex import --table tableName file.json`",
+      "",
       "By default, this imports into your dev deployment.",
+      "",
+      "See the data import guide (https://docs.convex.dev/database/import-export/import) for details and use cases.",
+    ].join("\n"),
   )
   .allowExcessArguments(false)
   .addImportOptions()

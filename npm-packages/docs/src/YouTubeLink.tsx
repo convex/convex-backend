@@ -27,7 +27,7 @@ export function YouTubeList({ items }: { items: YouTubeItem[] }) {
             rel="noopener noreferrer"
             className="video-card"
           >
-            <PlayIcon className="play-icon h-8 w-8" />
+            <PlayIcon className="play-icon" />
             <h2>{item.label}</h2>
           </a>
         );

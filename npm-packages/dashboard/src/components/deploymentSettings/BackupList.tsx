@@ -1,8 +1,7 @@
-import { TeamResponse } from "generatedApi";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
 import { ArchiveIcon } from "@radix-ui/react-icons";
 import { useState } from "react";
-import { useGetZipExport } from "hooks/deploymentApi";
+import { useDownloadZipExport } from "hooks/deploymentApi";
 import { BackupResponse, useListCloudBackupsIfAvailable } from "api/backups";
 import { Loading } from "@ui/Loading";
 import { EmptySection } from "@common/elements/EmptySection";
@@ -11,17 +10,18 @@ import udfs from "@common/udfs";
 import { BackupListItem, progressMessageForBackup } from "./BackupListItem";
 import { BackupDeploymentSelector } from "./BackupDeploymentSelector";
 import { useLatestRestore } from "./BackupRestoreStatus";
+import { BackupNowButton } from "./BackupNowButton";
 
 export function BackupList({
+  teamId,
   targetDeployment,
-  team,
   canCreate,
   canImport,
   canDelete,
   maxCloudBackups,
 }: {
+  teamId: number;
   targetDeployment: PlatformDeploymentResponse; // = deployment the settings page is open for
-  team: TeamResponse;
   canCreate: boolean;
   canImport: boolean;
   canDelete: boolean;
@@ -52,15 +52,22 @@ export function BackupList({
         <BackupDeploymentSelector
           selectedDeployment={selectedDeployment}
           onChange={setSelectedDeployment}
-          team={team}
           targetDeployment={targetDeployment}
-        />
+        >
+          <BackupNowButton
+            teamId={teamId}
+            deployment={targetDeployment}
+            maxCloudBackups={maxCloudBackups}
+            canCreate={canCreate}
+          />
+        </BackupDeploymentSelector>
       </div>
       <div className="scrollbar grow overflow-auto">
         {!backups ? (
           <Loading />
         ) : (
           <BackupListForDeployment
+            teamId={teamId}
             backups={backups}
             targetDeployment={targetDeployment}
             restoringBackupId={restoringBackupId}
@@ -76,6 +83,7 @@ export function BackupList({
 }
 
 function BackupListForDeployment({
+  teamId,
   backups,
   targetDeployment,
   restoringBackupId,
@@ -84,6 +92,7 @@ function BackupListForDeployment({
   canDelete,
   maxCloudBackups,
 }: {
+  teamId: number;
   backups: BackupResponse[];
   targetDeployment: PlatformDeploymentResponse;
   restoringBackupId: bigint | null;
@@ -108,7 +117,7 @@ function BackupListForDeployment({
       (backup) => backup.state === "requested" || backup.state === "inProgress",
     );
 
-  const getZipExportUrl = useGetZipExport({
+  const downloadZipExport = useDownloadZipExport({
     format: "zip",
     include_storage: true,
   });
@@ -129,13 +138,14 @@ function BackupListForDeployment({
       {backups.map((backup) => (
         <BackupListItem
           key={backup.id}
+          teamId={teamId}
           backup={backup}
           restoring={BigInt(backup.id) === restoringBackupId}
           someBackupInProgress={someBackupInProgress}
           someRestoreInProgress={restoringBackupId !== null}
           latestBackupInTargetDeployment={latestBackupInTargetDeployment}
           targetDeployment={targetDeployment}
-          getZipExportUrl={getZipExportUrl}
+          downloadZipExport={downloadZipExport}
           canCreate={canCreate}
           canImport={canImport}
           canDelete={canDelete}

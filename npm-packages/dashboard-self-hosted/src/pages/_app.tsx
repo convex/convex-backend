@@ -17,6 +17,7 @@ import { SelfHostedDisconnectOverlay } from "@common/features/disconnectOverlay/
 import { Menu, MenuItem } from "@ui/Menu";
 import { ThemeProvider } from "next-themes";
 import React, {
+  JSX,
   useCallback,
   useContext,
   useEffect,
@@ -36,12 +37,21 @@ import { Tooltip } from "@ui/Tooltip";
 import { DeploymentCredentialsForm } from "components/DeploymentCredentialsForm";
 import { DeploymentList } from "components/DeploymentList";
 import { checkDeploymentInfo } from "lib/checkDeploymentInfo";
+import {
+  CurrentDeployment,
+  fetchCurrentDeployment,
+} from "lib/fetchCurrentDeployment";
 import { ConvexCloudReminderToast } from "components/ConvexCloudReminderToast";
 import { z } from "zod";
 import { UIProvider } from "@ui/UIContext";
 import Link from "next/link";
 
-if (process.env.NEXT_PUBLIC_LOAD_MONACO_INTERNALLY === "true") {
+// Monaco only runs in the browser, and pulling it into the server bundle makes
+// it fail to evaluate there.
+if (
+  typeof window !== "undefined" &&
+  process.env.NEXT_PUBLIC_LOAD_MONACO_INTERNALLY === "true"
+) {
   import("../lib/monacoInternalLoader").then((a) => a).catch(console.error);
 }
 
@@ -120,8 +130,12 @@ function App({
   );
 }
 
-const LIST_DEPLOYMENTS_API_PORT_QUERY_PARAM = "a";
-const SELECTED_DEPLOYMENT_NAME_QUERY_PARAM = "d";
+// Whether to try fetching the deployment credentials from the
+// /api/current_deployment endpoint served by the CLI in anonymous mode.
+// Inlined at build time by Next.js; set in the `build:export` script.
+const USE_CURRENT_DEPLOYMENT_API =
+  process.env.NEXT_PUBLIC_USE_CURRENT_DEPLOYMENT_API === "true";
+
 const SESSION_STORAGE_DEPLOYMENT_NAME_KEY = "deploymentName";
 
 function normalizeUrl(url: string) {
@@ -209,6 +223,8 @@ const deploymentInfo: Omit<DeploymentInfo, "deploymentUrl" | "adminKey"> = {
     slug: "team",
   }),
   useTeamMembers: () => [],
+  useCurrentMemberName: () => undefined,
+  useMemberPreference: () => ({ value: false, set: async () => {} }),
   useTeamEntitlements: () => ({
     auditLogRetentionDays: -1,
     logStreamingEnabled: true,
@@ -306,12 +322,17 @@ const deploymentInfo: Omit<DeploymentInfo, "deploymentUrl" | "adminKey"> = {
   ),
   DisconnectOverlay: () => <SelfHostedDisconnectOverlay />,
   useTeamUsageState: () => "Default",
+  useTeamPlanType: () => null,
   teamsURI: "",
   projectsURI: "",
   deploymentsURI: "",
   isSelfHosted: true,
   workosIntegrationEnabled: false,
+  healthDeployProgressEnabled: false,
+  s3ExportIntegrationEnabled: false,
   connectionStateCheckIntervalMs: 2500,
+  showFivetranSyncProgress: false,
+  componentSwitcherTreeEnabled: false,
 };
 
 function DeploymentInfoProvider({
@@ -354,7 +375,7 @@ function DeploymentInfoProvider({
     [visiblePages],
   );
 
-  const onSubmit = useCallback(
+  const attemptLogin = useCallback(
     async ({
       submittedAdminKey,
       submittedDeploymentUrl,
@@ -384,7 +405,29 @@ function DeploymentInfoProvider({
     [setStoredAdminKey, setStoredDeploymentUrl, setStoredDeploymentName],
   );
 
-  useEmbeddedDashboardCredentials(onSubmit);
+  useEmbeddedDashboardCredentials(attemptLogin);
+
+  // `undefined` while the request to /api/current_deployment is in flight,
+  // `null` once it has failed (e.g. 404 → fall back to the other mechanisms).
+  const [currentDeployment, setCurrentDeployment] = useState<
+    CurrentDeployment | null | undefined
+  >(USE_CURRENT_DEPLOYMENT_API ? undefined : null);
+  useEffect(() => {
+    if (!USE_CURRENT_DEPLOYMENT_API) {
+      return;
+    }
+    void fetchCurrentDeployment().then((deployment) => {
+      setCurrentDeployment(deployment);
+      if (deployment) {
+        void attemptLogin({
+          submittedAdminKey: deployment.adminKey,
+          submittedDeploymentUrl:
+            normalizeUrl(deployment.url) ?? deployment.url,
+          submittedDeploymentName: deployment.name,
+        });
+      }
+    });
+  }, [attemptLogin]);
 
   const finalValue: DeploymentInfo = useMemo(
     () =>
@@ -403,8 +446,17 @@ function DeploymentInfoProvider({
   );
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
+
+  // Pre-1.41.0 CLI versions had a “list deployments” API server allowing the
+  // dashboard to find the list of anonymous backends and show it on screen (<DeploymentList />).
+  // URL parameters, e.g. ?a=6791&d=anonymous-projectName, were used to automatically open
+  // the dashboard for a given deployment.
+  // This workflow isn’t used in CLI versions ≥1.41.0, but we keep it for backwards compatibility.
   useEffect(() => {
     if (typeof window !== "undefined") {
+      const LIST_DEPLOYMENTS_API_PORT_QUERY_PARAM = "a";
+      const SELECTED_DEPLOYMENT_NAME_QUERY_PARAM = "d";
+
       const url = new URL(window.location.href);
       const listDeploymentsApiPort = url.searchParams.get(
         LIST_DEPLOYMENTS_API_PORT_QUERY_PARAM,
@@ -429,9 +481,17 @@ function DeploymentInfoProvider({
       }
     }
   }, [defaultListDeploymentsApiUrl]);
+
   if (!mounted) return null;
 
   if (!isValidDeploymentInfo) {
+    // Wait for /api/current_deployment (and the validation of the credentials
+    // it returns) before falling back, so the deployment list doesn’t flash
+    // while the requests are in flight. If the credentials turn out to be
+    // invalid (isValidDeploymentInfo === false), show the fallback UI.
+    if (currentDeployment !== null && isValidDeploymentInfo === null) {
+      return null;
+    }
     return (
       <div className="flex h-screen w-screen flex-col items-center justify-center gap-8">
         <ConvexLogo />
@@ -441,12 +501,12 @@ function DeploymentInfoProvider({
             onError={() => {
               setListDeploymentsApiUrl(null);
             }}
-            onSelect={onSubmit}
+            onSelect={attemptLogin}
             selectedDeploymentName={selectedDeploymentName}
           />
         ) : (
           <DeploymentCredentialsForm
-            onSubmit={onSubmit}
+            onSubmit={attemptLogin}
             initialAdminKey={adminKey}
             initialDeploymentUrl={deploymentUrl}
           />
@@ -489,7 +549,7 @@ function Header({ onLogout }: { onLogout: () => void }) {
       <Menu
         buttonProps={{
           icon: (
-            <GearIcon className="h-7 w-7 rounded-sm p-1 text-content-primary hover:bg-background-tertiary" />
+            <GearIcon className="size-7 rounded-sm p-1 text-content-primary hover:bg-background-tertiary" />
           ),
           variant: "unstyled",
           "aria-label": "Dashboard Settings",
@@ -513,7 +573,7 @@ function Header({ onLogout }: { onLogout: () => void }) {
  * This is used when the dashboard is embedded in another application via an iframe.
  */
 function useEmbeddedDashboardCredentials(
-  onSubmit: ({
+  attemptLogin: ({
     submittedAdminKey,
     submittedDeploymentUrl,
     submittedDeploymentName,
@@ -554,7 +614,7 @@ function useEmbeddedDashboardCredentials(
       }
 
       if (event.data.type === "dashboard-credentials") {
-        onSubmit({
+        attemptLogin({
           submittedAdminKey: event.data.adminKey,
           submittedDeploymentUrl: event.data.deploymentUrl,
           submittedDeploymentName: event.data.deploymentName,
@@ -567,5 +627,5 @@ function useEmbeddedDashboardCredentials(
     return () => {
       window.removeEventListener("message", handleMessage);
     };
-  }, [onSubmit]);
+  }, [attemptLogin]);
 }

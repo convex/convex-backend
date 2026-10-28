@@ -19,6 +19,11 @@ import {
 import { useTeams } from "api/teams";
 import { PaginationControls } from "elements/PaginationControls";
 import {
+  useCursorPagination,
+  useSnapBackOnEmptyPage,
+} from "hooks/useCursorPagination";
+import { PROFILE_SECTIONS } from "lib/sectionAnchors";
+import {
   TokenExpirationSelector,
   TokenExpirationValue,
   resolveExpirationTime,
@@ -35,38 +40,30 @@ type PersonalAccessToken = {
 export function PersonalAccessTokens() {
   const createToken = useCreatePersonalAccessToken();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [currentCursor, setCurrentCursor] = useState<string | undefined>(
-    undefined,
-  );
-  const [cursorHistory, setCursorHistory] = useState<(string | undefined)[]>([
-    undefined,
-  ]);
+  const {
+    currentCursor,
+    currentPage,
+    canGoPrevious,
+    onNextPage,
+    onPreviousPage,
+  } = useCursorPagination();
 
   const { data, isLoading } = usePaginatedPersonalAccessTokens(currentCursor);
 
   const tokens = data?.items;
   const hasMore = data?.pagination.hasMore ?? false;
   const nextCursor = data?.pagination.nextCursor;
-  const currentPage = cursorHistory.length;
 
-  const handleNextPage = () => {
-    if (nextCursor) {
-      setCursorHistory((prev) => [...prev, nextCursor]);
-      setCurrentCursor(nextCursor);
-    }
-  };
-
-  const handlePrevPage = () => {
-    if (cursorHistory.length > 1) {
-      const newHistory = [...cursorHistory];
-      newHistory.pop();
-      setCursorHistory(newHistory);
-      setCurrentCursor(newHistory[newHistory.length - 1]);
-    }
-  };
+  useSnapBackOnEmptyPage(
+    { canGoPrevious, onPreviousPage },
+    { isLoading, currentPageItems: tokens },
+  );
 
   return (
-    <Sheet className="flex flex-col gap-4">
+    <Sheet
+      id={PROFILE_SECTIONS.personalAccessTokens.id}
+      className="flex flex-col gap-4"
+    >
       <div className="flex items-center justify-between">
         <h3>Personal Access Tokens</h3>
         <Button onClick={() => setShowCreateDialog(true)} icon={<PlusIcon />}>
@@ -95,23 +92,19 @@ export function PersonalAccessTokens() {
           </div>
         )}
       </LoadingTransition>
-      {tokens && tokens.length > 0 && (hasMore || cursorHistory.length > 1) && (
+      {tokens && tokens.length > 0 && (hasMore || canGoPrevious) && (
         <PaginationControls
           isCursorBasedPagination
           currentPage={currentPage}
           hasMore={hasMore}
           pageSize={10}
           onPageSizeChange={() => {}}
-          onPreviousPage={handlePrevPage}
-          onNextPage={handleNextPage}
-          canGoPrevious={cursorHistory.length > 1}
+          onPreviousPage={onPreviousPage}
+          onNextPage={() => onNextPage(nextCursor)}
+          canGoPrevious={canGoPrevious}
           showPageSize={false}
         />
       )}
-      <p className="max-w-prose text-xs text-content-secondary">
-        The Convex Dashboard uses your oldest personal access token to
-        authenticate with deployments.
-      </p>
       {showCreateDialog && (
         <CreatePersonalTokenDialog
           onClose={() => setShowCreateDialog(false)}
@@ -231,7 +224,7 @@ function CreatePersonalTokenDialog({
             Copy your new token now. You won't be able to see it again.
           </p>
           <div className="flex items-center gap-2">
-            <code className="min-w-0 flex-1 truncate rounded bg-background-tertiary px-2 py-1 text-sm">
+            <code className="min-w-0 flex-1 truncate rounded-sm bg-background-tertiary px-2 py-1 text-sm">
               {createdToken}
             </code>
             <CopyButton text={createdToken} />
@@ -281,6 +274,7 @@ function CreatePersonalTokenDialog({
               value={values.tokenName}
               onChange={handleChange}
               placeholder="Enter a name for your PAT"
+              autoFocus
               error={
                 touched.tokenName && typeof errors.tokenName === "string"
                   ? errors.tokenName

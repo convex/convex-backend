@@ -44,7 +44,7 @@ use crate::{
     virtual_system_mapping,
 };
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CheckedComponent {
     pub definition_path: ComponentDefinitionPath,
     pub component_path: ComponentPath,
@@ -679,7 +679,7 @@ impl CheckedComponent {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CheckedHttpRoutes {
     http_module_routes: Option<Vec<HttpActionRoute>>,
     mounts: BTreeSet<HttpMountPath>,

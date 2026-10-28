@@ -32,7 +32,6 @@ const meta = {
         name: "My Awesome Project",
         teamId: 1,
         createTime: Date.now() - 30 * 24 * 60 * 60 * 1000,
-        isDemo: false,
       },
       isLoading: false,
       error: undefined,

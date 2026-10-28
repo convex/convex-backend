@@ -1,4 +1,4 @@
 {
   "typescriptCompiler": "tsgo",
-  "$schema": "https://raw.githubusercontent.com/get-convex/convex-backend/refs/heads/main/npm-packages/convex/schemas/convex.schema.json"
+  "$schema": "node_modules/convex/schemas/convex.schema.json"
 }

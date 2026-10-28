@@ -1,0 +1,20 @@
+{
+  "name": "ai-gateway-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p convex/tsconfig.json",
+    "dev": "convex dev"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.5",
+    "@convex-dev/ai-sdk-provider": "workspace:*",
+    "ai": "7.0.105",
+    "convex": "workspace:*",
+    "openai": "^6.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}

@@ -43,12 +43,43 @@ use crate::{
     types::{
         GenericIndexName,
         IndexDescriptor,
+        IndexRef,
         IndexTableIdentifier,
+        PersistenceIndexId,
     },
 };
 
 pub type TabletIndexMetadata = IndexMetadata<TabletId>;
 pub type DeveloperIndexMetadata = IndexMetadata<TableName>;
+
+impl TryFrom<&ParsedDocument<TabletIndexMetadata>> for IndexRef {
+    type Error = anyhow::Error;
+
+    /// Only database indexes have rows in persistence, so only they have a
+    /// ref.
+    fn try_from(metadata: &ParsedDocument<TabletIndexMetadata>) -> anyhow::Result<Self> {
+        let persistence_index_id = match &metadata.config {
+            IndexConfig::Database {
+                persistence_index_id,
+                ..
+            } => *persistence_index_id,
+            IndexConfig::Text { .. } => {
+                anyhow::bail!(
+                    "{} is a text index, which has no persistence rows",
+                    metadata.name
+                )
+            },
+            IndexConfig::Vector { .. } => anyhow::bail!(
+                "{} is a vector index, which has no persistence rows",
+                metadata.name
+            ),
+        };
+        Ok(Self::from_parts(
+            metadata.id().internal_id().into(),
+            persistence_index_id,
+        ))
+    }
+}
 
 /// In-memory representation of an index's metadata.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +115,7 @@ impl<T: IndexTableIdentifier> IndexMetadata<T> {
                     retention_started: false,
                     staged,
                 }),
+                persistence_index_id: None,
             },
         }
     }
@@ -184,8 +216,23 @@ impl<T: IndexTableIdentifier> IndexMetadata<T> {
             config: IndexConfig::Database {
                 spec: DatabaseIndexSpec { fields },
                 on_disk_state: DatabaseIndexState::Enabled,
+                persistence_index_id: None,
             },
         }
+    }
+
+    pub fn assign_persistence_index_id(&mut self, persistence_index_id: PersistenceIndexId) {
+        let IndexConfig::Database {
+            persistence_index_id: current_id,
+            ..
+        } = &mut self.config
+        else {
+            panic!("persistence index IDs only apply to database indexes")
+        };
+        assert!(
+            current_id.replace(persistence_index_id).is_none(),
+            "persistence index ID is already assigned"
+        );
     }
 
     pub fn is_database_index(&self) -> bool {

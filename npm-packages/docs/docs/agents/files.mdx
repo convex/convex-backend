@@ -13,21 +13,21 @@ similar to proxy the traffic.
 
 Example code:
 
-- [files/autoSave.ts](https://github.com/get-convex/agent/blob/main/example/convex/files/autoSave.ts)
+- [files/autoSave.ts](https://github.com/convex/agent/blob/main/example/convex/files/autoSave.ts)
   has a simple example of how to use the automatic file saving.
-- [files/addFile.ts](https://github.com/get-convex/agent/blob/main/example/convex/files/addFile.ts)
+- [files/addFile.ts](https://github.com/convex/agent/blob/main/example/convex/files/addFile.ts)
   has an example of how to save the file, submit a question, and generate a
   response in separate steps.
-- [files/generateImage.ts](https://github.com/get-convex/agent/blob/main/example/convex/files/generateImage.ts)
+- [files/generateImage.ts](https://github.com/convex/agent/blob/main/example/convex/files/generateImage.ts)
   has an example of how to generate an image and save it in an assistant
   message.
-- [FilesImages.tsx](https://github.com/get-convex/agent/blob/main/example/ui/files/FilesImages.tsx)
+- [FilesImages.tsx](https://github.com/convex/agent/blob/main/example/ui/files/FilesImages.tsx)
   has client-side code.
 
 ## Running the example
 
 ```sh
-git clone https://github.com/get-convex/agent.git
+git clone https://github.com/convex/agent.git
 cd agent
 npm run setup
 npm run dev
@@ -49,9 +49,6 @@ Rationale:
 It's better to submit a message in a mutation vs. an action because you can use
 an optimistic update on the client side to show the sent message immediately and
 have it disappear exactly when the message comes down in the query.
-
-However, you can't save to file storage from a mutation, so the file needs to
-already exist (hence the fileId).
 
 You can then asynchronously generate the response (with retries / etc) without
 the client waiting.
@@ -117,13 +114,15 @@ Example:
 
 ```ts
 await thread.generateText({
-  message: {
-    role: "user",
-    content: [
-      { type: "image", image: imageBytes, mimeType: "image/png" },
-      { type: "text", text: "What is this image?" },
-    ],
-  },
+  prompt: [
+    {
+      role: "user",
+      content: [
+        { type: "image", image: imageBytes, mediaType: "image/png" },
+        { type: "text", text: "What is this image?" },
+      ],
+    },
+  ],
 });
 ```
 
@@ -136,11 +135,11 @@ Saving to the files has 3 components:
 2. Saving a reference (the storageId) to the file in the component. This will
    automatically keep track of how many messages are referencing the file, so
    you can vacuum files that are no longer used (see
-   [files/vacuum.ts](https://github.com/get-convex/agent/blob/main/example/convex/files/vacuum.ts)).
+   [files/vacuum.ts](https://github.com/convex/agent/blob/main/example/convex/files/vacuum.ts)).
 3. Inserting a URL in place of the data in the message sent to the LLM, along
-   with the mimeType and other metadata provided. It will be inferred if not
+   with the media type and other metadata provided. It will be inferred if not
    provided in
-   [`guessMimeType`](https://github.com/get-convex/agent/blob/main/src/mapping.ts#L556).
+   [`guessMimeType`](https://github.com/convex/agent/blob/main/src/mapping.ts#L556).
 
 ### Can I just store the file myself and pass in a URL?
 
@@ -151,20 +150,84 @@ const storageId = await ctx.storage.store(blob);
 const url = await ctx.storage.getUrl(storageId);
 
 await thread.generateText({
-  message: {
-    role: "user",
-    content: [
-      { type: "image", data: url, mimeType: blob.type },
-      { type: "text", text: "What is this image?" },
-    ],
+  prompt: [
+    {
+      role: "user",
+      content: [
+        { type: "image", image: url, mediaType: blob.type },
+        { type: "text", text: "What is this image?" },
+      ],
+    },
+  ],
+});
+```
+
+### `Timeout while downloading <url>` from the provider
+
+When a message carries an image or file as a URL, the component stores the URL
+and hands it to the AI SDK. Providers that accept URLs for that media type
+(OpenAI does for `image/*`) download it themselves; for other providers the AI
+SDK downloads it inside your action before the request. If a provider error
+reports `Timeout while downloading` and names the image URL, the provider could
+not fetch that URL in time. The `AI_APICallError` request URL may be the
+provider's API endpoint; that alone does not identify which fetch timed out.
+Third-party hosts and CDNs can respond inconsistently, so the same image URL may
+work on a later attempt.
+
+To avoid relying on that host during generation, fetch the image in an action
+and pass its bytes in the message. You can set the fetch timeout or add retries.
+The bytes are sent inline on this call. When the message is saved, images over
+64 KiB are moved to Convex file storage, so later turns replay a storage URL.
+Either way only your own fetch, not the provider request, depends on your image
+host:
+
+```ts
+export const ask = internalAction({
+  args: { threadId: v.string(), imageUrl: v.string(), prompt: v.string() },
+  handler: async (ctx, { threadId, imageUrl, prompt }) => {
+    const url = new URL(imageUrl);
+    if (
+      url.origin !== "https://images.example.com" ||
+      url.username ||
+      url.password
+    ) {
+      throw new Error("Untrusted image URL");
+    }
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(10_000),
+      redirect: "error",
+    });
+    if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+    const mediaType = response.headers.get("content-type");
+    if (!mediaType?.startsWith("image/")) {
+      throw new Error(`Not an image: ${mediaType}`);
+    }
+    const image = new Uint8Array(await response.arrayBuffer());
+    const { thread } = await agent.continueThread(ctx, { threadId });
+    await thread.generateText({
+      prompt: [
+        {
+          role: "user",
+          content: [
+            { type: "image", image, mediaType },
+            { type: "text", text: prompt },
+          ],
+        },
+      ],
+    });
   },
 });
 ```
 
+Replace `images.example.com` with a host your application trusts. Do not fetch
+arbitrary user-supplied URLs: a server that does so can be pointed at internal
+hosts. Apart from localhost URLs, which it inlines for local development, the
+component does not download URLs on your behalf.
+
 ## Generating images
 
 There's an example in
-[files/generateImage.ts](https://github.com/get-convex/agent/blob/main/example/convex/files/generateImage.ts)
+[files/generateImage.ts](https://github.com/convex/agent/blob/main/example/convex/files/generateImage.ts)
 that takes a prompt, generates an image with OpenAI's dall-e 2, then saves the
 image to a thread.
 

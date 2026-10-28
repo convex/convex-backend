@@ -30,7 +30,7 @@ See the following sections for the Clerk SDK that you're using:
 ### React
 
 **Example:**
-[React with Convex and Clerk](https://github.com/get-convex/template-react-vite-clerk)
+[React with Convex and Clerk](https://github.com/convex/template-react-vite-clerk)
 
 This guide assumes you already have a working React app with Convex. If not
 follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
@@ -200,7 +200,7 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
 ### Next.js
 
 **Example:**
-[Next.js with Convex and Clerk](https://github.com/get-convex/template-nextjs-clerk)
+[Next.js with Convex and Clerk](https://github.com/convex/template-nextjs-clerk)
 
 This guide assumes you already have a working Next.js app with Convex. If not
 follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
@@ -444,7 +444,7 @@ follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
 ### TanStack Start
 
 **Example:**
-[TanStack Start with Convex and Clerk](https://github.com/get-convex/templates/tree/main/template-tanstack-start)
+[TanStack Start with Convex and Clerk](https://github.com/convex/templates/tree/main/template-tanstack-start)
 
 See the
 [TanStack Start with Clerk guide](/client/tanstack/tanstack-start/clerk.mdx) for
@@ -475,6 +475,17 @@ export default function Badge() {
   return <span>Logged in as {user.fullName}</span>;
 }
 ```
+
+### Factor verification age
+
+Clerk's `fva` (factor verification age) claim updates every minute until it hits
+99, so it's
+[excluded from the Convex identity](/auth/functions-auth.mdx#clerk-claims-configuration)
+to avoid rerunning authenticated queries on every token refresh.
+
+If you need step-up auth for sensitive actions, use Clerk's
+[reverification](https://clerk.com/docs/guides/secure/reverification) rather
+than reading `fva` directly.
 
 ## Configuring dev and prod instances
 

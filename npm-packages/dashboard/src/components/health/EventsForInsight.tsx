@@ -655,9 +655,7 @@ function EventReadAmount({
         {({ open }) => (
           <>
             <div className="flex items-center gap-1">
-              <span className="min-w-[4.25rem]">
-                {format(event.totalCount)}
-              </span>
+              <span className="min-w-17">{format(event.totalCount)}</span>
               <Tooltip tip="View breakdown" side="right" asChild>
                 <DisclosureButton
                   as={Button}

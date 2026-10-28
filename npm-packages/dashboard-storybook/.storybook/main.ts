@@ -1,11 +1,18 @@
 import { StorybookConfig } from "@storybook/nextjs-vite";
+import { createRequire } from "module";
 import path from "path";
 import { UserConfig, mergeConfig } from "vite";
 
+const require = createRequire(import.meta.url);
+
 const config: StorybookConfig = {
+  // Every package listed here must also be a dependency in package.json:
+  // Vercel decides whether to redeploy Storybook by walking the workspace
+  // dependency graph, and skips changes it can't see from this package.
   stories: [
     "../../dashboard/src/**/*.stories.@(js|jsx|ts|tsx)",
     "../../dashboard-common/src/**/*.stories.@(js|jsx|ts|tsx)",
+    "../../dashboard-self-hosted/src/**/*.stories.@(js|jsx|ts|tsx)",
     "../../@convex-dev/design-system/src/**/*.stories.@(js|jsx|ts|tsx)",
   ],
   addons: [
@@ -16,6 +23,14 @@ const config: StorybookConfig = {
     "@storybook/addon-vitest",
   ],
   staticDirs: [
+    // Use the Storybook logo as a favicon
+    {
+      from: path.resolve(
+        require.resolve("storybook/package.json"),
+        "../assets/browser/favicon.svg",
+      ),
+      to: "/favicon.svg",
+    },
     path.resolve(import.meta.dirname, "../../dashboard/public"),
     {
       from: path.resolve(

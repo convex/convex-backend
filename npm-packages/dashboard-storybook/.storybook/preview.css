@@ -1,1 +1,6 @@
 @import "../../dashboard/src/styles/global.css";
+
+/* Tailwind's automatic source detection starts at this package, and
+   dashboard-common's stylesheet only lists the cloud dashboard's sources, so
+   self-hosted-only classes need to be declared here to be generated. */
+@source "../../dashboard-self-hosted/src/";

@@ -30,7 +30,7 @@ The rate limiting example demonstrates two types of rate limiting:
 ## Running the Example
 
 ```sh
-git clone https://github.com/get-convex/agent.git
+git clone https://github.com/convex/agent.git
 cd agent
 npm run setup
 npm run dev
@@ -42,7 +42,7 @@ Try sending multiple questions quickly to see the rate limiting in action!
 
 Below we'll go through each configuration. You can also see the full example
 implementation in
-[rateLimiting.ts](https://github.com/get-convex/agent/blob/main/example/convex/rate_limiting/rateLimiting.ts).
+[rateLimiting.ts](https://github.com/convex/agent/blob/main/example/convex/rate_limiting/rateLimiting.ts).
 
 ```ts
 import { MINUTE, RateLimiter, SECOND } from "@convex-dev/rate-limiter";
@@ -119,7 +119,7 @@ Before processing a question, the system:
 5. If the rate limits aren't exceeded, the LLM request is made.
 
 See
-[rateLimiting.ts](https://github.com/get-convex/agent/blob/main/example/convex/rate_limiting/rateLimiting.ts)
+[rateLimiting.ts](https://github.com/convex/agent/blob/main/example/convex/rate_limiting/rateLimiting.ts)
 for the full implementation.
 
 ```ts
@@ -211,7 +211,7 @@ estimate, while also rate limiting the actual usage.
 ## Client-side Handling
 
 See
-[RateLimiting.tsx](https://github.com/get-convex/agent/blob/main/example/ui/rate_limiting/RateLimiting.tsx)
+[RateLimiting.tsx](https://github.com/convex/agent/blob/main/example/ui/rate_limiting/RateLimiting.tsx)
 for the client-side code.
 
 While the client isn't the final authority on whether a request should be

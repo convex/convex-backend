@@ -1,5 +1,9 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
-import { InvitationResponse, TeamResponse, TeamMember } from "generatedApi";
+import { TeamResponse } from "generatedApi";
+import {
+  InvitationResponse,
+  TeamMember,
+} from "@convex-dev/platform/managementApi";
 
 import { TeamMemberList } from "./TeamMemberList";
 

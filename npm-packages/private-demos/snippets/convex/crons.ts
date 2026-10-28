@@ -11,15 +11,7 @@ crons.interval(
 
 crons.monthly(
   "payment reminder",
-  { day: 1, hourUTC: 16, minuteUTC: 0 }, // Every month on the first day at 8:00am PST
-  internal.payments.sendPaymentEmail,
-  { email: "my_email@gmail.com" }, // argument to sendPaymentEmail
-);
-
-// An alternative way to create the same schedule as above with cron syntax
-crons.cron(
-  "payment reminder duplicate",
-  "0 16 1 * *",
+  { day: 1, hourUTC: 16 }, // Convex chooses the minute within the 16:00 UTC hour
   internal.payments.sendPaymentEmail,
   { email: "my_email@gmail.com" }, // argument to sendPaymentEmail
 );

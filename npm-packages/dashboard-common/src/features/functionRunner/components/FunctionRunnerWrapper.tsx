@@ -129,8 +129,8 @@ export function FunctionRunnerWrapper({
             showGlobalRunner(null, "click");
           }}
         >
-          <div className="h-8 w-8">
-            <FunctionIcon className="h-8 w-8" />
+          <div className="size-8">
+            <FunctionIcon className="size-8" />
           </div>
 
           <div className="ml-1 flex-col items-center gap-1 whitespace-nowrap transition-all select-none">

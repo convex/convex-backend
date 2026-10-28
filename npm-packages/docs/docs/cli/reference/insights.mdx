@@ -1,0 +1,60 @@
+---
+sidebar_position: 17
+title: "npx convex insights"
+sidebar_label: "npx convex insights"
+description: "Show health insights for your deployment"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex insights`
+
+Show health insights for a Convex deployment over the last 72 hours.
+Displays OCC conflicts and resource limit issues that may indicate performance problems.
+
+- Show insights: <CodeWithCopyButton text={"npx convex insights"} />
+- Include recent events for each insight: <CodeWithCopyButton text={"npx convex insights --details"} />
+- Check the production deployment: <CodeWithCopyButton text={"npx convex insights --prod"} />
+
+This command is only available for Convex cloud deployments when logged in as a user.
+
+## Syntax
+
+```sh
+npx convex insights [options]
+```
+
+## Options
+
+<dl>
+<dt>`--details`</dt>
+<dd>
+
+Show recent events for each insight
+
+</dd>
+<dt>`--json`</dt>
+<dd>
+
+Output insights as JSON
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Show insights for this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Show insights for a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

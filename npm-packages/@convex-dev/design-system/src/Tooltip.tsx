@@ -1,6 +1,7 @@
 import React from "react";
 import * as RadixTooltip from "@radix-ui/react-tooltip";
 import classNames from "classnames";
+import { usePortalContainer } from "./PortalContainer";
 
 export type TooltipSide = "left" | "right" | "bottom" | "top";
 
@@ -29,6 +30,7 @@ export function Tooltip({
   disableHoverableContent?: boolean;
   "aria-label"?: string;
 }) {
+  const portalContainer = usePortalContainer();
   // Some existing callsites pass in boolean so we do a truthy check
   if (!tip) {
     return <>{children}</>;
@@ -42,7 +44,8 @@ export function Tooltip({
         <RadixTooltip.Trigger
           asChild={asChild}
           className={classNames(
-            "focus-visible:outline-0 cursor-default",
+            "focus-visible:outline-0",
+            !asChild && "cursor-default",
             className,
           )}
           type="button" // don’t make the tooltip trigger submit forms
@@ -50,7 +53,7 @@ export function Tooltip({
         >
           {children}
         </RadixTooltip.Trigger>
-        <RadixTooltip.Portal>
+        <RadixTooltip.Portal container={portalContainer ?? undefined}>
           <RadixTooltip.Content
             side={side}
             align={align}

@@ -19,38 +19,24 @@ import {
   loadProjectLocalConfig,
   legacyDeploymentStateDir,
   rootDeploymentStateDir,
-  saveDeploymentConfig,
 } from "./filePaths.js";
 import {
-  ensureBackendRunning,
   ensureBackendStopped,
   localDeploymentUrl,
-  runLocalBackend,
   withRunningBackend,
 } from "./run.js";
-import { handlePotentialUpgrade } from "./upgrade.js";
-import { OnDeploymentActivityFunc } from "../deployment.js";
-import { promptSearch } from "../utils/prompts.js";
+import { handlePotentialUpgradeAndStart } from "./upgrade.js";
 import { LocalDeploymentError, printLocalDeploymentOnError } from "./errors.js";
 import {
   chooseLocalBackendPorts,
   printLocalDeploymentWelcomeMessage,
-  isOffline,
-  LOCAL_BACKEND_INSTANCE_SECRET,
 } from "./utils.js";
 import { ensureBackendBinaryDownloaded } from "./download.js";
 import { defaultEnvBackend } from "../defaultEnv.js";
 import { deploymentEnvBackend, EnvVar } from "../env.js";
 import { getProjectDetails } from "../deploymentSelection.js";
-
-export type DeploymentDetails = {
-  deploymentName: string;
-  deploymentUrl: string;
-  adminKey: string;
-  reference: string | null;
-  isDefault: boolean;
-  onActivity: OnDeploymentActivityFunc;
-};
+import { DeploymentDetails } from "../deployment.js";
+import { LEGACY_LOCAL_BACKEND_INSTANCE_SECRET } from "./secrets.js";
 
 export async function handleLocalDeployment(
   ctx: Context,
@@ -65,10 +51,6 @@ export async function handleLocalDeployment(
     forceUpgrade: boolean;
   },
 ): Promise<DeploymentDetails> {
-  if (await isOffline()) {
-    return handleOffline(ctx, options);
-  }
-
   const existingDeploymentForProject = await getExistingDeployment(ctx, {
     projectSlug: options.projectSlug,
     teamSlug: options.teamSlug,
@@ -110,38 +92,34 @@ export async function handleLocalDeployment(
     requestedPorts: options.ports,
     suggestedPorts: existingDeploymentForProject?.config.ports,
   });
-  const { deploymentName, adminKey, projectId } = await bigBrainStart(ctx, {
+  const { deploymentName, projectId } = await bigBrainStart(ctx, {
     port: cloudPort,
     projectSlug: options.projectSlug,
     teamSlug: options.teamSlug,
     instanceName: existingDeploymentForProject?.deploymentName ?? null,
   });
-  const onActivity = async (isOffline: boolean, _wasOffline: boolean) => {
-    await ensureBackendRunning(ctx, {
-      cloudPort,
-      deploymentName,
-      maxTimeSecs: 5,
-    });
-    if (isOffline) {
-      return;
-    }
-    await bigBrainRecordActivity(ctx, {
-      instanceName: deploymentName,
-    });
-  };
 
-  const { cleanupHandle } = await handlePotentialUpgrade(ctx, {
-    deploymentKind: "local",
-    deploymentName,
-    oldVersion: existingDeploymentForProject?.config.backendVersion ?? null,
-    newBinaryPath: binaryPath,
-    newVersion: version,
-    ports: { cloud: cloudPort, site: sitePort },
-    adminKey,
-    instanceSecret: LOCAL_BACKEND_INSTANCE_SECRET,
-    forceUpgrade: options.forceUpgrade,
-    cloudProjectId: projectId,
-  });
+  const { cleanupHandle, adminKey } = await handlePotentialUpgradeAndStart(
+    ctx,
+    {
+      deploymentKind: "local",
+      deploymentName,
+      oldVersion: existingDeploymentForProject?.config.backendVersion ?? null,
+      newBinaryPath: binaryPath,
+      newVersion: version,
+      ports: { cloud: cloudPort, site: sitePort },
+      existingCredentials: existingDeploymentForProject?.config
+        ? {
+            adminKey: existingDeploymentForProject?.config.adminKey,
+            instanceSecret:
+              existingDeploymentForProject?.config.instanceSecret ??
+              LEGACY_LOCAL_BACKEND_INSTANCE_SECRET,
+          }
+        : null,
+      forceUpgrade: options.forceUpgrade,
+      cloudProjectId: projectId,
+    },
+  );
 
   if (isFirstTime) {
     await importDefaultEnvVars(ctx, {
@@ -156,22 +134,32 @@ export async function handleLocalDeployment(
   // Periodically report activity to BigBrain every 60 seconds.
   // Uses self-scheduling setTimeout to avoid overlapping requests.
   let activityTimeout: ReturnType<typeof setTimeout> | null = null;
-  const scheduleActivityPing = () => {
+  let activityPingStopped = false;
+  async function activityPing() {
+    if (activityPingStopped) {
+      return;
+    }
+    try {
+      await bigBrainRecordActivity(ctx, {
+        instanceName: deploymentName,
+        adminKey,
+      });
+    } catch {
+      // Best-effort: don't crash on failed pings
+    }
+
+    if (activityPingStopped) {
+      return;
+    }
     activityTimeout = setTimeout(async () => {
-      try {
-        await bigBrainRecordActivity(ctx, {
-          instanceName: deploymentName,
-        });
-      } catch {
-        // Best-effort: don't crash on failed pings
-      }
-      scheduleActivityPing();
+      void activityPing();
     }, 60_000);
-  };
-  scheduleActivityPing();
+  }
+  void activityPing();
 
   const cleanupFunc = ctx.removeCleanup(cleanupHandle);
   ctx.registerCleanup(async (exitCode, err) => {
+    activityPingStopped = true;
     if (activityTimeout !== null) {
       clearTimeout(activityTimeout);
     }
@@ -190,7 +178,6 @@ export async function handleLocalDeployment(
     deploymentUrl: localDeploymentUrl(cloudPort),
     reference: null,
     isDefault: false,
-    onActivity,
   };
 }
 
@@ -215,64 +202,6 @@ export async function loadLocalDeploymentCredentials(
     deploymentName,
     deploymentUrl: localDeploymentUrl(config.ports.cloud),
     adminKey: config.adminKey,
-  };
-}
-
-async function handleOffline(
-  ctx: Context,
-  options: {
-    teamSlug: string;
-    projectSlug: string;
-    ports: { cloud: number | undefined; site: number | undefined };
-  },
-): Promise<DeploymentDetails> {
-  const { deploymentName, config } =
-    await chooseFromExistingLocalDeployments(ctx);
-  const { binaryPath } = await ensureBackendBinaryDownloaded(ctx, {
-    kind: "version",
-    version: config.backendVersion,
-  });
-  const { cloudPort, sitePort } = await chooseLocalBackendPorts(ctx, {
-    requestedPorts: options.ports,
-    // FIXME: This doesn’t try to reuse the ports already assigned in the config.
-    // Please update this if we ever support offline mode (currently this is dead code).
-  });
-  saveDeploymentConfig(ctx, "local", deploymentName, config);
-  await runLocalBackend(ctx, {
-    binaryPath,
-    ports: { cloud: cloudPort, site: sitePort },
-    deploymentName,
-    deploymentKind: "local",
-    instanceSecret: LOCAL_BACKEND_INSTANCE_SECRET,
-    isLatestVersion: false,
-  });
-  return {
-    adminKey: config.adminKey,
-    deploymentName,
-    deploymentUrl: localDeploymentUrl(cloudPort),
-    reference: null,
-    isDefault: false,
-    onActivity: async (isOffline: boolean, wasOffline: boolean) => {
-      await ensureBackendRunning(ctx, {
-        cloudPort,
-        deploymentName,
-        maxTimeSecs: 5,
-      });
-      if (isOffline) {
-        return;
-      }
-      if (wasOffline) {
-        await bigBrainStart(ctx, {
-          port: cloudPort,
-          projectSlug: options.projectSlug,
-          teamSlug: options.teamSlug,
-          instanceName: deploymentName,
-        });
-      }
-      await bigBrainRecordActivity(ctx, {
-        instanceName: deploymentName,
-      });
-    },
   };
 }
 
@@ -338,73 +267,6 @@ async function getLegacyLocalDeployments(ctx: Context): Promise<
       return [{ deploymentName, config }];
     }
     return [];
-  });
-}
-
-/**
- * Get all local deployments from both project-local and legacy locations.
- */
-async function getLocalDeployments(ctx: Context): Promise<
-  Array<{
-    deploymentName: string;
-    config: LocalDeploymentConfig;
-  }>
-> {
-  const deployments: Array<{
-    deploymentName: string;
-    config: LocalDeploymentConfig;
-  }> = [];
-
-  // Check project-local storage
-  const projectLocal = loadProjectLocalConfig(ctx);
-  if (
-    projectLocal !== null &&
-    projectLocal.deploymentName.startsWith("local-")
-  ) {
-    deployments.push(projectLocal);
-  }
-
-  // Also include legacy deployments (but avoid duplicates)
-  const legacyDeployments = await getLegacyLocalDeployments(ctx);
-  for (const legacy of legacyDeployments) {
-    if (!deployments.some((d) => d.deploymentName === legacy.deploymentName)) {
-      deployments.push(legacy);
-    }
-  }
-
-  return deployments;
-}
-
-async function chooseFromExistingLocalDeployments(ctx: Context): Promise<{
-  deploymentName: string;
-  config: LocalDeploymentConfig;
-}> {
-  const localDeployments = await getLocalDeployments(ctx);
-
-  if (localDeployments.length === 0) {
-    return ctx.crash({
-      exitCode: 1,
-      errorType: "fatal",
-      printedMessage:
-        "No local deployments found. Please run `npx convex dev` while online first.",
-    });
-  }
-
-  // Auto-select if there's only one deployment
-  if (localDeployments.length === 1) {
-    logVerbose(
-      `Auto-selecting the only local deployment: ${localDeployments[0].deploymentName}`,
-    );
-    return localDeployments[0];
-  }
-
-  // Multiple deployments (legacy) - prompt user to choose
-  return promptSearch(ctx, {
-    message: "Choose from an existing local deployment:",
-    choices: localDeployments.map((d) => ({
-      name: d.deploymentName,
-      value: d,
-    })),
   });
 }
 

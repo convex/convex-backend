@@ -1,0 +1,51 @@
+---
+sidebar_position: 13
+title: "npx convex codegen"
+sidebar_label: "npx convex codegen"
+description: "Generate backend type definitions"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex codegen`
+
+Generate code in `convex/_generated/` based on the current contents of `convex/`.
+
+This code is generated automatically while running `npx convex dev` and should be committed to the repo (your code won't typecheck without it!). Regenerating it explicitly is rarely needed (e.g. in CI to ensure the correct code was checked in).
+
+This doesn't modify the code running on the deployment.
+
+## Syntax
+
+```sh
+npx convex codegen [options]
+```
+
+## Options
+
+<dl>
+<dt>`--dry-run`</dt>
+<dd>
+
+Print out the generated configuration to stdout instead of writing to convex directory
+
+</dd>
+<dt>`--typecheck <mode>`</dt>
+<dd>
+
+Whether to check TypeScript files with `tsc --noEmit`.
+
+</dd>
+<dt>`--init`</dt>
+<dd>
+
+Also (over-)write the default convex/README.md and convex/tsconfig.json files, otherwise only written when creating a new Convex project.
+
+</dd>
+<dt>`--component-dir <path>`</dt>
+<dd>
+
+Generate code for a specific component directory instead of the current application.
+
+</dd>
+</dl>

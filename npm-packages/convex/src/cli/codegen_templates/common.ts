@@ -43,3 +43,20 @@ const collator = new Intl.Collator("en-US", {
 export function compareStrings(a: string, b: string): number {
   return collator.compare(a, b);
 }
+
+/**
+ * Comparison function for sorting module paths in codegen output.
+ *
+ * Compares the forward slash normalized form of each path so the resulting
+ * order is identical on every platform. Sorting OS-native paths directly
+ * diverges on Windows because "\" (0x5C) sorts after letters while "/"
+ * (0x2F) sorts before them. Uses plain code unit comparison to match the
+ * default Array.prototype.sort() order these paths sorted with on POSIX.
+ *
+ * Usage: modulePaths.sort(compareModulePaths)
+ */
+export function compareModulePaths(a: string, b: string): number {
+  const aNormalized = a.replace(/\\/g, "/");
+  const bNormalized = b.replace(/\\/g, "/");
+  return aNormalized < bNormalized ? -1 : aNormalized > bNormalized ? 1 : 0;
+}

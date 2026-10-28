@@ -29,6 +29,9 @@ Click on the Sentry card and follow the setup directions. You will need your
 [Sentry DSN](https://docs.sentry.io/product/sentry-basics/concepts/dsn-explainer/).
 You may optionally specify additional tags to be added to each exception event.
 
+When creating your project in Sentry, mark its platform as **Node.js** so that
+exception events are processed correctly.
+
 <Screenshot
   story="docs/pages/project/deployment/settings/Integrations#Configure Sentry"
   alt="Configure Sentry integration"
@@ -49,7 +52,7 @@ following tags. These tags cannot be overridden.
   the function that errored.
 - `server_name`: The name of the deployment. e.g. `happy-animal-123`
 - `environment`: One of `["prod", "dev", "preview"]`
-- `user`: If the function is [authenticated](/auth.mdx), then the
+- `user`: If the function is [authenticated](/auth/overview.mdx), then the
   [tokenIdentifier](/api/interfaces/server.UserIdentity#tokenidentifier) is used
   as the user id on Sentry. The `tokenIdentifier` is a stable and globally
   unique string representing the authenticated user.
@@ -92,7 +95,7 @@ event sent to PostHog:
 - `convex_request_id`: The
   [request ID](/functions/debugging.mdx#finding-relevant-logs-by-request-id) of
   the function that errored
-- `distinct_id`: If the function is [authenticated](/auth.mdx), the
+- `distinct_id`: If the function is [authenticated](/auth/overview.mdx), the
   [tokenIdentifier](/api/interfaces/server.UserIdentity#tokenidentifier) is
   used. Otherwise, the deployment name is used as a fallback.
 

@@ -1,7 +1,12 @@
 import { Command, Option } from "@commander-js/extra-typings";
-import { Context, oneoffContext } from "../bundler/context.js";
-import { logFinishedStep, logMessage } from "../bundler/log.js";
-import { checkAuthorization, performLogin } from "./lib/login.js";
+import * as dotenv from "dotenv";
+import { BigBrainAuth, Context, oneoffContext } from "../bundler/context.js";
+import { logFinishedStep, logMessage, logWarning } from "../bundler/log.js";
+import {
+  checkAuthorization,
+  isAuthorizedHeader,
+  performLogin,
+} from "./lib/login.js";
 import {
   loadProjectLocalConfig,
   loadUuidForAnonymousUser,
@@ -16,7 +21,12 @@ import {
   teamDashboardUrl,
 } from "./lib/dashboard.js";
 import { promptSearch, promptYesNo } from "./lib/utils/prompts.js";
-import { validateOrSelectTeam } from "./lib/utils/utils.js";
+import {
+  CONVEX_DEPLOY_KEY_ENV_VAR_NAME,
+  CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME,
+  ENV_VAR_FILE_PATH,
+  validateOrSelectTeam,
+} from "./lib/utils/utils.js";
 import {
   selectProject,
   updateEnvAndConfigForDeploymentSelection,
@@ -35,6 +45,61 @@ import {
 } from "./lib/utils/globalConfig.js";
 import { getTeamsForUser } from "./lib/api.js";
 
+/**
+ * The env file a deploy key came from, or null if it came from the shell.
+ * `dotenv` doesn't overwrite variables that are already set, so a value from
+ * the shell outranks these files -- match on the value to tell them apart.
+ */
+function deployKeyEnvFile(
+  ctx: Context,
+  envVarName: string,
+  value: string,
+): string | null {
+  for (const file of [ENV_VAR_FILE_PATH, ".env"]) {
+    if (!ctx.fs.exists(file)) {
+      continue;
+    }
+    if (dotenv.parse(ctx.fs.readUtf8File(file))[envVarName] === value) {
+      return file;
+    }
+  }
+  return null;
+}
+
+/**
+ * A project or deployment key in the environment outranks the account token for
+ * commands run from this directory, and an expired one makes the CLI look
+ * logged out, so report it separately from the account.
+ */
+async function reportDeployKeyInWorkingDirectory(
+  ctx: Context,
+  auth: BigBrainAuth | null,
+) {
+  // A preview deploy key is only used when there's no account token at all.
+  if (
+    auth === null ||
+    auth.kind === "accessToken" ||
+    auth.kind === "previewDeployKey"
+  ) {
+    return;
+  }
+  const key = auth.kind === "projectKey" ? auth.projectKey : auth.deploymentKey;
+  const envVarName = process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
+    ? CONVEX_DEPLOY_KEY_ENV_VAR_NAME
+    : CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME;
+  const envFile = deployKeyEnvFile(ctx, envVarName, key);
+  const source = envFile ?? "shell environment";
+  // Big Brain only strips a `project:`/`team:` prefix itself, so a deployment
+  // key authorizes only without its `dev:`/`prod:` prefix. Split on the first
+  // `|` like the server does, so a secret containing one survives.
+  const secret = key.slice(key.indexOf("|") + 1);
+  if (await isAuthorizedHeader(ctx, `Bearer ${secret}`)) {
+    logMessage(`Working Directory: Valid ${envVarName} in ${source}`);
+    return;
+  }
+  logWarning(`Working Directory: Invalid ${envVarName} in ${source}`);
+}
+
 const loginStatus = new Command("status")
   .description("Check login status and list accessible teams")
   .allowExcessArguments(false)
@@ -45,24 +110,33 @@ const loginStatus = new Command("status")
       envFile: undefined,
     });
 
-    const globalConfig = readGlobalConfig(ctx);
-    const hasToken = globalConfig?.accessToken !== null;
+    // `_updateBigBrainAuth` below replaces any deploy key in `ctx` with the
+    // account token, so read the deploy key first.
+    const auth = ctx.bigBrainAuth();
 
-    if (hasToken) {
-      logMessage(`Convex account token found in: ${globalConfigPath()}`);
-    } else {
-      logMessage("No token found locally");
+    const globalConfig = readGlobalConfig(ctx);
+    if (globalConfig === null) {
+      logMessage(`No Convex account token found in: ${globalConfigPath()}`);
+      logMessage("Status: Not logged in");
+      await reportDeployKeyInWorkingDirectory(ctx, auth);
       return;
     }
+    logMessage(`Convex account token found in: ${globalConfigPath()}`);
 
-    const isLoggedIn = await checkAuthorization(ctx, false);
-
-    if (!isLoggedIn) {
+    const accessToken = globalConfig.accessToken;
+    if (!(await isAuthorizedHeader(ctx, `Bearer ${accessToken}`))) {
       logMessage("Status: Not logged in");
+      await reportDeployKeyInWorkingDirectory(ctx, auth);
       return;
     }
 
     logMessage("Status: Logged in");
+    // Describe the account, even if a deploy key outranks it for other commands.
+    ctx._updateBigBrainAuth({
+      kind: "accessToken",
+      header: `Bearer ${accessToken}`,
+      accessToken,
+    });
     const teams = await getTeamsForUser(ctx);
     logMessage(
       `Teams: ${teams.length} team${teams.length === 1 ? "" : "s"} accessible`,
@@ -70,6 +144,7 @@ const loginStatus = new Command("status")
     for (const team of teams) {
       logMessage(`  - ${team.name} (${team.slug})`);
     }
+    await reportDeployKeyInWorkingDirectory(ctx, auth);
   });
 
 export const login = new Command("login")

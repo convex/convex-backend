@@ -9,15 +9,15 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@tailwindcss/postcss": "^4.1.11",
+    "@tailwindcss/postcss": "^4.3.3",
     "convex": "workspace:*",
     "@eslint/eslintrc": "^3",
     "eslint": "^9.37.0",
     "eslint-config-next": "^15.5.4",
-    "next": "^15.5.18",
-    "postcss": "^8.5.10",
+    "next": "^15.5.28",
+    "postcss": "^8.5.18",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "tailwindcss": "^4.1.11"
+    "tailwindcss": "^4.3.3"
   }
 }

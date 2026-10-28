@@ -38,6 +38,26 @@ export const Europe: Story = {
   },
 };
 
+export const Canada: Story = {
+  args: {
+    region: {
+      displayName: "Canada (Central)",
+      name: "aws-ca-central-1",
+      available: true,
+    },
+  },
+};
+
+export const Australia: Story = {
+  args: {
+    region: {
+      displayName: "Asia Pacific (Sydney)",
+      name: "aws-ap-southeast-2",
+      available: true,
+    },
+  },
+};
+
 export const UnavailableRegion: Story = {
   args: {
     region: {

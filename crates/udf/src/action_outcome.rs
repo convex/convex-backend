@@ -38,7 +38,7 @@ pub enum HttpActionResult {
     Error(JsError),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ActionOutcome {
     pub path: CanonicalizedComponentFunctionPath,
     pub arguments: SerializedArgs,

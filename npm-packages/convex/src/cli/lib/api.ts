@@ -26,6 +26,7 @@ import {
 import { loadProjectLocalConfig } from "./localDeployment/filePaths.js";
 import { chalkStderr } from "chalk";
 import { RegionName } from "../generatedApi.js";
+import type { RegionName as PublishedRegionName } from "@convex-dev/platform/managementApi";
 export type DeploymentName = string;
 export type CloudDeploymentType = "prod" | "dev" | "preview" | "custom";
 export type AccountRequiredDeploymentType = CloudDeploymentType | "local";
@@ -35,7 +36,6 @@ export type Project = {
   id: number;
   name: string;
   slug: string;
-  isDemo: boolean;
 };
 
 type AdminKey = string;
@@ -67,7 +67,10 @@ export async function createProject(
       body: {
         projectName,
         deploymentType: deploymentToProvision?.deploymentType ?? null,
-        deploymentRegion: deploymentToProvision?.region ?? null,
+        // The published platform types lag the CLI's own spec by a release,
+        // so the cast is deliberate: a new region needs no change here.
+        deploymentRegion: (deploymentToProvision?.region ??
+          null) as PublishedRegionName | null,
       },
     },
   );
@@ -216,11 +219,17 @@ async function hasAccessToProject(
   selector: { projectSlug: string; teamSlug: string },
 ): Promise<boolean> {
   try {
-    await bigBrainAPIMaybeThrows({
-      ctx,
-      path: `teams/${selector.teamSlug}/projects/${selector.projectSlug}/deployments`,
-      method: "GET",
-    });
+    await typedPlatformClient(ctx, { throw: true }).GET(
+      "/teams/{team_id_or_slug}/projects/{project_slug}",
+      {
+        params: {
+          path: {
+            team_id_or_slug: selector.teamSlug,
+            project_slug: selector.projectSlug,
+          },
+        },
+      },
+    );
     return true;
   } catch (err) {
     if (

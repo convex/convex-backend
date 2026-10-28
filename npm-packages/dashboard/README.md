@@ -12,7 +12,7 @@ Cloud hosted dashboard.
 
 ### First time setup
 
-First run `just rush install` to install dependencies.
+First run `just install-js` to install dependencies.
 
 You need environment variables set up to run the dashboard locally. First, run
 `npx vercel link` to link your local instance to the Vercel project. You’ll need
@@ -67,7 +67,7 @@ Now you should be able to see your project on the dashboard.
 ### Developing NPM
 
 If you make changes to any NPM packages used by the dashboard run
-`just rush build -t convex` and restart the local server.
+`just turbo run build --filter=convex...` and restart the local server.
 
 ## Testing strategies
 
@@ -84,8 +84,7 @@ GitHub pull requests.
 
 ## Bundle size
 
-You can analyze the bundle size of the dashboard by running
-`ANALYZE=true npm run build`.
+You can analyze the bundle size of the dashboard by running `npm run analyze`.
 
 ## Storybook
 
@@ -117,9 +116,10 @@ WORKOS_COOKIE_PASSWORD={copy from production env vars}
 WORKOS_API_SECRET={copy from production env vars}
 ```
 
-Run the CORS Anywhere proxy locally:
+Run the CORS proxy locally (`cors-proxy.js`, which only forwards to
+`https://api.convex.dev`):
 
-`npm run corsAnywhere`
+`npm run corsProxy`
 
 Now when you `npm run dev:pure`, the dashboard will talk to production big brain
 and backends.

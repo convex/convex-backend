@@ -24,7 +24,7 @@ non-public functions that are not called by clients, we recommend
 validation.
 
 **Example:**
-[Argument Validation](https://github.com/get-convex/convex-demos/tree/main/args-validation)
+[Argument Validation](https://github.com/convex/convex-demos/tree/main/args-validation)
 
 ## Adding validators
 
@@ -59,8 +59,8 @@ All functions, both public and internal, can accept and return the following
 data types. Each type has a corresponding validator that can be accessed on the
 [`v`](/api/modules/values#v) object imported from `"convex/values"`.
 
-The [database](/database.mdx) can store the exact same set of
-[data types](/database/types.md).
+The [database](/database/overview.mdx) can store the exact same set of
+[data types](/database/types.mdx).
 
 Additionally you can also express type unions, literals, `any` types, and
 optional fields.
@@ -248,12 +248,29 @@ const userWithoutStatus = userValidator.omit("status", "profileUrl");
 // This is useful for validating patches to a document.
 const userPatch = userWithoutStatus.partial();
 
-// Creates a new validator adding system fields to the user validator.
-const userDocument = userValidator.extend({
-  _id: v.id("users"),
-  _creationTime: v.number(),
+// Creates a new validator with an extra field added.
+const userWithFriends = userValidator.extend({
+  friends: v.array(schema.id("users")),
 });
 ```
+
+To validate whole documents of a table, use `schema.doc(tableName)`, which is
+that table's validator with the `_id` and `_creationTime` system fields added.
+`schema.id(tableName)` is `v.id(tableName)` restricted to the table names in
+your schema, for a type-safe alternative to `v.id`.
+
+```typescript
+export const getUserById = query({
+  args: { id: schema.id("users") },
+  returns: v.union(schema.doc("users"), v.null()),
+  handler: async (ctx, { id }) => {
+    return await ctx.db.get("users", id);
+  },
+});
+```
+
+For a table defined with a union, `schema.doc` adds the system fields to each
+member of the union.
 
 Notes:
 

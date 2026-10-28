@@ -20,7 +20,7 @@ To connect your Convex deployment to Fivetran, you need the following:
 - A Convex account on the [Professional plan](https://www.convex.dev/plans).
 - A Convex deployment. See [Convex's documentation](https://docs.convex.dev/) to get started.
 - Your Convex deployment's URL (for example, `https://jaded-raven-991.convex.cloud`).
-- Your Convex deployment's deploy key. You can find both the deployment URL and deploy key on the [Production Deployment Settings](https://docs.convex.dev/dashboard/deployments/deployment-settings) page.
+- A Convex [deploy key](https://docs.convex.dev/cli/deploy-key-types) for that deployment, granting the `deployment:data:view` permission. This is the only permission the connector needs: it lets the connector read your tables' documents and schema. You can find the deployment URL and generate a deploy key on the [Production Deployment Settings](https://docs.convex.dev/dashboard/deployments/deployment-settings) page.
 
 ---
 
@@ -30,7 +30,9 @@ To connect your Convex deployment to Fivetran, you need the following:
 
 1. Go to your deployment on the [Convex dashboard](https://dashboard.convex.dev/).
 2. Go to the [Production Deployment Settings](https://docs.convex.dev/dashboard/deployments/deployment-settings).
-3. Find your deployment URL and deploy key and make a note of them. You will need them to configure Fivetran.
+3. Make a note of your deployment URL.
+4. Generate a deploy key and enable only the `deployment:data:view` permission on it. That single permission is all the connector needs. See [Role Actions](https://docs.convex.dev/team-management/role-actions#data-plane-and-runtime) for the full list of actions a deploy key can be granted.
+5. Make a note of the deploy key. You will need it, along with the deployment URL, to configure Fivetran.
 
 ### <span class="step-item">Finish Fivetran configuration</span>
 
@@ -43,7 +45,7 @@ To connect your Convex deployment to Fivetran, you need the following:
 
 Fivetran performs the following tests to ensure that we can connect to your Convex deployment.
 
-- Validating that your deployment credentials.
+- Validating your deployment credentials, including that the deploy key has the `deployment:data:view` permission.
 - Ensuring you are on a [Convex Professional plan](https://www.convex.dev/plans).
 
 ---

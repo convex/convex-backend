@@ -1,3 +1,4 @@
+import { IntegrationAuditDetails } from "./IntegrationAuditDetails";
 import {
   ChevronUpIcon,
   ChevronDownIcon,
@@ -17,7 +18,17 @@ import {
   componentDiff,
   cronDiffType,
   schemaDiffType,
+  usageLimitConfig,
 } from "system-udfs/convex/tableDefs/deploymentAuditLogTable";
+import {
+  METRIC_CONFIG,
+  WINDOW_SUFFIX,
+  LIMIT_TYPE_LABEL,
+  formatAmount,
+  type UsageMetric,
+  type UsageLimitWindow,
+  type UsageLimitType,
+} from "@common/features/settings/components/UsageLimits";
 import { SchemaJson, displaySchema } from "@common/lib/format";
 import { DeploymentAuditLogEvent } from "@common/lib/useDeploymentAuditLog";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
@@ -46,6 +57,13 @@ export function DeploymentEventContent({
   inPanel?: boolean;
 }) {
   const { TeamMemberLink } = useContext(DeploymentInfoContext);
+  // Usage limit breaches and the resulting deployment state changes aren't
+  // attributable to a member, so the action text reads as a standalone
+  // sentence rather than "<actor> did X".
+  const hasActor = ![
+    "usage_limit_exceeded",
+    "change_usage_limit_stop_state",
+  ].includes(event.action);
   let body;
   switch (event.action) {
     case "build_indexes":
@@ -90,6 +108,28 @@ export function DeploymentEventContent({
       body = <SnapshotImportContent event={event} />;
       break;
 
+    case "update_usage_limit":
+      body = UsageLimitUpdateBody({ event });
+      break;
+
+    case "create_integration":
+    case "delete_integration":
+      body = event.metadata.config ? (
+        <IntegrationAuditDetails config={event.metadata.config} />
+      ) : null;
+      break;
+
+    case "update_integration":
+      body =
+        event.metadata.current || event.metadata.credential_changes ? (
+          <IntegrationAuditDetails
+            config={event.metadata.current}
+            previous={event.metadata.previous}
+            credentialChanges={event.metadata.credential_changes}
+          />
+        ) : null;
+      break;
+
     case "create_environment_variable":
     case "delete_environment_variable":
     case "update_environment_variable":
@@ -99,6 +139,7 @@ export function DeploymentEventContent({
     case "change_deployment_state":
     case "pause_deployment":
     case "unpause_deployment":
+    case "change_usage_limit_stop_state":
     case "change_system_stop_state":
     case "clear_tables":
     case "delete_scheduled_jobs_table":
@@ -107,17 +148,16 @@ export function DeploymentEventContent({
     case "cancel_all_scheduled_functions":
     case "cancel_scheduled_function":
     case "request_export":
+    case "download_export":
     case "cancel_export":
     case "set_export_expiration":
-    case "create_integration":
-    case "update_integration":
-    case "delete_integration":
     case "add_documents":
     case "delete_documents":
     case "update_documents":
     case "create_table":
     case "delete_files":
     case "generate_upload_url":
+    case "create_data_sync":
     default:
       body = null;
   }
@@ -126,10 +166,14 @@ export function DeploymentEventContent({
     <div className="flex flex-col gap-2 text-sm">
       <div className="flex items-center justify-between">
         <span className={cn(!inPanel && "leading-6")}>
-          <TeamMemberLink
-            memberId={Number(event.member_id)}
-            name={event.memberName}
-          />{" "}
+          {hasActor && (
+            <>
+              <TeamMemberLink
+                memberId={Number(event.member_id)}
+                name={event.memberName}
+              />{" "}
+            </>
+          )}
           <ActionText event={event} />
         </span>
         {!inPanel && <TimestampDistance date={new Date(event._creationTime)} />}
@@ -397,6 +441,27 @@ export function ActionText({ event }: { event: DeploymentAuditLogEvent }) {
         </>
       );
 
+    case "download_export":
+      return (
+        <>
+          <span>downloaded a </span>
+          <span className="font-mono font-semibold">
+            {event.metadata.format}
+          </span>
+          <span> </span>
+          <Tooltip
+            tip={<span className="font-mono">{event.metadata.id}</span>}
+            maxWidthClassName="max-w-md"
+          >
+            <span className="underline decoration-dotted">export</span>
+          </Tooltip>
+          <ComponentSuffix
+            component={event.metadata.component}
+            componentId={event.metadata.component_id}
+          />
+        </>
+      );
+
     case "cancel_export":
       return (
         <>
@@ -432,7 +497,7 @@ export function ActionText({ event }: { event: DeploymentAuditLogEvent }) {
       return (
         <>
           <span>created a </span>
-          <span className="font-mono font-semibold">{event.metadata.type}</span>
+          <IntegrationRef type={event.metadata.type} id={event.metadata.id} />
           <span> integration</span>
         </>
       );
@@ -441,7 +506,7 @@ export function ActionText({ event }: { event: DeploymentAuditLogEvent }) {
       return (
         <>
           <span>updated a </span>
-          <span className="font-mono font-semibold">{event.metadata.type}</span>
+          <IntegrationRef type={event.metadata.type} id={event.metadata.id} />
           <span> integration</span>
         </>
       );
@@ -450,7 +515,7 @@ export function ActionText({ event }: { event: DeploymentAuditLogEvent }) {
       return (
         <>
           <span>deleted a </span>
-          <span className="font-mono font-semibold">{event.metadata.type}</span>
+          <IntegrationRef type={event.metadata.type} id={event.metadata.id} />
           <span> integration</span>
         </>
       );
@@ -566,10 +631,148 @@ export function ActionText({ event }: { event: DeploymentAuditLogEvent }) {
         </>
       );
 
+    case "create_data_sync":
+      return (
+        <>
+          <span>started a </span>
+          <Tooltip
+            tip={<span className="font-mono">{event.metadata.sync_id}</span>}
+            maxWidthClassName="max-w-md"
+          >
+            <span className="underline decoration-dotted">data sync</span>
+          </Tooltip>
+        </>
+      );
+
+    case "create_usage_limit":
+      return (
+        <>
+          <span>created a usage limit: </span>
+          <UsageLimitSummary config={event.metadata.config} />
+        </>
+      );
+
+    case "delete_usage_limit":
+      return (
+        <>
+          <span>deleted a usage limit: </span>
+          <UsageLimitSummary config={event.metadata.config} />
+        </>
+      );
+
+    case "usage_limit_exceeded":
+      return (
+        <>
+          <span>A usage limit was exceeded: </span>
+          <UsageLimitSummary
+            config={event.metadata.config}
+            showStatus={false}
+          />
+        </>
+      );
+
+    case "change_usage_limit_stop_state":
+      return event.metadata.new_state === "disabled" ? (
+        <span>The deployment was disabled after exceeding a usage limit</span>
+      ) : (
+        <span>
+          The deployment was re-enabled after usage fell back under its limits
+        </span>
+      );
+
+    case "update_usage_limit": {
+      // The changed fields are shown as a diff in the event body; the sentence
+      // just names which limit was updated.
+      const { metricName, typeLabel } = usageLimitLabels(
+        event.metadata.current,
+      );
+      return (
+        <>
+          <span>updated the </span>
+          <span className="font-semibold">{typeLabel}</span>
+          <span> on </span>
+          <span className="font-semibold">{metricName}</span>
+        </>
+      );
+    }
+
     default:
       event satisfies never;
       return null;
   }
+}
+
+function usageLimitLabels(config: Infer<typeof usageLimitConfig>) {
+  const metricConfig = METRIC_CONFIG[config.metric as UsageMetric];
+  return {
+    metricName: metricConfig?.name ?? config.metric,
+    unit: metricConfig?.rawUnitShort ?? "",
+    windowSuffix: WINDOW_SUFFIX[config.window as UsageLimitWindow] ?? "",
+    typeLabel:
+      LIMIT_TYPE_LABEL[config.limitType as UsageLimitType] ?? config.limitType,
+  };
+}
+
+function UsageLimitSummary({
+  config,
+  showStatus = true,
+}: {
+  config: Infer<typeof usageLimitConfig>;
+  showStatus?: boolean;
+}) {
+  const { metricName, unit, windowSuffix, typeLabel } =
+    usageLimitLabels(config);
+  return (
+    <>
+      <span className="font-semibold">{typeLabel}</span>
+      <span> on </span>
+      <span className="font-semibold">{metricName}</span>
+      <span>
+        {" ("}
+        {formatAmount(Number(config.limit))} {unit} {windowSuffix}
+        {showStatus && (config.enabled ? ", enabled" : ", disabled")})
+      </span>
+    </>
+  );
+}
+
+function UsageLimitUpdateBody({
+  event,
+}: {
+  event: DeploymentAuditLogEvent & { action: "update_usage_limit" };
+}) {
+  const { previous, current } = event.metadata;
+  const { unit, windowSuffix } = usageLimitLabels(current);
+  const rows: { label: string; from: string; to: string }[] = [];
+  if (previous.limit !== current.limit) {
+    rows.push({
+      label: "Limit",
+      from: `${formatAmount(Number(previous.limit))} ${unit} ${windowSuffix}`,
+      to: `${formatAmount(Number(current.limit))} ${unit} ${windowSuffix}`,
+    });
+  }
+  if (previous.enabled !== current.enabled) {
+    rows.push({
+      label: "Status",
+      from: previous.enabled ? "Enabled" : "Disabled",
+      to: current.enabled ? "Enabled" : "Disabled",
+    });
+  }
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      {rows.map((row) => (
+        <div key={row.label} className="flex items-center gap-1.5">
+          <span className="text-content-secondary">{row.label}</span>
+          <span className="font-mono">{row.from}</span>
+          <span className="text-content-secondary">→</span>
+          <span className="font-mono font-semibold">{row.to}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function ItemListTooltip({ items }: { items: string[] }) {
@@ -584,6 +787,19 @@ function ItemListTooltip({ items }: { items: string[] }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function IntegrationRef({ type, id }: { type: string; id: string }) {
+  return (
+    <Tooltip
+      tip={<span className="font-mono">{id}</span>}
+      maxWidthClassName="max-w-md"
+    >
+      <span className="font-mono font-semibold underline decoration-dotted">
+        {type}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -944,7 +1160,7 @@ function PushContentForComponents({
 function Added() {
   return (
     <div className="flex items-center gap-1 text-sm">
-      <PlusIcon className="h-3 w-3 text-content-primary" />
+      <PlusIcon className="size-3 text-content-primary" />
       added
     </div>
   );
@@ -962,7 +1178,7 @@ function Updated() {
 function Deleted() {
   return (
     <div className="flex items-center gap-1 text-sm">
-      <TrashIcon className="h-3 w-3 text-content-primary" />
+      <TrashIcon className="size-3 text-content-primary" />
       deleted
     </div>
   );
@@ -1035,11 +1251,11 @@ function SnapshotImportIntoTable({
   let action = "";
   switch (import_mode) {
     case "RequireEmpty":
-      icon = <PlusIcon className="h-3 w-3 text-content-primary" />;
+      icon = <PlusIcon className="size-3 text-content-primary" />;
       action = "created";
       break;
     case "Append":
-      icon = <PlusIcon className="h-3 w-3 text-content-primary" />;
+      icon = <PlusIcon className="size-3 text-content-primary" />;
       action = "appended to";
       break;
     case "Replace":

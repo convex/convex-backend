@@ -94,7 +94,7 @@ const meta = {
   component: CategoricalHeatmap,
   render: (args) => (
     <Sheet>
-      <div className="h-64 w-[40rem]">
+      <div className="h-64 w-160">
         <CategoricalHeatmap {...args} />
       </div>
     </Sheet>

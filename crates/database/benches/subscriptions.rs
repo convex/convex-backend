@@ -40,6 +40,7 @@ use criterion::{
 };
 use database::{
     subscription::SubscriptionManager,
+    write_log::WriteInIndex,
     Token,
     WriteSource,
 };
@@ -59,7 +60,6 @@ use serde::Deserialize;
 use sync_types::Timestamp;
 use tokio::runtime::Runtime;
 use value::{
-    heap_size::WithHeapSize,
     ConvexString,
     DeveloperDocumentId,
     FieldPath,
@@ -265,15 +265,16 @@ fn bench_query(c: &mut Criterion) {
                                             update: u.clone(),
                                             new_document: idx_key_update.new_document.clone(),
                                         };
-                                        let write = (
-                                            WithHeapSize::from(imbl::vector![update]),
-                                            WriteSource::system("bench"),
-                                        );
+                                        let write = WriteInIndex {
+                                            ts: dummy_ts,
+                                            index_updates: vec![update],
+                                            write_source: WriteSource::system("bench"),
+                                        };
                                         let interval_map =
                                             subscription_manager.interval_map(idx_name).unwrap();
                                         SubscriptionManager::overlapping_database(
                                             interval_map,
-                                            std::iter::once((&dummy_ts, &write)),
+                                            std::iter::once(&write),
                                             &mut |id, _ts, _ws| {
                                                 to_notify.insert(id);
                                             },
@@ -285,16 +286,17 @@ fn bench_query(c: &mut Criterion) {
                                             document_id: idx_key_update.document_id,
                                             update: u.clone(),
                                         };
-                                        let write = (
-                                            WithHeapSize::from(imbl::vector![update]),
-                                            WriteSource::system("bench"),
-                                        );
+                                        let write = WriteInIndex {
+                                            ts: dummy_ts,
+                                            index_updates: vec![update],
+                                            write_source: WriteSource::system("bench"),
+                                        };
                                         let text_subscription = subscription_manager
                                             .text_subscription_for_index(idx_name)
                                             .unwrap();
                                         subscription_manager.overlapping_text(
                                             text_subscription,
-                                            std::iter::once((&dummy_ts, &write)),
+                                            std::iter::once(&write),
                                             &mut |id, _ts, _ws| {
                                                 to_notify.insert(id);
                                             },

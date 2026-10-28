@@ -10,16 +10,14 @@ use crate::scheduled_jobs::{
     SCHEDULED_JOBS_VIRTUAL_TABLE,
 };
 
-pub static SCHEDULED_JOBS_ARGS_TABLE: TableName = TableName::const_new("_scheduled_job_args");
+pub const SCHEDULED_JOBS_ARGS_TABLE: TableName = TableName::const_new("_scheduled_job_args");
 
 pub struct ScheduledJobArgsTable;
 
 impl SystemTable for ScheduledJobArgsTable {
     type Metadata = ScheduledJobArgs;
 
-    fn table_name() -> &'static TableName {
-        &SCHEDULED_JOBS_ARGS_TABLE
-    }
+    const TABLE_NAME: TableName = SCHEDULED_JOBS_ARGS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]

@@ -9,9 +9,8 @@
   "dependencies": {
     "jest": "^30.0.0",
     "js-sha256": "~0.11.0",
-    "react": "^18.0.0",
-    "react-dom": "^18.0.0",
-    "prettier": "3.8.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "jose": "^5.10.0"
   },
   "devDependencies": {
@@ -21,12 +20,12 @@
     "@types/jest": "^30.0.0",
     "@types/node": "^18.17.0",
     "@types/node-fetch": "^2.6.1",
-    "@types/react": "^18.0.0",
+    "@types/react": "^19.2.4",
     "@types/ws": "^8.5.13",
     "convex": "workspace:*",
     "node-fetch": "^2.6.1",
     "ts-jest": "^29.1.1",
     "typescript": "~5.0.3",
-    "ws": "8.20.1"
+    "ws": "8.21.0"
   }
 }

@@ -64,8 +64,8 @@ export function ScheduledFunctionsContentToolbar({
       <div className="flex w-full flex-wrap gap-4">
         <Combobox
           label="Filter scheduled runs by function"
-          className="w-[22rem]"
-          buttonClasses="w-[22rem]"
+          className="w-88"
+          buttonClasses="w-88"
           optionsWidth="full"
           searchPlaceholder="Search functions..."
           selectedOption={
@@ -179,7 +179,7 @@ export function ScheduledFunctionsContentToolbar({
                   className={cn(
                     "flex cursor-pointer items-center gap-2",
                     currentOpenFunction &&
-                      "w-fit cursor-not-allowed rounded bg-background-tertiary p-2 text-content-secondary",
+                      "w-fit cursor-not-allowed rounded-sm bg-background-tertiary p-2 text-content-secondary",
                   )}
                 >
                   <Checkbox

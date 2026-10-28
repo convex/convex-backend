@@ -24,10 +24,10 @@ jobs:
     runs-on: [self-hosted, aws, "${{ matrix.arch }}", xlarge]
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
@@ -50,13 +50,15 @@ jobs:
           context: .
           file: self-hosted/docker-build/Dockerfile.backend
           tags: |
-            ghcr.io/get-convex/convex-backend
-          cache-from: |
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.sha }},prefix=buildkit,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.ref_name }},prefix=buildkit,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
-          cache-to: |
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.sha }},mode=max,prefix=buildkit,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.ref_name }},mode=max,prefix=buildkit,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
+            ghcr.io/convex/convex-backend
+          # This workflow does not use a build cache.
+          # A shared cache is not safe for a release build. A bad cache entry
+          # from a cache poisoning attack can put incorrect content into the
+          # image.
+          # A build without a cache is slower, but the speed is not a problem
+          # here. This workflow runs only when a change merges to the `release`
+          # branch.
+          no-cache: true
           outputs: push-by-digest=true,type=image,push=true
           provenance: false
           build-args: |

@@ -21,18 +21,26 @@ export function IntegrationTitle({
       </p>
       <Tooltip tip={description}>
         <p className="max-w-fit rounded-sm border p-1 text-xs">
-          {integrationKind === "sentry" ||
-          integrationKind === "postHogErrorTracking"
-            ? "Exception Reporting"
-            : integrationKind === "fivetran"
-              ? "Streaming Export"
-              : integrationKind === "airbyte"
-                ? "Streaming Import"
-                : integrationKind === "workos"
-                  ? "Authentication"
-                  : "Log Stream"}
+          {integrationCategory(integrationKind)}
         </p>
       </Tooltip>
     </div>
   );
+}
+
+function integrationCategory(kind: IntegrationType): string {
+  switch (kind) {
+    case "sentry":
+    case "postHogErrorTracking":
+      return "Exception Reporting";
+    case "s3Export":
+    case "fivetran":
+      return "Streaming Export";
+    case "airbyte":
+      return "Streaming Import";
+    case "workos":
+      return "Authentication";
+    default:
+      return "Log Stream";
+  }
 }

@@ -1,6 +1,10 @@
 import { useState } from "react";
 
-import { FunctionReference, getFunctionName } from "../server/api.js";
+import {
+  FunctionReference,
+  FunctionReturnType,
+  getFunctionName,
+} from "../server/api.js";
 import {
   PaginatedQueryReference,
   PaginatedQueryArgs,
@@ -255,7 +259,7 @@ export function usePaginatedQuery_experimental<
       throw new Error("Why is it missing?");
     }
     const internalResult = {
-      results: [] as Query["_returnType"]["page"],
+      results: [] as FunctionReturnType<Query>["page"],
       status: "LoadingFirstPage" as const,
       isLoading: true as const,
       loadMore: function skipNOP(_numItems: number) {
@@ -270,7 +274,7 @@ export function usePaginatedQuery_experimental<
     return internalResult as unknown as UsePaginatedQueryReturnType<Query>;
   }
   const result = resultsObject.paginatedQuery as
-    | PaginatedQueryResult<Query["_returnType"]["page"][number]>
+    | PaginatedQueryResult<FunctionReturnType<Query>["page"][number]>
     | Error;
 
   // TODO this is a weird mix of responsibilities:
@@ -279,7 +283,7 @@ export function usePaginatedQuery_experimental<
   // It comes back to why we'd ever get undefined when asking about a query; have we not yet called subscribe for it?
   if (result === undefined) {
     const internalResult = {
-      results: [] as Query["_returnType"]["page"],
+      results: [] as FunctionReturnType<Query>["page"],
       loadMore: () => false,
       isLoading: true as const,
       status: "LoadingFirstPage" as const,
@@ -313,7 +317,7 @@ export function usePaginatedQuery_experimental<
       );
       setState(createInitialState);
       const internalResult = {
-        results: [] as Query["_returnType"]["page"],
+        results: [] as FunctionReturnType<Query>["page"],
         loadMore: () => false,
         isLoading: true as const,
         status: "LoadingFirstPage" as const,
@@ -329,7 +333,7 @@ export function usePaginatedQuery_experimental<
         throw result;
       }
       const internalResult = {
-        results: [] as Query["_returnType"]["page"],
+        results: [] as FunctionReturnType<Query>["page"],
         loadMore: () => false,
         isLoading: false as const,
         status: "Error" as const,

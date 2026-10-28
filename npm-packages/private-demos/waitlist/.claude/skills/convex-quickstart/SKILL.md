@@ -336,7 +336,9 @@ function Tasks() {
   return (
     <div>
       <button onClick={() => create({ text: "New task" })}>Add</button>
-      {tasks?.map((t) => <div key={t._id}>{t.text}</div>)}
+      {tasks?.map((t) => (
+        <div key={t._id}>{t.text}</div>
+      ))}
     </div>
   );
 }

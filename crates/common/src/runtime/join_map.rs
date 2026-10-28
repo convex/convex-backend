@@ -79,6 +79,10 @@ where
     pub async fn join_next(&mut self) -> Option<(K, Result<V, JoinError>)> {
         self.inner.join_next().await
     }
+
+    pub fn abort_matching(&mut self, predicate: impl FnMut(&K) -> bool) {
+        self.inner.abort_matching(predicate)
+    }
 }
 
 impl<K: Debug, V, S> Debug for JoinMap<K, V, S> {

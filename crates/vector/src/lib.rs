@@ -1,9 +1,4 @@
 #![feature(iterator_try_collect)]
-#![feature(int_roundings)]
-#![feature(type_alias_impl_trait)]
-#![feature(coroutines)]
-#![feature(coroutine_trait)]
-#![feature(try_blocks)]
 #![feature(try_blocks_heterogeneous)]
 #![feature(impl_trait_in_assoc_type)]
 

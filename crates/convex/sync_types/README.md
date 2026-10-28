@@ -7,4 +7,4 @@ For a fully built client using tokio, see
 
 https://crates.io/crates/convex/
 
-https://github.com/get-convex/convex-rs
+https://github.com/convex/convex-rs

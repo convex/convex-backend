@@ -32,7 +32,7 @@ export function ScheduledFunctionsContent({
     <div className="relative flex h-full max-w-6xl grow flex-col gap-4">
       <ScheduledFunctionsContentToolbar reload={reload} />
       <Sheet
-        className="max-w-full min-w-[40rem] grow overflow-hidden"
+        className="max-w-full min-w-160 grow overflow-hidden"
         padding={false}
       >
         <div className="flex h-full flex-col overflow-auto">

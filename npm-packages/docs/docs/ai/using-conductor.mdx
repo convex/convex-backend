@@ -22,10 +22,6 @@ want to build. The agent handles the rest. It runs `npm create convex@latest`,
 [auto-provisions a local backend](/cli/agent-mode#local-backend) without
 prompting for login because the agent's shell is non-interactive.
 
-After the initial setup, leave `npx convex dev` running in the workspace
-terminal so the agent always sees up-to-date generated types. Without it the
-agent can get stuck in a linting loop.
-
 To give each Conductor workspace its own cloud dev deployment automatically,
 wire the [per-worktree recipe](/cli/agent-mode#worktree-setups) into your
 project's `conductor.json` setup script.
@@ -60,7 +56,8 @@ This creates or updates `CLAUDE.md` (and `AGENTS.md`) and installs Convex
 specialized workflows like setting up auth, designing a schema, and running
 migrations.
 
-See [Convex AI files](/ai.mdx#convex-ai-files) for more on managing these files.
+See [Convex AI files](/ai/overview.mdx#convex-ai-files) for more on managing
+these files.
 
 ### Setup the Convex MCP Server
 

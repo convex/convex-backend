@@ -16,6 +16,177 @@
   "paths": {},
   "components": {
     "schemas": {
+      "AiGatewayEndpoint": {
+        "type": "string",
+        "enum": [
+          "chat_completions",
+          "decisions",
+          "embeddings",
+          "images",
+          "messages",
+          "responses",
+          "speech",
+          "transcriptions",
+          "videos"
+        ]
+      },
+      "AiGatewayEnvironment": {
+        "type": "string",
+        "enum": [
+          "production",
+          "staging"
+        ]
+      },
+      "AiGatewayOutcome": {
+        "type": "string",
+        "description": "Combines the response outcome with usage availability.",
+        "enum": [
+          "completed",
+          "no_usage",
+          "provider_error",
+          "upstream_error",
+          "abandoned",
+          "oversized"
+        ]
+      },
+      "AiGatewayProvider": {
+        "type": "string",
+        "enum": [
+          "openRouter"
+        ]
+      },
+      "AiGatewayUsageEvent": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "inference_id",
+          "provider",
+          "endpoint",
+          "cost_unit",
+          "outcome",
+          "environment"
+        ],
+        "properties": {
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "function": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "request_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "component_path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "inference_id": {
+            "type": "string"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/AiGatewayProvider"
+          },
+          "endpoint": {
+            "$ref": "#/components/schemas/AiGatewayEndpoint"
+          },
+          "upstream_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "completion_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "cached_prompt_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "reasoning_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "cost": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "cost_unit": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AiGatewayOutcome"
+          },
+          "environment": {
+            "$ref": "#/components/schemas/AiGatewayEnvironment"
+          }
+        }
+      },
       "ConsoleLogEvent": {
         "type": "object",
         "required": [
@@ -26,6 +197,11 @@
           "is_truncated"
         ],
         "properties": {
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "function": {
             "type": "object",
             "required": [
@@ -34,17 +210,26 @@
               "request_id"
             ],
             "properties": {
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "runtime": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "cached": {
                 "type": [
                   "boolean",
                   "null"
                 ]
               },
-              "component_path": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "request_id": {
+                "type": "string"
               },
               "mutation_queue_length": {
                 "type": [
@@ -60,19 +245,13 @@
                 ],
                 "minimum": 0
               },
-              "path": {
-                "type": "string"
-              },
-              "request_id": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string"
+              "component_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
-          },
-          "is_truncated": {
-            "type": "boolean"
           },
           "log_level": {
             "type": "string"
@@ -80,16 +259,14 @@
           "message": {
             "type": "string"
           },
+          "is_truncated": {
+            "type": "boolean"
+          },
           "system_code": {
             "type": [
               "string",
               "null"
             ]
-          },
-          "timestamp": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
           }
         }
       },
@@ -100,13 +277,13 @@
           "body"
         ],
         "properties": {
-          "body": {
-            "$ref": "#/components/schemas/Value"
-          },
           "timestamp": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "body": {
+            "$ref": "#/components/schemas/Value"
           }
         }
       },
@@ -118,16 +295,16 @@
           "audit_log_metadata"
         ],
         "properties": {
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "audit_log_action": {
             "type": "string"
           },
           "audit_log_metadata": {
             "type": "string"
-          },
-          "timestamp": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
           }
         }
       },
@@ -138,16 +315,11 @@
           "function",
           "execution_time_ms",
           "status",
+          "run_reason",
           "usage"
         ],
         "properties": {
-          "error_message": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "execution_time_ms": {
+          "timestamp": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -160,17 +332,26 @@
               "request_id"
             ],
             "properties": {
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "runtime": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "cached": {
                 "type": [
                   "boolean",
                   "null"
                 ]
               },
-              "component_path": {
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "request_id": {
+                "type": "string"
               },
               "mutation_queue_length": {
                 "type": [
@@ -186,16 +367,35 @@
                 ],
                 "minimum": 0
               },
-              "path": {
-                "type": "string"
-              },
-              "request_id": {
-                "type": "string"
-              },
-              "type": {
-                "type": "string"
+              "component_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
             }
+          },
+          "execution_time_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "user_execution_time_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "occ_info": {
             "oneOf": [
@@ -205,13 +405,25 @@
               {
                 "type": "object",
                 "properties": {
-                  "component_path": {
+                  "table_name": {
                     "type": [
                       "string",
                       "null"
                     ]
                   },
                   "document_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "write_source": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "component_path": {
                     "type": [
                       "string",
                       "null"
@@ -224,18 +436,6 @@
                     ],
                     "format": "int64",
                     "minimum": 0
-                  },
-                  "table_name": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  "write_source": {
-                    "type": [
-                      "string",
-                      "null"
-                    ]
                   }
                 }
               }
@@ -259,13 +459,21 @@
               }
             ]
           },
-          "status": {
-            "type": "string"
-          },
-          "timestamp": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
+          "run_reason": {
+            "type": "string",
+            "description": "Why a function was executed.",
+            "enum": [
+              "initialSubscription",
+              "dataChange",
+              "identityChange",
+              "webSocket",
+              "httpApi",
+              "httpEndpoint",
+              "cron",
+              "scheduler",
+              "action",
+              "tester"
+            ]
           },
           "usage": {
             "type": "object",
@@ -275,6 +483,8 @@
               "database_io_read_bytes",
               "database_io_write_bytes",
               "database_read_documents",
+              "database_write_documents",
+              "database_write_index_rows",
               "file_storage_read_bytes",
               "file_storage_write_bytes",
               "vector_storage_read_bytes",
@@ -283,14 +493,17 @@
               "text_search_write_query_bytes",
               "vector_search_query_bytes",
               "vector_search_write_query_bytes",
-              "network_egress_bytes"
+              "network_egress_bytes",
+              "audit_log_egress_bytes"
             ],
             "properties": {
-              "action_memory_used_mb": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
+              "database_read_bytes": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "database_write_bytes": {
+                "type": "integer",
                 "format": "int64",
                 "minimum": 0
               },
@@ -304,17 +517,17 @@
                 "format": "int64",
                 "minimum": 0
               },
-              "database_read_bytes": {
-                "type": "integer",
-                "format": "int64",
-                "minimum": 0
-              },
               "database_read_documents": {
                 "type": "integer",
                 "format": "int64",
                 "minimum": 0
               },
-              "database_write_bytes": {
+              "database_write_documents": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "database_write_index_rows": {
                 "type": "integer",
                 "format": "int64",
                 "minimum": 0
@@ -329,7 +542,12 @@
                 "format": "int64",
                 "minimum": 0
               },
-              "network_egress_bytes": {
+              "vector_storage_read_bytes": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "vector_storage_write_bytes": {
                 "type": "integer",
                 "format": "int64",
                 "minimum": 0
@@ -354,25 +572,41 @@
                 "format": "int64",
                 "minimum": 0
               },
-              "vector_storage_read_bytes": {
+              "network_egress_bytes": {
                 "type": "integer",
                 "format": "int64",
                 "minimum": 0
               },
-              "vector_storage_write_bytes": {
+              "action_memory_used_mb": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "audit_log_egress_bytes": {
                 "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "function_args_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "function_returns_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
                 "format": "int64",
                 "minimum": 0
               }
             }
-          },
-          "user_execution_time_ms": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "minimum": 0
           }
         }
       },
@@ -549,6 +783,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/AiGatewayUsageEvent"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "topic"
+                ],
+                "properties": {
+                  "topic": {
+                    "type": "string",
+                    "enum": [
+                      "ai_gateway_usage"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/CustomAuditEvent"
               },
               {
@@ -576,12 +831,12 @@
           "lag_seconds"
         ],
         "properties": {
-          "lag_seconds": {
+          "timestamp": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
           },
-          "timestamp": {
+          "lag_seconds": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -596,17 +851,17 @@
           "num_running_jobs"
         ],
         "properties": {
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "lag_seconds": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
           },
           "num_running_jobs": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "timestamp": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -621,7 +876,7 @@
           "egress_bytes"
         ],
         "properties": {
-          "egress_bytes": {
+          "timestamp": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -629,7 +884,7 @@
           "storage_id": {
             "type": "string"
           },
-          "timestamp": {
+          "egress_bytes": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -654,12 +909,22 @@
             "format": "int64",
             "minimum": 0
           },
-          "total_backup_storage_bytes": {
+          "total_document_size_bytes": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
           },
-          "total_document_size_bytes": {
+          "total_index_size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_vector_storage_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "total_text_storage_bytes": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -669,7 +934,7 @@
             "format": "int64",
             "minimum": 0
           },
-          "total_index_size_bytes": {
+          "total_backup_storage_bytes": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
@@ -684,16 +949,6 @@
             "propertyNames": {
               "type": "string"
             }
-          },
-          "total_text_storage_bytes": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "total_vector_storage_bytes": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
           }
         }
       },
@@ -705,13 +960,13 @@
           "message"
         ],
         "properties": {
-          "message": {
-            "type": "string"
-          },
           "timestamp": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "message": {
+            "type": "string"
           }
         }
       }

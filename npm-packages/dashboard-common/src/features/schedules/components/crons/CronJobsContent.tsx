@@ -48,7 +48,7 @@ export function CronJobsContent() {
     );
   } else {
     content = (
-      <div className="flex h-full w-full max-w-6xl flex-col gap-2">
+      <div className="flex size-full max-w-6xl flex-col gap-2">
         <div className="flex justify-between">
           <div className="flex flex-row items-center justify-between">
             <div className="flex flex-col gap-1">
@@ -66,7 +66,7 @@ export function CronJobsContent() {
 
   return (
     <PageContent>
-      <div className="h-full w-full max-w-6xl">
+      <div className="size-full max-w-6xl">
         <LoadingTransition>{!loading && content}</LoadingTransition>
       </div>
     </PageContent>
@@ -88,7 +88,7 @@ function Details({
   const currentlyRunning = cronJob.nextRun.state.type === "inProgress";
 
   return (
-    <div className="flex h-full w-full max-w-6xl flex-col gap-4">
+    <div className="flex size-full max-w-6xl flex-col gap-4">
       <div className="flex shrink-0 flex-col overflow-hidden">
         <div className="flex flex-row items-center justify-between">
           <div className="flex flex-row items-center gap-2">
@@ -99,7 +99,7 @@ function Details({
               onClick={back}
               icon={
                 <ChevronLeftIcon
-                  className="h-4 w-4"
+                  className="size-4"
                   aria-label="Back to cron jobs"
                 />
               }
@@ -266,7 +266,7 @@ function LogStatusLine({ status }: { status: CronJobLog["status"] }) {
   const { textColor, Icon } = statusTypes[status.type];
   return (
     <div className={`flex items-center gap-1 ${textColor}`}>
-      <Icon className="h-3.5 w-3.5" />
+      <Icon className="size-3.5" />
       <span className={`w-16 ${textColor}`}>
         {status.type === "success" ? (
           "success"

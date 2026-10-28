@@ -1,12 +1,14 @@
 //! Common "non-privileged" identity type.
 
 use std::{
+    collections::BTreeSet,
     fmt::{
         self,
         Display,
     },
     ops::Deref,
     str::FromStr,
+    sync::Arc,
 };
 
 use metrics::StaticMetricLabel;
@@ -82,18 +84,37 @@ impl HeapSize for InertIdentity {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum IdentityCacheKey {
     /// Admin for a deployment.
-    DeploymentAdmin(String),
+    DeploymentAdmin {
+        deployment_name: String,
+        /// The operations this admin is allowed to perform, as stable operation
+        /// names. This is part of the cache key so that admins with different
+        /// operation scopes (e.g. a full admin vs. a limited deploy key) never
+        /// share cached query results. Otherwise a system query whose
+        /// per-operation authorization check runs inside the UDF handler could
+        /// be served from the query cache to an admin lacking the required
+        /// operation, since the handler (and its `requireOperation` check) is
+        /// skipped on a cache hit. An empty set means all operations are
+        /// allowed.
+        allowed_ops: BTreeSet<String>,
+    },
     /// System admin.
     System,
     /// Unknown.
     Unknown(Option<String>),
-    User(UserIdentityAttributes),
+    User(Arc<UserIdentityAttributes>),
 }
 
 impl HeapSize for IdentityCacheKey {
     fn heap_size(&self) -> usize {
         match self {
-            IdentityCacheKey::DeploymentAdmin(s) => s.heap_size(),
+            IdentityCacheKey::DeploymentAdmin {
+                deployment_name,
+                allowed_ops,
+                ..
+            } => {
+                deployment_name.heap_size()
+                    + allowed_ops.iter().map(|op| op.heap_size()).sum::<usize>()
+            },
             IdentityCacheKey::System => 0,
             IdentityCacheKey::Unknown(s) => s.heap_size(),
             IdentityCacheKey::User(u) => u.heap_size(),

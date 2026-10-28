@@ -16,7 +16,7 @@
 		"@eslint/eslintrc": "^3",
 		"@eslint/js": "~9.39.0",
 		"@sveltejs/adapter-auto": "^6.0.0",
-		"@sveltejs/kit": "^2.60.1",
+		"@sveltejs/kit": "^2.70.2",
 		"@sveltejs/vite-plugin-svelte": "^6.0.0",
 		"@types/eslint": "~9.6.1",
 		"@typescript-eslint/eslint-plugin": "^8.0.0",
@@ -31,7 +31,7 @@
 		"svelte-check": "^4.0.0",
 		"tslib": "^2.4.1",
 		"typescript": "^5.9.2",
-		"vite": "^7.3.2"
+		"vite": "^7.3.7"
 	},
 	"type": "module",
 	"dependencies": {

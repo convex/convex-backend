@@ -5,7 +5,7 @@ import { nextBackoff } from "./dev.js";
 import chalk, { chalkStderr } from "chalk";
 import { stripVTControlCharacters } from "node:util";
 import { format } from "node:util";
-import { deploymentFetch } from "./utils/utils.js";
+import { deploymentFetch, ThrowingFetchError } from "./utils/utils.js";
 import { FunctionExecution } from "./apiTypes.js";
 
 export type LogMode = "always" | "pause-on-deploy" | "disable";
@@ -122,7 +122,12 @@ export async function watchLogs(
           options?.jsonl,
         );
       }
-    } catch {
+    } catch (e) {
+      // A 403 means the admin key isn't authorized for this deployment.
+      // Retrying won't help, so surface the error and fail immediately.
+      if (e instanceof ThrowingFetchError && e.response.status === 403) {
+        return await e.handle(ctx);
+      }
       numFailures += 1;
     }
     // Handle backoff

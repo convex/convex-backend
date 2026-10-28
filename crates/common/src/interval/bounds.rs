@@ -54,6 +54,7 @@ impl End {
     }
 
     /// Is the interval `(-inf, end)` disjoint with `[start, +inf)`?
+    /// i.e. is their intersection empty?
     pub fn is_disjoint(&self, start: &StartIncluded) -> bool {
         match (self, start) {
             (End::Unbounded, _) => false,
@@ -65,6 +66,17 @@ impl End {
         match (self, start) {
             (End::Unbounded, _) => false,
             (End::Excluded(s), StartIncluded(t)) => s[..].eq(&t[..]),
+        }
+    }
+
+    /// Is the union of `(-inf, end)` with `[start, +inf)` equal to `(-inf,
+    /// +inf)`?
+    ///
+    /// Equivalent to `!is_disjoint || is_adjacent`
+    pub fn is_overlapping_or_adjacent(&self, start: &StartIncluded) -> bool {
+        match (self, start) {
+            (End::Unbounded, _) => true,
+            (End::Excluded(s), StartIncluded(t)) => s >= t,
         }
     }
 

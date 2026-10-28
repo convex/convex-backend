@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 
 const AlgoliaAppID = "1KIE511890";
+const defaultStackPostImage = "/img/stack-logo-light.svg";
 
 interface StackResult {
   title: string;
@@ -90,8 +91,10 @@ export function StackPosts({ query }: StackPostsProps) {
               target="_blank"
             >
               <img
-                className="StackPosts-post-image"
-                src={`${mainImageUrl}?h=188`}
+                className={`StackPosts-post-image${mainImageUrl ? "" : " StackPosts-post-image--default"}`}
+                src={
+                  mainImageUrl ? `${mainImageUrl}?h=188` : defaultStackPostImage
+                }
                 alt=""
               />
               <div className="StackPosts-post-content">

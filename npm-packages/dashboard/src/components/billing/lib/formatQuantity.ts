@@ -8,11 +8,20 @@ export type QuantityType =
   // Receives and displays data in GB * hours
   | "actionCompute"
   // Receives and displays data in query-GB
-  | "textSearch";
+  | "textSearch"
+  // Receives and displays data in US dollars
+  | "currency";
 
 const ACTION_COMPUTE_FORMAT_DECIMAL = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 0,
   maximumFractionDigits: 5,
+});
+
+const CURRENCY_FORMAT = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
 });
 
 function formatActionCompute(value: number): string {
@@ -30,7 +39,9 @@ export function formatQuantity(value: number, quantityType: QuantityType) {
     case "actionCompute":
       return `${formatActionCompute(value)} GB-hours`;
     case "textSearch":
-      return `${formatActionCompute(value)} qGB`;
+      return `${formatActionCompute(value)} Query-GB`;
+    case "currency":
+      return CURRENCY_FORMAT.format(value);
     default:
       return formatNumberCompact(value);
   }
@@ -48,6 +59,8 @@ export function formatQuantityCompact(
       return `${formatActionCompute(value)}\u00a0GBh`;
     case "textSearch":
       return `${formatActionCompute(value)}\u00a0qGB`;
+    case "currency":
+      return CURRENCY_FORMAT.format(value);
     default:
       return formatNumberCompact(value);
   }

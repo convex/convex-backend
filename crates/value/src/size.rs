@@ -21,6 +21,23 @@ pub trait Size {
     fn nesting(&self) -> usize;
 }
 
+/// The size of an array-like sequence: one byte for each delimiter plus the
+/// elements' sizes.
+pub fn array_size<S: Size>(items: &[S]) -> usize {
+    1 + items.iter().map(Size::size).sum::<usize>() + 1
+}
+
+/// The size of an object-like mapping: one byte for each delimiter plus, for
+/// each field, its name, a separator byte, and its value's size.
+pub fn object_size<'a, S: Size + 'a>(
+    fields: impl Iterator<Item = (&'a crate::FieldName, &'a S)>,
+) -> usize {
+    1 + fields
+        .map(|(name, value)| name.len() + 1 + value.size())
+        .sum::<usize>()
+        + 1
+}
+
 pub fn check_system_size(size: usize) -> anyhow::Result<()> {
     if size > MAX_SIZE {
         // TODO CX-4516 - differentiate this from the check_user_size

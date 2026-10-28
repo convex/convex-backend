@@ -38,6 +38,7 @@ const result = await agent.generateText(
       excludeToolMessages: true,
       // How many recent messages to include. These are added after the search
       // messages, and do not count against the search limit.
+      // If the limit splits an order, more messages are included to complete it.
       recentMessages: 100,
       // Options for searching messages via text and/or vector search.
       searchOptions: {
@@ -202,18 +203,20 @@ and it will not run your usage handler.
 
 ```ts
 import { fetchRecentAndSearchMessages } from "@convex-dev/agent";
+import { embed } from "ai";
 
 const { recentMessages, searchMessages } = await fetchRecentAndSearchMessages(
   ctx,
   components.agent,
   {
+    userId,
     threadId,
     searchText: prompt, // Optional unless you want text/vector search.
     targetMessageId: promptMessageId, // Optionally target the search.
-    contextOptions, // Optional, defaults are used if not provided.
+    contextOptions,
     getEmbedding: async (text) => {
-      const embedding = await textEmbeddingModel.embed(text);
-      return { embedding, textEmbeddingModel };
+      const { embedding } = await embed({ model: embeddingModel, value: text });
+      return { embedding, embeddingModel };
     },
   },
 );
@@ -244,8 +247,8 @@ will not be saved automatically, but that the LLM will receive as context.
 
 ## Manage embeddings manually
 
-The `textEmbeddingModel` argument to the Agent constructor allows you to specify
-a text embedding model to use for vector search.
+The `embeddingModel` argument to the Agent constructor allows you to specify a
+text embedding model to use for vector search.
 
 If you set this, the agent will automatically generate embeddings for messages
 and use them for vector search.
@@ -261,7 +264,7 @@ import { embedMessages } from "@convex-dev/agent";
 
 const embeddings = await embedMessages(
   ctx,
-  { userId, threadId, textEmbeddingModel, ...config },
+  { userId, threadId, embeddingModel, ...config },
   [{ role: "user", content: "What is love?" }],
 );
 ```

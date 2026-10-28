@@ -13,10 +13,19 @@ Run `npm create convex` or follow any of the
 
 ## Installation
 
-Install the component package:
+These examples use the [Convex AI Gateway](https://docs.convex.dev/ai-gateway),
+available to paid teams on Convex Cloud and
+[project-linked local deployments](https://docs.convex.dev/ai-gateway/setup#local-development).
+See [Gateway setup](https://docs.convex.dev/ai-gateway/setup#vercel-ai-sdk) for
+package and Node.js runtime requirements. On the Free plan, use an
+[AI SDK provider](https://ai-sdk.dev/providers/ai-sdk-providers) with your own
+API key stored in an
+[environment variable](https://docs.convex.dev/production/environment-variables).
 
-```ts
-npm install @convex-dev/agent
+Install the component and Gateway provider:
+
+```sh
+npm install @convex-dev/agent @convex-dev/ai-sdk-provider ai convex
 ```
 
 Create a `convex.config.ts` file in your app's `convex/` folder and install the
@@ -38,14 +47,18 @@ successfully run once before you start defining Agents.
 
 ## Defining your first Agent
 
+The Gateway provider obtains a service token automatically when the model is
+called inside a Convex action; no provider API key is needed. See
+[Gateway setup](https://docs.convex.dev/ai-gateway/setup) for details.
+
 ```ts
 import { components } from "./_generated/api";
 import { Agent, stepCountIs } from "@convex-dev/agent";
-import { openai } from "@ai-sdk/openai";
+import { convexGateway } from "@convex-dev/ai-sdk-provider";
 
 const agent = new Agent(components.agent, {
   name: "My Agent",
-  languageModel: openai.chat("gpt-4o-mini"),
+  languageModel: convexGateway("openai/gpt-5-mini"),
   instructions: "You are a weather forecaster.",
   tools: { getWeather, getGeocoding },
   stopWhen: stepCountIs(3),
@@ -56,6 +69,7 @@ const agent = new Agent(components.agent, {
 
 ```ts
 import { action } from "./_generated/server";
+import { createThread } from "@convex-dev/agent";
 import { v } from "convex/values";
 
 export const helloWorld = action({

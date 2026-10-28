@@ -2,26 +2,18 @@ use std::rc::Rc;
 
 use anyhow::Context as _;
 use deno_core::v8;
-use indexmap::IndexSet;
 use slab::Slab;
-
-use super::{
-    aes,
-    ec,
-    ed25519,
-    hmac,
-    pbkdf2,
-    rsa,
-    x25519,
-    KeyType,
-    KeyUsage,
+use webcrypto::{
+    CryptoKey,
+    CryptoKeyKind,
+    CryptoKeyOrPair,
 };
+
 use crate::{
     convert_v8::{
-        DOMException,
-        DOMExceptionName,
         FromV8,
         ToV8,
+        TypeError,
     },
     strings,
 };
@@ -31,59 +23,8 @@ struct CryptoKeyStore {
     keys: Slab<(v8::Weak<v8::Object>, Rc<CryptoKey>)>,
 }
 
-pub(super) enum CryptoKeyKind {
-    Pbkdf2 {
-        algorithm: pbkdf2::Pbkdf2Algorithm,
-        key: pbkdf2::Pbkdf2Key,
-    },
-    Hmac {
-        algorithm: hmac::HmacKeyAlgorithm,
-        key: hmac::HmacKey,
-    },
-    Aes {
-        algorithm: aes::AesKeyAlgorithm,
-        key: aes::AesKey,
-    },
-    RsaPrivate {
-        algorithm: rsa::RsaHashedKeyAlgorithm,
-        key: rsa::RsaPrivateKey,
-    },
-    RsaPublic {
-        algorithm: rsa::RsaHashedKeyAlgorithm,
-        key: rsa::RsaPublicKey,
-    },
-    EcPrivate {
-        algorithm: ec::EcKeyAlgorithm,
-        key: ec::EcPrivateKey,
-    },
-    EcPublic {
-        algorithm: ec::EcKeyAlgorithm,
-        key: ec::EcPublicKey,
-    },
-    Ed25519Private {
-        algorithm: ed25519::Ed25519Algorithm,
-        key: ed25519::Ed25519PrivateKey,
-    },
-    Ed25519Public {
-        algorithm: ed25519::Ed25519Algorithm,
-        key: ed25519::Ed25519PublicKey,
-    },
-    X25519Private {
-        algorithm: x25519::X25519Algorithm,
-        key: x25519::X25519PrivateKey,
-    },
-    X25519Public {
-        algorithm: x25519::X25519Algorithm,
-        key: x25519::X25519PublicKey,
-    },
-}
-
-pub(super) struct CryptoKey {
-    pub kind: CryptoKeyKind,
-    pub r#type: KeyType,
-    pub extractable: bool,
-    pub usages: IndexSet<KeyUsage>,
-}
+/// Op argument/return type for a JS `CryptoKey` object.
+pub(super) struct JsCryptoKey(pub CryptoKey);
 
 fn get_crypto_key_template<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -105,22 +46,24 @@ fn get_crypto_key_template<'s>(
 
 // Looks up a Rust CryptoKey in the CryptoKeyStore based on the passed-in
 // CryptoKey instance.
-impl FromV8 for CryptoKey {
-    type Output = Rc<Self>;
+impl FromV8 for JsCryptoKey {
+    type Output = Rc<CryptoKey>;
 
     fn from_v8<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         input: v8::Local<'s, v8::Value>,
-    ) -> anyhow::Result<Rc<Self>> {
+    ) -> anyhow::Result<Rc<CryptoKey>> {
         let crypto_key = get_crypto_key_template(scope)?;
         let crypto_key_constructor = crypto_key
             .get_function(scope)
             .context("get CryptoKey constructor")?;
-        let input = input.try_cast::<v8::Object>()?;
-        anyhow::ensure!(
-            input.instance_of(scope, crypto_key_constructor.into()) == Some(true),
-            "TypeError"
-        );
+        let input = if let Ok(input) = input.try_cast::<v8::Object>()
+            && input.instance_of(scope, crypto_key_constructor.into()) == Some(true)
+        {
+            input
+        } else {
+            anyhow::bail!(TypeError::new("not of type CryptoKey"));
+        };
         let (id, ok) = input
             .get_internal_field(scope, 0)
             .context("missing internal field")?
@@ -143,11 +86,12 @@ impl FromV8 for CryptoKey {
 // APIs.
 //
 // Note that we never need to return a pre-existing CryptoKey instance.
-impl ToV8 for CryptoKey {
+impl ToV8 for JsCryptoKey {
     fn to_v8<'s>(
         self,
         scope: &mut v8::PinScope<'s, '_>,
     ) -> anyhow::Result<v8::Local<'s, v8::Value>> {
+        let key = self.0;
         let crypto_key = get_crypto_key_template(scope)?;
         let object = crypto_key
             .instance_template(scope)
@@ -155,7 +99,7 @@ impl ToV8 for CryptoKey {
             .context("failed to create instance")?;
         anyhow::ensure!(object.internal_field_count() == 1);
         let type_str = strings::r#type.create(scope)?;
-        let r#type = self.r#type.to_v8(scope)?;
+        let r#type = key.r#type.to_v8(scope)?;
         anyhow::ensure!(
             object.define_own_property(
                 scope,
@@ -165,7 +109,7 @@ impl ToV8 for CryptoKey {
             ) == Some(true)
         );
         let extractable_str = strings::extractable.create(scope)?;
-        let extractable = self.extractable.to_v8(scope)?;
+        let extractable = key.extractable.to_v8(scope)?;
         anyhow::ensure!(
             object.define_own_property(
                 scope,
@@ -177,8 +121,9 @@ impl ToV8 for CryptoKey {
         let algorithm_str = strings::algorithm.create(scope)?;
         // TODO: the resulting `algorithm` object has a null prototype, which
         // looks ugly when inspected.
-        let algorithm = match &self.kind {
+        let algorithm = match &key.kind {
             CryptoKeyKind::Pbkdf2 { algorithm, .. } => algorithm.to_v8(scope)?,
+            CryptoKeyKind::Hkdf { algorithm, .. } => algorithm.to_v8(scope)?,
             CryptoKeyKind::Hmac { algorithm, .. } => algorithm.to_v8(scope)?,
             CryptoKeyKind::Aes { algorithm, .. } => algorithm.to_v8(scope)?,
             CryptoKeyKind::RsaPrivate { algorithm, .. } => algorithm.to_v8(scope)?,
@@ -199,7 +144,7 @@ impl ToV8 for CryptoKey {
             ) == Some(true)
         );
         let usages_str = strings::usages.create(scope)?;
-        let usages = (&self.usages).to_v8(scope)?;
+        let usages = (&key.usages).to_v8(scope)?;
         anyhow::ensure!(
             object.define_own_property(
                 scope,
@@ -225,90 +170,38 @@ impl ToV8 for CryptoKey {
                 }
             }),
         );
-        entry.insert((weak, Rc::new(self)));
+        entry.insert((weak, Rc::new(key)));
         scope.set_slot(store);
         Ok(object.into())
     }
 }
 
-impl CryptoKey {
-    pub(super) fn check_usage(&self, usage: KeyUsage) -> anyhow::Result<()> {
-        if !self.usages.contains(&usage) {
-            anyhow::bail!(DOMException::new(
-                format!(
-                    "CryptoKey does not have {} usage",
-                    serde_json::to_string(&usage)?
-                ),
-                DOMExceptionName::InvalidAccessError
-            ));
-        }
-        Ok(())
-    }
+/// Op return type for a JS `{privateKey, publicKey}` pair or a single
+/// `CryptoKey`.
+pub(super) struct JsCryptoKeyOrPair(pub CryptoKeyOrPair);
 
-    /// If the [[type]] internal slot of result is "secret" or "private" and
-    /// usages is empty, then throw a SyntaxError.
-    pub(super) fn check_useless(&self) -> anyhow::Result<()> {
-        if [KeyType::Secret, KeyType::Private].contains(&self.r#type) && self.usages.is_empty() {
-            anyhow::bail!(DOMException::new(
-                "invalid key usages",
-                DOMExceptionName::SyntaxError,
-            ));
-        }
-        Ok(())
-    }
-}
-
-pub(super) struct CryptoKeyPair {
-    pub private_key: CryptoKey,
-    pub public_key: CryptoKey,
-}
-
-impl ToV8 for CryptoKeyPair {
+impl ToV8 for JsCryptoKeyOrPair {
     fn to_v8<'s>(
         self,
         scope: &mut v8::PinScope<'s, '_>,
     ) -> anyhow::Result<v8::Local<'s, v8::Value>> {
-        // N.B.: a CryptoKeyPair is just a regular object, not a special class
-        let private_key = self.private_key.to_v8(scope)?;
-        let public_key = self.public_key.to_v8(scope)?;
-        let crypto_key_pair = v8::Object::new(scope);
-        let private_key_str = strings::privateKey.create(scope)?;
-        anyhow::ensure!(
-            crypto_key_pair.set(scope, private_key_str.into(), private_key) == Some(true)
-        );
-        let public_key_str = strings::publicKey.create(scope)?;
-        anyhow::ensure!(
-            crypto_key_pair.set(scope, public_key_str.into(), public_key) == Some(true)
-        );
-        Ok(crypto_key_pair.into())
-    }
-}
-
-pub(super) enum CryptoKeyOrPair {
-    Symmetric(CryptoKey),
-    Asymmetric(CryptoKeyPair),
-}
-
-impl From<CryptoKeyPair> for CryptoKeyOrPair {
-    fn from(v: CryptoKeyPair) -> Self {
-        Self::Asymmetric(v)
-    }
-}
-
-impl From<CryptoKey> for CryptoKeyOrPair {
-    fn from(v: CryptoKey) -> Self {
-        Self::Symmetric(v)
-    }
-}
-
-impl ToV8 for CryptoKeyOrPair {
-    fn to_v8<'s>(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-    ) -> anyhow::Result<v8::Local<'s, v8::Value>> {
-        match self {
-            CryptoKeyOrPair::Symmetric(k) => k.to_v8(scope),
-            CryptoKeyOrPair::Asymmetric(kp) => kp.to_v8(scope),
+        match self.0 {
+            CryptoKeyOrPair::Symmetric(k) => JsCryptoKey(k).to_v8(scope),
+            CryptoKeyOrPair::Asymmetric(pair) => {
+                // N.B.: a CryptoKeyPair is just a regular object, not a special class
+                let private_key = JsCryptoKey(pair.private_key).to_v8(scope)?;
+                let public_key = JsCryptoKey(pair.public_key).to_v8(scope)?;
+                let crypto_key_pair = v8::Object::new(scope);
+                let private_key_str = strings::privateKey.create(scope)?;
+                anyhow::ensure!(
+                    crypto_key_pair.set(scope, private_key_str.into(), private_key) == Some(true)
+                );
+                let public_key_str = strings::publicKey.create(scope)?;
+                anyhow::ensure!(
+                    crypto_key_pair.set(scope, public_key_str.into(), public_key) == Some(true)
+                );
+                Ok(crypto_key_pair.into())
+            },
         }
     }
 }

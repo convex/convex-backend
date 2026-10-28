@@ -1,4 +1,10 @@
-import { query, mutation, action, internalMutation } from "./_generated/server";
+import {
+  query,
+  mutation,
+  action,
+  env,
+  internalMutation,
+} from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
@@ -23,7 +29,7 @@ export const send = mutation({
 function giphyUrl(queryString: string) {
   return (
     "https://api.giphy.com/v1/gifs/translate?api_key=" +
-    process.env.GIPHY_KEY +
+    env.GIPHY_KEY +
     "&s=" +
     encodeURIComponent(queryString)
   );

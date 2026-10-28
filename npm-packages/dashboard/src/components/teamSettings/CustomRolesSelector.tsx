@@ -65,8 +65,8 @@ export function CustomRolesSelector({
               onClick={() => remove(id)}
               className="flex cursor-pointer items-center gap-1 rounded-sm border px-1.5 py-1 text-xs text-content-primary shadow-xs transition-colors hover:border-content-error hover:bg-background-error hover:text-content-error hover:shadow-none"
             >
-              <span className="max-w-[12rem] truncate">{name}</span>
-              <Cross2Icon className="h-3 w-3 shrink-0" />
+              <span className="max-w-48 truncate">{name}</span>
+              <Cross2Icon className="size-3 shrink-0" />
             </Button>
           );
         })}

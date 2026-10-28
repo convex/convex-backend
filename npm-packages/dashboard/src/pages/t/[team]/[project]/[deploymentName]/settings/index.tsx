@@ -17,6 +17,7 @@ import { useCurrentProject } from "api/projects";
 import { useListCloudBackupsIfAvailable } from "api/backups";
 import { PermissionsContext } from "@common/lib/deploymentContext";
 import { useContext, useMemo, useRef } from "react";
+import { DEPLOYMENT_SETTINGS_SECTIONS } from "lib/sectionAnchors";
 
 export { getServerSideProps } from "lib/ssr";
 
@@ -48,7 +49,10 @@ function DeploymentURLAndDeployKey() {
   const deployment = useCurrentDeployment();
   const { capture } = usePostHog();
   const pauseDeploymentRef = useRef<HTMLDivElement | null>(null);
-  useScrollToHash("#pause-deployment", pauseDeploymentRef);
+  useScrollToHash(
+    `#${DEPLOYMENT_SETTINGS_SECTIONS.pauseDeployment.id}`,
+    pauseDeploymentRef,
+  );
 
   const team = useCurrentTeam();
   const project = useCurrentProject();
@@ -87,7 +91,10 @@ function DeploymentURLAndDeployKey() {
         <DeployKeysForDeployment />
       </Sheet>
       <DeploymentAdvancedSettings />
-      <div ref={pauseDeploymentRef}>
+      <div
+        id={DEPLOYMENT_SETTINGS_SECTIONS.pauseDeployment.id}
+        ref={pauseDeploymentRef}
+      >
         <PauseDeployment
           onPausedDeployment={() => {
             capture("paused_deployment");

@@ -19,7 +19,6 @@ use value::{
     heap_size::HeapSize,
     id_v6::DeveloperDocumentId,
     sha256::Sha256Digest,
-    ConvexValue,
 };
 
 use crate::external_packages::types::ExternalDepsPackageId;
@@ -28,12 +27,35 @@ use crate::external_packages::types::ExternalDepsPackageId;
 pub enum NodeVersion {
     /// Node 18 is deprecated in AWS, so customers with it set will
     /// no longer be able to update their static lambdas. This is okay because
-    /// users can update their Node version to unblock themselves. This also
-    /// means that new deployments with Node 18 will fail.
+    /// users can update their Node version to unblock themselves. New pushes
+    /// with Node 18 are rejected by [`NodeVersion::check_supported_for_push`].
     V18x,
+    /// Node 20 is end-of-life. Existing source packages keep running on it,
+    /// but new pushes with Node 20 are rejected by
+    /// [`NodeVersion::check_supported_for_push`].
     V20x,
     V22x,
     V24x,
+}
+
+impl NodeVersion {
+    /// Rejects end-of-life versions so that new code can't be pushed with
+    /// them. Versions stay parseable so existing source packages still load.
+    pub fn check_supported_for_push(self) -> anyhow::Result<()> {
+        match self {
+            NodeVersion::V18x | NodeVersion::V20x => {
+                let version = String::from(self);
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "NodeVersionNotSupported",
+                    format!(
+                        "Node {version} is no longer supported. Upgrade to a newer Node version \
+                         (https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version)."
+                    )
+                ));
+            },
+            NodeVersion::V22x | NodeVersion::V24x => Ok(()),
+        }
+    }
 }
 
 impl FromStr for NodeVersion {
@@ -96,12 +118,25 @@ impl TryFrom<SerializedNodeVersionDiff> for NodeVersionDiff {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Contains the metadata for a source package. Multiple [`SourcePackage`]
+/// documents may be referenced in the modules table. [`ModuleMetadata`] that
+/// reference old versions of [`SourcePackage`] are able to be read at all
+/// subsequent versions of [`SourcePackage`].
 pub struct SourcePackage {
     pub storage_key: ObjectKey,
     pub sha256: Sha256Digest,
     pub external_deps_package_id: Option<ExternalDepsPackageId>,
     pub package_size: PackageSize,
     pub node_version: Option<NodeVersion>,
+}
+
+impl SourcePackage {
+    pub fn metadata_matches(&self, other: &SourcePackage) -> bool {
+        // We explicitly do not compare the sha256 because it also includes creation
+        // time in the hash
+        self.node_version == other.node_version
+            && self.external_deps_package_id == other.external_deps_package_id
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default)]
@@ -138,21 +173,10 @@ impl std::fmt::Display for PackageSize {
     }
 }
 
-const MAX_ZIPPED_PACKAGES_SIZE: usize = 45_000_000; // 45 MB - Lambda gives us 50 MB so we have 5 MB wiggle room
 const MAX_UNZIPPED_PACKAGES_SIZE: usize = 230_000_000; // 230 MB - Lambda gives us 250 MB
 
 impl PackageSize {
     pub fn verify_size(&self) -> anyhow::Result<()> {
-        if self.zipped_size_bytes >= MAX_ZIPPED_PACKAGES_SIZE {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "ModulesTooLarge",
-                format!(
-                    "Total module size exceeded the zipped maximum ({} > maximum size {})",
-                    self.zipped_size_bytes.format_size(BINARY),
-                    MAX_ZIPPED_PACKAGES_SIZE.format_size(BINARY)
-                ),
-            ),);
-        }
         if self.unzipped_size_bytes >= MAX_UNZIPPED_PACKAGES_SIZE {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "ModulesTooLarge",
@@ -215,18 +239,17 @@ impl From<DeveloperDocumentId> for SourcePackageId {
     }
 }
 
-impl From<SourcePackageId> for ConvexValue {
+impl From<SourcePackageId> for String {
     fn from(value: SourcePackageId) -> Self {
         let id: DeveloperDocumentId = value.into();
         id.into()
     }
 }
-
-impl TryFrom<ConvexValue> for SourcePackageId {
+impl TryFrom<String> for SourcePackageId {
     type Error = anyhow::Error;
 
-    fn try_from(value: ConvexValue) -> Result<Self, Self::Error> {
-        let id: DeveloperDocumentId = value.try_into()?;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let id = DeveloperDocumentId::decode(&value)?;
         Ok(SourcePackageId(id))
     }
 }

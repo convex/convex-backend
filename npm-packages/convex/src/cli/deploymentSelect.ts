@@ -12,7 +12,10 @@ import {
   parseDeploymentSelector,
   ParsedDeploymentSelector,
 } from "./lib/deploymentSelector.js";
-import { updateEnvAndConfigForDeploymentSelection } from "./configure.js";
+import {
+  deploymentUrlForApplicationEnv,
+  updateEnvAndConfigForDeploymentSelection,
+} from "./configure.js";
 import { fetchDeploymentCanonicalUrls } from "./lib/deploy2.js";
 import {
   loadProjectLocalConfig,
@@ -33,14 +36,17 @@ import { logWarning } from "../bundler/log.js";
 export const deploymentSelect = new Command("select")
   .summary("Select the deployment to use when running commands")
   .description(
-    "Select the deployment to use when running commands.\n\n" +
-      "The deployment will be used by all `npx convex` commands, except `npx convex deploy`. You can also run individual commands on another deployment by using the --deployment flag on that command.\n\n" +
-      "Examples:\n" +
-      "  npx convex select dev                              # Select your personal cloud dev deployment in the current project\n" +
-      "  npx convex select local                            # Select your local deployment\n" +
-      "  npx convex select dev/james                        # Select a deployment in the same project by its reference\n" +
-      "  npx convex select some-project:dev/james           # Select a deployment in another project in the same team\n" +
-      "  npx convex select some-team:some-project:dev/james # Select a deployment in a particular team/project\n",
+    [
+      "Select the deployment to use when running commands.",
+      "",
+      "The deployment will be used by all `npx convex` commands, except `npx convex deploy`. You can also run individual commands on another deployment by using the --deployment flag on that command.",
+      "",
+      "• Select your personal cloud dev deployment in the current project: `npx convex deployment select dev`",
+      "• Select your local deployment: `npx convex deployment select local`",
+      "• Select a deployment in the same project by its reference: `npx convex deployment select dev/james`",
+      "• Select a deployment in another project in the same team: `npx convex deployment select some-project:dev/james`",
+      "• Select a deployment in a particular team/project: `npx convex deployment select some-team:some-project:dev/james`",
+    ].join("\n"),
   )
   .argument("<deployment>", "The deployment to use")
   .allowExcessArguments(false)
@@ -264,9 +270,9 @@ export async function saveSelectedDeployment(
     });
   }
 
-  const { convexSiteUrl: siteUrl } =
+  const { convexCloudUrl, convexSiteUrl: siteUrl } =
     deployment.deploymentFields.deploymentType === "local"
-      ? { convexSiteUrl: null }
+      ? { convexCloudUrl: deployment.url, convexSiteUrl: null }
       : await fetchDeploymentCanonicalUrls(ctx, {
           adminKey: deployment.adminKey,
           deploymentUrl: deployment.url,
@@ -275,7 +281,7 @@ export async function saveSelectedDeployment(
   await updateEnvAndConfigForDeploymentSelection(
     ctx,
     {
-      url: deployment.url,
+      url: deploymentUrlForApplicationEnv(deployment, convexCloudUrl),
       siteUrl,
       deploymentName: deployment.deploymentFields.deploymentName,
       teamSlug: deployment.deploymentFields.teamSlug,

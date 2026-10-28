@@ -18,7 +18,7 @@ use common::{
         ComponentName,
         Resource,
     },
-    document::DocumentUpdateWithPrevTs,
+    document::PendingDocumentUpdate,
     errors::JsError,
     execution_context::ExecutionContext,
     log_lines::LogLine,
@@ -30,6 +30,7 @@ use common::{
     types::{
         IndexId,
         RepeatableTimestamp,
+        UdfRuntime,
         UdfType,
     },
 };
@@ -38,6 +39,7 @@ use database::{
     Transaction,
     TransactionReadSet,
     TransactionReadSize,
+    UploadedFileUpload,
 };
 use keybroker::Identity;
 pub use metrics::record_module_sizes;
@@ -71,6 +73,7 @@ use udf::{
 use usage_tracking::FunctionUsageStats;
 use value::{
     identifier::Identifier,
+    ResolvedDocumentId,
     TabletId,
 };
 
@@ -85,6 +88,7 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
     async fn run_function(
         &self,
         udf_type: UdfType,
+        udf_runtime: Option<UdfRuntime>,
         identity: Identity,
         ts: RepeatableTimestamp,
         existing_writes: FunctionWrites,
@@ -105,7 +109,6 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
         udf_config: UdfConfig,
         modules: BTreeMap<CanonicalizedModulePath, ModuleConfig>,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
-        max_user_heap_size: usize,
     ) -> anyhow::Result<Result<BTreeMap<CanonicalizedModulePath, AnalyzedModule>, JsError>>;
 
     async fn evaluate_app_definitions(
@@ -154,6 +157,7 @@ pub struct FunctionFinalTransaction {
     pub reads: FunctionReads,
     pub writes: FunctionWrites,
     pub rows_read_by_tablet: BTreeMap<TabletId, u64>,
+    pub uploaded_files: BTreeMap<ResolvedDocumentId, UploadedFileUpload>,
 }
 
 impl<RT: Runtime> TryFrom<Transaction<RT>> for FunctionFinalTransaction {
@@ -167,6 +171,7 @@ impl<RT: Runtime> TryFrom<Transaction<RT>> for FunctionFinalTransaction {
             .iter()
             .map(|(table, stats)| (*table, stats.rows_read))
             .collect();
+        let uploaded_files = tx.get_uploaded_files()?;
         let (reads, writes) = tx.into_reads_and_writes();
         Ok(Self {
             begin_timestamp,
@@ -179,6 +184,7 @@ impl<RT: Runtime> TryFrom<Transaction<RT>> for FunctionFinalTransaction {
                     .collect(),
             },
             rows_read_by_tablet,
+            uploaded_files,
         })
     }
 }
@@ -210,5 +216,5 @@ impl From<TransactionReadSet> for FunctionReads {
 #[derive(Default)]
 pub struct FunctionWrites {
     /// N.B.: these are expected to have unique `id`s
-    pub updates: Vec<DocumentUpdateWithPrevTs>,
+    pub updates: Vec<PendingDocumentUpdate>,
 }

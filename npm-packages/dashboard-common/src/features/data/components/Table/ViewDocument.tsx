@@ -70,7 +70,7 @@ export function ViewDocument({
   const shouldSurfaceValidatorErrors = activeSchema?.schemaValidation;
 
   return (
-    <div className="flex h-full w-full min-w-[10rem] flex-col items-start overflow-y-hidden rounded-r border-l bg-background-secondary/70">
+    <div className="flex size-full min-w-40 flex-col items-start overflow-y-hidden rounded-r border-l bg-background-secondary/70">
       {showAuthorizeEditsModalColumn && (
         <AuthorizeEditsConfirmationDialog
           onClose={() => {
@@ -155,7 +155,7 @@ export function ViewDocument({
                 ) : (
                   <div className="flex w-full gap-1">
                     <Button
-                      className="flex h-[2.25rem] w-full cursor-text items-center justify-between truncate rounded-md border bg-background-secondary px-2 disabled:cursor-not-allowed"
+                      className="flex h-9 w-full cursor-text items-center justify-between truncate rounded-md border bg-background-secondary px-2 disabled:cursor-not-allowed"
                       variant="unstyled"
                       onClick={() => {
                         if (!areEditsAuthorized) {

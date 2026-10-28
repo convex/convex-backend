@@ -32,3 +32,28 @@ impl<T: ProstMessage> TextProtoEncoder<T> {
         Ok(text.into_bytes())
     }
 }
+
+/// Encodes a Prost message as standard-alphabet base64 of its binary wire
+/// format. The inverse of [`super::decoding::Base64ProtoDecoder`].
+#[derive(Clone)]
+pub struct Base64ProtoEncoder<T> {
+    _type: PhantomData<fn() -> T>,
+}
+
+impl<T> Base64ProtoEncoder<T> {
+    pub const fn new() -> Self {
+        Self { _type: PhantomData }
+    }
+}
+
+impl<T> Default for Base64ProtoEncoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: ProstMessage> Base64ProtoEncoder<T> {
+    pub fn encode(&self, value: &T) -> anyhow::Result<Vec<u8>> {
+        Ok(base64::encode(value.encode_to_vec()).into_bytes())
+    }
+}

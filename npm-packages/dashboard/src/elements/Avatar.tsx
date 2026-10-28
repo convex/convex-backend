@@ -146,7 +146,7 @@ export function Avatar({
       {!isSystem && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 z-10 h-full w-full rounded-full bg-black/30 dark:bg-black/15"
+          className="pointer-events-none absolute inset-0 z-10 size-full rounded-full bg-black/30 dark:bg-black/15"
         />
       )}
       {isSystem ? (

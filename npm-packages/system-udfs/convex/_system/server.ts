@@ -68,7 +68,11 @@ export type DeploymentOp =
   | "RunInternalMutations"
   | "RunInternalActions"
   | "RunTestQuery"
-  | "ViewAuditLog";
+  | "ViewAuditLog"
+  | "ViewUsage"
+  | "ViewUsageLimits"
+  | "WriteUsageLimits"
+  | "UseAiGateway";
 
 export function requireOperation(
   operation: DeploymentOp | NoPermissionRequired,

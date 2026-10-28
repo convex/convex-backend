@@ -41,8 +41,12 @@ pub static DEPRECATION_THRESHOLD: LazyLock<DeprecationThreshold> = LazyLock::new
 
 // Enabled in 1.7.0 but we use 1.6.1000 to allow for pre-releases to have this
 // feature enabled
-pub static MIN_NPM_VERSION_FOR_FUZZY_SEARCH: LazyLock<Version> =
-    LazyLock::new(|| env_config("MIN_NPM_VERSION_FOR_FUZZY_SEARCH", Version::new(1, 6, 1000)));
+pub static MIN_NPM_VERSION_FOR_PREFIX_SEARCH: LazyLock<Version> = LazyLock::new(|| {
+    env_config(
+        "MIN_NPM_VERSION_FOR_PREFIX_SEARCH",
+        Version::new(1, 6, 1000),
+    )
+});
 
 // Enabled in 1.27.5
 pub static MIN_NPM_VERSION_FOR_TRANSITION_CHUNKS: LazyLock<Version> = LazyLock::new(|| {
@@ -169,7 +173,7 @@ impl TryFrom<pb::common::ClientVersionIdent> for ClientVersionIdent {
 pub enum ClientType {
     Python,
     CLI,
-    // `npm create convex` CLI tool https://github.com/get-convex/templates/tree/main/create-convex
+    // `npm create convex` CLI tool https://github.com/convex/templates/tree/main/create-convex
     CreateConvex,
     NPM,
     // Actions running in node call into queries/mutations/etc. with this client.

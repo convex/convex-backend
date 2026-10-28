@@ -1,6 +1,5 @@
-import { useBBMutation } from "api/api";
 import { useProfile } from "api/profile";
-import { useCurrentProject } from "api/projects";
+import { useCurrentProject, useTransferProject } from "api/projects";
 import { useTeams, useCurrentTeam, useTeamMembers } from "api/teams";
 import { useHasCustomRolePermission } from "api/roles";
 import { projectResource } from "lib/permissions";
@@ -12,20 +11,6 @@ import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { useRouter } from "next/router";
 import { useState } from "react";
 
-function useTransferProject(projectId?: number, destinationTeamId?: number) {
-  return useBBMutation({
-    path: "/projects/{project_id}/transfer",
-    pathParams: {
-      project_id: projectId?.toString() || "",
-    },
-    mutateKey: "/teams/{team_id}/projects",
-    mutatePathParams: {
-      team_id: destinationTeamId?.toString() || "",
-    },
-    successToast: "Project transferred.",
-  });
-}
-
 export function TransferProject() {
   const project = useCurrentProject();
   const { selectedTeamSlug, teams } = useTeams();
@@ -36,8 +21,19 @@ export function TransferProject() {
   const transferProject = useTransferProject(
     project?.id,
     destinationTeamId ?? undefined,
+    originTeam?.id,
   );
   const destinationTeam = teams?.find((t) => t.id === destinationTeamId);
+  // Projects in a Vercel-managed team must be provisioned through the Vercel
+  // Marketplace, so the server rejects transfers into one.
+  const eligibleDestinationTeams = teams?.filter(
+    (t) => t.slug !== selectedTeamSlug && t.managedBy !== "vercel",
+  );
+  const hasEligibleDestinationTeam =
+    eligibleDestinationTeams !== undefined &&
+    eligibleDestinationTeams.length > 0;
+  const noDestinationTeamMessage =
+    "You must be a member of another team that is not managed by Vercel to transfer a project.";
 
   const me = useProfile();
   const originTeamMembers = useTeamMembers(originTeam?.id);
@@ -66,15 +62,12 @@ export function TransferProject() {
   const canTransfer = canTransferFromOrigin && isAdminOfNewTeam;
 
   const [showConfirmation, setShowConfirmation] = useState(false);
-  const validationError = !destinationTeamId
-    ? undefined
-    : teams && teams.length === 1
-      ? "You must be a member of another team to transfer a project."
-      : !canTransfer
-        ? !canTransferFromOrigin
-          ? `You do not have permission to transfer this project from ${originTeam?.name}.`
-          : `You must be an admin of ${destinationTeam?.name} to transfer this project to ${destinationTeam?.name}.`
-        : undefined;
+  const validationError =
+    !destinationTeamId || canTransfer
+      ? undefined
+      : !canTransferFromOrigin
+        ? `You do not have permission to transfer this project from ${originTeam?.name}.`
+        : `You must be an admin of ${destinationTeam?.name} to transfer this project to ${destinationTeam?.name}.`;
   const router = useRouter();
 
   return (
@@ -83,7 +76,7 @@ export function TransferProject() {
       <p className="mb-5 max-w-prose text-sm text-content-primary">
         Transfer this project to another team.
       </p>
-      {teams && teams.length > 1 && (
+      {hasEligibleDestinationTeam && (
         <div className="mb-4 flex flex-col gap-1">
           <Combobox
             label={
@@ -103,16 +96,14 @@ export function TransferProject() {
                   : undefined),
             }}
             options={
-              teams
-                ?.filter((t) => t.slug !== selectedTeamSlug)
-                .map((team) => ({
-                  label: team.name,
-                  value: team.id,
-                })) || []
+              eligibleDestinationTeams?.map((team) => ({
+                label: team.name,
+                value: team.id,
+              })) || []
             }
             selectedOption={destinationTeamId}
             setSelectedOption={setDestinationTeamId}
-            disabled={!canTransferFromOrigin || !teams || teams.length === 1}
+            disabled={!canTransferFromOrigin}
           />
           {!loading && validationError && (
             <p
@@ -130,11 +121,11 @@ export function TransferProject() {
           loading ||
           !destinationTeamId ||
           !canTransfer ||
-          (teams && teams.length === 1)
+          !hasEligibleDestinationTeam
         }
         tip={
-          teams && teams.length === 1
-            ? "You must be a member of another team to transfer a project."
+          !hasEligibleDestinationTeam
+            ? noDestinationTeamMessage
             : !destinationTeamId
               ? "Select a team to transfer this project to."
               : undefined

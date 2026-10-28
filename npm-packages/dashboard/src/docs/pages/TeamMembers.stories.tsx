@@ -1,6 +1,6 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { mocked, fn } from "storybook/test";
-import { InvitationResponse } from "generatedApi";
+import { InvitationResponse } from "@convex-dev/platform/managementApi";
 import { useRemoveTeamMember } from "api/teams";
 import {
   useTeamInvites,

@@ -1,21 +1,21 @@
 [package]
 name = "fivetran_source"
 description = "Fivetran source connector for Convex (convex.dev)"
-version = "2.0.1"
+version = "3.0.0"
 authors = ["Convex, Inc. <no-reply@convex.dev>"]
 edition = "2024"
 resolver = "2"
 license = "Apache-2.0"
-repository = "https://github.com/get-convex/convex-fivetran-source"
+repository = "https://github.com/convex/convex-fivetran-source"
 homepage = "https://www.convex.dev/"
 
 [package.metadata.cargo-machete]
 ignored = [
     # Build dependencies not understood
     "bytes",
-    "cfg_if",
-    "futures_util",
-    "tonic_build",
+    "cfg-if",
+    "futures-util",
+    "tonic-build",
     # Prost required via tonic macro
     "prost",
 ]
@@ -24,7 +24,7 @@ ignored = [
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true }
-convex = { workspace = true }
+common = { workspace = true }
 derive_more = { workspace = true }
 fivetran_common = { workspace = true }
 futures = { workspace = true }
@@ -38,6 +38,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
+value = { workspace = true }
 
 [build-dependencies]
 bytes = { workspace = true }
@@ -49,6 +50,7 @@ tonic-build = { workspace = true }
 
 [dev-dependencies]
 cmd_util = { workspace = true }
+common = { workspace = true, features = ["testing"] }
 convex = { workspace = true, features = ["testing"] }
 fivetran_common = { workspace = true, features = ["testing"] }
 pretty_assertions = { workspace = true }
@@ -56,6 +58,7 @@ proptest = { workspace = true }
 proptest-derive = { workspace = true }
 rand = { workspace = true }
 uuid = { workspace = true }
+value = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

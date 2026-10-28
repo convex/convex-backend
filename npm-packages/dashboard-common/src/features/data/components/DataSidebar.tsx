@@ -1,9 +1,8 @@
-import { CubeIcon, MagnifyingGlassIcon, PlusIcon } from "@radix-ui/react-icons";
+import { MagnifyingGlassIcon, PlusIcon } from "@radix-ui/react-icons";
 import { useMutation } from "convex/react";
 import classNames from "classnames";
 import { useContext, useState } from "react";
 import udfs from "@common/udfs";
-import { useInvalidateShapes } from "@common/features/data/lib/api";
 import { TextInput } from "@ui/TextInput";
 import {
   isTableMissingFromSchema,
@@ -13,9 +12,9 @@ import {
 import { TableTab } from "@common/features/data/components/TableTab";
 import { TableMetadata } from "@common/lib/useTableMetadata";
 import { NentSwitcher } from "@common/elements/NentSwitcher";
-import { Loading } from "@ui/Loading";
 import { Button } from "@ui/Button";
 import { useNents } from "@common/lib/useNents";
+import { useIsNarrowScreen } from "@ui/useIsNarrowScreen";
 import { PermissionsContext } from "@common/lib/deploymentContext";
 import { toast } from "@common/lib/utils";
 import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
@@ -23,19 +22,19 @@ import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
 export function DataSidebar({
   tableData,
   onSelectTable,
-  showSchema,
   onTableCreated,
 }: {
   tableData: TableMetadata;
   onSelectTable?: () => void;
-  showSchema: { hasSaved: boolean; showSchema: () => void } | undefined;
   onTableCreated?: () => void;
 }) {
-  const { name: selectedTable, tables } = tableData;
+  const { name: selectedTable, tableNames } = tableData;
 
   const [searchQuery, setSearchQuery] = useState("");
   const searchQueryLowercase = searchQuery.toLowerCase();
   const schema = useActiveSchema();
+
+  const isNarrow = useIsNarrowScreen();
 
   return (
     <div
@@ -44,13 +43,15 @@ export function DataSidebar({
         "py-4",
       )}
     >
-      <div className="mb-2 flex flex-col px-3">
-        <NentSwitcher />
-        <div className="flex w-full max-w-full flex-wrap items-center justify-between gap-2">
-          <h5>Tables</h5>
+      {!isNarrow && (
+        <div className="mb-2 flex flex-col px-3">
+          <NentSwitcher className="mb-4" />
+          <div className="flex w-full max-w-full flex-wrap items-center justify-between gap-2">
+            <h5>Tables</h5>
+          </div>
         </div>
-      </div>
-      {tables.size > 0 && (
+      )}
+      {tableNames.length > 0 && (
         <div className="flex items-center gap-1 border-b px-3 py-1.5">
           <MagnifyingGlassIcon className="text-content-secondary" />
           <input
@@ -68,7 +69,7 @@ export function DataSidebar({
       )}
       <div className="scrollbar flex-1 overflow-auto px-3 py-1">
         <div className="flex flex-col gap-0.5">
-          {Array.from(tables.keys())
+          {tableNames
             .filter(
               (r) =>
                 !searchQueryLowercase ||
@@ -88,20 +89,6 @@ export function DataSidebar({
         </div>
         <CreateNewTable tableData={tableData} onTableCreated={onTableCreated} />
       </div>
-      <div className="flex justify-around border-t pt-4">
-        {showSchema === undefined ? (
-          <Loading className="h-[2.25rem]" fullHeight={false} />
-        ) : (
-          <Button
-            variant="neutral"
-            onClick={showSchema.showSchema}
-            icon={<CubeIcon />}
-            className="animate-fadeInFromLoading overflow-hidden"
-          >
-            <span className="truncate">Schema</span>
-          </Button>
-        )}
-      </div>
     </div>
   );
 }
@@ -113,8 +100,7 @@ export function CreateNewTable({
   tableData: TableMetadata;
   onTableCreated?: () => void;
 }) {
-  const { tables, selectTable } = tableData;
-  const invalidateShapes = useInvalidateShapes();
+  const { tableNames, selectTable } = tableData;
 
   const createTable = useMutation(udfs.createTable.default);
   const [newTableName, setNewTableName] = useState<string>();
@@ -137,7 +123,7 @@ export function CreateNewTable({
           return;
         }
 
-        if (tables && Array.from(tables?.keys()).includes(newTableName)) {
+        if (tableNames.includes(newTableName)) {
           toast("error", `Table "${newTableName}" already exists.`);
         }
         try {
@@ -145,7 +131,6 @@ export function CreateNewTable({
             table: newTableName,
             componentId: selectedNent?.id ?? null,
           });
-          await invalidateShapes();
           selectTable(newTableName);
           onTableCreated?.();
         } finally {
@@ -167,7 +152,7 @@ export function CreateNewTable({
         value={newTableName}
         onChange={(e) => setNewTableName(e.target.value)}
         error={
-          tables?.has(newTableName)
+          tableNames.includes(newTableName)
             ? `Table '${newTableName}' already exists.`
             : newTableName
               ? validationError
@@ -187,7 +172,9 @@ export function CreateNewTable({
         <Button
           size="xs"
           disabled={
-            !newTableName || !!validationError || tables?.has(newTableName)
+            !newTableName ||
+            !!validationError ||
+            tableNames.includes(newTableName)
           }
           type="submit"
           aria-label={`Create table with name "${newTableName}"`}
@@ -224,5 +211,5 @@ export function CreateNewTable({
 }
 
 export function DataSideBarSkeleton() {
-  return <div className="h-full w-full bg-background-secondary" />;
+  return <div className="size-full bg-background-secondary" />;
 }

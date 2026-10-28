@@ -2,11 +2,22 @@ import { Sheet } from "@ui/Sheet";
 import { Button } from "@ui/Button";
 import { TextInput } from "@ui/TextInput";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
+import { PageContent } from "@common/elements/PageContent";
 
 import { RadioGroup } from "@headlessui/react";
 import classNames from "classnames";
-import { CheckCircledIcon } from "@radix-ui/react-icons";
+import {
+  CheckCircledIcon,
+  DiscordLogoIcon,
+  EnvelopeClosedIcon,
+  Half2Icon,
+  LockClosedIcon,
+  PersonIcon,
+  TrashIcon,
+} from "@radix-ui/react-icons";
+import { KeyIcon, UserGroupIcon } from "@heroicons/react/24/outline";
 import { withAuthenticatedPage } from "lib/withAuthenticatedPage";
+import { logout } from "lib/logout";
 import Head from "next/head";
 import {
   useDeleteAccount,
@@ -16,18 +27,43 @@ import {
 } from "api/profile";
 import { useState } from "react";
 import { Emails } from "components/profile/Emails";
+import { AvailableTeams } from "components/profile/AvailableTeams";
 import { DiscordAccounts } from "components/profile/DiscordAccounts";
 import { MemberResponse } from "generatedApi";
-import { LoadingTransition } from "@ui/Loading";
+import { Loading } from "@ui/Loading";
 import { useTheme } from "next-themes";
-import { ConnectedIdentities } from "components/profile/ConnectedIdentities";
+import { Security } from "components/profile/Security";
 import { PersonalAccessTokens } from "components/profile/PersonalAccessTokens";
+import { useDirectorySyncOffers } from "api/directorySync";
+import {
+  PROFILE_AVAILABLE_TEAMS_SECTION,
+  PROFILE_SECTIONS,
+} from "lib/sectionAnchors";
+import { SettingsLayout, type SettingsSection } from "elements/SettingsLayout";
 
 export { getServerSideProps } from "lib/ssr";
+
+// The Available Teams section renders only when there is a team to join, so
+// `sections` is assembled per render rather than being a module constant.
+function profileSections(hasAvailableTeams: boolean): SettingsSection[] {
+  return [
+    { ...PROFILE_SECTIONS.profileInformation, Icon: PersonIcon },
+    { ...PROFILE_SECTIONS.emails, Icon: EnvelopeClosedIcon },
+    ...(hasAvailableTeams
+      ? [{ ...PROFILE_AVAILABLE_TEAMS_SECTION, Icon: UserGroupIcon }]
+      : []),
+    { ...PROFILE_SECTIONS.security, Icon: LockClosedIcon },
+    { ...PROFILE_SECTIONS.personalAccessTokens, Icon: KeyIcon },
+    { ...PROFILE_SECTIONS.dashboardTheme, Icon: Half2Icon },
+    { ...PROFILE_SECTIONS.discordAccounts, Icon: DiscordLogoIcon },
+    { ...PROFILE_SECTIONS.deleteAccount, Icon: TrashIcon },
+  ];
+}
 
 export function Profile() {
   const profile = useProfile();
   const emails = useProfileEmails();
+  const availableTeams = useDirectorySyncOffers();
 
   const [showConfirmation, setShowConfirmation] = useState(false);
   const deleteAccount = useDeleteAccount();
@@ -51,30 +87,40 @@ export function Profile() {
       <Head>
         <title>Profile | Convex Dashboard</title>
       </Head>
-      <LoadingTransition
-        loadingProps={{
-          fullHeight: false,
-          className: "h-full",
-        }}
-      >
-        {emails && profile && (
-          <div className="scrollbar w-full overflow-auto">
-            <div className="mx-auto flex max-w-prose min-w-[22rem] flex-col justify-center gap-4 p-4">
-              <Sheet className="flex w-full flex-col gap-4">
+      <PageContent>
+        <SettingsLayout
+          title="Profile"
+          sections={profileSections(!!availableTeams?.length)}
+          contentReady={!!(emails && profile)}
+        >
+          {emails && profile ? (
+            <>
+              <Sheet
+                id={PROFILE_SECTIONS.profileInformation.id}
+                className="flex w-full flex-col gap-4"
+              >
                 <h3>Profile information</h3>
                 <ProfileForm profile={profile} />
               </Sheet>
 
               <Emails emails={emails} />
 
-              <ConnectedIdentities />
+              {availableTeams && availableTeams.length > 0 && (
+                <AvailableTeams offers={availableTeams} />
+              )}
+
+              <Security />
 
               <PersonalAccessTokens />
 
               <ToggleDarkMode />
+
               <DiscordAccounts />
 
-              <Sheet className="flex flex-col gap-4">
+              <Sheet
+                id={PROFILE_SECTIONS.deleteAccount.id}
+                className="flex flex-col gap-4"
+              >
                 <h3>Delete Account</h3>
                 {deleteAccountBody}
                 <Button
@@ -92,8 +138,13 @@ export function Profile() {
                         document.cookie = "";
                         window.localStorage.clear();
                         await deleteAccount();
-                        window.location.href =
-                          "/api/auth/logout?returnTo=/api/auth/login";
+                        // The account deletion also deletes the WorkOS user, so
+                        // skip the hosted WorkOS logout (which would render a
+                        // blank page for the now-nonexistent user) and just
+                        // clear our session cookie before sending them to login.
+                        logout(
+                          "/api/auth/logout?sessionDeleted=true&returnTo=/login",
+                        );
                       } catch (e: any) {
                         setDeleteAccountError(e.message);
                         throw e;
@@ -107,10 +158,12 @@ export function Profile() {
                   />
                 )}
               </Sheet>
-            </div>
-          </div>
-        )}
-      </LoadingTransition>
+            </>
+          ) : (
+            <Loading className="h-200" fullHeight={false} />
+          )}
+        </SettingsLayout>
+      </PageContent>
     </>
   );
 }
@@ -179,7 +232,10 @@ function ToggleDarkMode() {
   const { theme: currentTheme, setTheme } = useTheme();
 
   return (
-    <Sheet className="flex flex-col gap-4">
+    <Sheet
+      id={PROFILE_SECTIONS.dashboardTheme.id}
+      className="flex flex-col gap-4"
+    >
       <RadioGroup value={currentTheme} onChange={setTheme}>
         <RadioGroup.Label>
           <h3>Dashboard theme</h3>

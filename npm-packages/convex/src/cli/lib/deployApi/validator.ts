@@ -5,6 +5,7 @@ const baseConvexValidator = z.discriminatedUnion("type", [
   looseObject({ type: z.literal("null") }),
   looseObject({ type: z.literal("number") }),
   looseObject({ type: z.literal("bigint") }),
+  looseObject({ type: z.literal("commitTs") }),
   looseObject({ type: z.literal("boolean") }),
   looseObject({ type: z.literal("string") }),
   looseObject({ type: z.literal("bytes") }),

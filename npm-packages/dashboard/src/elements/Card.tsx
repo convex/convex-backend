@@ -85,7 +85,7 @@ export function Card({
                 tip={item.tip}
                 tipSide="right"
               >
-                <item.Icon className="h-4 w-4" />
+                <item.Icon className="size-4" />
                 {item.text}
               </MenuItem>
             ))}

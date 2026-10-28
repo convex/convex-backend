@@ -12,9 +12,20 @@ use common::{
         ParseDocument,
         ParsedDocument,
     },
+    interval::{
+        BinaryKey,
+        Interval,
+    },
+    persistence::PersistenceSnapshot,
+    query::Order,
     runtime::Runtime,
-    types::IndexId,
+    types::{
+        IndexId,
+        IndexRef,
+    },
 };
+use futures::TryStreamExt;
+use indexing::index_registry::IndexRegistry;
 use serde::{
     Deserialize,
     Serialize,
@@ -22,8 +33,12 @@ use serde::{
 use sync_types::Timestamp;
 use value::{
     codegen_convex_serialization,
+    values_to_bytes,
+    ConvexValue,
     FieldPath,
     InternalId,
+    NamespacedTableMapping,
+    ResolvedDocumentId,
     TableName,
     TableNamespace,
 };
@@ -123,7 +138,47 @@ impl<'a, RT: Runtime> IndexWorkerMetadataModel<'a, RT> {
     }
 }
 
-pub static INDEX_WORKER_METADATA_TABLE: TableName = TableName::const_new("_index_worker_metadata");
+pub async fn load_metadata_fast_forward_ts(
+    registry: &IndexRegistry,
+    snapshot: &PersistenceSnapshot,
+    table_mapping: &NamespacedTableMapping,
+    index: ResolvedDocumentId,
+) -> anyhow::Result<Option<Timestamp>> {
+    let metadata_table_id = table_mapping.id(&INDEX_WORKER_METADATA_TABLE)?;
+    let metadata_index_id = INDEX_DOC_ID_INDEX
+        .name()
+        .map_table(&table_mapping.name_to_tablet())?;
+    let metadata_index = IndexRef::try_from(registry.get_enabled(&metadata_index_id).unwrap())?;
+
+    let id_value = ConvexValue::String(index.internal_id().to_string().try_into()?);
+    let id_value_bytes = values_to_bytes(&[Some(id_value)]);
+    let interval = Interval::prefix(BinaryKey::from(id_value_bytes));
+
+    let stream = snapshot.index_scan(
+        metadata_index,
+        metadata_table_id.tablet_id,
+        &interval,
+        Order::Asc,
+        100,
+    );
+    let mut results: Vec<_> = stream
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .map(|(_, rev)| rev.value)
+        .collect();
+    let fast_forward_ts = if !results.is_empty() {
+        let mut doc = ParseDocument::<IndexWorkerMetadataRecord>::parse(results.remove(0))?;
+        // This defaults to Timestamp(0) if a document isn't present, which is fine for
+        // our purpose
+        Some(*doc.index_metadata.mut_fast_forward_ts())
+    } else {
+        None
+    };
+    Ok(fast_forward_ts)
+}
+
+pub const INDEX_WORKER_METADATA_TABLE: TableName = TableName::const_new("_index_worker_metadata");
 
 static INDEX_DOC_ID_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "index_id".parse().expect("Invalid built-in field"));
@@ -135,9 +190,7 @@ pub struct IndexWorkerMetadataTable;
 impl SystemTable for IndexWorkerMetadataTable {
     type Metadata = IndexWorkerMetadataRecord;
 
-    fn table_name() -> &'static TableName {
-        &INDEX_WORKER_METADATA_TABLE
-    }
+    const TABLE_NAME: TableName = INDEX_WORKER_METADATA_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![INDEX_DOC_ID_INDEX.clone()]

@@ -17,11 +17,17 @@ import {
 import { useState } from "react";
 import { copyTextToClipboard, toast } from "@common/lib/utils";
 import { Snippet } from "@common/elements/Snippet";
-import { LogIntegration } from "@common/lib/integrationHelpers";
+import type { LogTopic } from "@convex-dev/platform/deploymentApi";
+import {
+  LogIntegration,
+  topicsValidationSchema,
+} from "@common/lib/integrationHelpers";
+import { LogTopicsSelector } from "./LogTopicsSelector";
 
 const webhookValidationSchema = Yup.object().shape({
   url: Yup.string().url().required("URL required"),
   format: Yup.string().oneOf(["json", "jsonl"]).required("Format required"),
+  topics: topicsValidationSchema,
 });
 
 function HmacSecretDisplay({
@@ -94,6 +100,11 @@ export function WebhookConfigurationForm({
   const rotateWebhookSecret = useRotateWebhookSecret();
   const updateLogStream = useUpdateLogStream();
   const [showSecretRevealScreen, setShowSecretRevealScreen] = useState(false);
+  const [isRotatingSecret, setIsRotatingSecret] = useState(false);
+  const [rotateSecretStatus, setRotateSecretStatus] = useState<{
+    type: "success" | "error";
+    message: string;
+  } | null>(null);
   const existingIntegration = integration.existing?.config;
   const logStreamId = integration.existing?._id;
   const isHmacSecretLoading =
@@ -101,10 +112,15 @@ export function WebhookConfigurationForm({
 
   const isNewIntegration = existingIntegration === null || !logStreamId;
 
-  const formState = useFormik({
+  const formState = useFormik<{
+    url: string;
+    format: "json" | "jsonl";
+    topics: LogTopic[] | null;
+  }>({
     initialValues: {
       url: existingIntegration?.url ?? "",
       format: existingIntegration?.format ?? "jsonl",
+      topics: existingIntegration?.topics ?? null,
     },
     onSubmit: async (values, helpers) => {
       helpers.setStatus(undefined);
@@ -114,6 +130,7 @@ export function WebhookConfigurationForm({
             logStreamType: "webhook",
             url: values.url,
             format: values.format,
+            topics: values.topics ?? undefined,
           });
           onAddedIntegration?.();
           toast("success", "Created webhook integration");
@@ -121,7 +138,9 @@ export function WebhookConfigurationForm({
         } else {
           await updateLogStream(logStreamId, {
             logStreamType: "webhook",
-            ...values,
+            url: values.url,
+            format: values.format,
+            topics: values.topics,
           });
           toast("success", "Updated webhook integration");
           onClose();
@@ -138,66 +157,127 @@ export function WebhookConfigurationForm({
   // Show the secret reveal screen
   if (showSecretRevealScreen && existingIntegration?.hmacSecret) {
     return (
-      <div className="flex flex-col gap-4">
-        <HmacSecretDisplay
-          hmacSecret={existingIntegration.hmacSecret}
-          initialShowSecret
-        />
-        <Button className="ml-auto" variant="primary" onClick={onClose}>
-          Done
-        </Button>
-      </div>
+      <>
+        <div className="scrollbar flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 pb-4">
+          <HmacSecretDisplay
+            hmacSecret={existingIntegration.hmacSecret}
+            initialShowSecret
+          />
+        </div>
+        <div className="flex justify-end px-6 py-4">
+          <Button variant="primary" onClick={onClose}>
+            Done
+          </Button>
+        </div>
+      </>
     );
   }
 
   return (
-    <form onSubmit={formState.handleSubmit} className="flex flex-col gap-3">
-      <TextInput
-        value={formState.values.url}
-        onChange={formState.handleChange}
-        id="url"
-        label="URL"
-        placeholder="Enter a URL to send logs to"
-        error={formState.errors.url}
-      />
-      <Combobox
-        label="Format"
-        labelHidden={false}
-        options={[
-          { value: "jsonl", label: "JSONL (one object per line of request)" },
-          { value: "json", label: "JSON (one array per request)" },
-        ]}
-        selectedOption={formState.values.format}
-        setSelectedOption={async (v) => {
-          await formState.setFieldValue("format", v);
-        }}
-        allowCustomValue={false}
-        disableSearch
-        buttonClasses="w-full bg-inherit"
-      />
-      {existingIntegration?.hmacSecret && logStreamId && (
-        <>
-          <HmacSecretDisplay hmacSecret={existingIntegration?.hmacSecret} />
-          <div>
-            <Button
-              type="button"
-              onClick={async () => {
-                await rotateWebhookSecret(logStreamId);
-                toast("success", "Regenerated webhook secret.");
-              }}
-              variant="neutral"
-            >
-              Regenerate secret
-            </Button>
-          </div>
-        </>
-      )}
-      <div className="flex items-center justify-end gap-3">
+    <form
+      onSubmit={formState.handleSubmit}
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      <div className="scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 pb-4">
+        <TextInput
+          value={formState.values.url}
+          onChange={formState.handleChange}
+          id="url"
+          label="URL"
+          placeholder="Enter a URL to send logs to"
+          error={formState.errors.url}
+        />
+        <div className="flex flex-col gap-1">
+          <Combobox
+            label="Format"
+            labelHidden={false}
+            options={[
+              {
+                value: "jsonl",
+                label: "JSONL (one object per line of request)",
+              },
+              { value: "json", label: "JSON (one array per request)" },
+            ]}
+            selectedOption={formState.values.format}
+            setSelectedOption={async (v) => {
+              await formState.setFieldValue("format", v);
+            }}
+            allowCustomValue={false}
+            disableSearch
+            buttonClasses="w-full bg-inherit"
+          />
+        </div>
+        <LogTopicsSelector
+          value={formState.values.topics}
+          onChange={async (topics) => {
+            await formState.setFieldValue("topics", topics);
+          }}
+          error={formState.errors.topics as string | undefined}
+        />
+        {existingIntegration?.hmacSecret && logStreamId && (
+          <>
+            <HmacSecretDisplay hmacSecret={existingIntegration?.hmacSecret} />
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                onClick={async () => {
+                  setRotateSecretStatus(null);
+                  setIsRotatingSecret(true);
+                  try {
+                    await rotateWebhookSecret(logStreamId);
+                    setRotateSecretStatus({
+                      type: "success",
+                      message: "HMAC Secret regenerated",
+                    });
+                  } catch (e) {
+                    setRotateSecretStatus({
+                      type: "error",
+                      message:
+                        e instanceof Error
+                          ? e.message
+                          : "Failed to regenerate secret.",
+                    });
+                  } finally {
+                    setIsRotatingSecret(false);
+                  }
+                }}
+                variant="neutral"
+                loading={isRotatingSecret}
+                disabled={isRotatingSecret}
+              >
+                Regenerate secret
+              </Button>
+              {rotateSecretStatus && (
+                <span
+                  className={
+                    rotateSecretStatus.type === "error"
+                      ? "text-xs text-content-errorSecondary"
+                      : "text-xs text-content-success"
+                  }
+                  role={
+                    rotateSecretStatus.type === "error" ? "alert" : undefined
+                  }
+                >
+                  {rotateSecretStatus.message}
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+      <div className="flex items-center justify-end gap-2 px-6 py-4">
         {formState.status?.error && (
           <p className="text-sm text-content-errorSecondary" role="alert">
             {formState.status.error}
           </p>
         )}
+        <Button
+          variant="neutral"
+          onClick={onClose}
+          disabled={isHmacSecretLoading || formState.isSubmitting}
+        >
+          Cancel
+        </Button>
         <Button
           variant="primary"
           type="submit"

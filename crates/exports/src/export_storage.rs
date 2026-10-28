@@ -16,7 +16,7 @@ use common::{
     persistence::LatestDocument,
     runtime::Runtime,
     types::{
-        IndexId,
+        IndexRef,
         TableName,
     },
 };
@@ -60,6 +60,7 @@ use value::{
 };
 
 use crate::{
+    ensure_file_storage_export_size,
     zip_uploader::ZipSnapshotUpload,
     ExportComponents,
 };
@@ -71,13 +72,14 @@ pub(crate) async fn write_storage_table<'a, 'b: 'a, F, Fut, RT: Runtime>(
     namespace: TableNamespace,
     component_path: &ComponentPath,
     table_iterator: &mut MultiTableIterator<RT>,
-    by_id_indexes: &BTreeMap<TabletId, IndexId>,
+    by_id_indexes: &BTreeMap<TabletId, IndexRef>,
     system_tables: &BTreeMap<(TableNamespace, TableName), TabletId>,
     usage: &FunctionUsageTracker,
     requestor: ExportRequestor,
     update_progress: &F,
     in_component_str: &str,
     storage_total_entries: u64,
+    file_storage_size: &mut u64,
 ) -> anyhow::Result<()>
 where
     F: Fn(String) -> Fut + Send,
@@ -102,6 +104,12 @@ where
         let mut last_log_time = Instant::now();
         while let Some(LatestDocument { value: doc, .. }) = stream.try_next().await? {
             let file_storage_entry = ParseDocument::<FileStorageEntry>::parse(doc)?;
+            let file_size = u64::try_from(file_storage_entry.size)
+                .context("file storage entry has a negative size")?;
+            *file_storage_size = file_storage_size
+                .checked_add(file_size)
+                .context("total file storage size overflowed")?;
+            ensure_file_storage_export_size(*file_storage_size)?;
             let virtual_storage_id = file_storage_entry.id().developer_id;
             let creation_time = f64::from(file_storage_entry.creation_time());
             table_upload
@@ -171,13 +179,7 @@ where
                 .map(|ct| ct.parse())
                 .transpose()?;
             usage
-                .track_storage_call(
-                    component_path.clone(),
-                    requestor.usage_tag(),
-                    file_storage_entry.storage_id.clone(),
-                    content_type,
-                    file_storage_entry.sha256.clone(),
-                )
+                .track_storage_call(component_path.clone(), requestor.usage_tag(), content_type)
                 .await;
             usage
                 .track_storage_egress(

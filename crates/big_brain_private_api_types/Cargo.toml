@@ -8,24 +8,33 @@ license = "LicenseRef-FSL-1.1-Apache-2.0"
 ignored = [
     # proptest_derive macro depends on proptest
     "proptest",
-    "proptest_derive",
+    "proptest-derive",
     # Used in macros
     "derive_more",
+    "strum",
 ]
 
 [lib]
 doctest = false
 
 [features]
-testing = ["common/testing", "keybroker/testing", "proptest", "proptest-derive"]
+testing = [
+    "common/testing",
+    "errors/testing",
+    "keybroker/testing",
+    "proptest",
+    "proptest-derive",
+]
 
 [dependencies]
 anyhow = { workspace = true }
 common = { workspace = true }
 derive_more = { workspace = true }
+errors = { workspace = true }
 keybroker = { workspace = true }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 strum = { workspace = true }
@@ -34,6 +43,7 @@ utoipa = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
+errors = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }

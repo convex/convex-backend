@@ -35,11 +35,17 @@ use common::{
         ExtractClientVersion,
         HttpResponseError,
     },
-    knobs::ACTION_USER_TIMEOUT,
+    knobs::V8_ACTION_USER_TIMEOUT,
     runtime::UnixTimestamp,
     types::{
+        AttributionClaims,
         FunctionCaller,
+        QueryInvocation,
+        SessionId,
+        SessionRequestSeqNumber,
         UdfIdentifier,
+        UdfType,
+        AI_GATEWAY_URL,
     },
     RequestContext,
     RequestId,
@@ -47,8 +53,8 @@ use common::{
 use errors::ErrorMetadata;
 use fastrace::future::FutureExt;
 use http::HeaderMap;
-use isolate::UdfArgsJson;
 use keybroker::Identity;
+use model::session_requests::types::SessionRequestIdentifier;
 use serde::{
     Deserialize,
     Serialize,
@@ -61,7 +67,10 @@ use sync_types::{
     AuthenticationToken,
     CanonicalizedUdfPath,
 };
-use udf::ActionCallbacks;
+use udf::{
+    helpers::UdfArgsJson,
+    ActionCallbacks,
+};
 use usage_tracking::FunctionUsageTracker;
 use value::{
     export::ValueFormat,
@@ -90,6 +99,73 @@ pub struct NodeCallbackUdfPostRequest {
     pub args: UdfArgsJson,
 
     pub format: Option<String>,
+
+    /// Identifier used to make a mutation called from an action idempotent
+    /// across client-side retries. Only sent for mutation callbacks.
+    pub mutation_identifier: Option<MutationIdentifierJson>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationIdentifierJson {
+    pub session_id: String,
+    pub request_id: SessionRequestSeqNumber,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateServiceTokenResponse {
+    pub token: String,
+}
+
+pub async fn create_service_token(
+    MtState(st): MtState<LocalAppState>,
+    ExtractActionIdentity {
+        identity,
+        component_id,
+    }: ExtractActionIdentity,
+    ExtractActionName(action_name): ExtractActionName,
+    ExtractExecutionContext(context): ExtractExecutionContext,
+) -> Result<impl IntoResponse, HttpResponseError> {
+    let mut tx = st.application.begin(identity.clone()).await?;
+    let component_path = tx.must_component_path(component_id)?;
+    let attribution = match action_name {
+        Some(name) => AttributionClaims {
+            component_path: component_path.serialize(),
+            function_name: Some(name),
+            function_type: Some(UdfType::Action.to_lowercase_string().to_owned()),
+        },
+        None => AttributionClaims::unknown(),
+    };
+    let token = st
+        .application
+        .mint_ai_gateway_jwt(&identity, attribution, &context.request_id)
+        .await?;
+    Ok(Json(CreateServiceTokenResponse { token }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetServiceUrlResponse {
+    pub url: String,
+}
+
+pub async fn get_service_url() -> impl IntoResponse {
+    Json(GetServiceUrlResponse {
+        url: AI_GATEWAY_URL.to_owned(),
+    })
+}
+
+impl TryFrom<MutationIdentifierJson> for SessionRequestIdentifier {
+    type Error = anyhow::Error;
+
+    fn try_from(value: MutationIdentifierJson) -> Result<Self, Self::Error> {
+        let session_id: SessionId = value.session_id.parse()?;
+        Ok(SessionRequestIdentifier {
+            session_id,
+            request_id: value.request_id,
+        })
+    }
 }
 
 /// This is like `public_query_post`, except it allows calling internal
@@ -128,6 +204,7 @@ pub async fn internal_query_post(
                 parent_scheduled_job: context.parent_scheduled_job,
                 parent_execution_id: Some(context.execution_id),
             },
+            QueryInvocation::Fresh,
         )
         .await?;
     if req.format.is_some() {
@@ -161,6 +238,10 @@ pub async fn internal_mutation_post(
     ExtractExecutionContext(context): ExtractExecutionContext,
     Json(req): Json<NodeCallbackUdfPostRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
+    let mutation_identifier = req
+        .mutation_identifier
+        .map(SessionRequestIdentifier::try_from)
+        .transpose()?;
     let path = st
         .application
         .canonicalized_function_path(
@@ -178,7 +259,7 @@ pub async fn internal_mutation_post(
             PublicFunctionPath::Component(path),
             req.args.into_serialized_args()?,
             identity,
-            None,
+            mutation_identifier,
             FunctionCaller::Action {
                 parent_scheduled_job: context.parent_scheduled_job,
                 parent_execution_id: Some(context.execution_id),
@@ -571,7 +652,7 @@ async fn check_actions_token(
 
     // Tokens are valid for 2x the action timeout, which should be more than enough
     // assuming the timeout measures in tens of seconds.
-    let validity = 2 * *ACTION_USER_TIMEOUT;
+    let validity = 2 * *V8_ACTION_USER_TIMEOUT;
     st.application
         .key_broker()
         .check_action_token(&token.to_owned(), validity)

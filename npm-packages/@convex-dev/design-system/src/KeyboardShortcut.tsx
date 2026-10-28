@@ -55,6 +55,9 @@ export type Key =
   | "8"
   | "9";
 
+export const KEYCAP_CLASSES =
+  "inline-flex min-w-5 items-center justify-center rounded-sm border bg-background-tertiary px-1 py-px text-content-primary";
+
 type PlatformKeyNameOverrides = {
   [key in Key]?: string;
 };

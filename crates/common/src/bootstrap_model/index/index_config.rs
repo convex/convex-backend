@@ -27,7 +27,10 @@ use super::{
         VectorIndexState,
     },
 };
-use crate::bootstrap_model::index::text_index::TextIndexSnapshotData;
+use crate::{
+    bootstrap_model::index::text_index::TextIndexSnapshotData,
+    types::PersistenceIndexId,
+};
 
 /// Configuration that depends on the type of index.
 ///
@@ -43,6 +46,7 @@ pub enum IndexConfig {
     Database {
         spec: DatabaseIndexSpec,
         on_disk_state: DatabaseIndexState,
+        persistence_index_id: Option<PersistenceIndexId>,
     },
 
     /// Full text search index.
@@ -211,6 +215,8 @@ pub enum SerializedIndexConfig {
         #[serde(flatten)]
         spec: SerializedDatabaseIndexSpec,
         on_disk_state: SerializedDatabaseIndexState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persistence_index_id: Option<i64>,
     },
     #[serde(rename_all = "camelCase")]
     Search {
@@ -234,9 +240,11 @@ impl TryFrom<IndexConfig> for SerializedIndexConfig {
             IndexConfig::Database {
                 spec,
                 on_disk_state,
+                persistence_index_id,
             } => SerializedIndexConfig::Database {
                 spec: spec.into(),
                 on_disk_state: on_disk_state.try_into()?,
+                persistence_index_id: persistence_index_id.map(|id| i64::from(id.value())),
             },
             IndexConfig::Text {
                 spec,
@@ -264,9 +272,13 @@ impl TryFrom<SerializedIndexConfig> for IndexConfig {
             SerializedIndexConfig::Database {
                 spec,
                 on_disk_state,
+                persistence_index_id,
             } => IndexConfig::Database {
                 spec: spec.try_into()?,
                 on_disk_state: on_disk_state.try_into()?,
+                persistence_index_id: persistence_index_id
+                    .and_then(|id| u32::try_from(id).ok())
+                    .and_then(PersistenceIndexId::new),
             },
             SerializedIndexConfig::Search {
                 spec,

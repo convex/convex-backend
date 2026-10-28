@@ -47,11 +47,13 @@ export const WithTokens: Story = {
       data: {
         items: [
           {
+            id: 1,
             name: "ci-deploy",
             creationTime: now - 30 * oneDay,
             lastUsedTime: now - 2 * oneDay,
           },
           {
+            id: 2,
             name: "local-dev",
             creationTime: now - 7 * oneDay,
             lastUsedTime: null,
@@ -70,12 +72,14 @@ export const WithSSOToken: Story = {
       data: {
         items: [
           {
+            id: 1,
             name: "ci-deploy",
             creationTime: now - 30 * oneDay,
             lastUsedTime: now - 2 * oneDay,
             ssoTeamId: 1,
           },
           {
+            id: 2,
             name: "personal-token",
             creationTime: now - 14 * oneDay,
             lastUsedTime: now - oneDay,
@@ -94,6 +98,7 @@ export const WithPagination: Story = {
       data: {
         items: [
           {
+            id: 1,
             name: "ci-deploy",
             creationTime: now - 30 * oneDay,
             lastUsedTime: now - 2 * oneDay,

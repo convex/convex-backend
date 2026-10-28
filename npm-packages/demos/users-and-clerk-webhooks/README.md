@@ -10,14 +10,14 @@ can log out with a "Log Out" button.
 
 ## Running the App
 
-Run
+This app declares `CLERK_JWT_ISSUER_DOMAIN` and `CLERK_WEBHOOK_SECRET` in
+`convex/convex.config.ts`, so the deployment won't accept code until both are
+set. Configure a deployment first:
 
 ```sh
-npm run dev
+npm install
+npx convex init
 ```
-
-It will complain that an environment variable is missing. Follow the next steps
-to set it.
 
 ### Set up Clerk credentials
 
@@ -28,8 +28,7 @@ obtain:
 - A JWT template _Issuer URL_, set it as `CLERK_JWT_ISSUER_DOMAIN` on your
   Convex dashboard.
 
-At this point you should see `npm run dev` succeed, but you still need to set up
-one more variable.
+You still need to set up one more variable.
 
 ### Setting up webhooks in Clerk
 
@@ -49,6 +48,12 @@ Click on _Create_.
 After the endpoint is saved, copy the _Signing Secret_ (on the right side of the
 UI), it should start with `whsec_`. Set it as the value of the
 `CLERK_WEBHOOK_SECRET` environment variable in your Convex dashboard.
+
+### Start dev
+
+```sh
+npm run dev
+```
 
 From now on, when a user signs up you should see logs from the HTTP handler as
 well as a new row in the users table in the Convex dashboard.

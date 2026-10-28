@@ -67,7 +67,7 @@ export function WorkOSCredentialsSection({
         <div className="space-y-2">
           {/* Basic credentials with copy button */}
           <div className="relative">
-            <div className="overflow-hidden rounded border bg-background-primary">
+            <div className="overflow-hidden rounded-sm border bg-background-primary">
               <div className="flex items-center justify-between border-b bg-background-secondary px-3 py-2">
                 <span className="text-xs font-medium text-content-secondary">
                   Environment Variables
@@ -76,7 +76,7 @@ export function WorkOSCredentialsSection({
                   size="xs"
                   variant="neutral"
                   onClick={handleCopyAll}
-                  icon={<CopyIcon className="h-3 w-3" />}
+                  icon={<CopyIcon className="size-3" />}
                 >
                   Copy All
                 </Button>
@@ -103,7 +103,7 @@ WORKOS_COOKIE_PASSWORD="${cookiePassword}"`}
               id="show-cookie-password"
               checked={showCookiePassword}
               onChange={(e) => handleToggleCookiePassword(e.target.checked)}
-              className="h-3.5 w-3.5"
+              className="size-3.5"
             />
             <label
               htmlFor="show-cookie-password"

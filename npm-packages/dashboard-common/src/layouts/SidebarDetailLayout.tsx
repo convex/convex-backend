@@ -12,7 +12,11 @@ import {
   PanelGroup,
   PanelResizeHandle,
 } from "react-resizable-panels";
-import { DotFilledIcon, DragHandleDots2Icon } from "@radix-ui/react-icons";
+import {
+  DotFilledIcon,
+  DragHandleDots2Icon,
+  HamburgerMenuIcon,
+} from "@radix-ui/react-icons";
 import { cn } from "@ui/cn";
 
 import { PageContent } from "@common/elements/PageContent";
@@ -23,17 +27,21 @@ import {
 import { Tooltip } from "@ui/Tooltip";
 import { ClosePanelButton } from "@ui/ClosePanelButton";
 import { Button } from "@ui/Button";
+import { Modal } from "@ui/Modal";
+import { useIsNarrowScreen } from "@ui/useIsNarrowScreen";
 
 export function SidebarDetailLayout({
   sidebarComponent,
   contentComponent,
   panelSizeKey,
   resizeHandleTitle,
+  mobileBarContent,
 }: {
   sidebarComponent: ReactNode;
   contentComponent: ReactNode;
   panelSizeKey: string;
   resizeHandleTitle: string;
+  mobileBarContent?: ReactNode;
 }) {
   const router = useRouter();
 
@@ -43,6 +51,35 @@ export function SidebarDetailLayout({
   const panelRef = useRef<ImperativePanelHandle>(null);
 
   const { ErrorBoundary } = useContext(DeploymentInfoContext);
+
+  const isNarrow = useIsNarrowScreen();
+
+  const content = (
+    <PageContent>
+      <ErrorBoundary key={cleanPath}>
+        <div className="h-full animate-fadeInFromLoading overflow-auto">
+          {contentComponent}
+        </div>
+      </ErrorBoundary>
+      <NpmConvexServerVersionBanner />
+    </PageContent>
+  );
+
+  if (isNarrow) {
+    return (
+      <div className="flex h-full grow flex-col overflow-hidden">
+        <div className="flex items-center gap-2 border-b bg-background-secondary px-3 py-1.5">
+          {mobileBarContent}
+          <MobileSidebarModal
+            key={router.asPath}
+            title={resizeHandleTitle}
+            sidebarComponent={sidebarComponent}
+          />
+        </div>
+        <div className="relative h-full grow overflow-x-auto">{content}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full grow items-stretch overflow-hidden">
@@ -78,17 +115,41 @@ export function SidebarDetailLayout({
           className="relative h-full grow overflow-x-auto"
           defaultSize={80}
         >
-          <PageContent>
-            <ErrorBoundary key={cleanPath}>
-              <div className="h-full animate-fadeInFromLoading overflow-auto">
-                {contentComponent}
-              </div>
-            </ErrorBoundary>
-            <NpmConvexServerVersionBanner />
-          </PageContent>
+          {content}
         </Panel>
       </PanelGroup>
     </div>
+  );
+}
+
+function MobileSidebarModal({
+  title,
+  sidebarComponent,
+}: {
+  title: string;
+  sidebarComponent: ReactNode;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  return (
+    <>
+      <Button
+        variant="neutral"
+        size="sm"
+        icon={<HamburgerMenuIcon />}
+        onClick={() => setIsOpen(true)}
+      >
+        {title}
+      </Button>
+      {isOpen && (
+        <Modal
+          onClose={() => setIsOpen(false)}
+          title={title}
+          contentClassName="mx-0"
+        >
+          <div className="h-[70dvh]">{sidebarComponent}</div>
+        </Modal>
+      )}
+    </>
   );
 }
 
@@ -158,7 +219,7 @@ export function ResizeHandle({
 }: {
   collapsed: boolean;
   direction: "left" | "right";
-  panelRef?: React.RefObject<ImperativePanelHandle>;
+  panelRef?: React.RefObject<ImperativePanelHandle | null>;
   className?: string;
   handleTitle?: string;
 }) {
@@ -191,7 +252,7 @@ export function ResizeHandle({
             dragging && "border-4 border-util-accent text-content-primary",
             direction === "right"
               ? "rounded-r-md border-l-0"
-              : "ml-[-1.25rem] rounded-l-md border-r-0",
+              : "-ml-5 rounded-l-md border-r-0",
           )}
           icon={<DragHandleDots2Icon className="text-content-secondary" />}
         >

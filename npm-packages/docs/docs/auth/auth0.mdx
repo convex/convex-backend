@@ -15,7 +15,7 @@ passwords, social identity providers, one-time email or SMS access codes,
 multi-factor authentication, and single sign on and basic user management.
 
 **Example:**
-[Convex Authentication with Auth0](https://github.com/get-convex/convex-demos/tree/main/users-and-auth)
+[Convex Authentication with Auth0](https://github.com/convex/convex-demos/tree/main/users-and-auth)
 
 If you're using Next.js see the
 [Next.js setup guide](https://docs.convex.dev/client/nextjs).
@@ -242,8 +242,8 @@ Now switch to the new configuration by running `npx convex deploy`.
 To configure your client you can use environment variables as well. The exact
 name of the environment variables and the way to refer to them depends on each
 client platform (Vite vs Next.js etc.), refer to our corresponding
-[Quickstart](/quickstarts.mdx) or the relevant documentation for the platform
-you're using.
+[Quickstart](/quickstart/overview.mdx) or the relevant documentation for the
+platform you're using.
 
 Change the props to `Auth0Provider` to take in environment variables:
 
@@ -258,8 +258,8 @@ Change the props to `Auth0Provider` to take in environment variables:
 Use the `.env.local` or `.env` file to configure your client when running
 locally. The name of the environment variables file depends on each client
 platform (Vite vs Next.js etc.), refer to our corresponding
-[Quickstart](/quickstarts.mdx) or the relevant documentation for the platform
-you're using:
+[Quickstart](/quickstart/overview.mdx) or the relevant documentation for the
+platform you're using:
 
 ```py title=".env.local"
 VITE_AUTH0_DOMAIN="your-domain.us.auth0.com"

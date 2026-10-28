@@ -4,6 +4,7 @@
 mod action_callbacks;
 mod action_outcome;
 mod client;
+pub mod deployment_jwt;
 pub mod environment;
 mod function_outcome;
 pub mod helpers;
@@ -33,7 +34,7 @@ pub use crate::{
         HttpActionResponseHead,
         HttpActionResponsePart,
         HttpActionResponseStreamer,
-        HTTP_ACTION_BODY_LIMIT,
+        HTTP_ACTION_RESPONSE_BODY_LIMIT,
     },
     syscall_stats::SyscallStats,
     syscall_trace::SyscallTrace,

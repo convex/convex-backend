@@ -29,7 +29,7 @@ function Interactive({
     <Stepper activeStep={activeStep} onSelectStep={setActiveStep}>
       {stepLabels.map((label) => (
         <Stepper.Step key={label} label={label}>
-          <div className="rounded border border-border-transparent p-4 text-sm text-content-secondary">
+          <div className="rounded-sm border border-border-transparent p-4 text-sm text-content-secondary">
             Content for "{label}"
           </div>
         </Stepper.Step>

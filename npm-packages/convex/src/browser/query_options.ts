@@ -1,5 +1,9 @@
 // Inspired by https://tanstack.com/query/v5/docs/framework/react/guides/query-options
-import type { FunctionArgs, FunctionReference } from "../server/api.js";
+import type {
+  FunctionArgs,
+  FunctionReference,
+  FunctionReference_future,
+} from "../server/api.js";
 
 /**
  * Options for a Convex query: the query function reference and its arguments.
@@ -8,7 +12,9 @@ import type { FunctionArgs, FunctionReference } from "../server/api.js";
  *
  * @public
  */
-export type QueryOptions<Query extends FunctionReference<"query">> = {
+export type QueryOptions<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+> = {
   /**
    * The query function to run.
    */
@@ -40,8 +46,8 @@ export type QueryOptions<Query extends FunctionReference<"query">> = {
  * @returns The same object, typed as `QueryOptions<Query>`.
  * @internal
  */
-export function convexQueryOptions<Query extends FunctionReference<"query">>(
-  options: QueryOptions<Query>,
-): QueryOptions<Query> {
+export function convexQueryOptions<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+>(options: QueryOptions<Query>): QueryOptions<Query> {
   return options;
 }

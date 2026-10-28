@@ -11,6 +11,10 @@ use std::{
 
 use anyhow::Context;
 use async_trait::async_trait;
+use bytes::{
+    Buf,
+    Bytes,
+};
 use common::{
     backoff::Backoff,
     errors::{
@@ -18,7 +22,11 @@ use common::{
         JsError,
     },
     execution_context::ExecutionContext,
-    knobs::NODE_ANALYZE_MAX_RETRIES,
+    knobs::{
+        GET_SERVICE_TOKEN_GUARANTEED_LIFETIME,
+        MAX_LOG_LINES_NODE_ACTIONS,
+        NODE_ANALYZE_MAX_RETRIES,
+    },
     log_lines::{
         run_function_and_collect_log_lines,
         LogLine,
@@ -153,7 +161,7 @@ pub struct InvokeResponse {
 }
 
 #[derive(Clone)]
-pub struct Actions<RT: Runtime> {
+pub struct NodeActions<RT: Runtime> {
     executor: Arc<dyn NodeExecutor>,
     convex_origin: ConvexOrigin,
     user_timeout: Duration,
@@ -204,7 +212,7 @@ fn construct_js_error(
     Ok(error)
 }
 
-impl<RT: Runtime> Actions<RT> {
+impl<RT: Runtime> NodeActions<RT> {
     pub fn new(
         executor: Arc<dyn NodeExecutor>,
         convex_origin: ConvexOrigin,
@@ -257,7 +265,7 @@ impl<RT: Runtime> Actions<RT> {
             format!("Failed to deserialize execute (aws_request_id: {aws_request_id:?}) Response: {response}")
         })?;
 
-        tracing::info!(
+        tracing::debug!(
             "Total:{:?}, executor:{:?}, download:{:?}, import:{:?}, udf:{:?}, \
              env_invocations:{:?}, memory_allocated_mb:{:?}, egress_bytes:{:?}, aws_request_id:{:?}",
             timer.elapsed(),
@@ -332,9 +340,7 @@ impl<RT: Runtime> Actions<RT> {
         let response: BuildDepsResponse =
             serde_json::from_value(response.clone()).map_err(|e| {
                 anyhow::anyhow!(
-                    "Failed to deserialize build_deps response: {}. Response: {}",
-                    e.to_string(),
-                    response,
+                    "Failed to deserialize build_deps response: {e}. Response: {response}",
                 )
             })?;
 
@@ -420,11 +426,7 @@ impl<RT: Runtime> Actions<RT> {
             log_lines,
         ) = self.invoke_analyze(request).await?;
         let response: AnalyzeResponse = serde_json::from_value(response.clone()).map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to deserialize analyze response: {}. Response: {}",
-                e.to_string(),
-                response
-            )
+            anyhow::anyhow!("Failed to deserialize analyze response: {e}. Response: {response}")
         })?;
         tracing::info!(
             "Analyze took {:?}. aws_request_id={:?}",
@@ -552,6 +554,7 @@ impl<RT: Runtime> Actions<RT> {
                 source_index,
                 http_routes: None,
                 cron_specs: None,
+                reuse_context: false,
             };
             result.insert(path, module);
         }
@@ -607,6 +610,9 @@ impl TryFrom<ExecutorRequest> for JsonValue {
                     "sourcePackage": JsonValue::from(r.source_package),
                     "backendAddress": backend_address,
                     "timeoutSecs": timeout.as_secs_f64(),
+                    "maxLogLines": *MAX_LOG_LINES_NODE_ACTIONS,
+                    "serviceTokenGuaranteedLifetimeSecs":
+                        GET_SERVICE_TOKEN_GUARANTEED_LIFETIME.as_secs_f64(),
                     "backendCallbackToken": r.callback_token,
                     "authHeader": r.auth_header,
                     "userIdentity": r.user_identity.map(JsonValue::try_from).transpose()?,
@@ -975,32 +981,58 @@ fn parse_streamed_response(s: &str) -> anyhow::Result<Vec<ResponsePart>> {
 }
 
 pub enum NodeExecutorStreamPart {
-    Chunk(Vec<u8>),
-    InvokeComplete(Result<(), InvokeResponse>),
+    Chunk(Bytes),
+    InvokeComplete(InvokeCompletion),
+}
+
+/// How the executor transport reported the end of an invocation.
+pub enum InvokeCompletion {
+    /// The invocation completed without any failure signal.
+    Success,
+    /// The transport authoritatively reported a failure (e.g. AWS Lambda set
+    /// an error code). Returned to the caller, discarding any streamed
+    /// payload.
+    ExplicitError(InvokeResponse),
+    /// A failure inferred from out-of-band signals (e.g. the AWS Lambda
+    /// platform log tail). Returned to the caller only when the stream
+    /// produced no result payload: the signal may describe a crash that
+    /// happened after a complete response was already streamed.
+    ImplicitError(InvokeResponse),
 }
 
 pub async fn handle_node_executor_stream(
     log_line_sender: mpsc::UnboundedSender<LogLine>,
     mut stream: impl Stream<Item = anyhow::Result<NodeExecutorStreamPart>> + Unpin,
 ) -> anyhow::Result<Result<JsonValue, InvokeResponse>> {
-    let mut remaining_chunk: Vec<u8> = vec![];
+    let mut remaining_chunks: Vec<Bytes> = vec![];
     let mut result_values = vec![];
     while let Some(part) = stream.next().await {
         let part = part.with_context(|| "Error in node executor stream")?;
         match part {
-            NodeExecutorStreamPart::Chunk(chunk) => {
-                let mut bytes: &[u8] = &[remaining_chunk, chunk].concat();
+            NodeExecutorStreamPart::Chunk(mut chunk) => {
                 // Split any bytes from the previous chunk + the body of this chunk
                 // into new lines and parse them as JSON objects.
                 loop {
-                    match bytes.split_once(|b| b == &b'\n') {
+                    match memchr::memchr(b'\n', &chunk) {
                         None => {
-                            remaining_chunk = bytes.to_vec();
+                            if !chunk.is_empty() {
+                                remaining_chunks.push(chunk);
+                            }
                             break;
                         },
-                        Some((line, rest)) => {
-                            let decoded_str = String::from_utf8(line.to_vec())?;
-                            let parts = parse_streamed_response(&decoded_str)?;
+                        Some(pos) => {
+                            let before_newline = &chunk[..pos];
+                            let combined;
+                            let line = if remaining_chunks.is_empty() {
+                                before_newline
+                            } else {
+                                remaining_chunks.push(chunk.slice_ref(before_newline));
+                                combined = remaining_chunks.concat();
+                                remaining_chunks.clear();
+                                &combined
+                            };
+                            let decoded_str = str::from_utf8(line)?;
+                            let parts = parse_streamed_response(decoded_str)?;
                             for part in parts {
                                 match part {
                                     ResponsePart::LogLine(log_line) => {
@@ -1009,24 +1041,41 @@ pub async fn handle_node_executor_stream(
                                     ResponsePart::Result(result) => result_values.push(result),
                                 };
                             }
-                            bytes = rest;
+                            chunk.advance(pos + 1);
                         },
                     }
                 }
             },
-            NodeExecutorStreamPart::InvokeComplete(result) => {
-                if let Err(e) = result {
-                    return Ok(Err(e));
+            NodeExecutorStreamPart::InvokeComplete(completion) => {
+                let error_if_no_result = match completion {
+                    InvokeCompletion::ExplicitError(e) => return Ok(Err(e)),
+                    InvokeCompletion::ImplicitError(e) => Some(e),
+                    InvokeCompletion::Success => None,
+                };
+                let parsed = String::from_utf8(remaining_chunks.concat())
+                    .map_err(anyhow::Error::from)
+                    .and_then(|decoded_str| parse_streamed_response(&decoded_str));
+                match parsed {
+                    Ok(parts) => {
+                        for part in parts {
+                            match part {
+                                ResponsePart::LogLine(log_line) => {
+                                    log_line_sender.send(log_line)?;
+                                },
+                                ResponsePart::Result(result) => result_values.push(result),
+                            };
+                        }
+                    },
+                    // A crash can truncate the stream mid-line or mid-character;
+                    // prefer the inferred failure over the decode error when we
+                    // have one.
+                    Err(e) if error_if_no_result.is_none() => return Err(e),
+                    Err(_) => {},
                 }
-                let decoded_str = String::from_utf8(remaining_chunk.to_vec())?;
-                let parts = parse_streamed_response(&decoded_str)?;
-                for part in parts {
-                    match part {
-                        ResponsePart::LogLine(log_line) => {
-                            log_line_sender.send(log_line)?;
-                        },
-                        ResponsePart::Result(result) => result_values.push(result),
-                    };
+                if result_values.is_empty()
+                    && let Some(e) = error_if_no_result
+                {
+                    return Ok(Err(e));
                 }
                 break;
             },

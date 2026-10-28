@@ -12,21 +12,20 @@
     "@heroicons/react": "2.2.0",
     "clsx": "2.1.1",
     "convex": "workspace:*",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.1.13",
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^18.17.0",
-    "@types/react": "^18.0.0",
-    "@types/react-dom": "^18.0.0",
+    "@types/react": "^19.2.4",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.1",
-    "postcss": "^8.5.10",
-    "prettier": "3.8.1",
-    "tailwindcss": "^4.1.11",
+    "postcss": "^8.5.18",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.2",
-    "vite": "^6.4.2"
+    "vite": "^6.4.4"
   }
 }

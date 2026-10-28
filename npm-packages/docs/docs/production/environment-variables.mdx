@@ -8,7 +8,7 @@ description: "Declare, store, and access environment variables in Convex"
 Environment variables are key-value pairs that are useful for storing values you
 wouldn't want to put in code or in a table, such as an API key. You can set
 environment variables in Convex through the dashboard and access them in
-[functions](/functions.mdx).
+[functions](/functions/overview.mdx).
 
 For the best experience, [declare your environment variables](#declaring) in
 `convex/convex.config.ts` to get type-safe access via the generated `env`
@@ -25,7 +25,7 @@ deployment.
   alt="Environment variables table"
 />
 
-You can add up to 256 environment variables, and the total size of all
+You can add up to 512 environment variables, and the total size of all
 environment variables (names + values) cannot exceed 512KiB. Environment
 variable names cannot be more than 256 characters long, and they must start with
 a letter and only contain letters, numbers, and underscores. Environment
@@ -39,10 +39,10 @@ You can modify environment variables using the pencil icon button:
 />
 
 Environment variables can also be viewed and modified from the
-[command line](/cli.md#read-and-write-environment-variables).
+[command line](/cli/reference/env.mdx).
 
 ```sh
-npx convex env list
+npx convex env list --names-only
 npx convex env get NAME
 npx convex env set NAME 'value'
 npx convex env set --from-file .env.convex
@@ -135,9 +135,9 @@ value they contain.
 
 ### Passing environment variables to components \{#component-env-vars}
 
-[Components](/components.mdx) are isolated from the app's environment variables.
-When a component declares environment variables in its `convex.config.ts`, you
-can provide environment variables when installing it:
+[Components](/components/overview.mdx) are isolated from the app's environment
+variables. When a component declares environment variables in its
+`convex.config.ts`, you can provide environment variables when installing it:
 
 ```ts title="convex/convex.config.ts"
 import { defineApp } from "convex/server";
@@ -194,7 +194,9 @@ function giphyUrl(query) {
 
 If you've [declared your environment variables](#declaring) in
 `convex.config.ts`, prefer using the typed `env` import from `_generated/server`
-instead of `process.env` for better type safety.
+instead of `process.env` for better type safety. You can use the
+[`@convex-dev/no-process-env`](/linting/overview#no-process-env) lint rule to
+automatically flag `process.env` reads, and suggest using `env.*` instead.
 
 :::
 

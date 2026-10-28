@@ -1,0 +1,479 @@
+packages:
+  - "@convex-dev/ai-sdk-provider"
+  - "@convex-dev/bundle-analyzer"
+  - "@convex-dev/bundle-analyzer/tests/fixture"
+  - "@convex-dev/codemod"
+  - "@convex-dev/codemod/test/explicit-ids/custom-convex-folder"
+  - "@convex-dev/codemod/test/explicit-ids/sample-convex-project"
+  - "@convex-dev/design-system"
+  - "@convex-dev/eslint-plugin"
+  - "@convex-dev/eslint-plugin/oxlint-demo"
+  - "@convex-dev/platform"
+  - "@convex-dev/react-query"
+  - "@convex-dev/workos"
+  - components/ratelimiter
+  - components/triggers
+  - convex
+  - "convex-analytics"
+  - "convex-chat-speculative"
+  - dashboard
+  - "dashboard-common"
+  - "dashboard-self-hosted"
+  - "dashboard-storybook"
+  - demo_browser_tests
+  - "demos/args-validation"
+  - demos/clerk
+  - "demos/convex-test"
+  - "demos/cron-jobs"
+  - "demos/custom-errors"
+  - "demos/dall-e-storage-action"
+  - "demos/file-storage"
+  - "demos/file-storage-with-http"
+  - "demos/giphy-action"
+  - demos/html
+  - demos/http
+  - "demos/nextjs-app-router"
+  - "demos/nextjs-pages-router"
+  - demos/node
+  - demos/pagination
+  - "demos/presence-facepile"
+  - "demos/presence-typing-indicator"
+  - demos/prewarming
+  - "demos/python-quickstart"
+  - "demos/react-native"
+  - "demos/react-query"
+  - "demos/relational-data-modeling"
+  - demos/scheduling
+  - demos/search
+  - demos/sessions
+  - "demos/system-tables"
+  - "demos/tour-chat/0-start"
+  - "demos/tour-chat/1-smileys"
+  - "demos/tour-chat/2-likes"
+  - "demos/tour-chat/3-ai"
+  - demos/tutorial
+  - demos/typescript
+  - "demos/users-and-auth"
+  - "demos/users-and-clerk"
+  - "demos/users-and-clerk-webhooks"
+  - "demos/vector-search"
+  - "demos/zod-validation-ts"
+  - docs
+  - "id-encoding"
+  - lint
+  - "local-store"
+  - "node-executor"
+  - "private-demos/actions"
+  - "private-demos/ai-gateway"
+  - "private-demos/audit-logging"
+  - "private-demos/bundle-size"
+  - "private-demos/cjs-typescript"
+  - "private-demos/clerk-initial-auth"
+  - "private-demos/commit-timestamp"
+  - "private-demos/components-api-import"
+  - "private-demos/components-api-import-ts"
+  - "private-demos/components-legacy"
+  - "private-demos/components-legacy-ts"
+  - "private-demos/components-npm"
+  - "private-demos/components-poc"
+  - "private-demos/components-ts-alias"
+  - "private-demos/convex-tour-chat-tutorial"
+  - "private-demos/cron"
+  - "private-demos/ctx-meta"
+  - "private-demos/deploy-speed-test"
+  - "private-demos/e2e"
+  - "private-demos/env-vars-playground"
+  - "private-demos/http"
+  - "private-demos/javascript"
+  - "private-demos/javascript-old-syntax"
+  - "private-demos/middleware"
+  - "private-demos/nextjs-15-app"
+  - "private-demos/nextjs-15-app-clerk"
+  - "private-demos/nextjs-app-router-snippets"
+  - "private-demos/npm-showcase"
+  - "private-demos/openauth-react"
+  - "private-demos/pagination-adversarial"
+  - "private-demos/pagination-visualization"
+  - "private-demos/quickstarts/bun"
+  - "private-demos/quickstarts/expo"
+  - "private-demos/quickstarts/nextjs"
+  - "private-demos/quickstarts/nextjs-app-dir"
+  - "private-demos/quickstarts/nextjs-app-dir-14"
+  - "private-demos/quickstarts/nextjs-app-dir-js"
+  - "private-demos/quickstarts/nodejs"
+  - "private-demos/quickstarts/nuxt"
+  - "private-demos/quickstarts/react-vite"
+  - "private-demos/quickstarts/react-vite-ts"
+  - "private-demos/quickstarts/remix"
+  - "private-demos/quickstarts/sveltekit"
+  - "private-demos/quickstarts/tanstack-start"
+  - "private-demos/quickstarts/vue"
+  - "private-demos/snippets"
+  - "private-demos/snippets-config-files"
+  - "private-demos/static-codegen"
+  - "private-demos/static-codegen-ts"
+  - "private-demos/tanstack-start"
+  - "private-demos/tanstack-start-clerk"
+  - "private-demos/tanstack-start-workos"
+  - "private-demos/test-data"
+  - "private-demos/test-project"
+  - "private-demos/text-importer"
+  - "private-demos/tsgo-test"
+  - "private-demos/tutorial"
+  - "private-demos/typescript-exact-optional-property-types"
+  - "private-demos/typescript-modern"
+  - "private-demos/typescript-old"
+  - "private-demos/uses-ents"
+  - "private-demos/vector-importer"
+  - "private-demos/vector-search"
+  - "private-demos/waitlist"
+  - "scenario-runner"
+  - shapes
+  - "shared-cursors"
+  - "system-udfs"
+  - "tests/component-tests"
+  - "tests/component-tests/projects/basic"
+  - "tests/component-tests/projects/empty"
+  - "tests/component-tests/projects/env_vars"
+  - "tests/component-tests/projects/http_actions"
+  - "tests/component-tests/projects/http_legacy_routes"
+  - "tests/component-tests/projects/http_mount_routing"
+  - "tests/component-tests/projects/http_no_prefix_mounting"
+  - "tests/component-tests/projects/http_prefix_and_mount_routing"
+  - "tests/component-tests/projects/mounted"
+  - "tests/component-tests/projects/schema_with_index"
+  - "tests/component-tests/projects/with-schema"
+  - "tests/js-integration-tests"
+  - "tests/package-tests"
+  - "tests/publishing-tests"
+  - "tests/retention-tester"
+  - tests/simulation
+  - "tests/udf-tests"
+  - "udf-runtime"
+  - "udf-syscall-ffi"
+  - version
+  - "wasm-runtime-bundler"
+
+autoInstallPeers: true
+publishBranch: release
+minimumReleaseAge: 10080
+
+minimumReleaseAgeExclude:
+  # First-party package, thus the delay protects nothing here.
+  - convex-helpers
+  # AI SDK's experimental evaluation interface for Jev.
+  - ai@7.0.105
+  - "@ai-sdk/gateway@4.0.85"
+  - "@ai-sdk/provider@4.0.17"
+  - "@ai-sdk/provider-utils@5.0.43"
+  - next@16.4.2
+  - "@next/env@16.4.2"
+  - "@next/swc-darwin-arm64@16.4.2"
+  - "@next/swc-darwin-x64@16.4.2"
+  - "@next/swc-linux-arm64-gnu@16.4.2"
+  - "@next/swc-linux-arm64-musl@16.4.2"
+  - "@next/swc-linux-x64-gnu@16.4.2"
+  - "@next/swc-linux-x64-musl@16.4.2"
+  - "@next/swc-win32-arm64-msvc@16.4.2"
+  - "@next/swc-win32-x64-msvc@16.4.2"
+  - next@15.5.27
+  - "@next/env@15.5.27"
+  - "@next/swc-darwin-arm64@15.5.27"
+  - "@next/swc-darwin-x64@15.5.27"
+  - "@next/swc-linux-arm64-gnu@15.5.27"
+  - "@next/swc-linux-arm64-musl@15.5.27"
+  - "@next/swc-linux-x64-gnu@15.5.27"
+  - "@next/swc-linux-x64-musl@15.5.27"
+  - "@next/swc-win32-arm64-msvc@15.5.27"
+  - "@next/swc-win32-x64-msvc@15.5.27"
+  # First-party publishes; satellite packages pin `convex@^<latest>` right
+  # after a release, which would otherwise fail the age gate whenever anything
+  # re-resolves (e.g. `pnpm deploy`) during the 7 days after a convex release.
+  - convex
+  # First-party analytics package; docs pins an exact version right after
+  # npm publish, which would otherwise fail the 7-day age gate on install.
+  - "@convex-internal/web-analytics"
+  # The brace-expansion overrides below pin the DoS fixes, which are newer than
+  # the age gate on every maintenance branch.
+  - brace-expansion
+  # Renovate security update: svgo@4.1.0
+  - svgo@4.1.0
+  - adm-zip@0.6.1
+  # First-party publish; the convex-test docs often reference new features
+  - convex-test
+  - "@convex-dev/workpool@0.4.14"
+  # First-party publish; the CLI can't use workspace:* because copy.bara.sky
+  # mirrors it to convex-js.
+  - "@convex-dev/platform"
+
+# Keep react and react-dom out of pnpm's hoisted fallback layer. The workspace
+# has both React 18 (the demos) and React 19 (the dashboards), and
+# node_modules/.pnpm/node_modules holds a single global copy of each package:
+# whichever major an install puts there wins for every package that resolves
+# react without declaring a dependency on it, including Next's server-side
+# require() during prerendering. pnpm never reconciles that slot on later
+# installs, so a node_modules tree carried across the React 18 -> 19 upgrade
+# keeps serving React 18 and mixes the two majors at build time.
+hoistPattern:
+  - "*"
+  - "!react"
+  - "!react-dom"
+
+# These packages' .d.ts files import "react" without declaring @types/react,
+# so tsc resolves whichever @types/react pnpm happened to hoist into
+# node_modules/.pnpm/node_modules — a single global winner. With both React 18
+# and 19 in the workspace, that breaks type checking for whichever side loses.
+# Declaring @types/react as an optional peer links the consumer's own types
+# version next to each package instance instead.
+packageExtensions:
+  # These /test entrypoints need the consuming app's convex-test types.
+  "@convex-dev/workpool@0.4.14":
+    peerDependencies:
+      convex-test: "^0.0.61"
+    peerDependenciesMeta:
+      convex-test:
+        optional: true
+  "@convex-dev/batch-worker@0.2.2":
+    peerDependencies:
+      convex-test: "*"
+    peerDependenciesMeta:
+      convex-test:
+        optional: true
+  "@headlessui/react":
+    peerDependencies:
+      "@types/react": "*"
+    peerDependenciesMeta:
+      "@types/react":
+        optional: true
+  "@heroicons/react":
+    peerDependencies:
+      "@types/react": "*"
+    peerDependenciesMeta:
+      "@types/react":
+        optional: true
+  "@radix-ui/react-icons":
+    peerDependencies:
+      "@types/react": "*"
+    peerDependenciesMeta:
+      "@types/react":
+        optional: true
+  react-use:
+    peerDependencies:
+      "@types/react": "*"
+      "@types/react-dom": "*"
+    peerDependenciesMeta:
+      "@types/react":
+        optional: true
+      "@types/react-dom":
+        optional: true
+  next:
+    peerDependencies:
+      "@types/react": "*"
+      "@types/react-dom": "*"
+    peerDependenciesMeta:
+      "@types/react":
+        optional: true
+      "@types/react-dom":
+        optional: true
+  "@tanstack/react-router":
+    peerDependencies:
+      "@types/react": "*"
+    peerDependenciesMeta:
+      "@types/react":
+        optional: true
+  "@tanstack/react-start":
+    peerDependencies:
+      "@types/react": "*"
+    peerDependenciesMeta:
+      "@types/react":
+        optional: true
+  # posthog-js/react require()s "react" but posthog-js declares no react
+  # dependency at all, so it only ever resolved through the hoisted fallback.
+  # Declaring react as an optional peer links the consumer's own React next to
+  # each posthog-js instance instead.
+  posthog-js:
+    peerDependencies:
+      react: "*"
+    peerDependenciesMeta:
+      react:
+        optional: true
+
+overrides:
+  # @types/react-window depends on @types/react "*", which the lockfile keeps
+  # on v18. Its only consumers (the dashboards) use React 19 types.
+  "@types/react-window>@types/react": ^19.0.0
+  "@types/react-window-infinite-loader>@types/react": ^19.0.0
+  # domain-browser switched away from MIT after 4.22.0 (was a Rush
+  # preferredVersions pin in common-versions.json).
+  domain-browser: 4.22.0
+  "@ai-sdk/provider-utils@>=3.0.0 <3.0.28": ^3.0.28
+  "@babel/core@>=7.0.0 <7.29.6": ^7.29.6
+  "@clerk/backend@>=2.0.0 <2.33.3": ^2.33.3
+  "@clerk/clerk-react@>=5.0.0 <5.61.6": ^5.61.6
+  "@babel/plugin-transform-modules-systemjs@>=7.0.0 <7.29.4": ^7.29.4
+  "@babel/runtime-corejs3@7.26.0": ^7.26.10
+  "@babel/runtime@7.26.0": ^7.26.10
+  "@faker-js/faker@>=10.0.0 <10.5.0": ^10.5.0
+  "@hono/node-server@>=1.0.0 <1.19.15": ^1.19.15
+  "@humanfs/node@>=0.16.0 <0.16.8": ^0.16.8
+  "@opentelemetry/core@>=2.0.0 <2.8.0": ^2.8.0
+  "@isaacs/brace-expansion@<=5.0.0": ^5.0.1
+  "@nuxt/nitro-server@>=4.0.0 <4.6.2": ^4.6.2
+  "@protobufjs/utf8@>=1.0.0 <1.1.1": ^1.1.1
+  "@remix-run/router@<=1.23.1": ^1.23.2
+  "@sveltejs/kit@>=2.0.0 <2.70.2": ^2.70.2
+  "@swc/html@>=1.0.0 <1.15.47": ^1.15.47
+  "@tootallnate/once@2.0.0": 2.0.1
+  "@vitest/browser@>=4.0.0 <4.1.12": ^4.1.12
+  "@xmldom/xmldom@>=0.8.0 <0.8.15": ^0.8.15
+  "ajv@>=8.0.0 <8.18.0": ^8.18.0
+  "ajv@>=6.0.0 <6.14.0": ^6.14.0
+  "axios@>=1.0.0 <1.20.0": ^1.20.0
+  "basic-ftp@>=5.0.0 <6.2.3": ^6.2.3
+  "@auth/core@>=0.0.0 <0.41.3": ^0.41.3
+  "baseline-browser-mapping@>=2.0.0 <2.11.0": ^2.11.0
+  "body-parser@>=1.0.0 <1.20.6": ^1.20.6
+  "body-parser@>=2.0.0 <2.3.0": ^2.3.0
+  "brace-expansion@>=1.0.0 <1.1.21": 1.1.21
+  "brace-expansion@>=2.0.0 <2.1.7": 2.1.7
+  "brace-expansion@>=5.0.0 <5.0.12": 5.0.12
+  "browserslist@>=4.0.0 <4.28.7": ^4.28.7
+  "websocket-driver@0.7.4": ^0.7.5
+  "colord@>=2.0.0 <2.9.4": ^2.9.4
+  "compression@>=1.0.0 <1.8.2": ^1.8.2
+  "cookie@<0.7.0": ^0.7.2
+  "degit@>=2.0.0 <2.8.6": ^2.8.6
+  "devalue@>=5.0.0 <5.9.2": ^5.9.2
+  "diff@>=8.0.0 <8.0.3": ^8.0.3
+  "diff@>=4.0.0 <4.0.4": ^4.0.4
+  "dompurify@>=3.0.0 <3.4.17": ^3.4.17
+  "effect@>=3.0.0 <3.20.0": ^3.20.0
+  "esbuild@<=0.24.2": 0.25.0
+  "estree-util-value-to-estree@>=3.0.0 <3.3.3": ^3.3.3
+  "follow-redirects@>=1.15.0 <1.16.1": ^1.16.1
+  "glob@>=10.2.0 <10.5.0": ^10.5.0
+  "express-rate-limit@>=8.0.0 <8.2.2": ^8.2.2
+  "fast-uri@>=3.0.0 <3.1.8": ^3.1.8
+  "fast-xml-builder@>=1.0.0 <1.1.7": ^1.1.7
+  "fast-xml-parser@>=4.3.6 <5.7.0": ^5.7.0
+  "fflate@>=0.4.0 <0.4.9": ^0.4.9
+  "flatted@>=3.0.0 <3.4.2": ^3.4.2
+  "form-data@>=2.5.0 <2.5.6": 2.5.6
+  "form-data@>=4.0.0 <4.0.6": 4.0.6
+  "glob@>=11.0.0 <11.1.0": ^11.1.0
+  "h3@<=1.15.4": ^1.15.5
+  "hono@>=4.0.0 <4.13.11": ^4.13.11
+  "h3@>=2.0.0-0 <2.0.1-rc.18": 2.0.1-rc.22
+  "h3@2.0.1-rc.14": 2.0.1-rc.22
+  "h3-v2@2.0.1-rc.20": "npm:h3@2.0.1-rc.22"
+  "handlebars@>=4.0.0 <4.7.10": ^4.7.10
+  "http-proxy-middleware@>=2.0.0 <2.0.10": ^2.0.10
+  "http-proxy@1.11.1": ^1.18.1
+  "http-cache-semantics@>=4.0.0 <4.3.0": ^4.3.0
+  "image-size@>=2.0.0 <2.0.3": ^2.0.3
+  "immutable@>=5.0.0 <5.1.8": ^5.1.8
+  "ip-address@>=10.0.0 <10.7.4": ^10.7.4
+  "js-cookie@<3.0.7": ^3.0.7
+  "js-yaml@>=3.0.0 <3.15.2": ^3.15.2
+  "js-yaml@>=4.0.0 <4.3.2": ^4.3.2
+  "joi@>=17.0.0 <17.13.8": ^17.13.8
+  "jws@4.0.0": ^4.0.1
+  "jws@<3.2.3": ^3.2.3
+  "launch-editor@>=2.0.0 <2.14.2": ^2.14.2
+  "langsmith@<0.6.0": ^0.6.0
+  "lodash@>=4.0.0 <=4.17.23": ^4.18.1
+  "mdast-util-to-hast@>=13.0.0 <13.2.1": ^13.2.1
+  "minimatch@3.1.2": ^3.1.4
+  "minimatch@5.1.6": ^5.1.7
+  "minimatch@7.4.6": ^7.4.7
+  "minimatch@>=10.0.0 <10.2.3": ^10.2.3
+  "minimatch@>=9.0.0 <9.0.6": ^9.0.6
+  "moment@>=2.0.0 <2.31.0": ^2.31.0
+  "morgan@>=1.0.0 <1.12.1": ^1.12.1
+  "nanoid@>=3.0.0 <3.3.18": ^3.3.18
+  "next@>=15.0.0 <15.5.28": ^15.5.28
+  "next@>=16.0.0 <16.4.1": ^16.4.1
+  "nitropack@>=2.0.0 <2.13.4": 2.13.4
+  "node-forge@1.3.1": ^1.3.2
+  "node-forge@>=1.3.2 <1.4.0": ^1.4.0
+  "nuxt@>=4.0.0 <4.6.2": ^4.6.2
+  "path-to-regexp@^0.1.10": ^0.1.13
+  "path-to-regexp@^3": ^3.3.0
+  "path-to-regexp@^6": ^6.3.0
+  "path-to-regexp@>=8.0.0 <8.4.0": ^8.4.0
+  "pbkdf2@>=3.0.0 <3.1.7": ^3.1.7
+  "picomatch@2.3.1": ^2.3.2
+  "picomatch@>=4.0.0 <4.0.4": ^4.0.4
+  "postcss-selector-parser@>=6.0.0 <6.1.3": ^6.1.3
+  "postcss-selector-parser@>=7.0.0 <7.1.6": ^7.1.6
+  "postcss@>=8.0.0 <8.5.18": ^8.5.18
+  "preact@>=10.27.0 <10.27.3": ^10.27.3
+  "prismjs@1.29.0": ^1.30.0
+  "protobufjs@>=7.0.0 <7.6.3": ^7.6.3
+  "proxy-addr@>=2.0.0 <2.0.8": ^2.0.8
+  "qs@>=6.0.0 <6.16.0": ^6.16.0
+  "react-router-dom@>=6.0.0 <6.30.6": ^6.30.6
+  "rollup@2.79.2": ^2.80.0
+  "semver@7.3.5": ^7.5.2
+  "serialize-javascript@>=6.0.0 <7.0.5": ^7.0.5
+  "sharp@>=0.35.0 <0.35.5": ^0.35.5
+  "shell-quote@>=1.8.3 <1.11.0": ^1.11.0
+  "seroval@<1.6.3": ^1.6.3
+  "seroval-plugins@<=1.4.0": ^1.4.1
+  "sha.js@2.4.11": ^2.4.12
+  "simple-git@>=3.0.0 <3.36.0": ^3.36.0
+  "smol-toml@>=1.0.0 <1.9.0": ^1.9.0
+  "source-map-js@>=1.0.0 <1.2.2": ^1.2.2
+  "srvx@>=0.8.0 <0.11.13": ^0.11.13
+  "svelte@>=5.0.0 <5.55.7": ^5.55.7
+  "svgo@>=3.0.0 <3.3.3": ^4.1.0
+  "svgo@>=4.0.0 <4.1.0": ^4.1.0
+  "tar-fs@>=2.0.0 <2.1.3": 2.1.3
+  "tar-fs@>=3.0.0 <3.0.9": 3.0.9
+  "tar@>=6.0.0 <7.5.7": ^7.5.21
+  "tar@>=7.5.7 <7.5.21": ^7.5.21
+  "valibot@>=1.0.0 <1.4.2": ^1.4.2
+  "toml@>=3.0.0 <4.2.0": ^4.2.0
+  "trim@<0.0.3": ^0.0.3
+  "undici@5.28.4": ^6.28.1
+  "undici@>=5.29.0 <6.0.0": ^6.28.1
+  "undici@>=6.0.0 <6.28.1": ^6.28.1
+  "undici@>=7.0.0 <7.29.1": ^7.29.1
+  "undici@>=8.0.0 <8.10.2": ^8.10.2
+  "validator@13.15.15": ^13.15.22
+  "vitest@>=4.0.0 <4.1.12": ^4.1.12
+  "@vitest/browser-playwright@>=4.0.0 <4.1.12": ^4.1.12
+  "vinxi@0.5.3": ^0.5.6
+  "webpack-dev-server@>=5.0.0 <5.2.5": ^5.2.5
+  "webpack-dev-middleware@>=7.0.0 <7.4.6": ^7.4.6
+  "vite@5.4.14": ^5.4.19
+  "vite@>=6.0.0 <6.4.4": ^6.4.4
+  "vite@>=7.0.0 <7.3.7": ^7.3.7
+  "vite@>=8.0.0 <8.2.4": ^8.2.4
+  "ws@>=7.0.0 <7.5.11": ^7.5.11
+  "ws@>=8.0.0 <8.21.0": ^8.21.0
+  "yaml@>=1.0.0 <1.10.3": ^1.10.3
+  "yaml@>=2.0.0 <2.8.3": ^2.8.3
+  "zod@>=4.0.0 <4.6.6": ^4.6.6
+# Workspace scripts run after an explicit install. Avoid pnpm 11 racing installs
+# from concurrent Turbo tasks when it detects transient node_modules changes.
+verifyDepsBeforeRun: false
+# We use git dependencies, in particular convex/saffron
+blockExoticSubdeps: false
+# pnpm 10 denied dependency lifecycle scripts by default. Keep that policy
+# explicit under pnpm 11, which otherwise fails and scaffolds undecided entries.
+allowBuilds:
+  "@clerk/shared": false
+  "@parcel/watcher": false
+  "@sentry/cli": false
+  "@swc/core": false
+  browser-tabs-lock: false
+  bufferutil: false
+  core-js: false
+  core-js-pure: false
+  esbuild: false
+  msgpackr-extract: false
+  postman-code-generators: false
+  puppeteer: false
+  sharp: false
+  unrs-resolver: false

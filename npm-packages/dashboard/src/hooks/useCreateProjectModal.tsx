@@ -3,9 +3,9 @@ import { TextInput } from "@ui/TextInput";
 import { Button } from "@ui/Button";
 import { Loading } from "@ui/Loading";
 
-import { ReactElement, useState } from "react";
 import { useFormik } from "formik";
 import * as Yup from "yup";
+import { createGlobalState } from "react-use";
 import { TeamResponse } from "generatedApi";
 import type { PlatformCreateProjectResponse } from "@convex-dev/platform/managementApi";
 import { useCurrentTeam } from "api/teams";
@@ -13,18 +13,23 @@ import { useCreateProject } from "api/projects";
 import { cn } from "@ui/cn";
 import { usePostHog } from "hooks/usePostHog";
 
-export function useCreateProjectModal(): [
-  ReactElement | null,
-  (team?: TeamResponse) => void,
-] {
-  const [modalOpen, setModalOpen] = useState(false);
-  const [team, setTeam] = useState<TeamResponse | undefined>();
+export const useCreateProjectModalRequest = createGlobalState<{
+  team?: TeamResponse;
+} | null>(null);
+
+export function CreateProjectModal() {
+  const [request, setRequest] = useCreateProjectModalRequest();
   const currentTeam = useCurrentTeam();
 
-  const selectedTeam = team || currentTeam;
+  if (!request) {
+    return null;
+  }
 
-  const modal = modalOpen ? (
-    <Modal title="Create Project" onClose={() => setModalOpen(false)}>
+  const close = () => setRequest(null);
+  const selectedTeam = request.team || currentTeam;
+
+  return (
+    <Modal title="Create Project" onClose={close}>
       <>
         {selectedTeam && (
           <p className="mb-5">
@@ -34,7 +39,7 @@ export function useCreateProjectModal(): [
         )}
         {selectedTeam ? (
           <CreateProjectForm
-            onClose={() => setModalOpen(false)}
+            onClose={close}
             team={selectedTeam}
             onSuccess={(project) => {
               const projectUrl = `/t/${selectedTeam.slug}/${project.slug}/development`;
@@ -46,15 +51,7 @@ export function useCreateProjectModal(): [
         )}
       </>
     </Modal>
-  ) : null;
-
-  return [
-    modal,
-    (t?: TeamResponse) => {
-      setModalOpen(true);
-      setTeam(t);
-    },
-  ];
+  );
 }
 
 export const ProjectNameSchema = Yup.string()

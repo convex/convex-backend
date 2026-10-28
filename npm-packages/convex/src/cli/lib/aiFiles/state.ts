@@ -11,7 +11,7 @@ export const aiFilesStateSchema = z.object({
   guidelinesHash: z.string().nullable(),
   agentsMdSectionHash: z.string().nullable(),
   claudeMdHash: z.string().nullable(),
-  // Commit SHA from get-convex/agent-skills that was current when skills were
+  // Commit SHA from convex/agent-skills that was current when skills were
   // last installed. Used to detect when newer skills are available.
   agentSkillsSha: z.string().nullable(),
 });

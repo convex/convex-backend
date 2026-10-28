@@ -20,6 +20,7 @@ import { NoPermissionMessage } from "elements/NoPermissionMessage";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { EnvironmentVariables } from "@common/features/settings/components/EnvironmentVariables";
 import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
+import { deploymentTypeLabel } from "@common/lib/deploymentTypeColorClasses";
 
 // Deployment types that can be selected via checkboxes (excludes "custom" for now)
 const SELECTABLE_DEPLOYMENT_TYPES: DeploymentTypeType[] = [
@@ -327,7 +328,7 @@ export function validateProjectEnvVarUniqueness(
         );
         if (intersection.length > 0) {
           // Mark both as having errors
-          const conflictMsg = `Conflicts with another variable for: ${intersection.map(deploymentTypeName).join(", ")}`;
+          const conflictMsg = `Conflicts with another variable for: ${intersection.map(deploymentTypeLabel).join(", ")}`;
           errors[`${entries[i].formKey}.deploymentTypes`] = conflictMsg;
           errors[`${entries[j].formKey}.deploymentTypes`] = conflictMsg;
         }
@@ -341,7 +342,7 @@ export function validateProjectEnvVarUniqueness(
 function DeploymentTypeLabels({ envVar }: { envVar: ProjectEnvVarConfig }) {
   return (
     <div className="mt-0.5 flex flex-wrap gap-1 text-xs text-content-tertiary">
-      {envVar.deploymentTypes.map(deploymentTypeName).join(", ")}
+      {envVar.deploymentTypes.map(deploymentTypeLabel).join(", ")}
     </div>
   );
 }
@@ -393,7 +394,7 @@ function DeploymentTypeCheckboxes({
                   disabled={formState.isSubmitting}
                   className={deploymentTypeCheckedBackground(type)}
                 />
-                {deploymentTypeName(type)}
+                {deploymentTypeLabel(type)}
               </label>
             );
           })}
@@ -402,7 +403,7 @@ function DeploymentTypeCheckboxes({
 
       {error && (
         <p
-          className="flex max-w-full animate-fadeInFromLoading gap-1 text-xs break-words text-content-errorSecondary"
+          className="flex max-w-full animate-fadeInFromLoading gap-1 text-xs wrap-break-word text-content-errorSecondary"
           role="alert"
         >
           {error}
@@ -410,23 +411,6 @@ function DeploymentTypeCheckboxes({
       )}
     </div>
   );
-}
-
-function deploymentTypeName(dtype: DeploymentTypeType) {
-  switch (dtype) {
-    case "prod":
-      return "Production";
-    case "preview":
-      return "Preview";
-    case "dev":
-      return "Development";
-    case "custom":
-      return "Custom";
-    default: {
-      dtype satisfies never;
-      return "Unknown";
-    }
-  }
 }
 
 function deploymentTypeCheckedBackground(dtype: DeploymentTypeType) {
@@ -447,5 +431,5 @@ function deploymentTypeCheckedBackground(dtype: DeploymentTypeType) {
 }
 
 function envVarWithDtypesKey(envVar: ProjectEnvVarConfig) {
-  return `${envVar.name} (${envVar.deploymentTypes.map(deploymentTypeName).join(" ")})`;
+  return `${envVar.name} (${envVar.deploymentTypes.map(deploymentTypeLabel).join(" ")})`;
 }

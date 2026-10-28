@@ -17,7 +17,7 @@ use common::{
     },
     version::{
         Version,
-        MIN_NPM_VERSION_FOR_FUZZY_SEARCH,
+        MIN_NPM_VERSION_FOR_PREFIX_SEARCH,
     },
 };
 use errors::ErrorMetadata;
@@ -83,7 +83,7 @@ impl SearchQuery {
 
     fn get_cli_gated_search_version(&self) -> SearchVersion {
         match &self.version {
-            Some(v) if v >= &MIN_NPM_VERSION_FOR_FUZZY_SEARCH => SearchVersion::V2,
+            Some(v) if v >= &MIN_NPM_VERSION_FOR_PREFIX_SEARCH => SearchVersion::V2,
             _ => SearchVersion::V1,
         }
     }

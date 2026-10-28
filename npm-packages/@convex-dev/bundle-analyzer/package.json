@@ -1,0 +1,47 @@
+{
+  "name": "@convex-dev/bundle-analyzer",
+  "version": "0.1.0",
+  "description": "Analyze your Convex project to identify ways to optimize your bundle size.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/convex/convex-backend.git",
+    "directory": "npm-packages/@convex-dev/bundle-analyzer"
+  },
+  "bin": {
+    "bundle-analyzer": "./dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build",
+    "prepack": "node src/scripts/publish.mjs --check",
+    "publish-package": "node src/scripts/publish.mjs"
+  },
+  "dependencies": {
+    "esbuild": "0.27.0"
+  },
+  "devDependencies": {
+    "@commander-js/extra-typings": "^14.0.0",
+    "@types/d3-hierarchy": "~3.1.7",
+    "@types/node": "^18.17.0",
+    "chalk": "5",
+    "cli-truncate": "~5.1.1",
+    "commander": "^14.0.3",
+    "convex": "workspace:*",
+    "d3-hierarchy": "~3.1.2",
+    "string-width": "^8.1.0",
+    "strip-ansi": "^7.1.2",
+    "typescript": "~5.0.3",
+    "vitest": "^4.1.0"
+  }
+}

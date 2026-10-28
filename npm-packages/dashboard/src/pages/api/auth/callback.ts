@@ -1,7 +1,8 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { WorkOS } from "@workos-inc/node";
 import { captureException } from "@sentry/nextjs";
-import { createSessionCookie } from "server/workos";
+import { createSessionCookie, withWorkOSTimeout } from "server/workos";
+import { safeReturnTo } from "lib/returnTo";
 
 export default async function handler(
   req: NextApiRequest,
@@ -25,15 +26,17 @@ export default async function handler(
   }
 
   try {
-    const authenticateResponse =
-      await workos.userManagement.authenticateWithCode({
+    const authenticateResponse = await withWorkOSTimeout(
+      "authenticateWithCode",
+      workos.userManagement.authenticateWithCode({
         clientId: process.env.WORKOS_CLIENT_ID || "",
         code,
         session: {
           sealSession: true,
           cookiePassword: process.env.WORKOS_COOKIE_PASSWORD,
         },
-      });
+      }),
+    );
 
     const { sealedSession, authenticationMethod } = authenticateResponse;
 
@@ -45,7 +48,11 @@ export default async function handler(
 
     res.setHeader("Set-Cookie", createSessionCookie(sealedSession));
 
-    let returnTo = state && !state.startsWith("/api") ? state : "/";
+    // `state` carries the `returnTo` we set in login.ts. Only honor it if it's
+    // a safe same-origin path, and not an `/api` route (which would loop back
+    // through auth).
+    const sanitizedState = safeReturnTo(state, "/");
+    let returnTo = sanitizedState.startsWith("/api") ? "/" : sanitizedState;
 
     // url is a query parameter that is only set by the Vercel auth flow
     // if it is set, and looks like a redirect to the device-auth flow,
@@ -86,6 +93,9 @@ export default async function handler(
       return;
     }
     captureException(error);
+    // Show the friendly retry page. Without this the handler would fall through
+    // without sending a response, hanging the function until Vercel times out.
+    res.redirect(`/login-error?returnTo=${encodeURIComponent(state || "/")}`);
   }
 }
 

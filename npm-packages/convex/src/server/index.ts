@@ -55,7 +55,12 @@ export type {
   Auth,
   AuthConfig,
   AuthProvider,
+  MutationAuth,
   UserIdentity,
+  ReservedJwtClaim,
+  ReservedJwtClaimPrefix,
+  SignJwtClaims,
+  SignJwtOptions,
   UserIdentityAttributes,
 } from "./authentication.js";
 export * from "./database.js";
@@ -103,9 +108,15 @@ export {
   internalMutationGeneric,
   internalQueryGeneric,
 } from "./impl/registration_impl.js";
+export {
+  getServiceToken,
+  getServiceUrl,
+  type ServiceName,
+} from "./impl/actions_impl.js";
 export type {
   TransactionMetric,
   TransactionMetrics,
+  TransactionLimits,
   FunctionMetadata,
   DeploymentMetadata,
   RequestMetadata,
@@ -117,6 +128,7 @@ export type { IndexRange, IndexRangeBuilder } from "./index_range_builder.js";
 export * from "./pagination.js";
 export type { OrderedQuery, Query, QueryInitializer } from "./query.js";
 export type {
+  AdvancedRunQueryOptions,
   ArgsArray,
   DefaultFunctionArgs,
   FunctionVisibility,
@@ -171,6 +183,7 @@ export {
 export type {
   ApiFromModules,
   AnyApi,
+  FunctionReference_future,
   FilterApi,
   FunctionType,
   FunctionReference,
@@ -201,6 +214,7 @@ export type {
   ComponentDefinition,
   AnyComponents,
   FunctionHandle,
+  FunctionHandle_future,
 } from "./components/index.js";
 
 /**
@@ -221,8 +235,10 @@ export type {
   DataModelFromSchemaDefinition,
   SystemDataModel,
   SystemTableNames,
+  DocValidator,
+  SystemFieldValidators,
 } from "./schema.js";
-export { defineTable, defineSchema } from "./schema.js";
+export { defineTable, defineSchema, docValidator } from "./schema.js";
 
 export type {
   VectorSearch,

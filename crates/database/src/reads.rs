@@ -1,6 +1,9 @@
 //! Read set tracking for an active transaction
 use std::{
+    any::Any,
     collections::BTreeMap,
+    mem,
+    ops::Bound,
     sync::LazyLock,
 };
 
@@ -8,10 +11,7 @@ use cmd_util::env::env_config;
 use common::{
     bootstrap_model::index::database_index::IndexedFields,
     components::ComponentPath,
-    document::{
-        IndexKeyBuffer,
-        PackedDocument,
-    },
+    document::PackedDocument,
     document_index_keys::{
         DatabaseIndexWrite,
         TextIndexWrite,
@@ -25,13 +25,12 @@ use common::{
         TabletIndexName,
         Timestamp,
     },
-    value::ResolvedDocumentId,
     virtual_system_mapping::VirtualSystemMapping,
 };
 use errors::ErrorMetadata;
 use imbl::{
     OrdMap,
-    Vector,
+    OrdSet,
 };
 use search::QueryReads as SearchQueryReads;
 use usage_tracking::FunctionUsageTracker;
@@ -53,10 +52,7 @@ use crate::{
     },
     execution_size::TransactionLimits,
     stack_traces::StackTrace,
-    write_log::{
-        PackedDocumentUpdate,
-        WriteSource,
-    },
+    write_log::ArcWriteInIndex,
 };
 
 pub const OVER_LIMIT_HELP: &str = "Consider using smaller limits in your queries, paginating your \
@@ -74,6 +70,21 @@ pub struct IndexReads {
     pub fields: IndexedFields,
     pub intervals: IntervalSet,
     pub stack_traces: Option<Vec<(Interval, StackTrace)>>,
+}
+
+impl IndexReads {
+    /// The stack traces of the reads that cover `index_key`, or `None` if
+    /// backtraces aren't being collected.
+    pub(crate) fn stack_traces_covering(&self, index_key: &[u8]) -> Option<Vec<StackTrace>> {
+        let stack_traces = self.stack_traces.as_ref()?;
+        Some(
+            stack_traces
+                .iter()
+                .filter(|(interval, _)| interval.contains(index_key))
+                .map(|(_, trace)| trace.clone())
+                .collect(),
+        )
+    }
 }
 
 impl HeapSize for IndexReads {
@@ -121,6 +132,10 @@ impl ReadSet {
         self.search.iter()
     }
 
+    pub fn has_search_reads(&self) -> bool {
+        !self.search.is_empty()
+    }
+
     pub fn consume(
         self,
     ) -> (
@@ -130,45 +145,9 @@ impl ReadSet {
         (self.indexed.into_iter(), self.search.into_iter())
     }
 
-    /// Determine whether a mutation to a document overlaps with the read set.
-    ///
-    /// `reusable_buffer` is passed as a parameter to avoid repeated
-    /// allocations.
-    pub fn overlaps_document(
-        &self,
-        document: &PackedDocument,
-        reusable_buffer: &mut IndexKeyBuffer,
-    ) -> Option<ConflictingRead> {
-        for (
-            index,
-            IndexReads {
-                fields,
-                intervals,
-                stack_traces,
-            },
-        ) in iter_indexes_for_table(&self.indexed, document.id().tablet_id)
-        {
-            let index_key = document.index_key(fields, reusable_buffer);
-            if intervals.contains(index_key) {
-                let stack_traces = stack_traces.as_ref().map(|st| {
-                    st.iter()
-                        .filter_map(|(interval, trace)| {
-                            if interval.contains(index_key) {
-                                Some(trace.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                });
-                return Some(ConflictingRead {
-                    index: index.clone(),
-                    id: document.id(),
-                    stack_traces,
-                });
-            }
-        }
-
+    /// Determine whether a mutation to a document overlaps with the text index
+    /// reads in the read set.
+    pub fn search_overlaps_document(&self, document: &PackedDocument) -> Option<ConflictingRead> {
         for (index, search_reads) in iter_indexes_for_table(&self.search, document.id().tablet_id) {
             if search_reads.overlaps_document(document) {
                 return Some(ConflictingRead {
@@ -181,101 +160,34 @@ impl ReadSet {
         None
     }
 
-    /// writes_overlap_docs is the core logic for
-    /// detecting whether a transaction or subscription intersects a commit.
-    /// If a write transaction intersects, it will be retried to maintain
-    /// serializability. If a subscription intersects, it will be rerun and the
-    /// result sent to all clients.
-    #[fastrace::trace]
-    pub fn writes_overlap_docs<'a>(
-        &self,
-        updates: impl Iterator<
-            Item = (
-                &'a Timestamp,
-                impl Iterator<Item = &'a (ResolvedDocumentId, PackedDocumentUpdate)>,
-                &'a WriteSource,
-            ),
-        >,
-    ) -> Option<ConflictingReadWithWriteSource> {
-        let mut buffer = IndexKeyBuffer::new();
-        for (update_ts, updates, write_source) in updates {
-            for (_, update) in updates {
-                if let Some(ref document) = update.new_document
-                    && let Some(conflicting_read) = self.overlaps_document(document, &mut buffer)
-                {
-                    return Some(ConflictingReadWithWriteSource {
-                        read: conflicting_read,
-                        write_source: write_source.clone(),
-                        write_ts: *update_ts,
-                    });
-                }
-                if let Some(ref prev_value) = update.old_document
-                    && let Some(conflicting_read) = self.overlaps_document(prev_value, &mut buffer)
-                {
-                    return Some(ConflictingReadWithWriteSource {
-                        read: conflicting_read,
-                        write_source: write_source.clone(),
-                        write_ts: *update_ts,
-                    });
-                }
-            }
-        }
-        None
-    }
-
     /// Check whether any writes in the given index maps in the timestamp
-    /// range `[from, to]` conflict with this read set. More efficient than
-    /// `writes_overlap_docs` because it looks up only indexes that were read.
+    /// range `(from, to]` conflict with this read set. Only looks up indexes
+    /// that were read.
     #[fastrace::trace]
-    pub fn writes_overlap_by_index(
+    pub(crate) fn writes_overlap_by_index(
         &self,
-        by_database_index: &OrdMap<
-            TabletIndexName,
-            OrdMap<Timestamp, (WithHeapSize<Vector<DatabaseIndexWrite>>, WriteSource)>,
-        >,
-        by_search_index: &OrdMap<
-            TabletIndexName,
-            OrdMap<Timestamp, (WithHeapSize<Vector<TextIndexWrite>>, WriteSource)>,
-        >,
+        by_database_index: &OrdMap<TabletIndexName, OrdSet<ArcWriteInIndex<DatabaseIndexWrite>>>,
+        by_search_index: &OrdMap<TabletIndexName, OrdSet<ArcWriteInIndex<TextIndexWrite>>>,
         from: Timestamp,
         to: Timestamp,
     ) -> Option<ConflictingReadWithWriteSource> {
         // Check database index reads
-        for (
-            index,
-            IndexReads {
-                intervals,
-                stack_traces,
-                ..
-            },
-        ) in self.indexed.iter()
-        {
+        for (index, index_reads) in self.indexed.iter() {
             let Some(updates) = by_database_index.get(index) else {
                 continue;
             };
-            for (ts, (doc_updates, write_source)) in updates.range(from..=to) {
-                for update in doc_updates.iter() {
+            for write in updates.range((Bound::Excluded(from), Bound::Included(to))) {
+                for update in &write.index_updates {
                     for index_key in update.update.iter() {
-                        if intervals.contains(index_key) {
-                            let stack_traces = stack_traces.as_ref().map(|st| {
-                                st.iter()
-                                    .filter_map(|(interval, trace)| {
-                                        if interval.contains(index_key) {
-                                            Some(trace.clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
-                            });
+                        if index_reads.intervals.contains(index_key) {
                             return Some(ConflictingReadWithWriteSource {
                                 read: ConflictingRead {
                                     index: index.clone(),
                                     id: update.document_id,
-                                    stack_traces,
+                                    stack_traces: index_reads.stack_traces_covering(index_key),
                                 },
-                                write_source: write_source.clone(),
-                                write_ts: *ts,
+                                write_source: write.write_source.clone(),
+                                write_ts: write.ts,
                             });
                         }
                     }
@@ -287,8 +199,8 @@ impl ReadSet {
             let Some(updates) = by_search_index.get(index) else {
                 continue;
             };
-            for (ts, (doc_updates, write_source)) in updates.range(from..=to) {
-                for update in doc_updates.iter() {
+            for write in updates.range((Bound::Excluded(from), Bound::Included(to))) {
+                for update in &write.index_updates {
                     for value in update.update.iter() {
                         if search_reads.overlaps_search_index_key_value(value) {
                             return Some(ConflictingReadWithWriteSource {
@@ -297,8 +209,8 @@ impl ReadSet {
                                     id: update.document_id,
                                     stack_traces: None,
                                 },
-                                write_source: write_source.clone(),
-                                write_ts: *ts,
+                                write_source: write.write_source.clone(),
+                                write_ts: write.ts,
                             });
                         }
                     }
@@ -369,7 +281,7 @@ impl TransactionReadSet {
         &mut self,
         index_name: TabletIndexName,
         fields: IndexedFields,
-        intervals: impl IntoIterator<Item = Interval>,
+        mut intervals: impl IntoIterator<Item = Interval> + 'static,
     ) -> (usize, usize) {
         self.read_set.indexed.mutate_entry_or_insert_with(
             index_name.clone(),
@@ -391,11 +303,24 @@ impl TransactionReadSet {
                 );
 
                 let range_num_intervals_before = range_set.len();
-                for interval in intervals {
+                if range_set.is_empty()
+                    && let Some(intervals) =
+                        (&mut intervals as &mut dyn Any).downcast_mut::<IntervalSet>()
+                {
+                    // optimization: reuse the existing IntervalSet
+                    *range_set = mem::take(intervals);
                     if let Some(stack_traces) = stack_traces.as_mut() {
-                        stack_traces.push((interval.clone(), StackTrace::new()));
+                        for interval in range_set.iter() {
+                            stack_traces.push((interval, StackTrace::new()));
+                        }
                     }
-                    range_set.add(interval);
+                } else {
+                    for interval in intervals {
+                        if let Some(stack_traces) = stack_traces.as_mut() {
+                            stack_traces.push((interval.clone(), StackTrace::new()));
+                        }
+                        range_set.add(interval);
+                    }
                 }
                 let range_num_intervals_after = range_set.len();
 
@@ -427,7 +352,7 @@ impl TransactionReadSet {
     ) {
         let (index_reads, search_reads) = reads.consume();
         for (index_name, index_reads) in index_reads {
-            self._record_indexed(index_name, index_reads.fields, index_reads.intervals.iter());
+            self._record_indexed(index_name, index_reads.fields, index_reads.intervals);
         }
         for (index_name, search_reads) in search_reads {
             self.record_search(index_name, search_reads);
@@ -451,13 +376,13 @@ impl TransactionReadSet {
         let skip_logging_usage = table_name.is_system();
         usage_tracker.track_database_egress(
             component_path.clone(),
-            table_name.to_string(),
+            &table_name,
             document_size as u64,
             skip_logging_usage,
         );
         usage_tracker.track_database_egress_v2(
             component_path.clone(),
-            table_name.to_string(),
+            &table_name,
             document_size as u64,
             table_name.is_system(),
         );
@@ -466,13 +391,13 @@ impl TransactionReadSet {
         {
             usage_tracker.track_virtual_table_egress(
                 component_path.clone(),
-                virtual_table_name.to_string(),
+                virtual_table_name,
                 document_size as u64,
             );
         }
         usage_tracker.track_database_egress_rows(
             component_path,
-            table_name.to_string(),
+            &table_name,
             1,
             skip_logging_usage,
         );

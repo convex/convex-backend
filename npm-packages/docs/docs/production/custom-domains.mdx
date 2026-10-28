@@ -20,6 +20,12 @@ When you see that checkmark, your backend will now also serve traffic from that
 domain. The first request may take up to a minute because Convex will have to
 mint a new SSL certificate.
 
+Convex serves deployments through Cloudflare, so your deployment has baseline
+network-layer DDoS protection whether or not you use a custom domain. To learn
+what's included, what a custom domain changes, and how to add your own
+Cloudflare or Vercel edge, see
+[Abuse Protection](/production/abuse-protection.mdx).
+
 Reach out to support@convex.dev if you have any questions about getting set up!
 
 <ProFeatureUpsell feature="Custom domains" verb="require" />

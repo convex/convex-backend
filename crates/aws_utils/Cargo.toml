@@ -6,16 +6,23 @@ license = "LicenseRef-FSL-1.1-Apache-2.0"
 
 [dependencies]
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-sdk-firehose = { workspace = true }
 aws-sdk-s3 = { workspace = true }
+aws-smithy-runtime = { workspace = true }
 aws-smithy-types-convert = { workspace = true }
 aws-types = { workspace = true }
 cmd_util = { workspace = true }
 futures = { workspace = true }
+parking_lot = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true

@@ -1,7 +1,12 @@
 use std::{
-    borrow::Cow,
+    borrow::{
+        Borrow,
+        Cow,
+    },
     cmp::Ordering,
     collections::{
+        btree_map,
+        btree_set::UnorderedKeyError,
         BTreeMap,
         BTreeSet,
         VecDeque,
@@ -19,6 +24,7 @@ use std::{
         size_of,
     },
     ops::{
+        Bound,
         Deref,
         RangeBounds,
     },
@@ -27,7 +33,6 @@ use std::{
 };
 
 use compact_str::CompactString;
-use imbl::Vector;
 use serde_json::Value as JsonValue;
 use sync_types::{
     CanonicalizedUdfPath,
@@ -122,10 +127,7 @@ impl<T: Ord> Ord for WithHeapSize<T> {
 
 impl<T: Debug> Debug for WithHeapSize<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WithHeapSize")
-            .field("inner", &self.inner)
-            .field("elements_heap_size", &self.elements_heap_size)
-            .finish()
+        Debug::fmt(&self.inner, f)
     }
 }
 
@@ -247,69 +249,9 @@ impl<T: HeapSize> From<WithHeapSize<Vec<T>>> for Vec<T> {
     }
 }
 
-impl<T: HeapSize> ElementsHeapSize for Vector<T> {
-    const RECALCULATE_AFTER_CLONE: bool = false;
-
-    fn elements_heap_size(&self) -> usize {
-        self.iter().map(|v| v.heap_size()).sum::<usize>()
-    }
-}
-
 impl<T: HeapSize> HeapSize for WithHeapSize<Vec<T>> {
     fn heap_size(&self) -> usize {
         self.capacity() * mem::size_of::<T>() + self.elements_heap_size
-    }
-}
-
-impl<T: HeapSize + Clone> WithHeapSize<imbl::Vector<T>> {
-    pub fn push_back(&mut self, value: T) {
-        self.elements_heap_size += value.heap_size();
-        self.inner.push_back(value)
-    }
-
-    pub fn push_front(&mut self, value: T) {
-        self.elements_heap_size += value.heap_size();
-        self.inner.push_front(value)
-    }
-
-    fn remove_from_heap_size(&mut self, element: &Option<T>) {
-        if let Some(value) = element {
-            self.elements_heap_size -= value.heap_size();
-        }
-    }
-
-    pub fn pop_front(&mut self) -> Option<T> {
-        let result = self.inner.pop_front();
-        self.remove_from_heap_size(&result);
-        result
-    }
-
-    pub fn pop_back(&mut self) -> Option<T> {
-        let result = self.inner.pop_back();
-        self.remove_from_heap_size(&result);
-        result
-    }
-}
-
-impl<T: HeapSize + Clone> HeapSize for WithHeapSize<Vector<T>> {
-    fn heap_size(&self) -> usize {
-        self.elements_heap_size
-    }
-}
-
-impl<T: HeapSize + Clone> From<Vector<T>> for WithHeapSize<Vector<T>> {
-    fn from(value: Vector<T>) -> Self {
-        let elements_heap_size = value.elements_heap_size();
-        Self {
-            inner: value,
-            elements_heap_size,
-        }
-    }
-}
-
-impl<T: HeapSize + Clone> From<WithHeapSize<Vector<T>>> for Vector<T> {
-    fn from(value: WithHeapSize<Vector<T>>) -> Self {
-        value.inner
     }
 }
 
@@ -408,7 +350,7 @@ impl<T: HeapSize, U: HeapSize, V: HeapSize> HeapSize for (T, U, V) {
     }
 }
 
-impl<T: HeapSize> HeapSize for Arc<T> {
+impl<T: HeapSize + ?Sized> HeapSize for Arc<T> {
     #[inline]
     fn heap_size(&self) -> usize {
         // this is not entirely correct in the presence of sharing
@@ -501,6 +443,13 @@ impl HeapSize for UserIdentityAttributes {
 }
 
 impl HeapSize for &str {
+    #[inline]
+    fn heap_size(&self) -> usize {
+        self.len()
+    }
+}
+
+impl HeapSize for str {
     #[inline]
     fn heap_size(&self) -> usize {
         self.len()
@@ -694,6 +643,17 @@ impl<K: HeapSize + Ord, V: HeapSize> WithHeapSize<BTreeMap<K, V>> {
         result
     }
 
+    pub fn upper_bound_mut<'a, Q>(&'a mut self, bound: Bound<&Q>) -> WrappedCursorMut<'a, K, V>
+    where
+        K: Borrow<Q> + Ord,
+        Q: Ord + ?Sized,
+    {
+        WrappedCursorMut {
+            elements_heap_size: &mut self.elements_heap_size,
+            cursor: self.inner.upper_bound_mut(bound),
+        }
+    }
+
     /// Alternative to entry.or_insert_with() that requires passing a function
     /// to modify the entry. The more limiting API makes it easier for us
     /// easy to track the size after the mutation.
@@ -703,11 +663,11 @@ impl<K: HeapSize + Ord, V: HeapSize> WithHeapSize<BTreeMap<K, V>> {
         F: FnOnce(&mut V) -> T,
     {
         let value = match self.inner.entry(key) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
+            btree_map::Entry::Vacant(entry) => {
                 self.elements_heap_size += entry.key().heap_size();
                 entry.insert(default())
             },
-            std::collections::btree_map::Entry::Occupied(mut entry) => {
+            btree_map::Entry::Occupied(mut entry) => {
                 let value = entry.get_mut();
                 self.elements_heap_size -= value.heap_size();
                 entry.into_mut()
@@ -742,6 +702,69 @@ impl<K: HeapSize + Ord, V: HeapSize> WithHeapSize<BTreeMap<K, V>> {
             },
             None => mutation(None),
         }
+    }
+}
+
+pub struct WrappedCursorMut<'a, K, V> {
+    elements_heap_size: &'a mut usize,
+    cursor: btree_map::CursorMut<'a, K, V>,
+}
+
+impl<'a, K, V> WrappedCursorMut<'a, K, V> {
+    pub fn peek_prev(&mut self) -> Option<(&K, &V)> {
+        self.cursor.peek_prev().map(|(k, v)| (k, v as _))
+    }
+
+    pub fn peek_next(&mut self) -> Option<(&K, &V)> {
+        self.cursor.peek_next().map(|(k, v)| (k, v as _))
+    }
+
+    pub fn remove_prev(&mut self) -> Option<(K, V)>
+    where
+        K: Ord + HeapSize,
+        V: HeapSize,
+    {
+        let (k, v) = self.cursor.remove_prev()?;
+        *self.elements_heap_size -= k.heap_size();
+        *self.elements_heap_size -= v.heap_size();
+        Some((k, v))
+    }
+
+    pub fn remove_next(&mut self) -> Option<(K, V)>
+    where
+        K: Ord + HeapSize,
+        V: HeapSize,
+    {
+        let (k, v) = self.cursor.remove_next()?;
+        *self.elements_heap_size -= k.heap_size();
+        *self.elements_heap_size -= v.heap_size();
+        Some((k, v))
+    }
+
+    pub fn insert_after(&mut self, k: K, v: V) -> Result<(), UnorderedKeyError>
+    where
+        K: Ord + HeapSize,
+        V: HeapSize,
+    {
+        let heap_size = k.heap_size() + v.heap_size();
+        let r = self.cursor.insert_after(k, v);
+        if r.is_ok() {
+            *self.elements_heap_size += heap_size;
+        }
+        r
+    }
+
+    pub fn insert_before(&mut self, k: K, v: V) -> Result<(), UnorderedKeyError>
+    where
+        K: Ord + HeapSize,
+        V: HeapSize,
+    {
+        let heap_size = k.heap_size() + v.heap_size();
+        let r = self.cursor.insert_before(k, v);
+        if r.is_ok() {
+            *self.elements_heap_size += heap_size;
+        }
+        r
     }
 }
 

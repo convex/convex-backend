@@ -35,7 +35,7 @@ async function main({
     teamId = requestedTeamId;
   }
 
-  const projectsResponse = await client.GET("/teams/{team_id}/list_projects", {
+  const projectsResponse = await client.GET("/teams/{team_id}/projects", {
     params: {
       path: {
         team_id: teamId,
@@ -49,7 +49,7 @@ async function main({
     );
   }
 
-  console.log(`${projectsResponse.data.length} projects`);
+  console.log(`${projectsResponse.data.items.length} projects`);
 
   const createProjectResponse = await client.POST(
     "/teams/{team_id}/create_project",

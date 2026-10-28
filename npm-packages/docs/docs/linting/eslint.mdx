@@ -1,0 +1,177 @@
+---
+title: "ESLint"
+sidebar_position: 100
+description: "Set up the Convex lint rules with ESLint"
+---
+
+The Convex lint rules are an [ESLint](https://eslint.org) plugin, so ESLint
+supports every rule and autofix.
+
+## Setup
+
+Install the plugin with:
+
+```sh
+npm i @convex-dev/eslint-plugin --save-dev
+```
+
+For **ESLint 9+** (flat config, using `eslint.config.js`), add this to your
+`eslint.config.js` file:
+
+```ts
+import { defineConfig } from "eslint/config";
+
+import convexPlugin from "@convex-dev/eslint-plugin";
+
+export default defineConfig([
+  // Other configurations
+
+  ...convexPlugin.configs.recommended,
+]);
+```
+
+ESLint needs a TypeScript parser to read your Convex functions. If your config
+doesn’t set one up yet, use the config in
+[Type-aware linting](#type-aware-linting) below.
+
+<Details summary={<>If you’re using the deprecated <code>.eslintrc.js</code> format</>}>
+
+Install these two libraries:
+
+```sh
+npm i @typescript-eslint/eslint-plugin @convex-dev/eslint-plugin --save-dev
+```
+
+In `.eslintrc.js`, add:
+
+```js
+module.exports = {
+  extends: [
+    // Other configurations
+    "plugin:@typescript-eslint/recommended",
+    "plugin:@convex-dev/recommended",
+  ],
+  ignorePatterns: ["node_modules/", "dist/", "build/"],
+};
+```
+
+</Details>
+
+<Details summary={<>If your Convex functions are in a directory other than <code>convex</code></>}>
+
+By default, the Convex ESLint plugin will only apply rules in the `convex`
+directory.
+
+If you’re
+[customizing the Convex directory location](/config/convex.json#changing-the-convex-folder-name-or-location),
+here’s how to adapt your ESLint configuration:
+
+```ts
+// eslint.config.js
+import { defineConfig } from "eslint/config";
+
+import convexPlugin from "@convex-dev/eslint-plugin";
+
+const recommendedConfig = convexPlugin.configs.recommended[0];
+const recommendedRules = recommendedConfig.rules;
+
+export default defineConfig([
+  // Other configurations go here...
+
+  // Custom configuration with modified directory pattern
+  {
+    files: ["**/src/convex/**/*.ts"],
+    plugins: {
+      "@convex-dev": convexPlugin,
+    },
+    rules: recommendedRules,
+  },
+]);
+```
+
+</Details>
+
+<Details summary={<>If you’re using the <code>next lint</code> command from Next.js</>}>
+
+For `next lint` to run ESLint on your `convex` directory you need to add that
+directory to the default set of directories. Add this section to your
+`next.config.ts`:
+
+```ts
+const nextConfig: NextConfig = {
+  /* other options here */
+
+  eslint: {
+    dirs: ["pages", "app", "components", "lib", "src", "convex"],
+  },
+};
+```
+
+</Details>
+
+## Type-aware linting
+
+Some rules use TypeScript type information to give more precise results:
+[`explicit-table-ids`](/linting/overview#explicit-table-ids) reads the table
+name from `Id<"tableName">` types so it can fix calls for you, and
+[`no-collect-in-query`](/linting/overview#no-collect-in-query) (off by default)
+suggests replacements. The rules still work without it, but they fall back to
+matching code by name.
+
+To turn it on, set up
+[typed linting](https://typescript-eslint.io/getting-started/typed-linting/)
+with typescript-eslint:
+
+```sh
+npm i typescript-eslint --save-dev
+```
+
+```ts
+// eslint.config.js
+import { defineConfig } from "eslint/config";
+import tseslint from "typescript-eslint";
+
+import convexPlugin from "@convex-dev/eslint-plugin";
+
+export default defineConfig([
+  // Other configurations
+
+  { ignores: ["convex/_generated/**"] },
+  {
+    files: ["**/*.ts"],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+  },
+  ...convexPlugin.configs.recommended,
+]);
+```
+
+Type-aware linting is slower, since ESLint has to type check your code as it
+lints it.
+
+## Turning on more rules
+
+The recommended config leaves a few rules off, like
+[`no-collect-in-query`](/linting/overview#no-collect-in-query) and
+[`require-access-control`](/linting/overview#require-access-control). To turn
+one on, add it after the recommended config:
+
+```ts
+// eslint.config.js
+export default defineConfig([
+  // Other configurations
+
+  ...convexPlugin.configs.recommended,
+  {
+    files: ["**/convex/**/*.ts"],
+    rules: {
+      "@convex-dev/no-collect-in-query": "error",
+    },
+  },
+]);
+```

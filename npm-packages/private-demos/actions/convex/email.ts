@@ -1,12 +1,12 @@
 "use node";
-import { action } from "./_generated/server";
+import { action, env } from "./_generated/server";
 
 // Require:
 const postmark = require("postmark");
 
 export default action(async (_, { email }: { email: string }) => {
   // test client configured by Tom, don't use in automated tests (we'll get cut off)
-  const client = new postmark.ServerClient(process.env.POSTMARK_SERVER_TOKEN);
+  const client = new postmark.ServerClient(env.POSTMARK_SERVER_TOKEN);
 
   const result = await client.sendEmail({
     From: "tom@convex.dev",

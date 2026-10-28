@@ -58,8 +58,7 @@ export function useTableShapes(): {
     fetcher,
     {
       use: [deploymentAuthMiddleware],
-      refreshWhenHidden: true,
-      refreshInterval: 5000,
+      refreshInterval: 60000,
     },
   );
   return {

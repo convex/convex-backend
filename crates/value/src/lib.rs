@@ -1,10 +1,8 @@
-#![feature(try_blocks)]
+#![feature(portable_simd)]
+#![feature(btree_cursors)]
 #![feature(try_blocks_heterogeneous)]
 #![feature(never_type)]
-#![feature(type_alias_impl_trait)]
-#![feature(iter_from_coroutine)]
 #![feature(iterator_try_collect)]
-#![feature(coroutines)]
 #![feature(impl_trait_in_assoc_type)]
 
 mod array;
@@ -19,6 +17,7 @@ pub mod id_v6;
 mod json;
 pub mod numeric;
 mod object;
+mod pending;
 pub mod serde;
 pub mod serialized_args_ext;
 pub mod sha256;
@@ -94,7 +93,13 @@ pub use crate::{
         ConvexObject,
         MAX_OBJECT_FIELDS,
     },
+    pending::{
+        PendingValue,
+        COMMIT_TS_FIELD,
+        MAX_COMMIT_TS,
+    },
     size::{
+        array_size,
         Size,
         MAX_NESTING,
         MAX_SIZE,

@@ -6,7 +6,7 @@ Run a local backend with components enabled:
 just run-local-backend
 ```
 
-Run `convex dev` against the local backend (be sure to `just rush build` if
+Run `convex dev` against the local backend (be sure to `just turbo run build` if
 needed):
 
 ```bash

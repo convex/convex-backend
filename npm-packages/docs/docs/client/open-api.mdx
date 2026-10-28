@@ -4,6 +4,7 @@ sidebar_label: "OpenAPI"
 sidebar_position: 325
 ---
 
+import Config from "!!raw-loader!@site/../private-demos/snippets/convex/convex.config.ts";
 import Load from "!!raw-loader!@site/../private-demos/snippets/convex/goClientExample.ts";
 import Go from "!!raw-loader!@site/../private-demos/snippets/goExample.txt";
 
@@ -62,11 +63,16 @@ npm i openapi-generator-cli
 npx openapi-generator-cli generate -i convex-spec.yaml -g go -o convex_client
 ```
 
-These snippets include two different files:
+These snippets include three different files:
 
+- `convex/convex.config.ts` -
+  [declares](/production/environment-variables#declaring) the
+  `CONVEX_AUTH_TOKEN` environment variable that `loadOne` checks
 - `convex/load.ts` - contains Convex function definitions
 - `convex.go` - contains `Go` code that uses a generated, type-safe `HTTP`
   client.
+
+<Snippet title="convex/convex.config.ts" source={Config} />
 
 <Snippet title="convex/load.ts" source={Load} />
 

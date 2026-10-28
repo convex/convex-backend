@@ -158,7 +158,7 @@ export function FunctionLogs({
   }
 
   return (
-    <div className="flex h-full w-full max-w-full min-w-0 grow flex-col gap-2 overflow-hidden">
+    <div className="flex size-full max-w-full min-w-0 grow flex-col gap-2 overflow-hidden">
       <div className="flex min-w-0 shrink-0">
         <LogToolbar
           functions={[functionId]}

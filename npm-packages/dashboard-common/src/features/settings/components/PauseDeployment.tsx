@@ -11,6 +11,7 @@ import {
   PermissionsContext,
 } from "@common/lib/deploymentContext";
 import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
+import { deploymentIdentityLabel } from "@common/lib/deploymentTypeColorClasses";
 import { usePauseDeployment, useUnpauseDeployment } from "../lib/api";
 
 // TODO insert link to docs here
@@ -36,6 +37,9 @@ export function PauseDeployment({
   const { useIsOperationAllowed } = useContext(PermissionsContext);
   const deployment = useCurrentDeployment();
   const deploymentType = deployment?.deploymentType ?? "prod";
+  const deploymentIdentity = deployment
+    ? deploymentIdentityLabel(deployment)
+    : null;
   const [paused, setPaused] = useState(false);
   const [showConfirmation, setShowConfirmation] = useState(false);
 
@@ -91,7 +95,6 @@ export function PauseDeployment({
               onClose={() => setShowConfirmation(false)}
               onConfirm={() => Promise.resolve(toggle())}
               confirmText={
-                // TODO(ENG-10340) Include the deployment ref here
                 changeVerb(paused) +
                 (deploymentType === "prod" ? " Production" : "")
               }
@@ -99,12 +102,16 @@ export function PauseDeployment({
               dialogBody={
                 <>
                   Are you sure you want to {changeVerb(paused).toLowerCase()}{" "}
-                  {/* TODO(ENG-10340) Include the deployment ref here */}
-                  this{" "}
-                  {deploymentType === "prod" ? (
-                    <span className="font-semibold">Production</span>
-                  ) : null}{" "}
-                  deployment?
+                  {deploymentIdentity === null ? (
+                    "this deployment?"
+                  ) : (
+                    <>
+                      <span className="font-semibold">
+                        {deploymentIdentity}
+                      </span>
+                      ?
+                    </>
+                  )}
                 </>
               }
               variant={paused ? undefined : "danger"}

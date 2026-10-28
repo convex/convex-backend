@@ -31,9 +31,14 @@ import {
 import type { DataModel } from "./dataModel.js";
 
 /**
- * Typesafe environment variables declared in `convex.config.ts`.
+ * Typesafe environment variables.
+ *
+ * This includes platform-provided env vars and any variables declared in
+ * `convex.config.ts`.
  */
 type Env = {
+  readonly CONVEX_CLOUD_URL: string;
+  readonly CONVEX_SITE_URL: string;
   readonly THING_I_NEED: string;
 };
 
@@ -113,7 +118,8 @@ export const internalAction: ActionBuilder<DataModel, "internal"> =
  * @returns The wrapped function. Import this function from `convex/http.js` and route it to hook it up.
  */
 export const httpAction: HttpActionBuilder = httpActionGeneric;
-export const env: Env = process.env as unknown as Env;
+export const env: Env = (globalThis as unknown as { process: { env: Env } })
+  .process.env;
 
 /**
  * A set of services for use within Convex query functions.

@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:types": "tsc --noEmit",
-    "prepare": "tshy",
+    "prepublishOnly": "npm run build",
     "test": "vitest run --typecheck",
     "prepack": "node src/scripts/dont-publish-alpha-as-latest.mjs"
   },
@@ -37,10 +37,10 @@
   },
   "peerDependencies": {
     "@tanstack/react-query": "^5.0.0",
-    "convex": "^1.39.1"
+    "convex": "^1.42.3"
   },
   "devDependencies": {
-    "@convex-dev/auth": "^0.0.91",
+    "@convex-dev/auth": "^0.0.94",
     "@convex-dev/eslint-plugin": "workspace:*",
     "@eslint/compat": "~2.0.0",
     "@eslint/eslintrc": "^3",
@@ -53,16 +53,15 @@
     "@types/react-dom": "^18.0.0",
     "@vitejs/plugin-react": "^4.2.1",
     "convex": "workspace:*",
-    "convex-helpers": "^0.1.105",
+    "convex-helpers": "^0.1.129",
     "eslint": "^9.37.0",
-    "eslint-config-prettier": "^10.0.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
     "tshy": "^3.0.0",
     "typescript": "~5.0.3",
     "typescript-eslint": "^8.45.0",
-    "vite": "^6.4.2",
-    "vitest": "^3.2.4"
+    "vite": "^6.4.4",
+    "vitest": "^4.1.0"
   },
   "exports": {
     ".": {

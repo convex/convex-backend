@@ -22,6 +22,7 @@ type UseAuth = () => {
   // We don't use these properties but they should trigger a new token fetch.
   orgId: string | undefined | null;
   orgRole: string | undefined | null;
+  sessionId: string | undefined | null;
   sessionClaims: Record<string, unknown> | undefined | null;
 };
 
@@ -66,6 +67,7 @@ function useUseAuthFromClerk(useAuth: UseAuth) {
           getToken,
           orgId,
           orgRole,
+          sessionId,
           sessionClaims,
         } = useAuth();
         const fetchAccessToken = useCallback(
@@ -91,7 +93,7 @@ function useUseAuthFromClerk(useAuth: UseAuth) {
           // Anything else from the JWT Clerk wants to be reactive goes here too.
           // Clerk's Expo useAuth hook is not memoized so we don't include getToken.
           // eslint-disable-next-line react-hooks/exhaustive-deps
-          [orgId, orgRole],
+          [orgId, orgRole, sessionId],
         );
         return useMemo(
           () => ({

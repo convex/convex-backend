@@ -1,4 +1,5 @@
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
+import { deploymentIdentityLabel } from "@common/lib/deploymentTypeColorClasses";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { useContext } from "react";
 
@@ -23,9 +24,7 @@ export function AuthorizeEditsConfirmationDialog({
           <p>
             You are about to start editing data in{" "}
             <span className="font-semibold">
-              {deployment?.kind === "cloud"
-                ? deployment.reference
-                : deployment?.name}
+              {deployment && deploymentIdentityLabel(deployment)}
             </span>
             .
           </p>

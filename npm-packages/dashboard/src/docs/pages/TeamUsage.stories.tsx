@@ -1,40 +1,34 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { mocked } from "storybook/test";
 import {
-  useUsageTeamSummary,
-  useTokenUsage,
-  useUsageTeamMetricsByFunction,
-  useUsageTeamDailyCallsByTagByProject,
-  useUsageTeamDatabaseBandwidthPerDayByProject,
   useUsageTeamDocumentsPerDayByProject,
-  useUsageTeamDatabaseStoragePerDayByProject,
-  useUsageTeamStoragePerDayByProject,
-  useUsageTeamStorageThroughputDailyByProject,
-  useUsageTeamVectorBandwidthPerDayByProject,
-  useUsageTeamVectorStoragePerDayByProject,
   useUsageTeamDeploymentCountPerDayByProject,
   useUsageTeamDeploymentCountByType,
-  useUsageTeamDatabaseStoragePerDayByTable,
-  useUsageTeamDocumentCountPerDayByTable,
-  useUsageTeamActionComputeDailyByProject,
 } from "hooks/usageMetrics";
 import {
-  useUsageTeamSummaryV2,
-  useUsageTeamMetricsByFunctionV2,
-  useDatabaseStoragePerDayByProjectAndClassV2,
-  useDatabaseStoragePerDayByTableV2,
-  useDocumentCountPerDayByTableV2,
-  useDatabaseIOPerDayByProjectAndClassV2,
-  useFunctionCallsPerDayByProjectAndClassV2,
-  useComputePerDayByProjectV2,
-  useFileStoragePerDayByProjectV2,
-  useSearchStoragePerDayByProjectV2,
-  useDataEgressPerDayByProjectV2,
-  useSearchQueriesPerDayByProjectV2,
-  useDeploymentsByClassAndRegionV2,
-} from "hooks/usageMetricsV2";
+  useUsageTeamSummary,
+  useUsageTeamMetricsByFunction,
+  useDatabaseStoragePerDayByProjectAndClass,
+  useDatabaseStoragePerDayByTable,
+  useDocumentCountPerDayByTable,
+  useDatabaseIOPerDayByProjectAndClass,
+  useFunctionCallsPerDayByProjectAndClass,
+  useComputePerDayByProject,
+  useFileStoragePerDayByProject,
+  useSearchStoragePerDayByProject,
+  useDataEgressPerDayByProject,
+  useSearchQueriesPerDayByProject,
+  useDeploymentsByClassAndRegion,
+  useAiGatewayCostPerDayByProject,
+} from "hooks/usageMetrics";
 import { useCurrentBillingPeriod } from "api/usage";
 import { TeamUsagePage } from "../../pages/t/[team]/settings/usage";
+
+const AI_GATEWAY_COST_ROWS = [...Array(14).keys()].map((dayIndex) => ({
+  ds: `2026-02-${(dayIndex + 8).toString().padStart(2, "0")}`,
+  projectId: 7,
+  value: 0.18 + dayIndex * 0.11 + (dayIndex % 3) * 0.07,
+}));
 
 const meta = {
   component: TeamUsagePage,
@@ -49,78 +43,7 @@ const meta = {
       start: "2026-02-01",
       end: "2026-03-01",
     });
-    mocked(useUsageTeamSummary).mockReturnValue({
-      data: [
-        {
-          region: "aws-us-east-1",
-          functionCalls: 5_000_000,
-          actionCompute: 50,
-          databaseStorage: 5_368_709_120,
-          databaseBandwidth: 5_368_709_120,
-          fileStorage: 10_737_418_240,
-          fileBandwidth: 5_368_709_120,
-          vectorStorage: 107_374_182,
-          vectorBandwidth: 1_073_741_824,
-        },
-      ],
-      error: undefined,
-    });
-    mocked(useTokenUsage).mockReturnValue({
-      data: {
-        centitokensUsed: 5_000_000,
-        centitokensQuota: 2_500_000_000,
-        tokensUsed: 50_000,
-        tokensQuota: 25_000_000,
-        isPaidPlan: true,
-        isTeamDisabled: false,
-        planType: "professional",
-      },
-      error: undefined,
-      isLoading: false,
-      mutate: async () => ({
-        centitokensUsed: 5_000_000,
-        centitokensQuota: 2_500_000_000,
-        tokensUsed: 50_000,
-        tokensQuota: 25_000_000,
-        isPaidPlan: true,
-        isTeamDisabled: false,
-        planType: "professional",
-      }),
-      isValidating: false,
-    });
-    mocked(useUsageTeamMetricsByFunction).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useUsageTeamDailyCallsByTagByProject).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useUsageTeamDatabaseBandwidthPerDayByProject).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
     mocked(useUsageTeamDocumentsPerDayByProject).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useUsageTeamDatabaseStoragePerDayByProject).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useUsageTeamStoragePerDayByProject).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useUsageTeamStorageThroughputDailyByProject).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useUsageTeamVectorBandwidthPerDayByProject).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useUsageTeamVectorStoragePerDayByProject).mockReturnValue({
       data: undefined,
       error: undefined,
     });
@@ -132,68 +55,80 @@ const meta = {
       data: undefined,
       error: undefined,
     });
-    mocked(useUsageTeamDatabaseStoragePerDayByTable).mockReturnValue({
+    mocked(useUsageTeamSummary).mockReturnValue({
+      data: [
+        {
+          deploymentClass: "s16",
+          region: "aws-us-east-1",
+          databaseStorage: 5_368_709_120,
+          databaseIO: 5_368_709_120,
+          functionCalls: 5_000_000,
+          queryMutationCompute: 10,
+          actionComputeConvex: 30,
+          actionComputeNode: 20,
+          fileStorage: 10_737_418_240,
+          searchStorage: 107_374_182,
+          dataEgress: 5_368_709_120,
+          auditLogBandwidth: 268_435_456,
+          searchQueries: 500,
+          actionComputeUser: 30,
+          deploymentCount: 3,
+          pausedDeploymentCount: 1,
+          idleDeploymentCount: 1,
+        },
+      ],
+      error: undefined,
+    });
+    mocked(useUsageTeamMetricsByFunction).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useUsageTeamDocumentCountPerDayByTable).mockReturnValue({
+    mocked(useDatabaseStoragePerDayByProjectAndClass).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useUsageTeamActionComputeDailyByProject).mockReturnValue({
+    mocked(useDatabaseStoragePerDayByTable).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useUsageTeamSummaryV2).mockReturnValue({
+    mocked(useDocumentCountPerDayByTable).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useUsageTeamMetricsByFunctionV2).mockReturnValue({
+    mocked(useDatabaseIOPerDayByProjectAndClass).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useDatabaseStoragePerDayByProjectAndClassV2).mockReturnValue({
+    mocked(useFunctionCallsPerDayByProjectAndClass).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useDatabaseStoragePerDayByTableV2).mockReturnValue({
+    mocked(useComputePerDayByProject).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useDocumentCountPerDayByTableV2).mockReturnValue({
+    mocked(useFileStoragePerDayByProject).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useDatabaseIOPerDayByProjectAndClassV2).mockReturnValue({
+    mocked(useSearchStoragePerDayByProject).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useFunctionCallsPerDayByProjectAndClassV2).mockReturnValue({
+    mocked(useDataEgressPerDayByProject).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useComputePerDayByProjectV2).mockReturnValue({
+    mocked(useSearchQueriesPerDayByProject).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useFileStoragePerDayByProjectV2).mockReturnValue({
+    mocked(useDeploymentsByClassAndRegion).mockReturnValue({
       data: undefined,
       error: undefined,
     });
-    mocked(useSearchStoragePerDayByProjectV2).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useDataEgressPerDayByProjectV2).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useSearchQueriesPerDayByProjectV2).mockReturnValue({
-      data: undefined,
-      error: undefined,
-    });
-    mocked(useDeploymentsByClassAndRegionV2).mockReturnValue({
-      data: undefined,
+    mocked(useAiGatewayCostPerDayByProject).mockReturnValue({
+      data: AI_GATEWAY_COST_ROWS,
       error: undefined,
     });
   },
@@ -203,3 +138,16 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {};
+
+export const AiGateway: Story = {
+  name: "AI Gateway",
+  parameters: {
+    screenshotSelector: '[data-testid="ai-gateway-usage"]',
+    nextjs: {
+      router: {
+        pathname: "/t/[team]/settings/usage",
+        query: { team: "acme", section: "aiGatewayCost" },
+      },
+    },
+  },
+};

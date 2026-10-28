@@ -12,7 +12,7 @@ reminder email at the same time every month, or schedule a backup every
 Saturday.
 
 **Example:**
-[Cron Jobs](https://github.com/get-convex/convex-demos/tree/main/cron-jobs)
+[Cron Jobs](https://github.com/convex/convex-demos/tree/main/cron-jobs)
 
 ## Defining your cron jobs
 
@@ -46,7 +46,44 @@ The third argument is the name of the public function or
   [`crons.daily()`](/api/classes/server.Crons#daily),
   [`crons.weekly()`](/api/classes/server.Crons#weekly),
   [`crons.monthly()`](/api/classes/server.Crons#monthly) provide an alternative
-  syntax for common cron schedules with explicitly named arguments.
+  syntax for common cron schedules with explicitly named arguments. The
+  `minuteUTC` argument is optional. Leave it out and Convex picks a minute for
+  you, spreading runs across the hour.
+
+<Admonition type="info" title="Avoid scheduling on the exact top of the hour">
+
+The top of the hour (minute `0`) is the busiest time on the clock. Apps receive
+the most inbound traffic, webhooks, and scheduled work right at `:00`.
+Scheduling recurring work away from the top of the hour keeps it away from your
+busiest moments and makes it less likely to compete for your app's resources.
+
+The easiest way is to leave `minuteUTC` out and let Convex pick a minute for
+you, spreading runs across the hour. You can also set a specific off-peak minute
+if you need a predictable time.
+
+```ts
+// ❌ Runs at the busiest moment of the hour:
+crons.daily(
+  "send reminder",
+  { hourUTC: 17, minuteUTC: 0 },
+  internal.emails.send,
+);
+
+// ✅ Let Convex pick and spread the minute:
+crons.daily("send reminder", { hourUTC: 17 }, internal.emails.send);
+
+// ✅ Or choose a specific off-peak minute:
+crons.daily(
+  "send reminder",
+  { hourUTC: 17, minuteUTC: 23 },
+  internal.emails.send,
+);
+```
+
+The [`@convex-dev/no-top-of-hour-crons`](/linting/overview#no-top-of-hour-crons)
+lint rule flags schedules pinned to the top of the hour.
+
+</Admonition>
 
 ## Viewing your cron jobs
 

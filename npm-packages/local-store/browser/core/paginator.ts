@@ -8,14 +8,10 @@ import {
   IndexPrefix,
   IndexRangeRequest,
 } from "../../shared/types";
-import {
-  compareKeys,
-  compareValues,
-  maximalKey,
-  minimalKey,
-} from "../../shared/compare";
+import { compareKeys, maximalKey, minimalKey } from "../../shared/compare";
 import { GenericDocument, SchemaDefinition } from "convex/server";
 import { CopyOnWriteLocalStore } from "./localStore";
+import { compareValues } from "convex/values";
 
 export type SerializedRangeExpression = {
   type: "Eq" | "Gt" | "Gte" | "Lt" | "Lte";

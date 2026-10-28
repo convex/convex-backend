@@ -260,6 +260,7 @@ export async function normalizeDevOptions(
     debugNodeApis?: boolean;
     liveComponentSources?: boolean;
     pushAllModules?: boolean;
+    allowUnstagingSchema?: boolean;
     while?: string;
   },
 ): Promise<{
@@ -279,6 +280,7 @@ export async function normalizeDevOptions(
   debugNodeApis: boolean;
   liveComponentSources: boolean;
   pushAllModules: boolean;
+  allowUnstagingSchema: boolean;
 }> {
   if (cmdOptions.runComponent && !cmdOptions.run) {
     return await ctx.crash({
@@ -332,6 +334,7 @@ export async function normalizeDevOptions(
     debugNodeApis: !!cmdOptions.debugNodeApis,
     liveComponentSources: !!cmdOptions.liveComponentSources,
     pushAllModules: !!cmdOptions.pushAllModules,
+    allowUnstagingSchema: !!cmdOptions.allowUnstagingSchema,
   };
 }
 
@@ -463,7 +466,7 @@ Command.prototype.addRunOptions = function () {
       .addOption(
         new Option(
           "--component <path>",
-          "Path to the component in the component tree defined in convex.config.ts.",
+          'Path to the component (e.g. "workflow" or "workflow/workpool")',
         ),
       )
       .addOption(new Option("--live-component-sources").hideHelp())
@@ -495,8 +498,8 @@ Command.prototype.addImportOptions = function () {
       new Option(
         "--replace-all",
         "Replace all existing data in the deployment with the imported tables,\n" +
-          "  deleting tables that don't appear in the import file or the schema,\n" +
-          "  and clearing tables that appear in the schema but not in the import file",
+          "deleting tables that don't appear in the import file or the schema,\n" +
+          "and clearing tables that appear in the schema but not in the import file",
       )
         .conflicts("--append")
         .conflicts("--replace"),
@@ -518,7 +521,7 @@ Command.prototype.addImportOptions = function () {
     .addOption(
       new Option(
         "--component <path>",
-        "Path to the component in the component tree defined in convex.config.ts.",
+        'Path to the component (e.g. "workflow" or "workflow/workpool")',
       ),
     );
 };
@@ -555,7 +558,7 @@ Command.prototype.addDataOptions = function () {
     .addOption(
       new Option(
         "--component <path>",
-        "Path to the component in the component tree defined in convex.config.ts.",
+        'Path to the component (e.g. "workflow" or "workflow/workpool")',
       ),
     )
     .addOption(

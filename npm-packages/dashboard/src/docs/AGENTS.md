@@ -25,6 +25,15 @@ import { Screenshot } from "@site/src/components/Screenshot";
   - Stories under `pages/project/` render pages inside a project.
   - Stories under `pages/project/deployment/` render pages inside a deployment.
 
+## Timestamps
+
+Capture runs in a browser pinned to the `en-US` locale and the `UTC` timezone,
+so a story only needs to freeze `Date.now()` (in `beforeEach`) for its rendered
+times to be identical on every machine. Write mock timestamps as UTC instants
+(`new Date("2026-04-01T09:41:00Z").getTime()`) and read them back as UTC when
+reviewing a screenshot — the local times you see in `just storybook` are your
+own timezone, not what gets captured.
+
 ## Cropping screenshots
 
 Page stories can be cropped to only show specific element(s) using
@@ -34,6 +43,32 @@ Page stories can be cropped to only show specific element(s) using
 export const Default: Story = {
   parameters: {
     screenshotSelector: '[data-testid="table-context-menu"]',
+  },
+};
+```
+
+A story whose content doesn't fit the default 1024x700 capture viewport can
+widen or heighten it with `screenshotViewport: { width, height }`.
+
+### Capturing the command palette
+
+The team and project switchers in the header, and the deployment pill on a
+deployment page, all open the command palette. It portals to `document.body`, so
+query it through `screen` rather than the story canvas, and crop to the trigger
+and the anchored menu together:
+
+```ts
+export const TeamSwitcher: Story = {
+  parameters: {
+    screenshotSelector:
+      '[aria-label="Switch team"], .command-palette--anchored',
+    // The menu's list is min(330px, 40vh) tall, so the default viewport height
+    // clips its last row.
+    screenshotViewport: { width: 1024, height: 1000 },
+  },
+  play: async () => {
+    await userEvent.click(await screen.findByLabelText("Switch team"));
+    await screen.findByText("Create Team…");
   },
 };
 ```
@@ -66,3 +101,26 @@ just generate-docs-screenshots
 
 Then open the changed `.webp` files to visually verify the screenshots look
 correct.
+
+### Regenerating only some screenshots
+
+The command above recaptures every `docs/` story, which is slow. To regenerate
+only the stories you changed, pass a case-insensitive substring of the story
+title as the **first argument** — only stories whose title contains it are
+recaptured:
+
+```sh
+# Recapture only stories whose title contains "UsageLimits"
+just generate-docs-screenshots UsageLimits
+
+# Narrow further with a path-like substring (matches the story title, which is
+# its file path under docs/, e.g. "docs/pages/project/deployment/settings/…")
+just generate-docs-screenshots settings/usagelimits
+```
+
+The substring is matched against the full story title. Use a distinctive part of
+the component or path (e.g. `UsageLimits`, `Data`, `deployment/settings`) so you
+don't accidentally match unrelated stories. When a filter is passed, the other
+screenshots and their manifest entries are left untouched (no stale cleanup
+runs), so it's safe to iterate on one screenshot. Omit the argument to
+regenerate everything before committing.

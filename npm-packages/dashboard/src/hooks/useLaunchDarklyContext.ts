@@ -6,6 +6,7 @@ import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { useProfile } from "api/profile";
 import { useCurrentTeam } from "api/teams";
+import { useTeamOrbSubscription } from "api/billing";
 import { useCurrentProject } from "api/projects";
 import { useCurrentDeployment } from "api/deployments";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
@@ -20,6 +21,10 @@ export const useLDContext = () => {
   const profile = useProfile();
 
   const project = useCurrentProject();
+
+  // The subscription loads asynchronously; until it's available, the team's
+  // plan type is left undefined and re-identified once it loads.
+  const { subscription } = useTeamOrbSubscription(team?.id);
 
   return useMemo(() => {
     if (
@@ -46,6 +51,7 @@ export const useLDContext = () => {
         key: team.id.toString(),
         name: team.name,
         slug: team.slug,
+        planType: subscription?.plan.planType,
       };
     }
     if (project) {
@@ -65,6 +71,7 @@ export const useLDContext = () => {
     profile,
     team,
     project,
+    subscription,
   ]);
 };
 

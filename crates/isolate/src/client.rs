@@ -8,6 +8,10 @@ use std::{
     env,
     pin::pin,
     sync::{
+        atomic::{
+            AtomicUsize,
+            Ordering,
+        },
         Arc,
         Once,
     },
@@ -18,18 +22,20 @@ use ::metrics::{
     IntoLabel,
     Timer,
 };
+use anyhow::Context as _;
 use async_trait::async_trait;
 use common::{
     auth::AuthConfig,
     backoff::Backoff,
     bootstrap_model::components::definition::ComponentDefinitionMetadata,
     codel_queue::{
-        new_codel_queue_async,
+        CoDelQueue,
         CoDelQueueReceiver,
         CoDelQueueSender,
         ExpiredInQueue,
     },
     components::{
+        CanonicalizedComponentModulePath,
         ComponentDefinitionPath,
         ComponentName,
         Resource,
@@ -49,11 +55,12 @@ use common::{
     },
     knobs::{
         ANALYZE_CONCURRENCY,
-        FUNRUN_ISOLATE_ACTIVE_THREADS,
         HEAP_WORKER_REPORT_INTERVAL_SECONDS,
         ISOLATE_IDLE_TIMEOUT,
         ISOLATE_MAX_LIFETIME,
         ISOLATE_MAX_USER_HEAP_SIZE,
+        ISOLATE_QUEUE_CONGESTED_TIMEOUT,
+        ISOLATE_QUEUE_IDLE_TIMEOUT,
         ISOLATE_QUEUE_SIZE,
         REUSE_ISOLATES,
         V8_THREADS,
@@ -81,7 +88,6 @@ use database::{
 };
 use deno_core::v8::{
     self,
-    scope,
     V8,
 };
 use errors::{
@@ -91,13 +97,23 @@ use errors::{
 use fastrace::{
     func_path,
     future::FutureExt as _,
+    local::LocalSpan,
+    Event,
 };
-use file_storage::TransactionalFileStorage;
+use file_storage::{
+    FileDownloads,
+    TransactionalFileStorage,
+};
 use futures::{
-    select_biased,
+    future::{
+        self,
+        Join,
+        Ready,
+    },
     stream::{
         self,
         FuturesUnordered,
+        PollNext,
         StreamExt,
     },
     TryStreamExt as _,
@@ -128,7 +144,11 @@ use tokio::sync::{
     mpsc,
     oneshot,
 };
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::{
+    ReceiverStream,
+    UnboundedReceiverStream,
+};
+use tracing::Instrument as _;
 use udf::{
     validation::{
         ValidatedHttpPath,
@@ -146,30 +166,34 @@ use value::identifier::Identifier;
 
 use crate::{
     concurrency_limiter::ConcurrencyLimiter,
+    context_cache::{
+        CachedContexts,
+        ContextCache,
+    },
     isolate::{
         Isolate,
         IsolateHeapStats,
     },
-    isolate_worker::FunctionRunnerIsolateWorker,
     metrics::{
         self,
-        create_context_timer,
         log_aggregated_heap_stats,
         log_pool_max,
         log_pool_running_count,
         log_worker_stolen,
         queue_timer,
+        rejected_before_execution_error,
+        RejectedBeforeExecutionReason,
     },
-    module_cache::ModuleCache,
+    module_cache::{
+        ModuleCache,
+        V8ModuleSource,
+    },
+    ConcurrencyPermit,
 };
-
-// We gather prometheus stats every 30 seconds, so we should make sure we log
-// active permits more frequently than that.
-const ACTIVE_CONCURRENCY_PERMITS_LOG_FREQUENCY: Duration = Duration::from_secs(10);
 
 pub const PAUSE_RECREATE_CLIENT: &str = "recreate_client";
 pub const PAUSE_REQUEST: &str = "pause_request";
-pub const NO_AVAILABLE_WORKERS: &str = "There are no available workers to process the request";
+pub const NO_AVAILABLE_WORKERS: &str = "There is no capacity available to run this function";
 
 #[derive(Clone)]
 pub struct IsolateConfig {
@@ -180,7 +204,7 @@ pub struct IsolateConfig {
     // allows us to set an upper bound to it that we use for tests.
     max_user_timeout: Option<Duration>,
 
-    limiter: ConcurrencyLimiter,
+    pub(crate) limiter: ConcurrencyLimiter,
 }
 
 impl IsolateConfig {
@@ -192,6 +216,10 @@ impl IsolateConfig {
         }
     }
 
+    pub fn max_user_timeout(&self) -> Option<Duration> {
+        self.max_user_timeout
+    }
+
 }
 
 pub struct UdfRequest<RT: Runtime> {
@@ -201,6 +229,8 @@ pub struct UdfRequest<RT: Runtime> {
     pub unix_timestamp: UnixTimestamp,
     pub journal: QueryJournal,
     pub context: ExecutionContext,
+    pub environment_data: EnvironmentData<RT>,
+    pub file_downloads: FileDownloads,
 }
 
 pub struct HttpActionRequest<RT: Runtime> {
@@ -210,6 +240,7 @@ pub struct HttpActionRequest<RT: Runtime> {
     pub transaction: Transaction<RT>,
     pub identity: Identity,
     pub context: ExecutionContext,
+    pub environment_data: EnvironmentData<RT>,
 }
 
 pub struct ActionRequest<RT: Runtime> {
@@ -217,6 +248,7 @@ pub struct ActionRequest<RT: Runtime> {
     pub transaction: Transaction<RT>,
     pub identity: Identity,
     pub context: ExecutionContext,
+    pub environment_data: EnvironmentData<RT>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -247,12 +279,28 @@ impl<RT: Runtime> Request<RT> {
             parent_trace,
         }
     }
+
+    pub fn module(&self) -> Option<CanonicalizedComponentModulePath> {
+        let function_path = match &self.inner {
+            RequestType::Udf { request, .. } => request.path_and_args.path(),
+            RequestType::Action { request, .. } => request.params.path_and_args.path(),
+            RequestType::HttpAction { request, .. } => request.http_module_path.path(),
+            RequestType::Analyze { .. }
+            | RequestType::EvaluateSchema { .. }
+            | RequestType::EvaluateAuthConfig { .. }
+            | RequestType::EvaluateAppDefinitions { .. }
+            | RequestType::EvaluateComponentInitializer { .. } => return None,
+        };
+        Some(CanonicalizedComponentModulePath {
+            component: function_path.component,
+            module_path: function_path.udf_path.module().clone(),
+        })
+    }
 }
 
 pub enum RequestType<RT: Runtime> {
     Udf {
         request: UdfRequest<RT>,
-        environment_data: EnvironmentData<RT>,
         response: oneshot::Sender<anyhow::Result<(Transaction<RT>, FunctionOutcome)>>,
         queue_timer: Timer<VMHistogram>,
         rng_seed: [u8; 32],
@@ -262,7 +310,6 @@ pub enum RequestType<RT: Runtime> {
     },
     Action {
         request: ActionRequest<RT>,
-        environment_data: EnvironmentData<RT>,
         response: oneshot::Sender<anyhow::Result<ActionOutcome>>,
         queue_timer: Timer<VMHistogram>,
         action_callbacks: Arc<dyn ActionCallbacks>,
@@ -272,7 +319,6 @@ pub enum RequestType<RT: Runtime> {
     },
     HttpAction {
         request: HttpActionRequest<RT>,
-        environment_data: EnvironmentData<RT>,
         response: oneshot::Sender<anyhow::Result<HttpActionOutcome>>,
         queue_timer: Timer<VMHistogram>,
         action_callbacks: Arc<dyn ActionCallbacks>,
@@ -283,11 +329,10 @@ pub enum RequestType<RT: Runtime> {
     },
     Analyze {
         udf_config: UdfConfig,
-        modules: Arc<BTreeMap<CanonicalizedModulePath, Arc<FullModuleSource>>>,
+        modules: Arc<BTreeMap<CanonicalizedModulePath, Arc<V8ModuleSource>>>,
         to_analyze: CanonicalizedModulePath,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
         response: oneshot::Sender<anyhow::Result<Result<AnalyzedModule, JsError>>>,
-        max_user_heap_size: usize,
     },
     EvaluateSchema {
         schema_bundle: ModuleSource,
@@ -329,7 +374,6 @@ pub trait UdfCallback<RT: Runtime> {
         self,
         client_id: String,
         udf_request: UdfRequest<RT>,
-        environment_data: EnvironmentData<RT>,
         rng_seed: [u8; 32],
         reactor_depth: usize,
     ) -> anyhow::Result<(Transaction<RT>, NestedUdfOutcome)>;
@@ -344,30 +388,17 @@ where
         self,
         client_id: String,
         udf_request: UdfRequest<RT>,
-        environment_data: EnvironmentData<RT>,
         rng_seed: [u8; 32],
         reactor_depth: usize,
     ) -> anyhow::Result<(Transaction<RT>, NestedUdfOutcome)> {
         match self {
             Either::Left(l) => {
-                l.execute_nested_udf(
-                    client_id,
-                    udf_request,
-                    environment_data,
-                    rng_seed,
-                    reactor_depth,
-                )
-                .await
+                l.execute_nested_udf(client_id, udf_request, rng_seed, reactor_depth)
+                    .await
             },
             Either::Right(r) => {
-                r.execute_nested_udf(
-                    client_id,
-                    udf_request,
-                    environment_data,
-                    rng_seed,
-                    reactor_depth,
-                )
-                .await
+                r.execute_nested_udf(client_id, udf_request, rng_seed, reactor_depth)
+                    .await
             },
         }
     }
@@ -375,11 +406,18 @@ where
 
 impl<RT: Runtime> Request<RT> {
     fn expire(self, error: ExpiredInQueue) {
-        let error = anyhow::anyhow!(error).context(ErrorMetadata::overloaded(
-            "ExpiredInQueue",
-            "Too many concurrent requests in a short period of time. Spread out your requests out \
-             over time or throttle them to avoid errors.",
+        let error = anyhow::anyhow!(error).context(rejected_before_execution_error(
+            RejectedBeforeExecutionReason::ExpiredInQueue,
         ));
+        self.send_error(error);
+    }
+
+    fn reject(self, reason: RejectedBeforeExecutionReason) {
+        let error = rejected_before_execution_error(reason).into();
+        self.send_error(error);
+    }
+
+    fn send_error(self, error: anyhow::Error) {
         match self.inner {
             RequestType::Udf { response, .. } => {
                 let _ = response.send(Err(error));
@@ -408,35 +446,16 @@ impl<RT: Runtime> Request<RT> {
         }
     }
 
-    fn reject(self) {
-        let error =
-            ErrorMetadata::rejected_before_execution("WorkerOverloaded", NO_AVAILABLE_WORKERS)
-                .into();
-        match self.inner {
-            RequestType::Udf { response, .. } => {
-                let _ = response.send(Err(error));
-            },
-            RequestType::Action { response, .. } => {
-                let _ = response.send(Err(error));
-            },
-            RequestType::HttpAction { response, .. } => {
-                let _ = response.send(Err(error));
-            },
-            RequestType::Analyze { response, .. } => {
-                let _ = response.send(Err(error));
-            },
-            RequestType::EvaluateSchema { response, .. } => {
-                let _ = response.send(Err(error));
-            },
-            RequestType::EvaluateAuthConfig { response, .. } => {
-                let _ = response.send(Err(error));
-            },
-            RequestType::EvaluateAppDefinitions { response, .. } => {
-                let _ = response.send(Err(error));
-            },
-            RequestType::EvaluateComponentInitializer { response, .. } => {
-                let _ = response.send(Err(error));
-            },
+    fn is_response_closed(&self) -> bool {
+        match &self.inner {
+            RequestType::Udf { response, .. } => response.is_closed(),
+            RequestType::Action { response, .. } => response.is_closed(),
+            RequestType::HttpAction { response, .. } => response.is_closed(),
+            RequestType::Analyze { response, .. } => response.is_closed(),
+            RequestType::EvaluateSchema { response, .. } => response.is_closed(),
+            RequestType::EvaluateAuthConfig { response, .. } => response.is_closed(),
+            RequestType::EvaluateAppDefinitions { response, .. } => response.is_closed(),
+            RequestType::EvaluateComponentInitializer { response, .. } => response.is_closed(),
         }
     }
 }
@@ -448,8 +467,9 @@ impl<RT: Runtime> Clone for IsolateClient<RT> {
             handles: self.handles.clone(),
             scheduler: self.scheduler.clone(),
             sender: self.sender.clone(),
-            concurrency_logger: self.concurrency_logger.clone(),
-            concurrency_limiter: self.concurrency_limiter.clone(),
+            internal_sender: self.internal_sender.clone(),
+            active_workers: self.active_workers.clone(),
+            max_workers: self.max_workers,
         }
     }
 }
@@ -501,6 +521,8 @@ pub fn initialize_v8() {
             // default is 1MiB. Note that the flag is in KiB (https://github.com/v8/v8/blob/master/src/flags/flag-definitions.h#L1594).
             "--stack-size=2048".to_string(),
             "--js-base-64".to_string(),
+            // Planned to be phased out
+            "--no-experimental-wasm-legacy-eh".to_string(),
         ];
         if let Ok(flags) = env::var("ISOLATE_V8_FLAGS") {
             argv.extend(
@@ -532,64 +554,72 @@ pub struct IsolateClient<RT: Runtime> {
     handles: Arc<Mutex<Vec<IsolateWorkerHandle>>>,
     scheduler: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
     sender: CoDelQueueSender<RT, Request<RT>>,
-    concurrency_logger: Arc<Mutex<Option<Box<dyn SpawnHandle>>>>,
-    concurrency_limiter: ConcurrencyLimiter,
+    internal_sender: mpsc::UnboundedSender<Request<RT>>,
+    /// Shared with the scheduler. Tracks the total number of in-progress
+    /// workers across all clients.
+    active_workers: Arc<AtomicUsize>,
+    max_workers: usize,
 }
 
 impl<RT: Runtime> IsolateClient<RT> {
-    pub fn new(
+    pub fn new<W: IsolateWorker<RT>>(
         rt: RT,
         max_percent_per_client: usize,
         max_isolate_workers: usize,
-        isolate_config: Option<IsolateConfig>,
+        isolate_worker: W,
     ) -> anyhow::Result<Self> {
-        let concurrency_limiter = if *FUNRUN_ISOLATE_ACTIVE_THREADS > 0 {
-            ConcurrencyLimiter::new(*FUNRUN_ISOLATE_ACTIVE_THREADS)
-        } else {
-            ConcurrencyLimiter::unlimited()
-        };
-        let concurrency_logger = rt.spawn(
-            "concurrency_logger",
-            concurrency_limiter.go_log(rt.clone(), ACTIVE_CONCURRENCY_PERMITS_LOG_FREQUENCY),
-        );
-        let isolate_config =
-            isolate_config.unwrap_or(IsolateConfig::new("funrun", concurrency_limiter.clone()));
-
         initialize_v8();
         // NB: We don't call V8::Dispose or V8::ShutdownPlatform since we just assume a
         // single V8 instance per process and don't need to clean up its
         // resources.
-        let (sender, receiver) =
-            new_codel_queue_async::<_, Request<_>>(rt.clone(), *ISOLATE_QUEUE_SIZE);
+        let (sender, receiver) = CoDelQueue::new(
+            rt.clone(),
+            *ISOLATE_QUEUE_SIZE,
+            *ISOLATE_QUEUE_IDLE_TIMEOUT,
+            *ISOLATE_QUEUE_CONGESTED_TIMEOUT,
+        )
+        .into_sender_and_receiver();
+        let (internal_sender, internal_receiver) = mpsc::unbounded_channel();
         let handles = Arc::new(Mutex::new(Vec::new()));
         let handles_clone = handles.clone();
+        let active_workers = Arc::new(AtomicUsize::new(0));
+        let _active_workers = active_workers.clone();
         let rt_clone = rt.clone();
         let scheduler = rt.spawn("shared_isolate_scheduler", async move {
             // The scheduler thread pops a worker from available_workers and
             // pops a request from the CoDelQueueReceiver. Then it sends the request
             // to the worker.
-            let isolate_worker = FunctionRunnerIsolateWorker::new(rt_clone.clone(), isolate_config);
             let scheduler = SharedIsolateScheduler::new(
                 rt_clone,
                 isolate_worker,
                 max_isolate_workers,
                 handles_clone,
                 max_percent_per_client,
+                _active_workers,
             );
-            scheduler.run(receiver).await
+            scheduler.run(receiver, internal_receiver).await
         });
         Ok(Self {
             rt,
             sender,
+            internal_sender,
             scheduler: Arc::new(Mutex::new(Some(scheduler))),
-            concurrency_logger: Arc::new(Mutex::new(Some(concurrency_logger))),
             handles,
-            concurrency_limiter,
+            active_workers,
+            max_workers: max_isolate_workers,
         })
     }
 
-    pub fn concurrency_limiter(&self) -> &ConcurrencyLimiter {
-        &self.concurrency_limiter
+    /// Returns the total number of isolate workers currently servicing a
+    /// request across all clients.
+    pub fn active_workers(&self) -> usize {
+        self.active_workers.load(Ordering::Relaxed)
+    }
+
+    /// Returns the maximum number of isolate workers this client's scheduler
+    /// is permitted to create.
+    pub fn max_workers(&self) -> usize {
+        self.max_workers
     }
 
     pub fn aggregate_heap_stats(&self) -> IsolateHeapStats {
@@ -625,8 +655,9 @@ impl<RT: Runtime> IsolateClient<RT> {
                 unix_timestamp,
                 journal,
                 context,
+                environment_data,
+                file_downloads: FileDownloads::default(),
             },
-            environment_data,
             response: tx,
             queue_timer: queue_timer(),
             rng_seed,
@@ -668,13 +699,13 @@ impl<RT: Runtime> IsolateClient<RT> {
                 identity: transaction.identity().clone(),
                 transaction,
                 context,
+                environment_data,
             },
             response: tx,
             queue_timer: queue_timer(),
             action_callbacks,
             fetch_client,
             log_line_sender,
-            environment_data,
             function_started_sender,
         };
         self.send_request(Request::new(
@@ -717,8 +748,8 @@ impl<RT: Runtime> IsolateClient<RT> {
                 identity,
                 transaction,
                 context,
+                environment_data,
             },
-            environment_data,
             response: tx,
             queue_timer: queue_timer(),
             action_callbacks,
@@ -746,7 +777,6 @@ impl<RT: Runtime> IsolateClient<RT> {
         modules: BTreeMap<CanonicalizedModulePath, ModuleConfig>,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
         instance_name: String,
-        max_user_heap_size: usize,
     ) -> anyhow::Result<Result<BTreeMap<CanonicalizedModulePath, AnalyzedModule>, JsError>> {
         anyhow::ensure!(
             modules
@@ -765,10 +795,10 @@ impl<RT: Runtime> IsolateClient<RT> {
                 .map(|(path, module_config)| {
                     (
                         path,
-                        Arc::new(FullModuleSource {
+                        Arc::new(V8ModuleSource::new(FullModuleSource {
                             source: module_config.source,
                             source_map: module_config.source_map,
-                        }),
+                        })),
                     )
                 })
                 .collect(),
@@ -786,7 +816,6 @@ impl<RT: Runtime> IsolateClient<RT> {
                         response: tx,
                         udf_config: udf_config.clone(),
                         environment_variables: environment_variables.clone(),
-                        max_user_heap_size,
                     };
                     self.send_request(Request::new(
                         instance_name.clone(),
@@ -1045,9 +1074,6 @@ impl<RT: Runtime> IsolateClient<RT> {
         if let Some(mut scheduler) = self.scheduler.lock().take() {
             scheduler.shutdown();
         }
-        if let Some(mut concurrency_logger) = self.concurrency_logger.lock().take() {
-            concurrency_logger.shutdown();
-        }
 
         Ok(())
     }
@@ -1071,26 +1097,25 @@ impl<RT: Runtime> UdfCallback<RT> for &IsolateClient<RT> {
         self,
         client_id: String,
         udf_request: UdfRequest<RT>,
-        environment_data: EnvironmentData<RT>,
         rng_seed: [u8; 32],
         reactor_depth: usize,
     ) -> anyhow::Result<(Transaction<RT>, NestedUdfOutcome)> {
-        let (tx, outcome) = self
-            .execute_udf(
-                udf_request.udf_type,
-                udf_request.path_and_args,
-                udf_request.transaction,
-                udf_request.journal,
-                udf_request.context,
-                environment_data,
-                rng_seed,
-                udf_request.unix_timestamp,
-                reactor_depth,
-                client_id,
-                None,  /* function_started_sender */
-                false, /* subfunctions_in_same_isolate */
-            )
-            .await?;
+        let subquery_path = udf_request.path_and_args.path().clone();
+        let (tx, rx) = oneshot::channel();
+        let request = RequestType::Udf {
+            request: udf_request,
+            response: tx,
+            queue_timer: queue_timer(),
+            rng_seed,
+            reactor_depth,
+            function_started_sender: None,
+            udf_callback: Some(self.clone()),
+        };
+        self.internal_sender
+            .send(Request::new(client_id, request, EncodedSpan::from_parent()))
+            .ok()
+            .context("scheduler shut down")?;
+        let (tx, outcome) = IsolateClient::<RT>::receive_response(rx).await??;
         let outcome = match outcome {
             FunctionOutcome::Query(outcome) | FunctionOutcome::Mutation(outcome) => {
                 NestedUdfOutcome {
@@ -1101,7 +1126,14 @@ impl<RT: Runtime> UdfCallback<RT> for &IsolateClient<RT> {
                     audit_log_lines: outcome.audit_log_lines,
                     journal: outcome.journal,
                     result: match outcome.result {
-                        Ok(t) => Ok(t.unpack()?),
+                        Ok(t) => Ok(t.unpack().map_err(|e| {
+                            e.wrap_error_message(|msg| {
+                                format!(
+                                    "Subquery {} return value invalid: {msg}",
+                                    subquery_path.for_logging().debug_str(),
+                                )
+                            })
+                        })?),
                         Err(e) => Err(e),
                     },
                     syscall_trace: outcome.syscall_trace,
@@ -1122,8 +1154,8 @@ pub struct SharedIsolateScheduler<RT: Runtime, W: IsolateWorker<RT>> {
     worker_senders: Vec<
         mpsc::Sender<(
             Request<RT>,
-            oneshot::Sender<ActiveWorkerState>,
-            ActiveWorkerState,
+            ConcurrencyPermit,
+            oneshot::Sender<IdleWorkerInfo>,
         )>,
     >,
     /// Map from client_id to stack of workers (implemented with a deque). The
@@ -1135,19 +1167,28 @@ pub struct SharedIsolateScheduler<RT: Runtime, W: IsolateWorker<RT>> {
     /// new client.
     available_workers: HashMap<String, VecDeque<IdleWorkerState>>,
     /// Set of futures awaiting a response from an active worker.
-    in_progress_workers: FuturesUnordered<oneshot::Receiver<ActiveWorkerState>>,
+    in_progress_workers:
+        FuturesUnordered<Join<oneshot::Receiver<IdleWorkerInfo>, Ready<ActiveWorkerState>>>,
     /// Counts the number of active workers per client. Should only contain a
     /// key if the value is greater than 0.
     in_progress_count: HashMap<String, usize>,
+    /// Total number of in-progress workers across all clients.
+    active_workers: Arc<AtomicUsize>,
     /// The max number of workers this scheduler is permitted to create.
     max_workers: usize,
     handles: Arc<Mutex<Vec<IsolateWorkerHandle>>>,
-    max_percent_per_client: usize,
+    /// The max number of active workers (per `in_progress_count`) allowed for a
+    /// single client_id.
+    max_active_workers_per_client: usize,
 }
 
+pub struct IdleWorkerInfo {
+    cached_contexts: Arc<CachedContexts>,
+}
 struct IdleWorkerState {
     worker_id: usize,
     last_used_ts: tokio::time::Instant,
+    info: IdleWorkerInfo,
 }
 struct ActiveWorkerState {
     worker_id: usize,
@@ -1161,6 +1202,7 @@ impl<RT: Runtime, W: IsolateWorker<RT>> SharedIsolateScheduler<RT, W> {
         max_workers: usize,
         handles: Arc<Mutex<Vec<IsolateWorkerHandle>>>,
         max_percent_per_client: usize,
+        active_workers: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             rt,
@@ -1168,14 +1210,21 @@ impl<RT: Runtime, W: IsolateWorker<RT>> SharedIsolateScheduler<RT, W> {
             worker_senders: Vec::new(),
             in_progress_workers: FuturesUnordered::new(),
             in_progress_count: HashMap::new(),
+            active_workers,
             available_workers: HashMap::new(),
             max_workers,
             handles,
-            max_percent_per_client,
+            max_active_workers_per_client: (max_workers * max_percent_per_client)
+                .div_ceil(100)
+                .max(1),
         }
     }
 
-    fn handle_completed_worker(&mut self, completed_worker: ActiveWorkerState) {
+    fn handle_completed_worker(
+        &mut self,
+        completed_worker: ActiveWorkerState,
+        info: IdleWorkerInfo,
+    ) {
         let new_count = match self
             .in_progress_count
             .remove_entry(&completed_worker.client_id)
@@ -1194,6 +1243,7 @@ impl<RT: Runtime, W: IsolateWorker<RT>> SharedIsolateScheduler<RT, W> {
                 completed_worker.client_id
             ),
         };
+        self.active_workers.fetch_sub(1, Ordering::Relaxed);
         log_pool_running_count(
             self.worker.config().name,
             new_count,
@@ -1206,57 +1256,121 @@ impl<RT: Runtime, W: IsolateWorker<RT>> SharedIsolateScheduler<RT, W> {
             .push_front(IdleWorkerState {
                 worker_id: completed_worker.worker_id,
                 last_used_ts: self.rt.monotonic_now(),
+                info,
             });
     }
 
-    pub async fn run(mut self, receiver: CoDelQueueReceiver<RT, Request<RT>>) {
+    pub async fn run(
+        mut self,
+        mut receiver: CoDelQueueReceiver<RT, Request<RT>>,
+        internal_receiver: mpsc::UnboundedReceiver<Request<RT>>,
+    ) {
         log_pool_max(self.worker.config().name, self.max_workers);
-        let mut receiver = receiver.fuse();
         let mut report_stats = self.rt.wait(*HEAP_WORKER_REPORT_INTERVAL_SECONDS);
+        let mut expired_receiver = receiver.expired_receiver();
+        let limiter = self.worker.config().limiter.clone();
+        let rt = self.rt.clone();
+        let external_request_stream =
+            stream::poll_fn(move |cx| receiver.poll_next_with_expiration(cx)).filter_map(
+                async |(request, expiration)| {
+                    match expiration {
+                        Ok(expiration) => {
+                            let permit = tokio::select! {
+                                biased;
+                                permit = limiter.acquire(
+                                    request.client_id.clone().into(),
+                                    // For newly executing functions, we acquire the
+                                    // permit in "low priority" mode. This means
+                                    // that we prioritize already-executing
+                                    // functions over new ones and avoid piling more
+                                    // work on if we're overloaded.
+                                    false,
+                                ) => permit,
+                                () = rt.wait(
+                                    expiration.saturating_duration_since(rt.monotonic_now()),
+                                ) => {
+                                    request.reject(
+                                        RejectedBeforeExecutionReason::InitialPermitTimeout,
+                                    );
+                                    return None;
+                                }
+                            };
+                            Some((request, permit))
+                        },
+                        Err(expired) => {
+                            request.expire(expired);
+                            None
+                        },
+                    }
+                },
+            );
+        let internal_request_stream =
+            UnboundedReceiverStream::new(internal_receiver).then(async |request| {
+                // Internal requests (for nested UDFs) get priority because they
+                // block workers.
+                let permit = limiter
+                    .acquire(request.client_id.clone().into(), true)
+                    .await;
+                (request, permit)
+            });
+        let mut next_request_stream = pin!(stream::select_with_strategy(
+            internal_request_stream,
+            external_request_stream,
+            |&mut ()| PollNext::Left
+        ));
         loop {
-            select_biased! {
-                completed_worker = self.in_progress_workers.select_next_some() => {
-                    let Ok(completed_worker): Result<ActiveWorkerState, _> = completed_worker else {
-                        tracing::warn!("Worker has shut down uncleanly. Shutting down {} scheduler.", self.worker.config().name);
+            let all_workers_busy = self.active_workers.load(Ordering::Relaxed) >= self.max_workers;
+            tokio::select! {
+                biased;
+                completed_worker = self.in_progress_workers.next(),
+                if !self.in_progress_workers.is_empty() => {
+                    let Some((Ok(info), completed_worker)) = completed_worker
+                    else {
+                        tracing::warn!(
+                            "Worker has shut down uncleanly. Shutting down {} scheduler.",
+                            self.worker.config().name
+                        );
                         return;
                     };
-                    self.handle_completed_worker(completed_worker);
+                    self.handle_completed_worker(completed_worker, info);
                 }
-                request = receiver.next() => {
+                request = expired_receiver.next() => {
                     let Some((request, expired)) = request else {
-                        tracing::warn!("Request sender went away; {} scheduler shutting down", self.worker.config().name);
-                        return
+                        break;
                     };
-                    if let Some(expired) = expired {
-                        request.expire(expired);
+                    request.expire(expired);
+                }
+                request = next_request_stream.next(),
+                if !all_workers_busy => {
+                    let Some((request, permit)) = request else {
+                        break;
+                    };
+                    if request.is_response_closed() {
                         continue;
                     }
-                    let Some(worker_id) = self.get_worker(&request.client_id) else {
-                        request.reject();
-                        continue;
+                    let worker_id = match self.get_worker(&request) {
+                        Ok(worker_id) => worker_id,
+                        Err(reason) => {
+                            request.reject(reason);
+                            continue;
+                        },
                     };
                     let (done_sender, done_receiver) = oneshot::channel();
-                    self.in_progress_workers.push(done_receiver);
+                    let st = ActiveWorkerState {
+                        client_id: request.client_id.clone(),
+                        worker_id,
+                    };
+                    self.in_progress_workers
+                        .push(future::join(done_receiver, future::ready(st)));
                     let entry = self
                         .in_progress_count
                         .entry(request.client_id.clone())
                         .or_default();
                     *entry += 1;
-                    log_pool_running_count(
-                        self.worker.config().name,
-                        *entry,
-                        &request.client_id,
-                    );
-                    let client_id = request.client_id.clone();
+                    self.active_workers.fetch_add(1, Ordering::Relaxed);
+                    log_pool_running_count(self.worker.config().name, *entry, &request.client_id);
                     if self.worker_senders[worker_id]
-                        .try_send((
-                            request,
-                            done_sender,
-                            ActiveWorkerState {
-                                client_id,
-                                worker_id,
-                            },
-                        ))
+                        .try_send((request, permit, done_sender))
                         .is_err()
                     {
                         // Available worker should have an empty channel, so if we fail
@@ -1268,47 +1382,67 @@ impl<RT: Runtime, W: IsolateWorker<RT>> SharedIsolateScheduler<RT, W> {
                         return;
                     }
                 },
-                _ = report_stats => {
+                _ = &mut report_stats => {
                     let heap_stats = self.aggregate_heap_stats();
                     log_aggregated_heap_stats(&heap_stats);
                     report_stats = self.rt.wait(*HEAP_WORKER_REPORT_INTERVAL_SECONDS);
                 },
             }
         }
+        tracing::warn!(
+            "Request sender went away; {} scheduler shutting down",
+            self.worker.config().name
+        );
     }
 
     /// Find a worker for the given `client_id`.`
-    /// Returns `None` if no worker could be allocated for this client (i.e.
-    /// this client has reached it's capacity with the scheduler).
+    /// Returns an error if no worker can be allocated for this client.
     ///
     /// Note that the returned worker id is removed from the
     /// `self.available_workers` state, so the caller is responsible for using
     /// the worker and returning it back to `self.available_workers` after it is
     /// done.
-    fn get_worker(&mut self, client_id: &str) -> Option<usize> {
+    fn get_worker(
+        &mut self,
+        request: &Request<RT>,
+    ) -> Result<usize, RejectedBeforeExecutionReason> {
+        let client_id = request.client_id.as_str();
         // Make sure this client isn't overloading the scheduler.
         let active_worker_count = self
             .in_progress_count
             .get(client_id)
             .copied()
             .unwrap_or_default();
-        if (active_worker_count * 100) / (self.max_workers) >= self.max_percent_per_client {
+        if active_worker_count >= self.max_active_workers_per_client {
             tracing::warn!(
-                "Client {} is using >= {}% of scheduler capacity; rejecting new request",
+                "Client {} is using >= {} of scheduler capacity; rejecting new request",
                 client_id,
-                self.max_percent_per_client,
+                self.max_active_workers_per_client,
             );
-            return None;
+            return Err(RejectedBeforeExecutionReason::PerClientWorkerOverloaded);
         }
         // Try to find an existing worker for this client.
         if let Some((client_id, mut workers)) = self.available_workers.remove_entry(client_id) {
+            // If there is a worker with an appropriate reusable context, pick that one
+            // first.
+            // This skips workers with inapplicable reused contexts.
+            // TODO: just promote the saved context's module path into the hashmap key.
             let worker = workers
-                .pop_front()
-                .expect("Available worker map should never contain an empty list");
+                .extract_if(.., |worker| {
+                    worker.info.cached_contexts.can_serve_request(request)
+                })
+                .next();
             if !workers.is_empty() {
                 self.available_workers.insert(client_id, workers);
             }
-            return Some(worker.worker_id);
+            if let Some(worker) = worker {
+                return Ok(worker.worker_id);
+            }
+            // Otherwise all the workers have cached contexts for other modules
+            // that we don't want to clobber; try to assign a new worker
+            // instead.
+            // It's possible that one of our own workers will end up being the
+            // least-recently-used one.
         }
         // If we've recently started up and haven't yet created `max_workers` threads,
         // create a new worker instead of "stealing" some other client's worker.
@@ -1329,47 +1463,37 @@ impl<RT: Runtime, W: IsolateWorker<RT>> SharedIsolateScheduler<RT, W> {
                 self.worker.config().name,
                 self.worker_senders.len() - 1
             );
-            return Some(self.worker_senders.len() - 1);
+            return Ok(self.worker_senders.len() - 1);
         }
         // No existing worker for this client and we've already started the max number
         // of workers -- just grab the least recently used worker. This worker is least
         // likely to be reused by its' previous client.
-        let Some((key, workers)) =
-            self.available_workers
-                .iter_mut()
-                .min_by(|(_, workers1), (_, workers2)| {
-                    workers1
-                        .back()
-                        .expect("Available worker map should never contain an empty list")
-                        .last_used_ts
-                        .cmp(
-                            &workers2
-                                .back()
-                                .expect("Available worker map should never contain an empty list")
-                                .last_used_ts,
-                        )
-                })
+        let Some((key, workers)) = self
+            .available_workers
+            .iter_mut()
+            .min_by_key(|(_, workers)| {
+                workers
+                    .back()
+                    .expect("Available worker map should never contain an empty list")
+                    .last_used_ts
+            })
         else {
-            // No available workers.
-            return None;
+            // No available workers. This should be unreachable since we don't
+            // pull a request from the queue until there is a free worker.
+            tracing::error!("unexpected: couldn't find a worker?");
+            return Err(RejectedBeforeExecutionReason::WorkerPoolOverloaded);
         };
-        log_worker_stolen(
-            workers
-                .back()
-                .expect("Available worker map should never contain an empty list")
-                .last_used_ts
-                .elapsed(),
-        );
-        let worker_id = workers
+        let worker = workers
             .pop_back()
             .expect("Available worker map should never contain an empty list");
+        log_worker_stolen(worker.last_used_ts.elapsed());
         if workers.is_empty() {
             // This variable shadowing drops the mutable reference to
             // `self.available_workers`.
             let key = key.clone();
             self.available_workers.remove(&key);
         }
-        Some(worker_id.worker_id)
+        Ok(worker.worker_id)
     }
 
     fn aggregate_heap_stats(&self) -> IsolateHeapStats {
@@ -1405,50 +1529,46 @@ impl SharedIsolateHeapStats {
 
 #[async_trait(?Send)]
 pub trait IsolateWorker<RT: Runtime>: Clone + Send + 'static {
-    async fn service_requests<T>(
+    async fn service_requests(
         self,
-        reqs: mpsc::Receiver<(Request<RT>, oneshot::Sender<T>, T)>,
+        reqs: mpsc::Receiver<(
+            Request<RT>,
+            ConcurrencyPermit,
+            oneshot::Sender<IdleWorkerInfo>,
+        )>,
         heap_stats: SharedIsolateHeapStats,
     ) {
         let IsolateConfig {
-            max_user_timeout,
-            limiter,
-            ..
+            max_user_timeout, ..
         } = self.config();
         let mut reqs = std::pin::pin!(ReceiverStream::new(reqs).peekable());
-        let mut ready: Option<(oneshot::Sender<_>, _)> = None;
-        let mut isolate_heap_size = *ISOLATE_MAX_USER_HEAP_SIZE;
+        let mut ready: Option<oneshot::Sender<_>> = None;
         'recreate_isolate: loop {
             let mut last_client_id: Option<String> = None;
             let mut last_request: Option<String> = None;
             let mut isolate = Isolate::new(
-                self.rt(),
+                self.rt().clone(),
                 *max_user_timeout,
-                limiter.clone(),
-                isolate_heap_size,
+                *ISOLATE_MAX_USER_HEAP_SIZE,
             );
-            // Reset to default heap size for the next isolate, unless
-            // overridden before the next `continue 'recreate_isolate`.
-            isolate_heap_size = *ISOLATE_MAX_USER_HEAP_SIZE;
+            isolate.set_heap_stats_handle(heap_stats.clone());
+            let mut context_cache = ContextCache::new();
             heap_stats.store(isolate.heap_stats());
             loop {
-                let v8_context = {
-                    let _create_context_timer = create_context_timer();
-                    scope!(let scope, isolate.isolate());
-                    let context = v8::Context::new(scope, v8::ContextOptions::default());
-                    v8::Global::new(scope, context)
-                };
+                context_cache.prepare(isolate.isolate());
                 // Check again whether the isolate has enough free heap memory
                 // before starting the next request
                 if let Some(debug_str) = &last_request
-                    && should_recreate_isolate(&mut isolate, debug_str)
+                    && should_recreate_isolate(&mut isolate, &mut context_cache, debug_str)
                 {
                     continue 'recreate_isolate;
                 }
                 heap_stats.store(isolate.heap_stats());
-                if let Some((done, done_token)) = ready.take() {
+                if let Some(done) = ready.take() {
                     // Inform the scheduler that this thread is ready to accept a new request.
-                    let _ = done.send(done_token);
+                    let _ = done.send(IdleWorkerInfo {
+                        cached_contexts: context_cache.cached_contexts().clone(),
+                    });
                 }
                 tokio::select! {
                     // If the isolate isn't "tainted", no need to wait for the idle timeout.
@@ -1477,61 +1597,28 @@ pub trait IsolateWorker<RT: Runtime>: Clone + Send + 'static {
                         } else if reused {
                             tracing::debug!("Reusing isolate for client {}", req.client_id);
                         }
-                        // If this is an analyze request with a higher heap
-                        // requirement, recreate the isolate with the larger heap.
-                        match req.inner {
-                            RequestType::Analyze {
-                                max_user_heap_size: required_heap, ..
-                            } => {
-                                if isolate.max_user_heap_size() < required_heap {
-                                    tracing::debug!(
-                                        "Restarting isolate for analyze: current heap {} < required {}",
-                                        isolate.max_user_heap_size(),
-                                        required_heap,
-                                    );
-                                    metrics::log_recreate_isolate("analyze_heap_upgrade");
-                                    isolate_heap_size = required_heap;
-                                    continue 'recreate_isolate;
-                                }
-                            },
-                            _ => {
-                                // If our last request was allocated more than the default heap size for analyze, recreate the isolate.
-                                if isolate.max_user_heap_size() > *ISOLATE_MAX_USER_HEAP_SIZE {
-                                    tracing::debug!(
-                                        "Restarting isolate after analyze: current heap {}",
-                                        isolate.max_user_heap_size(),
-                                    );
-                                    metrics::log_recreate_isolate("after_analyze_heap_upgrade");
-                                    isolate_heap_size = *ISOLATE_MAX_USER_HEAP_SIZE;
-                                    continue 'recreate_isolate;
-                                }
-                            },
-                        };
                         // Ok, we're ready to accept the request for real.
-                        let Some((req, done, done_token)) = reqs.next().await else { return };
-                        // Note that we won't reply to `done` until the next
-                        // `v8_context` is created. This improves latency in the
-                        // common case since requests will be routed to a thread
-                        // that has a context ready to go.
-                        ready = Some((done, done_token));
+                        let Some((req, permit, done)) = reqs.next().await else { return };
+                        // Note that we won't reply to `done` until
+                        // `context_cache` has been prepared. This improves
+                        // latency in the common case since requests will be
+                        // routed to a thread that has a context ready to go.
+                        ready = Some(done);
                         let root = initialize_root_from_parent(
                             func_path!(),
                             req.parent_trace.clone(),
                         );
                         root.add_property(|| ("reused_isolate", reused.as_label()));
-                        // Require the layer below to opt into isolate reuse by setting `isolate_clean`.
-                        let mut isolate_clean = false;
-                        let debug_str = self
+                        let (debug_str, isolate_clean) = self
                             .handle_request(
                                 &mut isolate,
-                                v8_context,
-                                &mut isolate_clean,
+                                &mut context_cache,
                                 req,
-                                heap_stats.clone(),
+                                permit,
                             )
                             .in_span(root)
                             .await;
-                        if !isolate_clean || should_recreate_isolate(&mut isolate, &debug_str) {
+                        if !isolate_clean {
                             continue 'recreate_isolate;
                         }
                         last_request = Some(debug_str);
@@ -1541,33 +1628,64 @@ pub trait IsolateWorker<RT: Runtime>: Clone + Send + 'static {
         }
     }
 
+    #[fastrace::trace]
     async fn handle_request(
         &self,
         isolate: &mut Isolate<RT>,
-        v8_context: v8::Global<v8::Context>,
-        isolate_clean: &mut bool,
-        req: Request<RT>,
-        heap_stats: SharedIsolateHeapStats,
-    ) -> String;
+        context_cache: &mut ContextCache,
+        request: Request<RT>,
+        permit: ConcurrencyPermit,
+    ) -> (String, bool) {
+        let pause_client = self.rt().pause_client();
+        pause_client.wait(PAUSE_REQUEST).await;
+        let client_id = &request.client_id;
+        // Set the scope to be tagged with the client_id just for the duration of
+        // handling the request. It would be nice to get sentry::with_scope to work, but
+        // it uses a synchronous callback and we need `report_error` in the future to
+        // have the client_id tag.
+        sentry::configure_scope(|scope| scope.set_tag("client_id", client_id));
+        // Also add the tag to tracing so it shows up in DataDog logs.
+        let span = tracing::info_span!("isolate_worker_handle_request", instance_name = client_id);
+        let result = self
+            .handle_request_inner(isolate, context_cache, request, permit)
+            .instrument(span)
+            .await;
+        sentry::configure_scope(|scope| scope.remove_tag("client_id"));
+        result
+    }
+
+    async fn handle_request_inner(
+        &self,
+        isolate: &mut Isolate<RT>,
+        context_cache: &mut ContextCache,
+        request: Request<RT>,
+        permit: ConcurrencyPermit,
+    ) -> (String, bool);
 
     fn config(&self) -> &IsolateConfig;
-    fn rt(&self) -> RT;
+    fn rt(&self) -> &RT;
 }
 
-pub(crate) fn should_recreate_isolate<RT: Runtime>(
+pub fn should_recreate_isolate<RT: Runtime>(
     isolate: &mut Isolate<RT>,
+    context_cache: &mut ContextCache,
     last_executed: &str,
 ) -> bool {
     if !*REUSE_ISOLATES {
         metrics::log_recreate_isolate("env_disabled");
         return true;
     }
-    if let Err(e) = isolate.check_isolate_clean() {
-        tracing::error!(
+    if let Err(e) = isolate.check_isolate_clean(context_cache) {
+        tracing::debug!(
             "Restarting Isolate {}: {e:?}, last request: {last_executed:?}",
             e.reason()
         );
         metrics::log_recreate_isolate(e.reason());
+        LocalSpan::add_event(
+            Event::new("isolate_unclean")
+                .with_property(|| ("reason", e.reason()))
+                .with_property(|| ("last_executed", last_executed.to_owned())),
+        );
         return true;
     }
 

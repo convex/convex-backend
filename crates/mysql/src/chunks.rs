@@ -4,13 +4,15 @@ use common::{
     document::ResolvedDocument,
     index::IndexEntry,
     knobs::{
-        MYSQL_CHUNK_SIZE,
         MYSQL_MAX_CHUNK_BYTES,
         MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE,
+        MYSQL_MAX_FILL_CHUNK_ROWS,
+        MYSQL_SMART_CHUNK_MAX_SIZE,
     },
     persistence::{
         DocumentLogEntry,
         DocumentPrevTsQuery,
+        IndexBackfillEntry,
         PersistenceIndexEntry,
     },
     types::Timestamp,
@@ -19,6 +21,12 @@ use common::{
 
 pub trait ApproxSize {
     fn approx_size(&self) -> usize;
+}
+
+impl<T: ApproxSize> ApproxSize for &T {
+    fn approx_size(&self) -> usize {
+        (*self).approx_size()
+    }
 }
 
 impl<T: ApproxSize> ApproxSize for Option<T> {
@@ -74,7 +82,13 @@ impl ApproxSize for DocumentLogEntry {
 
 impl ApproxSize for PersistenceIndexEntry {
     fn approx_size(&self) -> usize {
-        self.index_id.size() + self.key.len() + InternalDocumentId::MIN.size()
+        self.index.id().size() + self.key.len() + InternalDocumentId::MIN.size()
+    }
+}
+
+impl ApproxSize for IndexBackfillEntry {
+    fn approx_size(&self) -> usize {
+        self.index.id().size() + self.key.len() + self.value.approx_size()
     }
 }
 
@@ -143,13 +157,51 @@ pub fn smart_chunks<T: ApproxSize>(items: &[T]) -> impl Iterator<Item = &[T]> {
     SmartChunkIter {
         items,
         max_dynamic_size: *MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE,
-        max_chunk_size: *MYSQL_CHUNK_SIZE,
+        max_chunk_size: *MYSQL_SMART_CHUNK_MAX_SIZE,
         max_bytes: *MYSQL_MAX_CHUNK_BYTES,
     }
 }
 
 /// Possible lengths of chunks returned by smart_chunks.
 pub fn smart_chunk_sizes() -> impl Iterator<Item = usize> {
-    (1..=*MYSQL_CHUNK_SIZE)
+    (1..=*MYSQL_SMART_CHUNK_MAX_SIZE)
         .filter(|len| *len <= *MYSQL_MAX_DYNAMIC_SMART_CHUNK_SIZE || len.is_power_of_two())
+}
+
+struct FillChunkIter<'a, T: ApproxSize> {
+    items: &'a [T],
+    max_bytes: usize,
+    max_rows: usize,
+}
+
+impl<'a, T: ApproxSize> Iterator for FillChunkIter<'a, T> {
+    type Item = &'a [T];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.items.is_empty() {
+            return None;
+        }
+        let mut len = 0;
+        let mut total_bytes = 0;
+        for item in self.items {
+            total_bytes += item.approx_size();
+            if len > 0 && (len >= self.max_rows || total_bytes > self.max_bytes) {
+                break;
+            }
+            len += 1;
+        }
+        let (chunk, remaining) = self.items.split_at(len);
+        self.items = remaining;
+        Some(chunk)
+    }
+}
+
+/// Fills write chunks up to the approximate byte budget or the row cap. An
+/// oversized row gets a chunk of its own to ensure progress.
+pub fn fill_chunks<T: ApproxSize>(items: &[T]) -> impl Iterator<Item = &[T]> {
+    FillChunkIter {
+        items,
+        max_bytes: *MYSQL_MAX_CHUNK_BYTES,
+        max_rows: *MYSQL_MAX_FILL_CHUNK_ROWS,
+    }
 }

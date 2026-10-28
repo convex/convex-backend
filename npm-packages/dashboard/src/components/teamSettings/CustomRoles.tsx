@@ -137,7 +137,6 @@ const CREATOR_VAL = "(self|[0-9]+)";
 const DEPLOYMENT_TYPE_VAL = "(dev|prod|preview|custom)";
 const projectSel = `(\\*|id=${SELECTOR_VAL}|slug=${SELECTOR_VAL})`;
 const deploymentSel = `(\\*|id=${SELECTOR_VAL}|type=${DEPLOYMENT_TYPE_VAL}|creator=${CREATOR_VAL})`;
-const memberSel = `(\\*|id=${SELECTOR_VAL})`;
 const tokenSel = `(\\*|creator=${CREATOR_VAL})`;
 const csv = (sel: string) => `${sel}(,${sel})*`;
 const tokenTail = `:token:${csv(tokenSel)}`;
@@ -145,11 +144,12 @@ const projectTail = `(${tokenTail}|:deployment:${csv(deploymentSel)}(${tokenTail
 const RESOURCE_PATTERN =
   `^(team:\\*(${tokenTail})?` +
   `|project:${csv(projectSel)}${projectTail}?` +
-  `|member:${csv(memberSel)}` +
+  `|member:\\*` +
   `|customRole:\\*` +
   `|billing:\\*` +
   `|oauthApplication:\\*` +
   `|sso:\\*` +
+  `|directorySync:\\*` +
   `|integration:\\*)$`;
 
 // ⚠️ If updating this, please remember to also update the
@@ -262,6 +262,15 @@ const statementsSchema = {
             properties: { resource: { pattern: "^sso:[^:]+$" } },
           },
           then: { properties: { actions: actionsForCategory("sso") } },
+        },
+        {
+          if: {
+            required: ["resource"],
+            properties: { resource: { pattern: "^directorySync:[^:]+$" } },
+          },
+          then: {
+            properties: { actions: actionsForCategory("directorySync") },
+          },
         },
         {
           if: {
@@ -611,7 +620,7 @@ function CustomRoleForm({
           </label>
           <textarea
             id="role-description"
-            className="min-h-[60px] w-full rounded border bg-background-secondary px-3 py-2 text-sm text-content-primary disabled:cursor-not-allowed disabled:bg-background-tertiary disabled:text-content-secondary"
+            className="min-h-[60px] w-full rounded-sm border bg-background-secondary px-3 py-2 text-sm text-content-primary disabled:cursor-not-allowed disabled:bg-background-tertiary disabled:text-content-secondary"
             value={description}
             onChange={(e) => {
               setDescription(e.target.value);
@@ -626,7 +635,7 @@ function CustomRoleForm({
           <div className="text-left text-sm text-content-primary">
             Statements
           </div>
-          <div className="min-h-48 flex-1 overflow-hidden rounded border">
+          <div className="min-h-48 flex-1 overflow-hidden rounded-sm border">
             {overflowWidgetsNode && (
               <Editor
                 path={STATEMENTS_EDITOR_PATH}

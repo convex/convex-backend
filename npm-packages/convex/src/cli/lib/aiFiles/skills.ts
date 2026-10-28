@@ -23,11 +23,11 @@ function configuredSkillAgents(
 }
 
 /**
- * Runs `npx skills add get-convex/agent-skills --yes` in the given directory.
+ * Runs `npx skills add convex/agent-skills --yes --copy` in the given directory.
  * Returns true on success, false if the process fails or cannot be started.
  */
 function runSkillsAdd(cwd: string, agents: string[]): Promise<boolean> {
-  const args = ["add", "get-convex/agent-skills", "--yes"];
+  const args = ["add", "convex/agent-skills", "--yes", "--copy"];
   for (const agent of agents) {
     args.push("--agent", agent);
   }
@@ -116,6 +116,9 @@ async function removeSkillsLockIfEmpty({
 /**
  * Install Convex agent skills and record the SHA into the state.
  * Handles the kill-switch check and all logging internally.
+ *
+ * Returns false if the skills CLI failed. Skipping skills because no agents
+ * are configured or the kill switch is on counts as success.
  */
 export async function installSkills({
   projectDir,
@@ -125,26 +128,27 @@ export async function installSkills({
   projectDir: string;
   state: AiFilesState;
   aiFilesConfig?: AiFilesProjectConfig | undefined;
-}): Promise<void> {
+}): Promise<boolean> {
   const agents = configuredSkillAgents(aiFilesConfig);
-  if (agents.length === 0) return;
-  if (!(await shouldRunSkillsCli())) return;
+  if (agents.length === 0) return true;
+  if (!(await shouldRunSkillsCli())) return true;
 
   logMessage("Installing Convex agent skills...");
   const skillsOk = await runSkillsAdd(projectDir, agents);
   if (!skillsOk) {
     logMessage(
       chalkStderr.yellow(
-        "Could not install agent skills. You can retry manually with: npx skills add get-convex/agent-skills",
+        "Could not install agent skills. You can retry manually with: npx skills add convex/agent-skills --copy",
       ),
     );
-    return;
+    return false;
   }
 
   const sha = await fetchAgentSkillsSha();
   if (sha) state.agentSkillsSha = sha;
 
   logMessage(`${chalkStderr.green("✔")} Skills installed`);
+  return true;
 }
 
 export type RemoveInstalledSkillsStatus = "unchanged" | "removed" | "failed";

@@ -38,8 +38,8 @@ use common::{
     types::{
         IndexDescriptor,
         IndexDiff,
-        IndexId,
         IndexName,
+        IndexRef,
         StableIndexName,
         TableName,
         TabletIndexName,
@@ -47,7 +47,7 @@ use common::{
 };
 use errors::ErrorMetadata;
 use indexing::{
-    backend_in_memory_indexes::index_not_a_database_index_error,
+    database_index_snapshot::index_not_a_database_index_error,
     index_registry::{
         index_not_found_error,
         Index,
@@ -61,7 +61,6 @@ use value::{
 };
 
 use crate::{
-    bootstrap_model::index_backfills::IndexBackfillModel,
     patch_value,
     query::TableFilter,
     reads::TransactionReadSet,
@@ -81,9 +80,7 @@ pub struct IndexTable;
 impl SystemTable for IndexTable {
     type Metadata = TabletIndexMetadata;
 
-    fn table_name() -> &'static TableName {
-        &INDEX_TABLE
-    }
+    const TABLE_NAME: TableName = INDEX_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]
@@ -358,9 +355,6 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
     ) -> anyhow::Result<()> {
         for index in indexes {
             self.enable_index(&index).await?;
-            IndexBackfillModel::new(self.tx)
-                .delete_index_backfill(index.id())
-                .await?;
         }
         Ok(())
     }
@@ -375,10 +369,12 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
             IndexConfig::Database {
                 spec,
                 on_disk_state,
+                persistence_index_id,
             } => match on_disk_state {
                 DatabaseIndexState::Enabled => IndexConfig::Database {
                     spec,
                     on_disk_state: DatabaseIndexState::Backfilled { staged: true },
+                    persistence_index_id,
                 },
                 _ => {
                     anyhow::bail!("Index is not enabled, so it cannot be disabled");
@@ -616,26 +612,40 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
             (Some(enabled_index), None) => self.identical_or_replaced(enabled_index, new_index),
             (None, Some(pending_index)) => self.identical_or_replaced(pending_index, new_index),
             (Some(enabled_index), Some(pending_index)) => {
-                let mut comparison = self.identical_or_replaced(pending_index.clone(), new_index);
+                let mut pending_comparison =
+                    self.identical_or_replaced(pending_index.clone(), new_index.clone());
+                let mut enabled_comparison =
+                    self.identical_or_replaced(enabled_index.clone(), new_index);
+                if let IndexComparison::Identical(index) = &mut enabled_comparison {
+                    // Allows using a still active index for the current push if a pending
+                    // schema/push mutates the index, but hasn't been enabled
+                    // yet
+                    anyhow::ensure!(index == &enabled_index);
+                    enabled_comparison = IndexComparison::Replaced {
+                        replaced: vec![pending_index],
+                        replacement: ReplacementIndex::Identical(enabled_index),
+                    };
+                    return Ok(enabled_comparison);
+                }
                 if let IndexComparison::Replaced {
                     replaced,
                     replacement: _,
-                } = &mut comparison
+                } = &mut pending_comparison
                 {
                     // If the pending index has been mutated, we need to replace both the
                     // pending and enabled indexes.
                     anyhow::ensure!(*replaced == vec![pending_index.clone()]);
                     *replaced = vec![enabled_index, pending_index];
-                } else if let IndexComparison::Identical(index) = &mut comparison {
+                } else if let IndexComparison::Identical(index) = &mut pending_comparison {
                     // If the pending index is identical to the new index, we need to replace
                     // the enabled index with the pending index.
                     anyhow::ensure!(index == &pending_index);
-                    comparison = IndexComparison::Replaced {
+                    pending_comparison = IndexComparison::Replaced {
                         replaced: vec![enabled_index],
                         replacement: ReplacementIndex::Identical(pending_index),
                     };
                 }
-                comparison
+                pending_comparison
             },
         })
     }
@@ -858,12 +868,12 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
     }
 
     /// Returns by_id indexes for *all tablets*, including hidden ones.
-    pub async fn by_id_indexes(&mut self) -> anyhow::Result<BTreeMap<TabletId, IndexId>> {
+    pub async fn by_id_indexes(&mut self) -> anyhow::Result<BTreeMap<TabletId, IndexRef>> {
         let all_indexes = self.get_all_indexes()?;
-        Ok(all_indexes
+        all_indexes
             .filter(|index| index.name.is_by_id())
-            .map(|index| (*index.name.table(), index.id().internal_id().into()))
-            .collect())
+            .map(|index| Ok((*index.name.table(), IndexRef::try_from(index)?)))
+            .collect()
     }
 
     pub async fn by_id_index_metadata(

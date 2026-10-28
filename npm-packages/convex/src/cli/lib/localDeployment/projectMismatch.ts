@@ -1,4 +1,4 @@
-import { PlatformProjectDetails } from "@convex-dev/platform/managementApi";
+import { ProjectResponse } from "@convex-dev/platform/managementApi";
 import { Context } from "../../../bundler/context.js";
 import { logVerbose } from "../../../bundler/log.js";
 import {
@@ -19,7 +19,7 @@ export async function targetProjectForLocalSelector(
   ctx: Context,
   parsed: ParsedDeploymentSelector,
   currentSelection: DeploymentSelection,
-): Promise<PlatformProjectDetails | null> {
+): Promise<ProjectResponse | null> {
   switch (parsed.kind) {
     case "inTeamProject":
       return await getProjectDetails(ctx, {

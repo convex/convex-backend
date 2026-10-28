@@ -93,9 +93,10 @@ type ConfigureCmdOptions = {
 /**
  * As of writing, this is used by:
  * - `npx convex dev`
- * - `npx convex codegen`
+ * - `npx convex init`
  *
- * But is not used by `npx convex deploy` or other commands.
+ * But is not used by `npx convex deploy`, `npx convex codegen`,
+ * `npx convex env`, or other commands.
  */
 export async function deploymentCredentialsOrConfigure(
   ctx: Context,
@@ -121,17 +122,22 @@ export async function deploymentCredentialsOrConfigure(
     chosenConfiguration,
     cmdOptions,
   );
-  const { convexSiteUrl: siteUrl } = await fetchDeploymentCanonicalUrls(ctx, {
-    adminKey: selectedDeployment.adminKey,
-    deploymentUrl: selectedDeployment.url,
-  });
+  const { convexCloudUrl, convexSiteUrl: siteUrl } =
+    await fetchDeploymentCanonicalUrls(ctx, {
+      adminKey: selectedDeployment.adminKey,
+      deploymentUrl: selectedDeployment.url,
+    });
+  const applicationUrl = deploymentUrlForApplicationEnv(
+    selectedDeployment,
+    convexCloudUrl,
+  );
 
   if (selectedDeployment.deploymentFields !== null) {
     // Set the `CONVEX_DEPLOYMENT` env var + the `CONVEX_URL` env var
     await updateEnvAndConfigForDeploymentSelection(
       ctx,
       {
-        url: selectedDeployment.url,
+        url: applicationUrl,
         siteUrl,
         deploymentName: selectedDeployment.deploymentFields.deploymentName,
         teamSlug: selectedDeployment.deploymentFields.teamSlug,
@@ -157,6 +163,21 @@ export async function deploymentCredentialsOrConfigure(
         ? null
         : { ...selectedDeployment.deploymentFields, siteUrl: siteUrl },
   };
+}
+
+export function deploymentUrlForApplicationEnv(
+  selectedDeployment: {
+    url: string;
+    deploymentFields: { deploymentType: DeploymentType } | null;
+  },
+  canonicalCloudUrl: string,
+): string {
+  const deploymentType = selectedDeployment.deploymentFields?.deploymentType;
+  return deploymentType !== undefined &&
+    deploymentType !== "local" &&
+    deploymentType !== "anonymous"
+    ? canonicalCloudUrl
+    : selectedDeployment.url;
 }
 
 export async function _deploymentCredentialsOrConfigure(
@@ -607,14 +628,14 @@ async function selectExistingProject(
   devDeployment: "cloud" | "local";
 }> {
   const {
-    team: { slug: teamSlug },
+    team: { id: teamId, slug: teamSlug },
     chosen,
   } = await validateOrSelectTeam(ctx, config.team, "Team:");
 
   const projectSlug = await validateOrSelectProject(
     ctx,
     config.project,
-    teamSlug,
+    teamId,
     "Configure project",
     "Project:",
   );
@@ -692,10 +713,7 @@ async function ensureDeploymentProvisioned(
           },
           options.deploymentOptions.kind,
         );
-      return {
-        ...credentials,
-        onActivity: null,
-      };
+      return credentials;
     }
     case "local": {
       const credentials = await handleLocalDeployment(ctx, {

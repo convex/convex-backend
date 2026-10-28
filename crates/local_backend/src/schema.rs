@@ -30,12 +30,14 @@ use common::{
             SchemaState,
         },
     },
+    execution_context::RequestMetadata,
     http::{
         extract::{
             Json,
             MtState,
             Path,
         },
+        ExtractRequestMetadata,
         HttpResponseError,
     },
     types::IndexDiff,
@@ -45,6 +47,7 @@ use database::{
     SchemaModel,
 };
 use errors::ErrorMetadata;
+use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
     Serialize,
@@ -98,6 +101,7 @@ impl TryFrom<IndexMetadata<TableName>> for IndexMetadataResponse {
             IndexConfig::Database {
                 spec: DatabaseIndexSpec { fields },
                 on_disk_state,
+                persistence_index_id: _,
             } => {
                 let backfill_state = match on_disk_state {
                     DatabaseIndexState::Backfilling(_) => "in_progress".to_string(),
@@ -237,14 +241,16 @@ impl PrepareSchemaResponse {
 #[debug_handler]
 pub async fn prepare_schema(
     State(st): State<LocalAppState>,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(req): Json<PrepareSchemaArgs>,
 ) -> Result<Json<PrepareSchemaResponse>, HttpResponseError> {
-    let (response, _) = prepare_schema_handler(st, req).await?;
+    let (response, _) = prepare_schema_handler(st, request_metadata, req).await?;
     Ok(response)
 }
 
 pub async fn prepare_schema_handler(
     st: LocalAppState,
+    request_metadata: RequestMetadata,
     req: PrepareSchemaArgs,
 ) -> Result<(Json<PrepareSchemaResponse>, bool), HttpResponseError> {
     let bundle = req.bundle.try_into()?;
@@ -300,7 +306,7 @@ pub async fn prepare_schema_handler(
             vec![]
         };
         st.application
-            .commit_with_audit_log_events(tx, audit_events, "prepare_schema")
+            .commit_with_audit_log_events(tx, audit_events, request_metadata, "prepare_schema")
             .await?;
     }
 

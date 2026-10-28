@@ -7,7 +7,7 @@ description: "Tracking token usage of the Agent component"
 
 You can provide a `usageHandler` to the agent to track token usage. See an
 example in
-[this demo](https://github.com/get-convex/agent/blob/main/example/convex/usage_tracking/usageHandler.ts)
+[this demo](https://github.com/convex/agent/blob/main/example/convex/usage_tracking/usageHandler.ts)
 that captures usage to a table, then scans it to generate per-user invoices.
 
 You can provide a `usageHandler` to the agent, per-thread, or per-message.
@@ -119,7 +119,7 @@ export const schema = defineSchema({
 You can use a cron job to generate invoices at the end of the billing period.
 
 See
-[usage_tracking/invoicing.ts](https://github.com/get-convex/agent/blob/main/example/convex/usage_tracking/invoicing.ts)
+[usage_tracking/invoicing.ts](https://github.com/convex/agent/blob/main/example/convex/usage_tracking/invoicing.ts)
 for an example of how to generate invoices.
 
 You can then add it to `convex/crons.ts`:

@@ -47,7 +47,7 @@ export function LogToolbar({
     <div className="flex w-full flex-wrap items-center justify-end gap-2">
       {firstItem}
       {nents && (
-        <div className="min-w-[9.5rem]">
+        <div className="min-w-38">
           <MultiSelectCombobox
             options={nents}
             selectedOptions={selectedNents}
@@ -67,7 +67,7 @@ export function LogToolbar({
         </div>
       )}
       {!hideFunctionFilter && (
-        <div className="min-w-[9.5rem]">
+        <div className="min-w-38">
           <MultiSelectCombobox
             options={functionsForCurrentNents as string[]}
             selectedOptions={selectedFunctionsFiltered}
@@ -86,7 +86,7 @@ export function LogToolbar({
           />
         </div>
       )}
-      <div className="min-w-[9.5rem]">
+      <div className="min-w-38">
         <MultiSelectCombobox
           options={["success", "failure", "DEBUG", "INFO", "WARN", "ERROR"]}
           selectedOptions={selectedLevels}

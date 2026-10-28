@@ -1,8 +1,7 @@
-#![feature(try_blocks)]
-#![feature(type_alias_impl_trait)]
 #![feature(impl_trait_in_assoc_type)]
 
 mod broker;
+mod deployment_jwt;
 mod encryptor;
 mod legacy_encryptor;
 mod metrics;
@@ -17,15 +16,26 @@ pub use self::{
         AdminIdentityPrincipal,
         CoreIdTokenWithCustomClaims,
         CustomClaims,
+        ExportDownloadActor,
         FunctionRunnerKeyBroker,
         GetFileAuthorization,
         Identity,
+        IdentityValidity,
         KeyBroker,
         StoreFileAuthorization,
         SystemKey,
         UserIdentity,
     },
-    encryptor::Encryptor,
+    deployment_jwt::{
+        deployment_jwt_issuer,
+        DeploymentJwtKey,
+        DeploymentJwtKeys,
+        DeploymentJwtRequest,
+    },
+    encryptor::{
+        Encryptor,
+        RandomEncryptor,
+    },
     legacy_encryptor::LegacyEncryptor,
     operations::{
         bad_admin_key_error,

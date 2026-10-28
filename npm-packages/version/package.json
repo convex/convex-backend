@@ -20,7 +20,7 @@
     "@types/semver": "^7.3.13",
     "convex-test": "^0.0.41",
     "typescript": "^5.9.2",
-    "vite": "^6.4.2",
-    "vitest": "^3.2.4"
+    "vite": "^6.4.4",
+    "vitest": "^4.1.0"
   }
 }

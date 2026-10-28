@@ -18,6 +18,7 @@ use common::{
     },
 };
 use model::backend_info::BackendInfoModel;
+use roles::RequireDeploymentOp;
 use serde::Serialize;
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;

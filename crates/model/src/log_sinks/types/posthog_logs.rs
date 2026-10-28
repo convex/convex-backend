@@ -1,6 +1,12 @@
-use std::fmt;
+use std::{
+    collections::BTreeSet,
+    fmt,
+};
 
-use common::pii::PII;
+use common::{
+    log_streaming::LogTopic,
+    pii::PII,
+};
 use serde::{
     Deserialize,
     Serialize,
@@ -13,6 +19,9 @@ pub struct PostHogLogsConfig {
     pub api_key: PII<String>,
     pub host: Option<String>,
     pub service_name: Option<String>,
+    /// The set of topics this log stream is subscribed to. `None` means the
+    /// stream is subscribed to all topics, including ones added in the future.
+    pub topics: Option<BTreeSet<LogTopic>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -21,6 +30,8 @@ pub struct SerializedPostHogLogsConfig {
     pub api_key: String,
     pub host: Option<String>,
     pub service_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topics: Option<Vec<String>>,
 }
 
 impl From<PostHogLogsConfig> for SerializedPostHogLogsConfig {
@@ -29,17 +40,21 @@ impl From<PostHogLogsConfig> for SerializedPostHogLogsConfig {
             api_key: value.api_key.0,
             host: value.host,
             service_name: value.service_name,
+            topics: super::serialize_topics(value.topics),
         }
     }
 }
 
-impl From<SerializedPostHogLogsConfig> for PostHogLogsConfig {
-    fn from(value: SerializedPostHogLogsConfig) -> Self {
-        Self {
+impl TryFrom<SerializedPostHogLogsConfig> for PostHogLogsConfig {
+    type Error = anyhow::Error;
+
+    fn try_from(value: SerializedPostHogLogsConfig) -> Result<Self, Self::Error> {
+        Ok(Self {
             api_key: PII(value.api_key),
             host: value.host,
             service_name: value.service_name,
-        }
+            topics: super::deserialize_topics(value.topics)?,
+        })
     }
 }
 

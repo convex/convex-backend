@@ -1,20 +1,25 @@
 import {
   ChevronDownIcon,
   DesktopIcon,
+  DotsHorizontalIcon,
   DownloadIcon,
+  FileIcon,
   PaperPlaneIcon,
   UploadIcon,
 } from "@radix-ui/react-icons";
 import classNames from "classnames";
 import { Button } from "@ui/Button";
 import { Tooltip } from "@ui/Tooltip";
-import { AggregatedFunctionMetrics } from "hooks/usageMetrics";
-import { AggregatedFunctionMetricsV2 } from "hooks/usageMetricsV2";
+import {
+  AggregatedFunctionMetrics,
+  REST_OF_FUNCTIONS,
+  UsageDeploymentType,
+} from "hooks/usageMetrics";
 import { rootComponentPath } from "api/usage";
 import Link from "next/link";
 import { ReactNode, useMemo, useState } from "react";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
-import { DeploymentType, TeamResponse, ProjectDetails } from "generatedApi";
+import { TeamResponse, ProjectDetails } from "generatedApi";
 import { PuzzlePieceIcon } from "@common/elements/icons";
 import { BANDWIDTH_CATEGORIES } from "./lib/teamUsageCategories";
 import { deploymentTypeColorClasses } from "@common/lib/deploymentTypeColorClasses";
@@ -28,21 +33,26 @@ import { cn } from "@ui/cn";
 const ITEMS_SHOWN_INITIALLY = 6;
 const ITEMS_SHOW_MORE_INCREMENT = 20;
 
-type SystemRowKind =
+// Rows labelled by what they represent rather than by a function path.
+type SpecialRowKind =
   | "dashboard"
   | "cloudBackup"
   | "logStreaming"
-  | "streamingExport";
+  | "streamingExport"
+  | "fileServing"
+  | "restOfFunctions";
 
-function getSystemRowKind(fn: string): SystemRowKind | null {
+function getSpecialRowKind(fn: string): SpecialRowKind | null {
   if (fn.startsWith("_system/")) return "dashboard";
   if (fn === "_system_job/cloud_backup") return "cloudBackup";
   if (fn === "_system_job/log_stream_payload") return "logStreaming";
   if (fn === "_system_job/streaming_export") return "streamingExport";
+  if (fn === "_system_job/get_range") return "fileServing";
+  if (fn === REST_OF_FUNCTIONS) return "restOfFunctions";
   return null;
 }
 
-function renderSystemRowLabel(kind: SystemRowKind): ReactNode {
+function renderSpecialRowLabel(kind: SpecialRowKind): ReactNode {
   switch (kind) {
     case "dashboard":
       return (
@@ -72,6 +82,20 @@ function renderSystemRowLabel(kind: SystemRowKind): ReactNode {
           Streaming Export
         </span>
       );
+    case "fileServing":
+      return (
+        <span className="flex items-center gap-1.5">
+          <FileIcon />
+          File Serving
+        </span>
+      );
+    case "restOfFunctions":
+      return (
+        <span className="flex items-center gap-1.5">
+          <DotsHorizontalIcon />
+          All other functions
+        </span>
+      );
   }
 }
 
@@ -81,14 +105,12 @@ type DeploymentTypeRow = {
   componentPath: string;
   value: number;
   values: number[];
-  deploymentType: DeploymentType | null;
-  systemKind: SystemRowKind | null;
+  deploymentType: UsageDeploymentType | null;
+  specialKind: SpecialRowKind | null;
   href: string | null;
 };
 
-export type FunctionMetricsRow =
-  | AggregatedFunctionMetrics
-  | AggregatedFunctionMetricsV2;
+export type FunctionMetricsRow = AggregatedFunctionMetrics;
 
 export type FunctionBreakdownMetric = {
   name: string;
@@ -101,6 +123,8 @@ export type FunctionBreakdownMetric = {
   }[];
 };
 
+// function breakdown metrics
+
 export const FunctionBreakdownMetricCalls: FunctionBreakdownMetric = {
   name: "function calls",
   getTotal: (row) => row.callCount,
@@ -108,46 +132,7 @@ export const FunctionBreakdownMetricCalls: FunctionBreakdownMetric = {
   quantityType: "unit",
 };
 
-export const FunctionBreakdownMetricDatabaseBandwidth: FunctionBreakdownMetric =
-  {
-    name: "database bandwidth",
-    getTotal: (row) => row.databaseIngressSize + row.databaseEgressSize,
-    getValues: (row) => [row.databaseEgressSize, row.databaseIngressSize],
-    quantityType: "storage",
-    categories: Object.values(BANDWIDTH_CATEGORIES),
-  };
-
-export const FunctionBreakdownMetricActionCompute: FunctionBreakdownMetric = {
-  name: "action compute",
-  getTotal: (row) => ("actionComputeTime" in row ? row.actionComputeTime : 0),
-  getValues: (row) => ["actionComputeTime" in row ? row.actionComputeTime : 0],
-  quantityType: "actionCompute",
-};
-
-export const FunctionBreakdownMetricVectorBandwidth: FunctionBreakdownMetric = {
-  name: "vector bandwidth",
-  getTotal: (row) =>
-    "vectorIngressSize" in row
-      ? row.vectorIngressSize + row.vectorEgressSize
-      : 0,
-  getValues: (row) =>
-    "vectorIngressSize" in row
-      ? [row.vectorEgressSize, row.vectorIngressSize]
-      : [0, 0],
-  quantityType: "storage",
-  categories: Object.values(BANDWIDTH_CATEGORIES),
-};
-
-// V2 function breakdown metrics
-
-export const FunctionBreakdownMetricCallsV2: FunctionBreakdownMetric = {
-  name: "function calls",
-  getTotal: (row) => row.callCount,
-  getValues: (row) => [row.callCount],
-  quantityType: "unit",
-};
-
-export const FunctionBreakdownMetricDatabaseIOV2: FunctionBreakdownMetric = {
+export const FunctionBreakdownMetricDatabaseIO: FunctionBreakdownMetric = {
   name: "database I/O",
   getTotal: (row) => row.databaseIngressSize + row.databaseEgressSize,
   getValues: (row) => [row.databaseEgressSize, row.databaseIngressSize],
@@ -155,7 +140,7 @@ export const FunctionBreakdownMetricDatabaseIOV2: FunctionBreakdownMetric = {
   categories: Object.values(BANDWIDTH_CATEGORIES),
 };
 
-export const FunctionBreakdownMetricComputeV2: FunctionBreakdownMetric = {
+export const FunctionBreakdownMetricCompute: FunctionBreakdownMetric = {
   name: "compute",
   getTotal: (row) =>
     ("queryMutationComputeTime" in row ? row.queryMutationComputeTime : 0) +
@@ -183,7 +168,7 @@ export const FunctionBreakdownMetricComputeV2: FunctionBreakdownMetric = {
   ],
 };
 
-export const FunctionBreakdownMetricSearchV2: FunctionBreakdownMetric = {
+export const FunctionBreakdownMetricSearch: FunctionBreakdownMetric = {
   name: "search",
   getTotal: (row) =>
     ("textSearchGb" in row ? row.textSearchGb : 0) +
@@ -205,11 +190,18 @@ export const FunctionBreakdownMetricSearchV2: FunctionBreakdownMetric = {
   ],
 };
 
-export const FunctionBreakdownMetricDataEgressV2: FunctionBreakdownMetric = {
+export const FunctionBreakdownMetricDataEgress: FunctionBreakdownMetric = {
   name: "data egress",
   getTotal: (row) => ("dataEgress" in row ? row.dataEgress : 0),
   getValues: (row) => ["dataEgress" in row ? row.dataEgress : 0],
   quantityType: "storage",
+};
+
+export const FunctionBreakdownMetricAiGateway: FunctionBreakdownMetric = {
+  name: "AI",
+  getTotal: (row) => ("aiGatewayCost" in row ? row.aiGatewayCost : 0),
+  getValues: (row) => ["aiGatewayCost" in row ? row.aiGatewayCost : 0],
+  quantityType: "currency",
 };
 
 export function TeamUsageByFunctionChart({
@@ -263,7 +255,7 @@ export function TeamUsageByFunctionChart({
 
         {numShown < nonZeroRows.length && (
           <div className="h-4">
-            <div className="bottom-four pointer-events-none absolute h-24 w-full bg-gradient-to-b from-transparent to-background-secondary" />
+            <div className="bottom-four pointer-events-none absolute h-24 w-full bg-linear-to-b from-transparent to-background-secondary" />
             <div className="absolute bottom-0 left-[50%]">
               <Button
                 className="-translate-x-1/2"
@@ -301,12 +293,12 @@ function ChartRow({
     | undefined;
 }) {
   const path = row.function;
-  const { componentPath, systemKind } = row;
+  const { componentPath, specialKind } = row;
   const { module, functionName } = useMemo(() => {
     const separator = ".js:";
     const separatorPosition = path.indexOf(separator);
 
-    if (systemKind !== null) {
+    if (specialKind !== null) {
       return { module: "", functionName: "default" };
     }
 
@@ -319,7 +311,7 @@ function ChartRow({
       module: path.substring(0, separatorPosition),
       functionName: path.substring(separatorPosition + separator.length),
     };
-  }, [path, systemKind]);
+  }, [path, specialKind]);
 
   const { values } = row;
   const nonZeroValues = values
@@ -328,7 +320,7 @@ function ChartRow({
   const linkContents = (
     <div className="group relative flex h-10 py-1">
       <div role="cell" className="relative flex grow">
-        <div className="absolute top-0 left-0 flex h-full w-full items-center">
+        <div className="absolute top-0 left-0 flex size-full items-center">
           {nonZeroValues.map(([value, index], i) => (
             <div
               className={classNames(
@@ -345,10 +337,10 @@ function ChartRow({
           ))}
         </div>
 
-        <div className="absolute top-0 left-0 flex h-full w-full items-center text-sm">
+        <div className="absolute top-0 left-0 flex size-full items-center text-sm">
           <div className="truncate px-4">
-            {systemKind !== null ? (
-              renderSystemRowLabel(systemKind)
+            {specialKind !== null ? (
+              renderSpecialRowLabel(specialKind)
             ) : (
               <div className="flex items-center gap-1.5">
                 {componentPath && componentPath !== rootComponentPath && (
@@ -419,29 +411,36 @@ function ChartRow({
         : null;
 
   const deploymentTypeTip =
-    row.deploymentType === "dev" ? (
+    row.deploymentType === "local" ? (
+      <div>AI Gateway spend from local development linked to this project.</div>
+    ) : row.deploymentType === "dev" ? (
       <div>This row aggregates all dev deployments of your team.</div>
     ) : row.deploymentType === "preview" ? (
       <div>This row aggregates all preview deployments of your team.</div>
     ) : null;
 
-  const systemFunctionTip =
-    systemKind === "dashboard" ? (
+  const specialFunctionTip =
+    specialKind === "dashboard" ? (
       <div>
         Usage incurred by using the Convex dashboard, such as viewing the data
         or logs page for your deployment.
+      </div>
+    ) : specialKind === "restOfFunctions" ? (
+      <div>
+        Usage from this project’s lower-usage functions, which aren’t broken out
+        individually. Spans all deployment types.
       </div>
     ) : null;
   const tip =
     valueTip !== null ||
     deploymentTypeTip !== null ||
-    systemFunctionTip !== null ? (
+    specialFunctionTip !== null ? (
       <div className="flex flex-col items-center gap-2">
         {valueTip !== null ? (
           <div className="flex flex-col items-end">{valueTip}</div>
         ) : null}
         {deploymentTypeTip}
-        {systemFunctionTip}
+        {specialFunctionTip}
       </div>
     ) : undefined;
 
@@ -463,14 +462,17 @@ function ChartRow({
 function DeploymentTypeIndicator({
   deploymentType,
 }: {
-  deploymentType: DeploymentType;
+  deploymentType: UsageDeploymentType;
 }) {
+  const colorClasses = deploymentTypeColorClasses(
+    deploymentType === "local" ? "custom" : deploymentType,
+  );
   return (
     <>
       <span
         className={cn(
           "mr-2 size-4 rounded-xl border",
-          deploymentTypeColorClasses(deploymentType),
+          colorClasses,
           "border-border-transparent dark:border-border-transparent",
         )}
       />
@@ -490,31 +492,23 @@ function useOrderedAndGroupedRows(
   deployments: PlatformDeploymentResponse[],
   team: TeamResponse,
 ): DeploymentTypeRow[] {
-  const fallbackDeploymentType: DeploymentType = "preview";
   return useMemo(() => {
+    // A project can have several production deployments; link to the default
+    // one. `isDefault` only exists on cloud deployments.
+    const prodDeploymentName = deployments.find(
+      (d) => d.kind === "cloud" && d.deploymentType === "prod" && d.isDefault,
+    )?.name;
     const byFunctionAndDeploymentType = rows.reduce(
       (accumulator, row) => {
-        let deploymentType;
         const { componentPath } = row;
         let key;
-        let deployment = null;
-        const systemKind = getSystemRowKind(row.function);
-        const name = systemKind === "dashboard" ? "" : row.function;
+        const specialKind = getSpecialRowKind(row.function);
+        const name = specialKind === "dashboard" ? "" : row.function;
+        // Without a project, rows from every deployment type are shown together.
+        const deploymentType = project ? row.deploymentType : null;
         if (project) {
-          deployment = deployments.find(
-            (d) =>
-              (d.kind === "cloud" &&
-                "deploymentId" in row &&
-                d.id === row.deploymentId) ||
-              d.name === row.deploymentName,
-          );
-          deploymentType = deployment
-            ? deployment.deploymentType
-            : fallbackDeploymentType;
-
           key = `${componentPath} ${name} ${deploymentType}`;
         } else {
-          deploymentType = null;
           key = `${componentPath} ${name}`;
         }
 
@@ -534,15 +528,16 @@ function useOrderedAndGroupedRows(
             value: total,
             values,
             deploymentType,
-            systemKind,
+            specialKind,
 
             // We don’t link to development environments because they might belong to
             // someone else in the team. This might be improved later.
             href:
-              project && deploymentType === "prod" && systemKind === null
-                ? `/t/${team.slug}/${project.slug}/${
-                    deployment!.name
-                  }/functions?function=${encodeURIComponent(
+              project &&
+              deploymentType === "prod" &&
+              specialKind === null &&
+              prodDeploymentName
+                ? `/t/${team.slug}/${project.slug}/${prodDeploymentName}/functions?function=${encodeURIComponent(
                     name.replace(".js", ""),
                   )}`
                 : null,
@@ -554,8 +549,15 @@ function useOrderedAndGroupedRows(
       {} as Record<string, DeploymentTypeRow>,
     );
 
-    return Object.values(byFunctionAndDeploymentType).sort(
-      (a, b) => b.value - a.value,
-    );
-  }, [rows, metric, deployments, project, team, fallbackDeploymentType]);
+    // The roll-up sits last however large it is, so it reads as the tail of the
+    // list rather than as the project's biggest function.
+    return Object.values(byFunctionAndDeploymentType).sort((a, b) => {
+      const aIsRest = a.specialKind === "restOfFunctions";
+      const bIsRest = b.specialKind === "restOfFunctions";
+      if (aIsRest !== bIsRest) {
+        return aIsRest ? 1 : -1;
+      }
+      return b.value - a.value;
+    });
+  }, [rows, metric, deployments, project, team]);
 }

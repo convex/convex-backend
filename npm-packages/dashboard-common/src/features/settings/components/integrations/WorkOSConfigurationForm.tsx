@@ -605,24 +605,24 @@ function WorkOSTeamSection({
             <>
               {teamInfo ? (
                 <span className="inline-flex items-center gap-1 text-content-secondary">
-                  <CheckIcon className="h-4 w-4" /> Convex has access to this
+                  <CheckIcon className="size-4" /> Convex has access to this
                   WorkOS workspace{" "}
                 </span>
               ) : teamHealthData.error?.code === "WorkOSTeamNotFound" ? (
                 <span className="inline-flex items-center gap-1 text-content-warning">
-                  <ExclamationTriangleIcon className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="size-4" />
                   This WorkOS team could not be found. Did you delete it? You
                   may want to click on “Disconnect Workspace”.
                 </span>
               ) : teamHealthData.error?.code === "WorkOSTeamDeleted" ? (
                 <span className="inline-flex items-center gap-1 text-content-warning">
-                  <ExclamationTriangleIcon className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="size-4" />
                   This WorkOS team has been deleted. If you want to use WorkOS,
                   click on “Disconnect Workspace”.
                 </span>
               ) : teamHealthData.error?.code === "WorkOSAPIUnavailable" ? (
                 <span className="inline-flex items-center gap-1 text-content-warning">
-                  <ExclamationTriangleIcon className="h-4 w-4" /> WorkOS API
+                  <ExclamationTriangleIcon className="size-4" /> WorkOS API
                   currently unavailable
                 </span>
               ) : !teamHealthData.error && !teamHealthData.data ? (
@@ -631,7 +631,7 @@ function WorkOSTeamSection({
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 text-content-warning">
-                  <ExclamationTriangleIcon className="h-4 w-4" /> Unable to
+                  <ExclamationTriangleIcon className="size-4" /> Unable to
                   verify workspace
                 </span>
               )}
@@ -644,11 +644,11 @@ function WorkOSTeamSection({
           ) : teamInfo ? (
             canProvisionProduction ? (
               <span className="inline-flex items-center gap-1 text-content-secondary">
-                <CheckIcon className="h-4 w-4" /> Payment method configured
+                <CheckIcon className="size-4" /> Payment method configured
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-content-secondary">
-                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 text-content-warning" />
+                <ExclamationTriangleIcon className="size-4 shrink-0 text-content-warning" />
                 <span>
                   <Link
                     href="https://dashboard.workos.com/settings/billing"
@@ -1019,18 +1019,18 @@ function ConsolidatedEnvironmentSection({
               <>
                 {envHealthData.data ? (
                   <span className="inline-flex items-center gap-1 text-content-secondary">
-                    <CheckIcon className="h-4 w-4" /> Convex has access to this
+                    <CheckIcon className="size-4" /> Convex has access to this
                     environment
                   </span>
                 ) : envHealthData.error?.code ===
                   "WorkOSEnvironmentNotFound" ? (
                   <span className="inline-flex items-center gap-1 text-content-error">
-                    <Cross2Icon className="h-4 w-4" /> Environment not found in
+                    <Cross2Icon className="size-4" /> Environment not found in
                     WorkOS (may have been deleted)
                   </span>
                 ) : envHealthData.error?.code === "WorkOSAPIUnavailable" ? (
                   <span className="inline-flex items-center gap-1 text-content-warning">
-                    <ExclamationTriangleIcon className="h-4 w-4" /> WorkOS API
+                    <ExclamationTriangleIcon className="size-4" /> WorkOS API
                     currently unavailable
                   </span>
                 ) : !envHealthData.error ? (
@@ -1039,7 +1039,7 @@ function ConsolidatedEnvironmentSection({
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 text-content-warning">
-                    <ExclamationTriangleIcon className="h-4 w-4" /> Unable to
+                    <ExclamationTriangleIcon className="size-4" /> Unable to
                     verify environment
                   </span>
                 )}
@@ -1047,13 +1047,13 @@ function ConsolidatedEnvironmentSection({
             )}
             {teamMismatch ? (
               <span className="inline-flex items-center gap-1 text-content-warning">
-                <ExclamationTriangleIcon className="h-4 w-4" /> Created for a
+                <ExclamationTriangleIcon className="size-4" /> Created for a
                 different workspace than{" "}
                 <span className="font-mono">{workosTeam?.workosTeamName}</span>
               </span>
             ) : workosTeam ? (
               <span className="inline-flex items-center gap-1 text-content-secondary">
-                <CheckIcon className="h-4 w-4" /> Created by WorkOS workspace
+                <CheckIcon className="size-4" /> Created by WorkOS workspace
                 linked to this Convex team,{" "}
                 <span className="font-mono">{workosTeam.workosTeamName}</span>
               </span>
@@ -1105,7 +1105,7 @@ function ConsolidatedEnvironmentSection({
               if (changes.length === 0) {
                 return (
                   <span className="inline-flex items-center gap-1 text-content-secondary">
-                    <CheckIcon className="h-4 w-4" />
+                    <CheckIcon className="size-4" />
                     <code>WORKOS_*</code> environment variables match the values
                     for the provisioned environment
                   </span>
@@ -1116,7 +1116,7 @@ function ConsolidatedEnvironmentSection({
               return (
                 <div className="flex flex-col gap-2">
                   <span className="inline-flex items-center gap-1 text-content-warning">
-                    <ExclamationTriangleIcon className="h-4 w-4" />
+                    <ExclamationTriangleIcon className="size-4" />
                     Environment variables need to be configured
                   </span>
 
@@ -1157,7 +1157,7 @@ function ConsolidatedEnvironmentSection({
                             target="_blank"
                           >
                             Configure Manually
-                            <ExternalLinkIcon className="ml-1 h-3 w-3" />
+                            <ExternalLinkIcon className="ml-1 size-3" />
                           </Button>
                         )}
                       </div>
@@ -1283,19 +1283,19 @@ function ConsolidatedEnvironmentSection({
           </p>
           <div className="flex flex-col gap-1 text-xs">
             <span className="inline-flex items-center gap-1 text-content-secondary">
-              <CheckIcon className="h-4 w-4" />
+              <CheckIcon className="size-4" />
               <code>WORKOS_CLIENT_ID</code> is set to a shared AuthKit
               environment for this project
             </span>
             {workosEnvVars.apiKey ? (
               <span className="inline-flex items-center gap-1 text-content-secondary">
-                <CheckIcon className="h-4 w-4" />
+                <CheckIcon className="size-4" />
                 <code>WORKOS_API_KEY</code> is set so <code>authKit</code>{" "}
                 properties in convex.json will be configured by the Convex CLI
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-content-warning">
-                <ExclamationTriangleIcon className="h-4 w-4" />
+                <ExclamationTriangleIcon className="size-4" />
                 <code>WORKOS_API_KEY</code> is not set - automatic configuration
                 via convex.json will not work
               </span>

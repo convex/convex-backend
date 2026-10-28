@@ -6,8 +6,10 @@ demo.
 Modify the `convex/convex.config.ts` file to add or remove declared env vars and
 `convex/functions.ts` to make use of them.
 
-You can also try changing `fakecomponent/convex.config.ts` which the app hooks
-up.
+The app hooks up two components so you can see both env var shapes:
+`fakecomponent` declares a required env var (so `env` must be passed when
+installing it) and `optionalcomponent` declares only an optional one (so `env`
+can be omitted). Try changing either `convex.config.ts` to experiment.
 
 Spin up a backend using `just run-local-backend` and try your changes with
 `just convex dev`.

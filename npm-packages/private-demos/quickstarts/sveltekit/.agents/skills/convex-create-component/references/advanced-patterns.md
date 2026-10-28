@@ -37,20 +37,17 @@ export const enqueue = mutation({
 
 ## Deriving validators from schema
 
-Instead of manually repeating field types in return validators, extend the schema validator:
+Instead of manually repeating field types in return validators, use
+`schema.doc(tableName)` — the table's validator with the `_id` and
+`_creationTime` system fields added — and `schema.id(tableName)`:
 
 ```ts
 import { v } from "convex/values";
 import schema from "./schema.js";
 
-const notificationDoc = schema.tables.notifications.validator.extend({
-  _id: v.id("notifications"),
-  _creationTime: v.number(),
-});
-
 export const getLatest = query({
   args: {},
-  returns: v.nullable(notificationDoc),
+  returns: v.nullable(schema.doc("notifications")),
   handler: async (ctx) => {
     return await ctx.db.query("notifications").order("desc").first();
   },

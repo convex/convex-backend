@@ -171,7 +171,7 @@ export function FunctionRateHeatmapView({
       ? { ...data, rows: data.rows.filter((r) => r.key !== "_rest") }
       : data;
   return (
-    <div ref={containerRef} className="flex h-full w-full">
+    <div ref={containerRef} className="flex size-full">
       <CategoricalHeatmap
         data={displayData}
         kind={METRIC_TO_HEATMAP_KIND[metricKind]}
@@ -196,7 +196,7 @@ export function CategoricalHeatmap({
 }) {
   const config = KIND_CONFIG[kind];
   return (
-    <div className="flex h-full min-h-52 w-full flex-col">
+    <div className="flex size-full min-h-52 flex-col">
       <LoadingTransition
         loadingProps={{
           fullHeight: false,
@@ -204,13 +204,13 @@ export function CategoricalHeatmap({
           shimmer: false,
         }}
         loadingState={
-          <div className="flex h-full w-full items-center justify-center">
+          <div className="flex size-full items-center justify-center">
             <Spinner className="m-auto size-12" />
           </div>
         }
       >
         {data === null ? (
-          <div className="flex h-full w-full items-center justify-center px-12 text-center text-sm text-content-secondary">
+          <div className="flex size-full items-center justify-center px-12 text-center text-sm text-content-secondary">
             {config.emptyMessage}
           </div>
         ) : data === undefined ? null : (
@@ -305,7 +305,6 @@ function HeatmapGrid({
       el.removeEventListener("scroll", update);
       observer.disconnect();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortedRows.length]);
   // On mount (and whenever row count changes), scroll to the bottom so the
   // user sees the last (worst-performing) rows first. Without this, the
@@ -317,7 +316,6 @@ function HeatmapGrid({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     recomputeFade(el);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortedRows.length]);
   // Fade to a translucent-black endpoint (rather than fully transparent) for a
   // softer affordance. 12px tall on a 144px container is ~8%.
@@ -338,11 +336,11 @@ function HeatmapGrid({
   return (
     <div
       ref={containerRef}
-      className="flex h-full w-full flex-col gap-1 px-2 pt-1 pb-2"
+      className="flex size-full flex-col gap-1 px-2 pt-1 pb-2"
     >
       <div
         ref={scrollRef}
-        className="scrollbar flex flex-col overflow-y-auto pr-1 [scrollbar-gutter:stable]"
+        className="scrollbar flex scrollbar-gutter-stable flex-col overflow-y-auto pr-1"
         style={{ maskImage, WebkitMaskImage: maskImage, maxHeight: "9rem" }}
       >
         <div
@@ -520,7 +518,6 @@ function Legend({ config }: { config: KindConfig }) {
               ? VIRIDIS_STOPS
               : [...VIRIDIS_STOPS].reverse();
           return stops.map((color, i) => (
-            // eslint-disable-next-line react/no-array-index-key
             <div key={i} className="flex-1" style={{ background: color }} />
           ));
         })()}

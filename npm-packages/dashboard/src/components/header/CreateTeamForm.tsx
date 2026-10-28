@@ -45,7 +45,7 @@ export function CreateTeamForm({ onClose }: { onClose(): void }) {
       />
 
       <Button
-        className="mt-[1px] h-fit"
+        className="mt-px h-fit"
         size="sm"
         disabled={
           !formState.dirty || formState.isSubmitting || !formState.isValid

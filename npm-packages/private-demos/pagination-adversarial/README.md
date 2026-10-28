@@ -8,6 +8,6 @@ so we can test pages growing unboundedly.
 Run:
 
 ```
-just rush install
+just install-js
 npm run dev
 ```

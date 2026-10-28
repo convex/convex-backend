@@ -3,6 +3,7 @@ use std::{
         BTreeMap,
         HashMap,
     },
+    pin::Pin,
     sync::{
         atomic::{
             AtomicU64,
@@ -15,9 +16,9 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use errors::ErrorMetadata;
 use futures::{
     future::BoxFuture,
+    Stream,
     StreamExt,
 };
 use futures_async_stream::try_stream;
@@ -27,6 +28,7 @@ use reqwest::{
     Proxy,
     Url,
 };
+use rustls_platform_verifier::BuilderVerifierExt;
 use tokio::select;
 
 use crate::http::{
@@ -40,16 +42,33 @@ pub trait FetchClient: Send + Sync {
     async fn fetch(&self, request: HttpRequestStream) -> anyhow::Result<HttpResponseStream>;
 }
 
+/// The request's `AbortSignal` fired before the fetch (or the read of its
+/// response body) completed. Layers closer to JS translate this into a
+/// `DOMException` named `AbortError`, which is what the fetch spec requires and
+/// what SDKs check for.
+#[derive(Debug, thiserror::Error)]
+#[error("The signal has been aborted")]
+pub struct FetchAborted;
+
 pub struct ProxiedFetchClient {
     http_client:
         LazyLock<reqwest::Client, Box<dyn FnOnce() -> reqwest::Client + Send + Sync + 'static>>,
+    uses_proxy: bool,
 }
 
-// Share the underlying TlsConnector between ProxiedFetchClients
-static TLS_CONNECTOR: LazyLock<native_tls::TlsConnector> = LazyLock::new(|| {
-    let mut tls = native_tls::TlsConnector::builder();
-    tls.request_alpns(&["h2", "http/1.1"]);
-    tls.build().expect("failed to build TLS connector")
+// Share the underlying rustls::ClientConfig between ProxiedFetchClients
+static TLS_CONNECTOR: LazyLock<rustls::ClientConfig> = LazyLock::new(|| {
+    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("invalid default protocol versions?")
+    .with_platform_verifier()
+    .expect("Failed to create rustls_platform_verifier")
+    .with_no_client_auth();
+    // reqwest prefers HTTP2 by default, preserve that
+    config.alpn_protocols = vec!["h2".into(), "http/1.1".into()];
+    config
 });
 
 /// Creates a reqwest client configured with an optional proxy.
@@ -64,7 +83,10 @@ pub fn build_proxied_reqwest_client(
     client_id: String,
     redirect_policy: reqwest::redirect::Policy,
 ) -> reqwest::Client {
-    let mut builder = reqwest::Client::builder().redirect(redirect_policy);
+    let mut builder = reqwest::Client::builder()
+        .redirect(redirect_policy)
+        .http2_keep_alive_interval(*crate::knobs::HTTP2_CLIENT_KEEPALIVE_INTERVAL)
+        .http2_keep_alive_timeout(*crate::knobs::HTTP2_CLIENT_KEEPALIVE_TIMEOUT);
     // It's okay to panic on these errors, as they indicate a serious programming
     // error -- building the reqwest client is expected to be infallible.
     if let Some(proxy_url) = proxy_url {
@@ -90,6 +112,7 @@ impl ProxiedFetchClient {
         redirect_policy: reqwest::redirect::Policy,
     ) -> Self {
         Self {
+            uses_proxy: proxy_url.is_some(),
             http_client: LazyLock::new(Box::new(move || {
                 build_proxied_reqwest_client(proxy_url, client_id, redirect_policy)
             })),
@@ -104,28 +127,39 @@ impl FetchClient for ProxiedFetchClient {
             .http_client
             .request(request.method, request.url.as_str());
         let request_size = Arc::new(AtomicU64::new(0));
-        let body = Body::wrap_stream(request.body.inspect({
-            let request_size = request_size.clone();
-            move |b| {
-                if let Ok(b) = b {
-                    request_size
-                        .clone()
-                        .fetch_add(b.len() as u64, Ordering::Relaxed);
-                }
-            }
-        }));
-        request_builder = request_builder.body(body);
+        // Only attach a body when the request has one. `Body::wrap_stream` (used
+        // by `streaming_body`) reports `is_end_stream() == false`, so hyper omits
+        // END_STREAM from the HTTP/2 HEADERS frame and closes the stream with a
+        // trailing empty DATA frame -- which strict servers reject for a body-less
+        // GET (https://github.com/convex/convex-backend/issues/497). Omitting
+        // the body uses `Body::empty()` (`is_end_stream() == true`), so hyper sets
+        // END_STREAM on HEADERS and sends no DATA frame.
+        if let Some(body) = request.body {
+            request_builder = request_builder.body(streaming_body(body, request_size.clone()));
+        }
         for (name, value) in &request.headers {
+            // `Proxy-Authorization` is hop-by-hop and comes from the client's proxy
+            // configuration.
+            if name == http::header::PROXY_AUTHORIZATION {
+                continue;
+            }
             request_builder = request_builder.header(name.as_str(), value.as_bytes());
         }
         let raw_request = request_builder.build()?;
         let raw_response = select! {
             response = self.http_client.execute(raw_request) => {
-                response?
+                // Through our egress proxy, the chain below reqwest's message
+                // names the proxy ("tunnel error"), so keep only that message.
+                response.map_err(|e| {
+                    if self.uses_proxy {
+                        anyhow::anyhow!("{e}")
+                    } else {
+                        e.into()
+                    }
+                })?
             },
             _ = &mut request.signal => {
-                // TODO: This should turn into a DOMException with name "AbortError"
-                anyhow::bail!(ErrorMetadata::bad_request("RequestAborted", "AbortError"));
+                anyhow::bail!(FetchAborted);
             },
         };
         if raw_response.status() == StatusCode::PROXY_AUTHENTICATION_REQUIRED {
@@ -150,6 +184,23 @@ impl FetchClient for ProxiedFetchClient {
     }
 }
 
+/// Wraps a request body stream into a reqwest [`Body`], counting the bytes that
+/// flow through it into `request_size`.
+///
+/// This is intentionally a lazy, non-awaiting wrap: the body stream may be a
+/// full-duplex body whose first chunk is only produced after the response
+/// headers arrive, so we must not poll it before the request is sent.
+fn streaming_body(
+    body: Pin<Box<dyn Stream<Item = anyhow::Result<Bytes>> + Sync + Send>>,
+    request_size: Arc<AtomicU64>,
+) -> Body {
+    Body::wrap_stream(body.inspect(move |b| {
+        if let Ok(b) = b {
+            request_size.fetch_add(b.len() as u64, Ordering::Relaxed);
+        }
+    }))
+}
+
 #[try_stream(boxed, ok = Bytes, error = anyhow::Error)]
 async fn cancelable_body_stream<E: Into<anyhow::Error>>(
     stream: impl futures::stream::Stream<Item = Result<Bytes, E>> + Send + 'static,
@@ -163,8 +214,7 @@ async fn cancelable_body_stream<E: Into<anyhow::Error>>(
                     item.transpose().map_err(Into::<anyhow::Error>::into)
                 },
                 _ = &mut signal => {
-                    // TODO: This should turn into a DOMException with name "AbortError"
-                    Err(anyhow::anyhow!(ErrorMetadata::bad_request("RequestAborted", "AbortError")))
+                    Err(anyhow::anyhow!(FetchAborted))
                 },
             }
         };

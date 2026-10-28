@@ -71,7 +71,7 @@ function FunctionsProvider({ children }: { children: ReactNode }) {
 
   if (!modules || !nents) {
     return (
-      <div className={cn("flex h-full w-full items-center justify-center")}>
+      <div className={cn("flex size-full items-center justify-center")}>
         <LoadingLogo />
       </div>
     );

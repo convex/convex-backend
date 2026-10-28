@@ -1,6 +1,12 @@
 import { useMemo } from "react";
 import { useQuery } from "../react/client.js";
-import { FunctionReference, makeFunctionReference } from "../server/api.js";
+import {
+  FunctionArgs,
+  FunctionReturnType,
+  makeFunctionReference,
+  FunctionReference,
+  FunctionReference_future,
+} from "../server/api.js";
 import { jsonToConvex } from "../values/index.js";
 
 /**
@@ -9,7 +15,9 @@ import { jsonToConvex } from "../values/index.js";
  *
  * @public
  */
-export type Preloaded<Query extends FunctionReference<"query">> = {
+export type Preloaded<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+> = {
   __type: Query;
   _name: string;
   _argsJSON: string;
@@ -31,13 +39,13 @@ export type Preloaded<Query extends FunctionReference<"query">> = {
  *
  * @public
  */
-export function usePreloadedQuery<Query extends FunctionReference<"query">>(
-  preloadedQuery: Preloaded<Query>,
-): Query["_returnType"] {
+export function usePreloadedQuery<
+  Query extends FunctionReference<"query"> | FunctionReference_future<"query">,
+>(preloadedQuery: Preloaded<Query>): FunctionReturnType<Query> {
   const args = useMemo(
     () => jsonToConvex(preloadedQuery._argsJSON),
     [preloadedQuery._argsJSON],
-  ) as Query["_args"];
+  ) as FunctionArgs<Query>;
   const preloadedResult = useMemo(
     () => jsonToConvex(preloadedQuery._valueJSON),
     [preloadedQuery._valueJSON],

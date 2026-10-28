@@ -1,7 +1,7 @@
 ---
 title: "Role Actions"
 slug: "role-actions"
-sidebar_position: 3
+sidebar_position: 4
 description:
   "Reference for every action a Convex role can grant, and which built-in roles
   cover which actions."
@@ -92,6 +92,30 @@ Resource leaf: `sso:*`.
 | ----------------------------------------- | ----------------------------- | :--------: | :------------: |
 | `sso:enable`, `sso:disable`, `sso:update` | Manage the SSO configuration. |     ✓      |       ✗        |
 | `sso:view`                                | View the SSO configuration.   |     ✓      |       ✓        |
+
+## Authentication domains
+
+Resource leaf: `team:*`. These cover the **Authentication Domains** section of
+the [team authentication page](/team-management/sso.mdx), which both SSO and
+[Directory Sync](/team-management/directory-sync.mdx) read.
+
+| Action                                     | Description                  | Team Admin | Team Developer |
+| ------------------------------------------ | ---------------------------- | :--------: | :------------: |
+| `team:domain:create`, `team:domain:delete` | Add and remove team domains. |     ✓      |       ✗        |
+| `team:domain:view`                         | View the team's domains.     |     ✓      |       ✓        |
+
+## Directory Sync
+
+Resource leaf: `directorySync:*`.
+
+| Action                                                                 | Description                              | Team Admin | Team Developer |
+| ---------------------------------------------------------------------- | ---------------------------------------- | :--------: | :------------: |
+| `directorySync:enable`, `directorySync:disable`                        | Turn directory management on and off.    |     ✓      |       ✗        |
+| `directorySync:updateGroupMapping`, `directorySync:deleteGroupMapping` | Change the role a directory group gives. |     ✓      |       ✗        |
+| `directorySync:view`                                                   | View the Directory Sync configuration.   |     ✓      |       ✓        |
+
+Reviewing the staged roster before enabling Directory Sync also requires
+`member:view`, because it lists each team member and their role.
 
 ## Team integrations
 
@@ -190,6 +214,8 @@ identity.
 | `deployment:functions:runInternalQueries`, `deployment:functions:runTestQuery`         | Run internal queries or test queries against the deployment. |     ✓      |       ✓        |       ✓       |
 | `deployment:functions:runInternalMutations`, `deployment:functions:runInternalActions` | Run internal mutations or actions against the deployment.    |     ✓      |  ✓ _non-prod_  |       ✓       |
 | `deployment:functions:actAsUser`                                                       | Run functions as another authenticated user.                 |     ✓      |  ✓ _non-prod_  |       ✓       |
+| `deployment:usage:view`, `deployment:usageLimits:view`                                 | Read the deployment's current usage and its usage limits.    |     ✓      |       ✓        |       ✓       |
+| `deployment:usageLimits:write`                                                         | Create, update, or delete the deployment's usage limits.     |     ✓      |  ✓ _non-prod_  |       ✓       |
 
 ### Backups
 
@@ -207,12 +233,16 @@ for project-scoped, and `deployment:token:*` for deployment-scoped.
 
 ### Team-scoped tokens (resource leaf: `team:*:token:*`)
 
-| Action                                                                           | Description                       | Team Admin | Team Developer |
-| -------------------------------------------------------------------------------- | --------------------------------- | :--------: | :------------: |
-| `team:token:create`, `team:token:update`, `team:token:delete`, `team:token:view` | Manage team-scoped access tokens. |     ✓      |       ✗        |
+| Action                                                                           | Description                                                   | Team Admin | Team Developer |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------- | :--------: | :------------: |
+| `team:token:create`, `team:token:view`, `team:token:update`, `team:token:delete` | Create, view, update, and delete your own team-scoped tokens. |     ✓      |       ✓        |
 
-Members can always update or delete tokens **they personally created**,
-regardless of their team role.
+All of these actions are scoped to tokens **you personally created**.
+
+A team access token can only perform actions its creator is allowed to perform.
+If the creator has [custom roles](/team-management/custom-roles), the token is
+limited to the actions those roles allow, so issuing a token never escalates the
+creator's privileges.
 
 ### Project-scoped tokens (resource leaf: `project:…:token:*`)
 

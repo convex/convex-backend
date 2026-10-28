@@ -1,0 +1,16 @@
+{
+  "name": "wasm-runtime-bundler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/bundle-web-globals.mjs",
+    "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "convex": "workspace:*",
+    "esbuild": "0.27.0",
+    "udf-runtime": "workspace:*",
+    "web-streams-polyfill": "~3.3.0"
+  }
+}

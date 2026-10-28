@@ -1,6 +1,6 @@
 // @snippet start sendImageStore
 import { httpRouter } from "convex/server";
-import { httpAction } from "./_generated/server";
+import { env, httpAction } from "./_generated/server";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
@@ -30,7 +30,7 @@ http.route({
       // CORS headers
       headers: new Headers({
         // e.g. https://mywebsite.com, configured on your Convex dashboard
-        "Access-Control-Allow-Origin": process.env.CLIENT_ORIGIN!,
+        "Access-Control-Allow-Origin": env.CLIENT_ORIGIN,
         Vary: "origin",
       }),
     });
@@ -73,7 +73,7 @@ http.route({
       return new Response(null, {
         headers: new Headers({
           // e.g. https://mywebsite.com, configured on your Convex dashboard
-          "Access-Control-Allow-Origin": process.env.CLIENT_ORIGIN!,
+          "Access-Control-Allow-Origin": env.CLIENT_ORIGIN,
           "Access-Control-Allow-Methods": "POST",
           "Access-Control-Allow-Headers": "Content-Type, Digest",
           "Access-Control-Max-Age": "86400",

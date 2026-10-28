@@ -32,15 +32,13 @@ use crate::{
 
 pub mod types;
 
-pub static DATABASE_GLOBALS_TABLE: TableName = TableName::const_new("_db");
+pub const DATABASE_GLOBALS_TABLE: TableName = TableName::const_new("_db");
 
 pub struct DatabaseGlobalsTable;
 impl SystemTable for DatabaseGlobalsTable {
     type Metadata = DatabaseGlobals;
 
-    fn table_name() -> &'static TableName {
-        &DATABASE_GLOBALS_TABLE
-    }
+    const TABLE_NAME: TableName = DATABASE_GLOBALS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![]

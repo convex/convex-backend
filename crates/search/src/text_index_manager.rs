@@ -45,15 +45,12 @@ use storage::Storage;
 use crate::{
     memory_index::MemoryTextIndex,
     metrics,
-    query::{
-        CompiledQuery,
-        RevisionWithKeys,
-    },
-    searcher::FragmentedTextStorageKeys,
+    query::CompiledQuery,
     QueryResults,
     Searcher,
     TantivySearchIndexSchema,
     TextIndexWriteSize,
+    TextSearchResults,
 };
 
 #[derive(Clone)]
@@ -177,7 +174,10 @@ impl TextIndexManager {
             TantivySearchIndexSchema::new_for_index(index, &search.printable_index_name()?)?;
         let (compiled_query, reads) = tantivy_schema.compile(search, version)?;
 
-        let revisions_with_keys = self
+        let TextSearchResults {
+            revisions_with_keys,
+            filtered_bytes_searched,
+        } = self
             .run_compiled_query(
                 index,
                 &search.printable_index_name()?,
@@ -191,6 +191,7 @@ impl TextIndexManager {
         let results = QueryResults {
             revisions_with_keys,
             reads,
+            filtered_bytes_searched,
         };
         metrics::finish_search(timer, &results.revisions_with_keys);
         Ok(results)
@@ -203,13 +204,13 @@ impl TextIndexManager {
         query: pb::searchlight::TextQuery,
         searcher: Arc<dyn Searcher>,
         search_storage: Arc<dyn Storage>,
-    ) -> anyhow::Result<RevisionWithKeys> {
+    ) -> anyhow::Result<TextSearchResults> {
         let timer = metrics::search_timer(&SEARCHLIGHT_CLUSTER_NAME);
         let tantivy_schema = TantivySearchIndexSchema::new_for_index(index, printable_index_name)?;
         let compiled_query =
             CompiledQuery::try_from_text_query_proto(query, tantivy_schema.search_field)?;
 
-        let revisions_with_keys = self
+        let results = self
             .run_compiled_query(
                 index,
                 printable_index_name,
@@ -219,8 +220,8 @@ impl TextIndexManager {
                 search_storage,
             )
             .await?;
-        metrics::finish_search(timer, &revisions_with_keys);
-        Ok(revisions_with_keys)
+        metrics::finish_search(timer, &results.revisions_with_keys);
+        Ok(results)
     }
 
     async fn run_compiled_query(
@@ -231,12 +232,15 @@ impl TextIndexManager {
         compiled_query: CompiledQuery,
         searcher: Arc<dyn Searcher>,
         search_storage: Arc<dyn Storage>,
-    ) -> anyhow::Result<RevisionWithKeys> {
+    ) -> anyhow::Result<TextSearchResults> {
         // Ignore empty searches to avoid failures due to transient search
         // issues (e.g. bootstrapping).
         if compiled_query.is_empty() {
             tracing::debug!("Skipping empty search query");
-            return Ok(vec![]);
+            return Ok(TextSearchResults {
+                revisions_with_keys: vec![],
+                filtered_bytes_searched: 0,
+            });
         }
         let SnapshotInfo {
             disk_index,
@@ -250,12 +254,7 @@ impl TextIndexManager {
                 compiled_query,
                 memory_index,
                 search_storage,
-                disk_index
-                    .0
-                    .iter()
-                    .cloned()
-                    .map(FragmentedTextStorageKeys::from)
-                    .collect(),
+                disk_index.0.clone(),
                 *disk_index_ts,
                 searcher,
                 metric_labels,
@@ -334,6 +333,20 @@ impl TextIndexManager {
                 (Some(prev_version), Some(next_version)) => {
                     let prev_metadata: ParsedDocument<IndexMetadata<_>> = prev_version.parse()?;
                     let next_metadata: ParsedDocument<IndexMetadata<_>> = next_version.parse()?;
+                    // We can truncate in-memory indexes as we backfill since we know everything
+                    // through last_segment_ts is now on disk. Prevents unbounded growth of
+                    // in-memory indexes.
+                    if let IndexConfig::Text {
+                        on_disk_state: TextIndexState::Backfilling(next_backfill_state),
+                        ..
+                    } = &next_metadata.config
+                        && let Some(cursor) = &next_backfill_state.cursor
+                        && let Some(index) = indexes.get_mut(&id.internal_id().into())
+                    {
+                        index
+                            .memory_index_mut()
+                            .truncate(cursor.last_segment_ts.succ()?)?;
+                    }
                     let (old_snapshot, new_snapshot) =
                         match (&prev_metadata.config, &next_metadata.config) {
                             (
@@ -544,6 +557,22 @@ impl TextIndexManager {
             TextIndexManagerState::Bootstrapping => vec![],
             TextIndexManagerState::Ready(ref indexes) => indexes
                 .iter()
+                .map(|(id, s)| (*id, s.memory_index().size()))
+                .collect(),
+        }
+    }
+
+    /// In-memory index sizes used to decide whether to reject writes that are
+    /// too large. Excludes backfilling indexes: they aren't queryable, their
+    /// in-memory contents are kept bounded by the backfill flusher (which
+    /// truncates the memory index as it persists progress), and they should
+    /// never block writes to the table.
+    pub fn flushable_in_memory_index_sizes(&self) -> Vec<(IndexId, usize)> {
+        match self.indexes {
+            TextIndexManagerState::Bootstrapping => vec![],
+            TextIndexManagerState::Ready(ref indexes) => indexes
+                .iter()
+                .filter(|(_, s)| !matches!(s, TextIndex::Backfilling { .. }))
                 .map(|(id, s)| (*id, s.memory_index().size()))
                 .collect(),
         }

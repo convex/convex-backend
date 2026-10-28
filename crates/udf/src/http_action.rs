@@ -27,7 +27,7 @@ use value::sha256::{
     Sha256Digest,
 };
 
-pub const HTTP_ACTION_BODY_LIMIT: usize = 20 << 20;
+pub const HTTP_ACTION_RESPONSE_BODY_LIMIT: usize = 100 << 20;
 
 pub struct HttpActionRequest {
     pub head: HttpActionRequestHead,
@@ -91,6 +91,24 @@ impl TryFrom<pb::common::HttpActionRequestHead> for HttpActionRequestHead {
             url,
             method,
         })
+    }
+}
+
+impl From<HttpActionRequestHead> for pb::common::HttpActionRequestHead {
+    fn from(
+        HttpActionRequestHead {
+            headers,
+            url,
+            method,
+        }: HttpActionRequestHead,
+    ) -> Self {
+        Self {
+            http_headers: normalize_header_map(headers)
+                .map(HttpHeader::from)
+                .collect(),
+            url: url.to_string(),
+            method: method.to_string(),
+        }
     }
 }
 

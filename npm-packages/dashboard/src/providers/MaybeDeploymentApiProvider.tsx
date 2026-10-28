@@ -1,3 +1,4 @@
+import { JSX } from "react";
 import {
   DeploymentApiProviderProps,
   DeploymentApiProvider,
@@ -16,7 +17,6 @@ export function MaybeDeploymentApiProvider({
   ) : (
     // Render children without the deployment API provider
     // so the page can render and load server-side props.
-    // eslint-disable-next-line react/jsx-no-useless-fragment
     <>{children}</>
   );
 }

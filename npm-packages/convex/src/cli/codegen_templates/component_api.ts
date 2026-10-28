@@ -9,7 +9,12 @@ import {
 } from "../lib/components/definition/directoryStructure.js";
 import { StartPushResponse } from "../lib/deployApi/startPush.js";
 import { importPath, moduleIdentifier } from "./api.js";
-import { apiComment, compareStrings, header } from "./common.js";
+import {
+  apiComment,
+  compareModulePaths,
+  compareStrings,
+  header,
+} from "./common.js";
 import {
   ComponentExports,
   EvaluatedComponentDefinition,
@@ -346,7 +351,7 @@ async function* codegenDynamicApiObjects(
   const absModulePaths = await entryPoints(ctx, componentDirectory.path);
   const modulePaths = absModulePaths
     .map((p) => path.relative(componentDirectory.path, p))
-    .sort();
+    .sort(compareModulePaths);
   for (const modulePath of modulePaths) {
     const ident = moduleIdentifier(modulePath);
     const path = importPath(modulePath);
@@ -382,7 +387,7 @@ async function* codegenDynamicApiObjectsTS(
   const absModulePaths = await entryPoints(ctx, componentDirectory.path);
   const modulePaths = absModulePaths
     .map((p) => path.relative(componentDirectory.path, p))
-    .sort();
+    .sort(compareModulePaths);
   for (const modulePath of modulePaths) {
     const ident = moduleIdentifier(modulePath);
     const path = importPath(modulePath);

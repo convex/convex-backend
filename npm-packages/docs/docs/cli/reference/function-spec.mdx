@@ -1,0 +1,49 @@
+---
+sidebar_position: 16
+title: "npx convex function-spec"
+sidebar_label: "npx convex function-spec"
+description: "List function metadata from your deployment"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex function-spec`
+
+List argument and return values to your Convex functions.
+
+By default, this inspects your dev deployment.
+
+## Syntax
+
+```sh
+npx convex function-spec [options]
+```
+
+## Options
+
+<dl>
+<dt>`--file`</dt>
+<dd>
+
+Output as JSON to a file.
+
+</dd>
+<dt>`--prod`</dt>
+<dd>
+
+Read function metadata from this project's default production deployment.
+
+</dd>
+<dt>`--deployment <deployment>`</dt>
+<dd>
+
+Read function metadata from a specific deployment. Accepts:
+- a deployment name (e.g. joyful-capybara-123)
+- a deployment reference (e.g. dev/james, staging)
+- `dev` (for your personal dev deployment)
+- `prod` (for your project’s default production deployment)
+- `local` (for your local dev deployment).
+You can also select deployments in other projects with `project-slug:reference` or `team-slug:project-slug:reference`.
+
+</dd>
+</dl>

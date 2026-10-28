@@ -8,8 +8,5 @@
   "devDependencies": {
     "convex": "workspace:*",
     "typescript": "~5.0.3"
-  },
-  "dependencies": {
-    "prettier": "3.8.1"
   }
 }

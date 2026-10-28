@@ -4,6 +4,12 @@ sidebar_position: 300
 description: "Convex MCP server"
 ---
 
+import {
+  McpHarnessesList,
+  ClaudeCodeInlineMention,
+  CursorInlineMention,
+} from "@site/src/QuickstartsList.tsx";
+
 The Convex
 [Model Context Protocol](https://docs.cursor.com/context/model-context-protocol)
 (MCP) server provides several tools that allow AI agents to interact with your
@@ -13,33 +19,49 @@ Convex deployment.
 
 Add the following command to your MCP servers configuration:
 
-`npx -y convex@latest mcp start`
+```sh
+npx -y convex@latest mcp start
+```
 
-For Cursor you can use this quick link to install:
+Or see editor-specific instructions:
 
-[![Install MCP Server](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/en/install-mcp?name=convex&config=eyJjb21tYW5kIjoibnB4IC15IGNvbnZleEBsYXRlc3QgbWNwIHN0YXJ0In0%3D)
+<McpHarnessesList />
 
-or see editor specific instructions:
-
-- [Cursor](/ai/using-cursor.mdx#setup-the-convex-mcp-server)
-- [Claude Code](/ai/using-claude-code.mdx#setup-the-convex-mcp-server)
-- [Codex](/ai/using-codex.mdx#setup-the-convex-mcp-server)
-- [Conductor](/ai/using-conductor.mdx#setup-the-convex-mcp-server)
-- [VS Code](/ai/using-github-copilot.mdx#setup-the-convex-mcp-server)
+When using <ClaudeCodeInlineMention /> or <CursorInlineMention />, we recommend installing the [Convex plugin](/ai/overview.mdx#plugins), which automatically starts the MCP server.
 
 ## Configuration Options
 
-The MCP server supports several command-line options to customize its behavior:
+The MCP server supports several command-line options to customize its behavior.
+
+<Admonition type="info">
+
+For the full list of options, see the
+[`npx convex mcp` CLI reference](/cli/reference/mcp.mdx).
+
+</Admonition>
 
 ### Project Directory
 
-By default, the MCP server can run for multiple projects, and each tool call
-specifies its project directory. To run the server for a single project instead,
-use:
+The tools provided by the MCP server require agents to select a deployment. To
+find the right deployment to use, agents use the `status` tool.
+
+By default, `status` uses the current project directory. If you want to use
+another project directory by default or run `npx convex mcp` from a folder that
+is not a Convex project, you can change the project `status` uses with the
+`--project-dir` flag:
 
 ```sh
 npx -y convex@latest mcp start --project-dir /path/to/project
 ```
+
+<Admonition type="warning">
+
+Setting `--project-dir` doesn’t prevent agents from manually providing a custom
+`projectDir` in the `status` tool call. It also does not prevent the agent from
+running tools in deployments that belong to other projects. If you need to
+enforce security boundaries, check out [_Security_](#security).
+
+</Admonition>
 
 ### Deployment Selection
 
@@ -130,9 +152,147 @@ Available tools that can be disabled: `data`, `envGet`, `envList`, `envRemove`,
 
 ### Environment Variable Tools
 
-- **`envList`**: Lists all environment variables for a deployment
+- **`envList`**: Lists the names of all environment variables for a deployment.
+  Pass `includeValues: true` to also get their values
 - **`envGet`**: Retrieves the value of a specific environment variable
 - **`envSet`**: Sets a new environment variable or updates an existing one
 - **`envRemove`**: Removes an environment variable from the deployment
 
-[Read more about how to use the Convex MCP Server](https://stack.convex.dev/convex-mcp-server)
+## Security
+
+The MCP server is safe by default: in
+[production deployments](/production/multiple-deployments#deployment-types),
+agents can’t access <abbr title="Personally Identifiable Information">PII</abbr>,
+and they can only perform read-only operations.
+
+If necessary, you can customize the MCP server settings to grant more
+permissions in production deployments, or limit the MCP server
+to a single deployment.
+
+<Admonition type="info">
+
+If your agent is allowed to run `npx convex` commands independently,
+they will be run with the full authorization of your credentials,
+unless you use a [scoped deploy key](/cli/deploy-key-types.mdx#deployment-token).
+
+</Admonition>
+
+### Allowed tools by deployment type
+
+By default, the MCP server only allows **operations on
+[non-production deployments](/production/multiple-deployments#deployment-types)**
+and **safe operations on
+[production deployments](/production/multiple-deployments#deployment-types)**
+(i.e. actions that are read-only and don’t expose <abbr title="Personally Identifiable Information">PII</abbr> or environment variables).
+
+You can start the MCP server with `--cautiously-allow-production-pii` or
+`--dangerously-enable-production-deployments` to allow your agents to perform
+more actions on production deployments.
+
+{/* There are no line breaks in the cells to prevent MDX from adding a paragraph */}
+
+<table>
+  <caption className="sr-only">Allowed tools by deployment type and flags used</caption>
+  <thead>
+    <tr>
+      <th id="tool-category" scope="col">Tool category</th>
+      <th id="default" scope="col">Default</th>
+      <th id="allow-production-pii" scope="col">
+        <code>--cautiously-allow-production-pii</code>
+      </th>
+      <th id="enable-production-deployments" scope="col">
+        <code>--dangerously-enable-production-deployments</code>
+      </th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <tr>
+      <th
+        id="non-production-deployments"
+        colspan="4"
+        scope="colgroup"
+        align="left"
+      >
+        <a href="/production/multiple-deployments#deployment-types">
+          <strong>Non-production deployments</strong>
+        </a>
+      </th>
+    </tr>
+
+    <tr>
+      <th id="non-production-all-operations" scope="row" className="font-normal text-left">All operations</th>
+      <td align="center" headers="non-production-deployments non-production-all-operations default">✅</td>
+      <td align="center" headers="non-production-deployments non-production-all-operations allow-production-pii">✅</td>
+      <td align="center" headers="non-production-deployments non-production-all-operations enable-production-deployments">✅</td>
+    </tr>
+
+    <tr>
+      <th
+        id="production-deployments"
+        colspan="4"
+        scope="colgroup"
+        align="left"
+      >
+        <a href="/production/multiple-deployments#deployment-types">
+          <strong>Production deployments</strong>
+        </a>
+      </th>
+    </tr>
+
+    <tr>
+      <th id="production-non-pii-read-only" scope="row" className="font-normal text-left">Non-<abbr title="Personally Identifiable Information">PII</abbr> read-only operations<br /><small>(<code>insights</code>, <code>tables</code>, <code>functionSpec</code>)</small></th>
+      <td align="center" headers="production-deployments production-non-pii-read-only default">✅</td>
+      <td align="center" headers="production-deployments production-non-pii-read-only allow-production-pii">✅</td>
+      <td align="center" headers="production-deployments production-non-pii-read-only enable-production-deployments">✅</td>
+    </tr>
+
+    <tr>
+      <th id="production-pii-read-only" scope="row" className="font-normal text-left"><abbr title="Personally Identifiable Information">PII</abbr> read-only operations<br /><small>(<code>data</code>, <code>logs</code>, <code>runOneoffQuery</code>)</small></th>
+      <td align="center" headers="production-deployments production-pii-read-only default">❌</td>
+      <td align="center" headers="production-deployments production-pii-read-only allow-production-pii">✅</td>
+      <td align="center" headers="production-deployments production-pii-read-only enable-production-deployments">✅</td>
+    </tr>
+
+    <tr>
+      <th id="production-env-read" scope="row" className="font-normal text-left">Reading environment variables<br /><small>(<code>envGet</code>, <code>envList</code>)</small></th>
+      <td align="center" headers="production-deployments production-env-read default">❌</td>
+      <td align="center" headers="production-deployments production-env-read allow-production-pii">❌</td>
+      <td align="center" headers="production-deployments production-env-read enable-production-deployments">✅</td>
+    </tr>
+
+    <tr>
+      <th id="production-write-operations" scope="row" className="font-normal text-left">Write operations<br /><small>(<code>run</code>, <code>envSet</code>, <code>envRemove</code>)</small></th>
+      <td align="center" headers="production-deployments production-write-operations default">❌</td>
+      <td align="center" headers="production-deployments production-write-operations allow-production-pii">❌</td>
+      <td align="center" headers="production-deployments production-write-operations enable-production-deployments">✅</td>
+    </tr>
+
+  </tbody>
+</table>
+
+If you want to disable access to particular tools, you can also use the
+`--disable-tools` CLI flag.
+
+### Limit access to a specific deployment
+
+By default, the MCP server uses the user’s global authentication credentials
+(set up through `npx convex login`) to access deployments. As a result, agents
+using the MCP can access all projects that your Convex account has access to.
+
+If you want to restrict the MCP server to a particular deployment,
+[generate a deploy key](/cli/deploy-key-types.mdx#deployment-token) and set the
+`CONVEX_DEPLOY_KEY` environment variable.
+
+```sh
+CONVEX_DEPLOY_KEY="dev:happy-capybara-849|…=" npx -y convex@latest mcp start
+```
+
+<Admonition type="info" title="Limitation">
+
+The `insights` tool is not available when the MCP server is started with
+`CONVEX_DEPLOY_KEY` (for both production and non-production deployments).
+
+</Admonition>
+
+<StackPosts query="MCP server" />

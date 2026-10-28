@@ -87,7 +87,7 @@ impl From<ErrorMetadata> for ErrorMetadataProto {
         ErrorMetadataProto {
             code: ErrorCodeProto::from(metadata.code.clone()).into(),
             short_msg: Some(metadata.short_msg.to_string()),
-            msg: Some(metadata.msg.to_string()),
+            msg: Some(truncate(&metadata.msg)),
             occ_info: match metadata.code {
                 ErrorCode::OCC {
                     table_name,
@@ -111,6 +111,16 @@ impl From<ErrorMetadata> for ErrorMetadataProto {
     }
 }
 
+/// gRPC error messages are encoded in HTTP2 trailers, which are size limited
+/// limit error messages at 4K to stay on the safe side
+fn truncate(msg: &str) -> String {
+    const MAX_ERROR_LENGTH: usize = 4096;
+    if msg.len() <= MAX_ERROR_LENGTH {
+        return msg.to_owned();
+    }
+    format!("{}...", &msg[..msg.floor_char_boundary(MAX_ERROR_LENGTH)])
+}
+
 impl TryFrom<ErrorMetadataProto> for ErrorMetadata {
     type Error = anyhow::Error;
 
@@ -128,6 +138,20 @@ impl TryFrom<ErrorMetadataProto> for ErrorMetadata {
     }
 }
 
+fn has_connection_reset_source(status: &tonic::Status) -> bool {
+    let mut source = status.source();
+    while let Some(error) = source {
+        if error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset)
+        {
+            return true;
+        }
+        source = error.source();
+    }
+    false
+}
+
 pub trait ErrorMetadataStatusExt {
     fn from_anyhow(error: anyhow::Error) -> Self;
     fn into_anyhow(self) -> anyhow::Error;
@@ -138,7 +162,7 @@ pub trait ErrorMetadataStatusExt {
 
 impl ErrorMetadataStatusExt for tonic::Status {
     fn from_anyhow(error: anyhow::Error) -> Self {
-        let message = format!("{error:#}");
+        let message = truncate(&format!("{error:#}"));
         if let Some(metadata) = error.downcast_ref::<ErrorMetadata>().cloned() {
             let code: tonic::Code = metadata.code.grpc_status_code();
             let details = StatusDetailsProto {
@@ -152,6 +176,7 @@ impl ErrorMetadataStatusExt for tonic::Status {
 
     fn into_anyhow(self) -> anyhow::Error {
         let code = self.code();
+        let is_connection_reset = has_connection_reset_source(&self);
         let details = match StatusDetailsProto::decode(self.details()) {
             Ok(details) => details,
             Err(err) => {
@@ -173,7 +198,11 @@ impl ErrorMetadataStatusExt for tonic::Status {
                 Err(err) => return err.context("Failed to parse ErrorMetadata proto"),
             };
             error = error.context(error_metadata)
-        } else if code == tonic::Code::ResourceExhausted {
+        } else if code == tonic::Code::ResourceExhausted
+            || (code == tonic::Code::Unknown && is_connection_reset)
+        {
+            // A push can cut off an active connection, which Tonic reports as a
+            // source-backed `Unknown` rather than `Unavailable`.
             error = error.context(ErrorMetadata::overloaded(
                 INTERNAL_SERVER_ERROR,
                 INTERNAL_SERVER_ERROR_MSG,

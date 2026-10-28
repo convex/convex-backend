@@ -9,12 +9,11 @@
     "convex": "workspace:*",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "@faker-js/faker": "^10.0.0",
-    "prettier": "3.8.1"
+    "@faker-js/faker": "^10.0.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
-    "vite": "^6.4.2",
+    "vite": "^6.4.4",
     "typescript": "~5.0.3"
   }
 }

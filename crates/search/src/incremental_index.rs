@@ -52,7 +52,10 @@ use tokio::fs;
 use value::InternalId;
 
 use crate::{
-    archive::cache::ArchiveCacheManager,
+    archive::cache::{
+        ArchiveCacheManager,
+        CachedArchive,
+    },
     constants::CONVEX_EN_TOKENIZER,
     convex_en,
     disk_index::{
@@ -560,12 +563,20 @@ pub struct SearchSegmentForMerge {
     pub id_tracker: StaticIdTracker,
 }
 
+/// The on-disk files of a text segment fetched through the archive cache.
+/// `archives` keeps the files under `paths` on disk; drop it only once nothing
+/// reads from them anymore.
+pub struct FetchedTextSegment {
+    pub paths: TextSegmentPaths,
+    pub archives: Vec<CachedArchive>,
+}
+
 pub async fn fetch_text_segment<RT: Runtime>(
     archive_cache: ArchiveCacheManager<RT>,
     storage: Arc<dyn Storage>,
     keys: impl Into<FragmentedTextStorageKeys>,
     labels: SearchIndexMetricLabels<'_>,
-) -> anyhow::Result<TextSegmentPaths> {
+) -> anyhow::Result<FetchedTextSegment> {
     let keys = keys.into();
     let labels = labels.to_owned();
 
@@ -594,18 +605,21 @@ pub async fn fetch_text_segment<RT: Runtime>(
         labels,
     );
 
-    let (index_path, id_tracker_path, alive_bit_set_path, deleted_terms_path) = futures::try_join!(
+    let (index, id_tracker, alive_bitset, deleted_terms) = futures::try_join!(
         fetch_index_path,
         fetch_id_tracker_path,
         fetch_alive_bitset_path,
         fetch_deleted_terms
     )?;
 
-    Ok(TextSegmentPaths {
-        index_path,
-        id_tracker_path,
-        alive_bit_set_path,
-        deleted_terms_path,
+    Ok(FetchedTextSegment {
+        paths: TextSegmentPaths {
+            index_path: index.path().to_owned(),
+            id_tracker_path: id_tracker.path().to_owned(),
+            alive_bit_set_path: alive_bitset.path().to_owned(),
+            deleted_terms_path: deleted_terms.path().to_owned(),
+        },
+        archives: vec![index, id_tracker, alive_bitset, deleted_terms],
     })
 }
 
@@ -632,23 +646,32 @@ pub async fn fetch_compact_and_upload_text_segment<RT: Runtime>(
 ) -> anyhow::Result<FragmentedTextSegment> {
     let _storage = storage.clone();
     let labels = labels.to_owned();
-    let opened_segments = try_join_buffer_unordered(
-        "text_segment_merge",
-        segments.into_iter().map(move |segment| {
-            let pool = blocking_thread_pool.clone();
-            let storage = storage.clone();
-            let cache = cache.clone();
-            let labels = labels.clone();
-            async move {
-                let paths = fetch_text_segment(cache, storage, segment, labels).await?;
-                pool.execute(|| open_text_segment_for_merge(paths)).await?
-            }
-        }),
-    )
-    .await?;
+    let opened_segments: Vec<(SearchSegmentForMerge, Vec<CachedArchive>)> =
+        try_join_buffer_unordered(
+            "text_segment_merge",
+            segments.into_iter().map(move |segment| {
+                let pool = blocking_thread_pool.clone();
+                let storage = storage.clone();
+                let cache = cache.clone();
+                let labels = labels.clone();
+                async move {
+                    let FetchedTextSegment { paths, archives } =
+                        fetch_text_segment(cache, storage, segment, labels).await?;
+                    let opened = pool
+                        .execute(|| open_text_segment_for_merge(paths))
+                        .await??;
+                    anyhow::Ok((opened, archives))
+                }
+            }),
+        )
+        .await?;
+    let (opened_segments, archives): (Vec<_>, Vec<_>) = opened_segments.into_iter().unzip();
 
     let dir = TempDir::new()?;
     let new_segment = merge_segments(opened_segments, dir.path()).await?;
+    // The merge reads the fetched segments through mmaps that must stay valid
+    // until it has finished.
+    drop(archives);
     upload_text_segment(rt, _storage, new_segment).await
 }
 
@@ -679,6 +702,13 @@ pub async fn merge_segments(
     let total_alive = search_segments
         .iter()
         .fold(0, |acc, e| acc + e.alive_bitset.num_alive_docs());
+    // tantivy's IndexMerger panics while writing fast fields when no input
+    // segment has a live document.
+    anyhow::ensure!(
+        total_alive > 0,
+        "Cannot merge {} segments with no live documents",
+        search_segments.len()
+    );
 
     let index_dir = dir.join("index_dir");
     fs::create_dir(&index_dir).await?;

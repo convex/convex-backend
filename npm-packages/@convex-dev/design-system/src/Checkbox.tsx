@@ -3,6 +3,7 @@ import { cn } from "./cn";
 
 export function Checkbox({
   checked,
+  "aria-label": ariaLabel = "Selected",
   className,
   onChange,
   onKeyDown,
@@ -10,6 +11,7 @@ export function Checkbox({
   id = undefined,
 }: {
   checked: boolean | "indeterminate";
+  "aria-label"?: string;
   className?: string;
   onChange: React.EventHandler<React.SyntheticEvent<HTMLInputElement>>;
   onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void;
@@ -49,7 +51,7 @@ export function Checkbox({
       disabled={disabled ?? false}
       checked={checkedBool}
       aria-checked={checked === "indeterminate" ? "mixed" : checkedBool}
-      aria-label="Selected"
+      aria-label={ariaLabel}
     />
   );
 }

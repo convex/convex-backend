@@ -262,6 +262,13 @@ class Performance extends EventTarget implements IPerformance {
   }
 }
 
+Object.defineProperty(Performance.prototype, Symbol.toStringTag, {
+  value: "Performance",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
+
 class PerformanceEntry implements IPerformanceEntry {
   #name: string;
   #entryType: string;
@@ -317,11 +324,14 @@ class PerformanceEntry implements IPerformanceEntry {
       duration: this.#duration,
     };
   }
-
-  get [Symbol.toStringTag]() {
-    return "PerformanceEntry";
-  }
 }
+
+Object.defineProperty(PerformanceEntry.prototype, Symbol.toStringTag, {
+  value: "PerformanceEntry",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 class PerformanceMark extends PerformanceEntry implements IPerformanceMark {
   #detail: any;
@@ -337,6 +347,18 @@ class PerformanceMark extends PerformanceEntry implements IPerformanceMark {
   constructor(name: string, options?: { startTime?: number; detail?: any }) {
     const prefix = "Failed to construct 'PerformanceMark'";
     requiredArguments(arguments.length, 1, prefix);
+    // WebIDL dictionary conversion: only undefined, null, and objects
+    // (including functions) are accepted.
+    if (
+      options !== undefined &&
+      options !== null &&
+      typeof options !== "object" &&
+      typeof options !== "function"
+    ) {
+      throw new TypeError(
+        `${prefix}: The provided value is not of type 'PerformanceMarkOptions'.`,
+      );
+    }
 
     const { detail = null, startTime = callPerformanceNow() } = options ?? {};
 
@@ -360,6 +382,13 @@ class PerformanceMark extends PerformanceEntry implements IPerformanceMark {
     };
   }
 }
+
+Object.defineProperty(PerformanceMark.prototype, Symbol.toStringTag, {
+  value: "PerformanceMark",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 class PerformanceMeasure
   extends PerformanceEntry
@@ -410,6 +439,13 @@ class PerformanceMeasure
     };
   }
 }
+
+Object.defineProperty(PerformanceMeasure.prototype, Symbol.toStringTag, {
+  value: "PerformanceMeasure",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 export const setupPerformance = (global: any) => {
   Object.defineProperty(global, "Performance", {

@@ -19,7 +19,7 @@ RUN cargo chef prepare --recipe-path recipe.json --bin convex-local-backend
 # Build stage: Compiles the Rust backend with all dependencies
 # Uses cargo-chef's recipe from the previous stage for optimal caching
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS build
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 # Update APT configuration for Docker builds
 # Sets retry attempts, assumes yes for prompts, and configures dpkg timeout
@@ -60,17 +60,33 @@ WORKDIR /convex
 COPY scripts ./scripts
 RUN npm ci --prefix scripts/
 
-# Disable build cache as it's not usable without a real git repo present
-ENV RUSH_BUILD_CACHE_ENABLED=0
 COPY npm-packages ./npm-packages
 COPY Justfile ./
-RUN --mount=type=cache,target=/convex/npm-packages/common/temp/,sharing=locked just rush install
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked just install-js
 
+# Provision protoc and uv via mise before the cargo layers (versions + checksums
+# from mise.toml/mise.lock; mise's own version from min_version). mise lives only
+# in this build stage, never the runtime image. $PROTOC is set per cargo RUN below
+# so it's available to both `cargo chef cook` and the real build; uv goes on PATH
+# there because `npm-packages/convex`'s build script, which isolate's build.rs
+# runs through turbo, is a `uv run --script`.
+COPY mise.toml mise.lock ./
+ENV MISE_INSTALL_PATH="/usr/local/bin/mise" \
+    MISE_DATA_DIR="/mise" \
+    MISE_CONFIG_DIR="/mise" \
+    MISE_CACHE_DIR="/mise/cache"
+RUN curl -fsSL https://mise.run | MISE_VERSION="v$(sed -nE 's/^min_version = "([^"]+)"/\1/p' mise.toml)" sh \
+    && mise trust && mise install --locked protoc uv
+
+# Cargo reads .cargo/config.toml (e.g. RUSTY_V8_MIRROR, which redirects the V8
+# static-lib download to our fork) via hierarchical discovery from the working
+# directory, so it must be present before `cargo chef cook` builds dependencies.
+COPY .cargo/config.toml ./.cargo/config.toml
 COPY --from=chef /tmp/recipe.json recipe.json
 # Use cargo-chef to build dependencies from the recipe created in the first stage
 # This step will be cached unless dependencies change
-RUN --mount=type=cache,target=/convex/target/ --mount=type=cache,target=/usr/local/cargo/git/db --mount=type=cache,target=/usr/local/cargo/registry/ cargo chef cook --release --recipe-path recipe.json
-# Now copy everything else over -- we've minimized the set of files that cause a full `rush install` or `cargo build` to run.
+RUN --mount=type=cache,target=/convex/target/ --mount=type=cache,target=/usr/local/cargo/git/db --mount=type=cache,target=/usr/local/cargo/registry/ PROTOC="$(mise which protoc)" cargo chef cook --release --recipe-path recipe.json
+# Now copy everything else over -- we've minimized the set of files that cause a full `pnpm install` or `cargo build` to run.
 COPY . .
 
 # Build the convex-local-backend binary
@@ -79,7 +95,9 @@ ARG VERGEN_GIT_SHA
 ARG VERGEN_GIT_COMMIT_TIMESTAMP
 ENV VERGEN_GIT_SHA=${VERGEN_GIT_SHA}
 ENV VERGEN_GIT_COMMIT_TIMESTAMP=${VERGEN_GIT_COMMIT_TIMESTAMP}
-RUN --mount=type=cache,target=/convex/npm-packages/common/temp/,sharing=locked --mount=type=cache,target=/convex/target/ --mount=type=cache,target=/usr/local/cargo/git/db --mount=type=cache,target=/usr/local/cargo/registry/ <<EOF
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked --mount=type=cache,target=/convex/target/ --mount=type=cache,target=/usr/local/cargo/git/db --mount=type=cache,target=/usr/local/cargo/registry/ <<EOF
+export PROTOC="$(mise which protoc)"
+export PATH="$(dirname "$(mise which uv)"):$PATH"
 cargo build --release -p local_backend --bin convex-local-backend
 cp target/release/convex-local-backend .
 cargo build --release -p keybroker --bin generate_key
@@ -92,7 +110,7 @@ RUN if [[ -z "$debug" ]]; then strip ./convex-local-backend; strip ./generate_ke
 # Uses Ubuntu Noble (24.04) as the base image
 FROM ubuntu:noble
 ARG VERGEN_GIT_SHA
-LABEL org.opencontainers.repository=https://github.com/get-convex/convex-backend
+LABEL org.opencontainers.repository=https://github.com/convex/convex-backend
 LABEL org.opencontainers.image.revision=${VERGEN_GIT_SHA}
 
 WORKDIR /convex

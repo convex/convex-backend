@@ -18,7 +18,7 @@ export function usePrettyReadonlyCode(
   const [prettyCode, setPrettyCode] = useState<string>();
   const [isTooBig, setIsTooBig] = useState<boolean>(false);
   const [isFormattingCode, setIsFormattingCode] = useState(false);
-  const workerRef = useRef<Worker>();
+  const workerRef = useRef<Worker | undefined>(undefined);
 
   const workerCallback = useCallback((message: MessageEvent<string>) => {
     // Received formatted code.

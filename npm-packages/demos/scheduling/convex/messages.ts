@@ -52,7 +52,9 @@ export const updateExpiringMessage = internalMutation({
   },
   handler: async (ctx, { messageId, body, secondsLeft }) => {
     if (secondsLeft > 0) {
-      await ctx.db.patch(messageId, { body: formatMessage(body, secondsLeft) });
+      await ctx.db.patch("messages", messageId, {
+        body: formatMessage(body, secondsLeft),
+      });
       await ctx.scheduler.runAfter(
         1000,
         internal.messages.updateExpiringMessage,
@@ -63,7 +65,7 @@ export const updateExpiringMessage = internalMutation({
         },
       );
     } else {
-      await ctx.db.delete(messageId);
+      await ctx.db.delete("messages", messageId);
     }
   },
 });

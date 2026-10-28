@@ -11,6 +11,7 @@ doctest = false
 anyhow = { workspace = true }
 big_brain_private_api_types = { workspace = true }
 common = { workspace = true }
+errors = { workspace = true }
 reqwest = { workspace = true }
 
 [lints]

@@ -1,36 +1,28 @@
 import { Button } from "@ui/Button";
 import { Sheet } from "@ui/Sheet";
 import { Tooltip } from "@ui/Tooltip";
-import { Loading } from "@ui/Loading";
 import { Spinner } from "@ui/Spinner";
-import { Callout } from "@ui/Callout";
 import { formatBytes, formatNumberCompact } from "@common/lib/format";
-import { UsageSummary } from "hooks/usageMetrics";
-import { UsageSummaryRowV2 } from "hooks/usageMetricsV2";
+import { UsageSummaryRow } from "hooks/usageMetrics";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { formatQuantity } from "./lib/formatQuantity";
 import { ReactNode } from "react";
-import { GetTokenInfoResponse, TeamEntitlementsResponse } from "generatedApi";
+import { TeamEntitlementsResponse } from "generatedApi";
+
 import {
   QuestionMarkCircledIcon,
   CrossCircledIcon,
   ChevronRightIcon,
-  InfoCircledIcon,
+  ExclamationTriangleIcon,
 } from "@radix-ui/react-icons";
 import { cn } from "@ui/cn";
 import { useRouter } from "next/router";
 import { Donut } from "@ui/Donut";
-
-const METRIC_TO_SECTION: Record<string, string> = {
-  functionCalls: "functionCalls",
-  actionCompute: "actionCompute",
-  databaseStorage: "databaseStorage",
-  databaseBandwidth: "databaseBandwidth",
-  fileStorage: "filesStorage",
-  fileBandwidth: "filesBandwidth",
-  vectorStorage: "vectorsStorage",
-  vectorBandwidth: "vectorsBandwidth",
-  deploymentCount: "deployments",
-};
+import { Loading } from "@ui/Loading";
+import { formatDistanceToNowStrict } from "date-fns";
+import type { UsagePricing } from "./lib/usagePrices";
+import { getUsageSpend, formatSpend } from "./lib/usageSpend";
+import type { UsageSpend } from "./lib/usageSpend";
 
 const BUSINESS_METRIC_TO_SECTION: Record<string, string> = {
   functionCalls: "functionCalls",
@@ -41,6 +33,8 @@ const BUSINESS_METRIC_TO_SECTION: Record<string, string> = {
   searchStorage: "searchStorage",
   searchQueries: "searchQueries",
   dataEgress: "dataEgress",
+  auditLogBandwidth: "auditLogBandwidth",
+  aiGatewayCost: "aiGatewayCost",
   deploymentCount: "deployments",
 };
 
@@ -53,28 +47,35 @@ const SELF_SERVE_METRIC_TO_SECTION: Record<string, string> = {
   searchStorage: "searchStorage",
   searchQueries: "searchQueries",
   dataEgress: "dataEgress",
+  auditLogBandwidth: "auditLogBandwidth",
+  aiGatewayCost: "aiGatewayCost",
   deploymentCount: "deployments",
 };
 
 type BusinessMetricKey =
-  | keyof Omit<UsageSummaryRowV2, "deploymentClass" | "region">
+  | keyof Omit<UsageSummaryRow, "deploymentClass" | "region">
   | "compute"
   | "actionCompute"
-  | "deploymentCount"
-  | "chefTokens";
+  | "aiGatewayCost"
+  | "deploymentCount";
 
-type V2Section = {
+type Section = {
   metric: BusinessMetricKey;
-  // TODO: Remove string fallback once teamMaxSearchQueries is in generated types
-  entitlement?: keyof TeamEntitlementsResponse | string;
+  entitlement?: {
+    [K in keyof TeamEntitlementsResponse]: TeamEntitlementsResponse[K] extends number
+      ? K
+      : never;
+  }[keyof TeamEntitlementsResponse];
   format: (value: number) => string;
   detail: string;
   title: string;
   suffix?: string;
   noOnDemand?: boolean;
+  // The plan includes none of this metric; the whole amount bills on demand.
+  allOnDemand?: boolean;
 };
 
-const businessSections: V2Section[] = [
+const businessSections: Section[] = [
   {
     metric: "functionCalls",
     format: formatNumberCompact,
@@ -91,7 +92,8 @@ const businessSections: V2Section[] = [
   {
     metric: "databaseStorage",
     format: formatBytes,
-    detail: "The total size of all documents stored in your projects",
+    detail:
+      "The total size of all documents and indexes stored in your projects",
     title: "Database Storage",
   },
   {
@@ -126,20 +128,28 @@ const businessSections: V2Section[] = [
     title: "Data Egress",
   },
   {
+    metric: "auditLogBandwidth",
+    format: formatBytes,
+    detail:
+      "The amount of audit log data egressed to your configured S3 bucket.",
+    title: "Audit Log Bandwidth",
+  },
+  {
+    metric: "aiGatewayCost",
+    format: (v: number) => formatQuantity(v, "currency"),
+    detail: "Spend on Convex-managed AI models through the AI gateway",
+    title: "AI Gateway",
+    allOnDemand: true,
+  },
+  {
     metric: "deploymentCount",
     format: formatNumberCompact,
     detail: "The number of deployments across all projects",
     title: "Deployments",
   },
-  {
-    metric: "chefTokens",
-    format: (n: number) => `${formatNumberCompact(n)} Tokens`,
-    detail: "The number of Chef tokens used",
-    title: "Chef Tokens",
-  },
 ];
 
-const selfServeSections: V2Section[] = [
+const selfServeSections: Section[] = [
   {
     metric: "functionCalls",
     entitlement: "teamMaxFunctionCalls",
@@ -161,7 +171,8 @@ const selfServeSections: V2Section[] = [
     metric: "databaseStorage",
     entitlement: "teamMaxDatabaseStorage",
     format: formatBytes,
-    detail: "The total size of all documents stored in your projects",
+    detail:
+      "The total size of all documents and indexes stored in your projects",
     title: "Database Storage",
   },
   {
@@ -187,6 +198,13 @@ const selfServeSections: V2Section[] = [
     title: "Data Egress",
   },
   {
+    metric: "auditLogBandwidth",
+    format: formatBytes,
+    detail:
+      "The amount of audit log data egressed to your configured S3 bucket.",
+    title: "Audit Log Bandwidth",
+  },
+  {
     metric: "searchStorage",
     entitlement: "teamMaxVectorStorage",
     format: formatBytes,
@@ -209,48 +227,69 @@ const selfServeSections: V2Section[] = [
     noOnDemand: true,
   },
   {
-    metric: "chefTokens",
-    entitlement: "maxChefTokens",
-    format: (n: number) => `${formatNumberCompact(n)} Tokens`,
-    detail: "The number of Chef tokens used",
-    title: "Chef Tokens",
+    metric: "aiGatewayCost",
+    format: (v: number) => formatQuantity(v, "currency"),
+    detail: "Spend on Convex-managed AI models through the AI gateway",
+    title: "AI Gateway",
+    allOnDemand: true,
   },
 ];
 
 export function BusinessPlanSummary({
-  summaryV2,
-  deploymentCount,
-  chefTokenUsage,
-  hasFilter: _hasFilter,
+  summary,
   error,
+  aiGatewayCost,
+  aiGatewayCostError,
   isBusinessPlan = true,
   entitlements,
   hasSubscription = false,
   showEntitlements = false,
+  pricing = { status: "unavailable", reason: "unsupported-period" },
+  spendApplicable = true,
 }: {
-  summaryV2?: UsageSummaryRowV2[];
-  deploymentCount?: number;
-  chefTokenUsage?: GetTokenInfoResponse;
-  hasFilter: boolean;
+  summary?: UsageSummaryRow[];
   error?: any;
+  aiGatewayCost?: number;
+  aiGatewayCostError?: any;
   isBusinessPlan?: boolean;
   entitlements?: TeamEntitlementsResponse;
   hasSubscription?: boolean;
   showEntitlements?: boolean;
+  pricing?: UsagePricing;
+  spendApplicable?: boolean;
 }) {
   const router = useRouter();
+  const { dashboardShowCashUsage } = useLaunchDarkly();
+  const showSpend = dashboardShowCashUsage && pricing.status !== "unavailable";
+  const gridColumns = hasSubscription
+    ? showSpend
+      ? "grid-cols-[4fr_3fr_2fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_2fr_auto]"
+      : "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
+    : showSpend
+      ? "grid-cols-[5fr_4fr_2fr_auto]"
+      : "grid-cols-[5fr_4fr_auto]";
   const activeSections = isBusinessPlan ? businessSections : selfServeSections;
 
+  // Deployment counts live on the summary rows but are team-wide (the gauge has
+  // no project/component dimension we filter on), so sum across every row.
+  const deploymentCount = summary
+    ? summary.reduce((sum, row) => sum + row.deploymentCount, 0)
+    : undefined;
+  const pausedDeploymentCount = summary
+    ? summary.reduce((sum, row) => sum + row.pausedDeploymentCount, 0)
+    : undefined;
+  const idleDeploymentCount = summary
+    ? summary.reduce((sum, row) => sum + row.idleDeploymentCount, 0)
+    : undefined;
+
   // Aggregate usage rows by summing each metric in activeSections.
-  const aggregateRows = (rows: UsageSummaryRowV2[]) =>
+  const aggregateRows = (rows: UsageSummaryRow[]) =>
     rows.reduce(
       (acc, row) => {
         for (const section of activeSections) {
-          if (
-            section.metric === "deploymentCount" ||
-            section.metric === "chefTokens"
-          )
-            continue;
+          if (section.metric === "deploymentCount") continue;
+          // Comes from its own query, not the summary rows.
+          if (section.metric === "aiGatewayCost") continue;
           let value: number;
           if (section.metric === "compute") {
             value =
@@ -270,583 +309,347 @@ export function BusinessPlanSummary({
     );
 
   // Aggregate across deployment classes and regions
-  const aggregated = summaryV2 ? aggregateRows(summaryV2) : undefined;
+  const aggregated = summary ? aggregateRows(summary) : undefined;
 
-  // Add deployment count from separate data source
+  // Only show the audit log egress section for teams that can configure custom audit logs.
+  const visibleSections = activeSections.filter(
+    (section) =>
+      section.metric !== "auditLogBandwidth" ||
+      entitlements?.customAuditLogsInLogStreamsConfigEnabled === true,
+  );
+
+  // Apply the team-wide deployment count to the aggregate.
   if (aggregated && deploymentCount !== undefined) {
     aggregated.deploymentCount = deploymentCount;
   }
-
-  // Add chef token usage from separate data source
-  if (aggregated && chefTokenUsage) {
-    aggregated.chefTokens = chefTokenUsage.centitokensUsed / 100;
+  if (aggregated && aiGatewayCost !== undefined) {
+    aggregated.aiGatewayCost = aiGatewayCost;
   }
-
-  // For self-serve plans, aggregate only primary region (aws-us-east-1)
-  // so that included limits only apply to US-hosted deployments.
-  const primaryRegionAggregated =
-    !isBusinessPlan && summaryV2
-      ? aggregateRows(summaryV2.filter((row) => row.region === "aws-us-east-1"))
-      : undefined;
 
   const sectionToRoute = isBusinessPlan
     ? BUSINESS_METRIC_TO_SECTION
     : SELF_SERVE_METRIC_TO_SECTION;
 
-  const hasEuDeployments =
-    !isBusinessPlan && summaryV2?.some((s) => s.region !== "aws-us-east-1");
-
   return (
-    <>
-      {hasEuDeployments && (
-        <Callout variant="instructions" className="flex items-start gap-2">
-          <InfoCircledIcon className="mt-0.5 size-4 shrink-0" />
-          <p>
+    <Sheet
+      className="animate-fadeInFromLoading overflow-hidden"
+      padding={false}
+    >
+      <div className="flex flex-col gap-1 overflow-x-clip">
+        <div
+          className={cn(
+            "grid items-center gap-2 rounded-t border-b px-4 py-2 text-sm text-content-secondary",
+            gridColumns,
+          )}
+        >
+          <div>Resource</div>
+          <div>
             {hasSubscription ? (
-              <>
-                <span className="font-semibold">
-                  EU region usage is billed on-demand.
-                </span>{" "}
-                Included plan limits only apply to US-hosted deployments. All
-                usage on EU deployments is charged at on-demand rates, plus a
-                30% regional surcharge.
-              </>
-            ) : (
-              <>
-                <span className="font-semibold">
-                  EU region usage has no included limits on paid plans.
-                </span>{" "}
-                If you upgrade, included plan limits will only apply to
-                US-hosted deployments. EU deployment usage will be billed
-                on-demand at plan rates, plus a 30% regional surcharge.
-              </>
-            )}
-          </p>
-        </Callout>
-      )}
-      <Sheet
-        className="animate-fadeInFromLoading overflow-hidden"
-        padding={false}
-      >
-        <div className="flex flex-col gap-1 overflow-x-clip">
-          <div
-            className={cn(
-              "grid items-center gap-2 rounded-t border-b px-4 py-2 text-sm text-content-secondary",
-              hasSubscription
-                ? "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
-                : "grid-cols-[5fr_4fr_auto]",
-            )}
-          >
-            <div>Resource</div>
-            <div>
-              {hasSubscription ? (
-                <div className="flex items-center gap-1">
-                  Included{" "}
-                  <Tooltip
-                    tip="The amount of usage used within the included limits of your plan."
-                    side="right"
-                    className="hidden sm:block"
-                  >
-                    <QuestionMarkCircledIcon />
-                  </Tooltip>
-                </div>
-              ) : (
-                "Usage"
-              )}
-            </div>
-            {hasSubscription && (
               <div className="flex items-center gap-1">
-                On-demand{" "}
+                Included{" "}
                 <Tooltip
-                  tip="Usage beyond your plan's included limits."
+                  tip="The amount of usage used within the included limits of your plan."
                   side="right"
                   className="hidden sm:block"
                 >
                   <QuestionMarkCircledIcon />
                 </Tooltip>
               </div>
+            ) : (
+              "Usage"
             )}
-            <span className="invisible flex items-center gap-1 text-xs">
-              <span className="hidden whitespace-nowrap sm:inline">
-                View breakdown by day
-              </span>
-              <ChevronRightIcon className="size-4" />
-            </span>
           </div>
-          {error ? (
-            <PlanSummaryError />
-          ) : !aggregated ? (
-            <PlanSummaryLoading />
-          ) : (
-            activeSections.map((section, index) => {
-              const sectionId = sectionToRoute[section.metric];
-              const { section: _s, tab: _t, ...restQuery } = router.query;
-              const linkQuery = sectionId
-                ? { ...restQuery, section: sectionId }
-                : restQuery;
-              const linkHref = { pathname: router.pathname, query: linkQuery };
-
-              const metric = aggregated[section.metric] ?? 0;
-              const entitlement =
-                section.entitlement && entitlements
-                  ? ((entitlements as Record<string, unknown>)[
-                      section.entitlement
-                    ] as number | undefined)
-                  : undefined;
-
-              // For self-serve plans, only primary region (US) usage counts
-              // toward included limits, matching the V1 behavior.
-              const primaryRegionMetric = primaryRegionAggregated
-                ? (primaryRegionAggregated[section.metric] ?? 0)
-                : metric;
-              const includedAmount =
-                primaryRegionMetric !== undefined && entitlement !== undefined
-                  ? Math.min(primaryRegionMetric, entitlement)
-                  : undefined;
-              const onDemandAmount =
-                metric !== undefined && includedAmount !== undefined
-                  ? metric - includedAmount
-                  : undefined;
-
-              if (section.metric === "chefTokens") {
-                return (
-                  <div
-                    key={index}
-                    className={cn(
-                      "grid min-h-10 items-center gap-2 rounded-sm px-4 py-2 text-left transition-colors hover:bg-background-primary",
-                      hasSubscription
-                        ? "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
-                        : "grid-cols-[5fr_4fr_auto]",
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      {showEntitlements && entitlement !== undefined && (
-                        <Tooltip
-                          side="bottom"
-                          tip={`Your team has used ${Math.floor(100 * (metric / entitlement))}% of the included amount of ${section.title}.`}
-                          className="flex animate-fadeInFromLoading items-center"
-                        >
-                          <Donut current={metric} max={entitlement} />
-                        </Tooltip>
-                      )}
-                      <SectionLabel detail={section.detail}>
-                        {section.title}
-                      </SectionLabel>
-                    </div>
-                    <div className="animate-fadeInFromLoading">
-                      <span>{section.format(metric)}</span>
-                      {showEntitlements && entitlement !== undefined && (
-                        <span> / {section.format(entitlement)}</span>
-                      )}
-                    </div>
-                    {hasSubscription && <div />}
-                    <span className="invisible flex items-center gap-1 text-xs">
-                      <span className="hidden whitespace-nowrap sm:inline">
-                        View breakdown by day
-                      </span>
-                      <ChevronRightIcon className="size-4" />
-                    </span>
-                  </div>
-                );
-              }
-
-              return (
-                <Button
-                  key={index}
-                  variant="unstyled"
-                  onClick={() => {
-                    void router.push(linkHref, undefined, { shallow: true });
-                  }}
-                  className={cn(
-                    "group grid min-h-10 items-center gap-2 rounded-sm px-4 py-2 text-left transition-colors hover:bg-background-primary focus-visible:bg-background-primary focus-visible:outline-2 focus-visible:outline-border-selected",
-                    hasSubscription
-                      ? "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
-                      : "grid-cols-[5fr_4fr_auto]",
-                  )}
+          {hasSubscription && (
+            <div className="flex items-center gap-1">
+              On-demand{" "}
+              <Tooltip
+                tip="Usage beyond your plan's included limits."
+                side="right"
+                className="hidden sm:block"
+              >
+                <QuestionMarkCircledIcon />
+              </Tooltip>
+            </div>
+          )}
+          {showSpend && (
+            <span className="flex items-center gap-1">
+              Spend
+              {pricing.status === "ready" && (
+                <Tooltip
+                  tip={`Spend is only available for time ranges starting after the previous change to prices (${formatDistanceToNowStrict(pricing.period.start, { addSuffix: true })}).`}
                 >
-                  <div className="flex items-center gap-2">
-                    {showEntitlements && entitlement !== undefined && (
+                  <QuestionMarkCircledIcon />
+                </Tooltip>
+              )}
+            </span>
+          )}
+          <span className="invisible flex items-center gap-1 text-xs">
+            <span className="hidden whitespace-nowrap sm:inline">
+              View breakdown by day
+            </span>
+            <ChevronRightIcon className="size-4" />
+          </span>
+        </div>
+        {error ? (
+          <PlanSummaryError />
+        ) : !aggregated ? (
+          <PlanSummaryLoading />
+        ) : (
+          visibleSections.map((section, index) => {
+            const sectionId = sectionToRoute[section.metric];
+            const { section: _s, tab: _t, ...restQuery } = router.query;
+            const linkQuery = sectionId
+              ? { ...restQuery, section: sectionId }
+              : restQuery;
+            const linkHref = { pathname: router.pathname, query: linkQuery };
+
+            const metric = aggregated[section.metric] ?? 0;
+            const aiCostFailed =
+              section.metric === "aiGatewayCost" &&
+              aiGatewayCostError !== undefined;
+            const aiCostPending =
+              section.metric === "aiGatewayCost" &&
+              aiGatewayCost === undefined &&
+              !aiCostFailed;
+            const entitlement =
+              section.entitlement && entitlements
+                ? entitlements[section.entitlement]
+                : undefined;
+
+            const includedAmount = section.allOnDemand
+              ? 0
+              : entitlement !== undefined
+                ? Math.min(metric, entitlement)
+                : undefined;
+            const onDemandAmount =
+              metric !== undefined && includedAmount !== undefined
+                ? metric - includedAmount
+                : undefined;
+
+            const displayedUsage =
+              hasSubscription &&
+              !section.noOnDemand &&
+              includedAmount !== undefined
+                ? includedAmount
+                : metric;
+
+            const spend =
+              showSpend && pricing.status === "ready" && spendApplicable
+                ? section.metric === "aiGatewayCost"
+                  ? aiCostFailed || aiGatewayCost === undefined
+                    ? undefined
+                    : { amount: aiGatewayCost, missingDimensions: [] }
+                  : getUsageSpend(summary, section.metric, pricing.period)
+                : undefined;
+
+            return (
+              <Button
+                key={index}
+                variant="unstyled"
+                onClick={() => {
+                  void router.push(linkHref, undefined, { shallow: true });
+                }}
+                className={cn(
+                  "group grid min-h-10 items-center gap-2 rounded-sm px-4 py-2 text-left transition-colors hover:bg-background-primary focus-visible:bg-background-primary focus-visible:outline-2 focus-visible:outline-border-selected",
+                  gridColumns,
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  {showEntitlements &&
+                    (entitlement !== undefined ? (
                       <Tooltip
                         side="bottom"
-                        tip={`Your team has used ${Math.floor(100 * (primaryRegionMetric / entitlement))}% of the included amount of ${section.title}.`}
+                        tip={`Your team has used ${(100 * (displayedUsage / entitlement)).toFixed(2)}% of the included amount of ${section.title}.`}
                         className="flex animate-fadeInFromLoading items-center"
                       >
-                        <Donut
-                          current={primaryRegionMetric}
-                          max={entitlement}
-                        />
+                        <Donut current={displayedUsage} max={entitlement} />
                       </Tooltip>
-                    )}
-                    <SectionLabel detail={section.detail}>
-                      {section.title}
-                    </SectionLabel>
-                  </div>
-                  <div className="animate-fadeInFromLoading">
+                    ) : (
+                      // Keep sections without an included limit aligned with
+                      // the gauged ones.
+                      <div className="hidden size-6 sm:block" />
+                    ))}
+                  <SectionLabel detail={section.detail}>
+                    {section.title}
+                  </SectionLabel>
+                </div>
+                <div className="animate-fadeInFromLoading">
+                  {hasSubscription && section.allOnDemand ? (
+                    <span className="text-content-secondary">–</span>
+                  ) : aiCostFailed ? (
+                    <span className="text-content-secondary">Unavailable</span>
+                  ) : aiCostPending ? (
+                    <Loading fullHeight={false} className="h-4 w-16" />
+                  ) : (
                     <span>
-                      {hasSubscription &&
-                      !section.noOnDemand &&
-                      includedAmount !== undefined
-                        ? section.format(includedAmount)
-                        : section.format(metric)}
+                      {section.format(displayedUsage)}
                       {section.suffix &&
                         (!showEntitlements ? ` ${section.suffix}` : "")}
                     </span>
-                    {showEntitlements && entitlement !== undefined && (
-                      <span>
+                  )}
+                  {showEntitlements && entitlement !== undefined && (
+                    <span>
+                      {" "}
+                      / {section.format(entitlement)}
+                      {section.suffix ? ` ${section.suffix}` : ""}
+                    </span>
+                  )}
+                  {section.metric === "deploymentCount" &&
+                    isBusinessPlan &&
+                    pausedDeploymentCount !== undefined &&
+                    idleDeploymentCount !== undefined && (
+                      <span className="text-content-secondary">
                         {" "}
-                        / {section.format(entitlement)}
-                        {section.suffix ? ` ${section.suffix}` : ""}
+                        (
+                        {formatNumberCompact(
+                          Math.max(
+                            displayedUsage -
+                              pausedDeploymentCount -
+                              idleDeploymentCount,
+                            0,
+                          ),
+                        )}{" "}
+                        active · {formatNumberCompact(idleDeploymentCount)} idle
+                        · {formatNumberCompact(pausedDeploymentCount)} paused)
                       </span>
                     )}
+                </div>
+                {hasSubscription && (
+                  <div className="animate-fadeInFromLoading">
+                    {section.allOnDemand ? (
+                      aiCostFailed ? (
+                        <span className="text-content-secondary">
+                          Unavailable
+                        </span>
+                      ) : aiCostPending ? (
+                        <Loading fullHeight={false} className="h-4 w-16" />
+                      ) : (
+                        // The whole amount bills on demand, so it is not an
+                        // increment over an included amount.
+                        `${section.format(metric)}${section.suffix ? ` ${section.suffix}` : ""}`
+                      )
+                    ) : (
+                      !section.noOnDemand &&
+                      onDemandAmount !== undefined &&
+                      onDemandAmount > 0 &&
+                      `+${section.format(onDemandAmount)}${section.suffix ? ` ${section.suffix}` : ""}`
+                    )}
                   </div>
-                  {hasSubscription && (
-                    <div className="animate-fadeInFromLoading">
-                      {!section.noOnDemand &&
-                        onDemandAmount !== undefined &&
-                        onDemandAmount > 0 &&
-                        `+${section.format(onDemandAmount)}${section.suffix ? ` ${section.suffix}` : ""}`}
-                    </div>
-                  )}
-                  <span className="flex items-center gap-1 text-xs text-content-secondary">
-                    <span className="hidden whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 sm:inline">
-                      View breakdown by day
-                    </span>
-                    <ChevronRightIcon className="size-4" />
+                )}
+                {showSpend && (
+                  <div className="animate-fadeInFromLoading tabular-nums">
+                    {!spendApplicable ||
+                    section.metric === "deploymentCount" ? (
+                      <span className="text-content-secondary">–</span>
+                    ) : pricing.status === "error" || aiCostFailed ? (
+                      <span className="text-content-secondary">
+                        Unavailable
+                      </span>
+                    ) : pricing.status === "loading" || aiCostPending ? (
+                      <Loading fullHeight={false} className="h-4 w-16" />
+                    ) : (
+                      <SpendValue
+                        spend={spend}
+                        sectionTitle={section.title}
+                        showUnavailableWarning={
+                          pricing.status === "ready" &&
+                          section.metric !== "aiGatewayCost"
+                        }
+                      />
+                    )}
+                  </div>
+                )}
+                <span className="flex items-center gap-1 text-xs text-content-secondary">
+                  <span className="hidden whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 sm:inline">
+                    View breakdown by day
                   </span>
-                </Button>
-              );
-            })
-          )}
-        </div>
-      </Sheet>
-    </>
+                  <ChevronRightIcon className="size-4" />
+                </span>
+              </Button>
+            );
+          })
+        )}
+      </div>
+    </Sheet>
   );
 }
 
-export function PlanSummary({
-  chefTokenUsage,
-  teamSummary,
-  deploymentCount,
-  entitlements,
-  hasSubscription,
-  showEntitlements,
-  hasFilter,
-  error,
+function SpendValue({
+  spend,
+  sectionTitle,
+  showUnavailableWarning,
 }: {
-  chefTokenUsage?: GetTokenInfoResponse;
-  teamSummary?: UsageSummary[];
-  deploymentCount?: number;
-  entitlements?: TeamEntitlementsResponse;
-  hasSubscription: boolean;
-  showEntitlements: boolean;
-  hasFilter: boolean;
-  error?: any;
+  spend: UsageSpend | undefined;
+  sectionTitle: string;
+  showUnavailableWarning: boolean;
 }) {
   return (
-    <PlanSummaryForTeam
-      chefTokenUsage={chefTokenUsage}
-      teamSummary={teamSummary}
-      deploymentCount={deploymentCount}
-      entitlements={entitlements}
-      hasSubscription={hasSubscription}
-      showEntitlements={showEntitlements}
-      hasFilter={hasFilter}
-      error={error}
-    />
-  );
-}
-
-const sections: {
-  metric:
-    | "databaseStorage"
-    | "databaseBandwidth"
-    | "functionCalls"
-    | "actionCompute"
-    | "fileStorage"
-    | "fileBandwidth"
-    | "vectorStorage"
-    | "vectorBandwidth"
-    | "chefTokens"
-    | "deploymentCount";
-  entitlement:
-    | "teamMaxDatabaseStorage"
-    | "teamMaxDatabaseBandwidth"
-    | "teamMaxFunctionCalls"
-    | "teamMaxActionCompute"
-    | "teamMaxFileStorage"
-    | "teamMaxFileBandwidth"
-    | "teamMaxVectorStorage"
-    | "teamMaxVectorBandwidth"
-    | "maxChefTokens"
-    | "maxDeployments";
-  format: (value: number) => string;
-  detail: string;
-  title: string;
-  suffix?: string;
-  noOnDemand?: boolean;
-}[] = [
-  {
-    metric: "functionCalls",
-    entitlement: "teamMaxFunctionCalls",
-    format: formatNumberCompact,
-    detail:
-      "The number of times any query, mutation, file access or other function was called",
-    title: "Function Calls",
-  },
-  {
-    metric: "actionCompute",
-    entitlement: "teamMaxActionCompute",
-    format: formatNumberCompact,
-    suffix: "GB-hours",
-    detail:
-      "The execution time of all actions multiplied by their allocated amount of RAM",
-    title: "Action Compute",
-  },
-  {
-    metric: "databaseStorage",
-    entitlement: "teamMaxDatabaseStorage",
-    format: formatBytes,
-    detail: "The current total size of all documents stored in your projects",
-    title: "Database Storage",
-  },
-  {
-    metric: "databaseBandwidth",
-    entitlement: "teamMaxDatabaseBandwidth",
-    format: formatBytes,
-    detail: "The amount of data read and written",
-    title: "Database Bandwidth",
-  },
-  {
-    metric: "fileStorage",
-    entitlement: "teamMaxFileStorage",
-    format: formatBytes,
-    detail: "The current total size of all files stored in your projects",
-    title: "File Storage",
-  },
-  {
-    metric: "fileBandwidth",
-    entitlement: "teamMaxFileBandwidth",
-    format: formatBytes,
-    detail: "The amount of file data stored and read",
-    title: "File Bandwidth",
-  },
-  {
-    metric: "vectorStorage",
-    entitlement: "teamMaxVectorStorage",
-    format: formatBytes,
-    detail: "The current total size of all vectors stored in vector indexes",
-    title: "Vector Storage",
-  },
-  {
-    metric: "vectorBandwidth",
-    entitlement: "teamMaxVectorBandwidth",
-    format: formatBytes,
-    detail: "The amount of data read and written for vector indexes",
-    title: "Vector Bandwidth",
-  },
-  {
-    metric: "deploymentCount",
-    entitlement: "maxDeployments",
-    format: formatNumberCompact,
-    detail: "The current number of deployments across all projects",
-    title: "Deployments",
-    noOnDemand: true,
-  },
-  {
-    metric: "chefTokens",
-    entitlement: "maxChefTokens",
-    format: (n: number) => `${formatNumberCompact(n)} Tokens`,
-    detail: "The number of Chef tokens used",
-    title: "Chef Tokens",
-  },
-];
-
-export type PlanSummaryForTeamProps = {
-  chefTokenUsage?: GetTokenInfoResponse;
-  teamSummary?: UsageSummary[];
-  deploymentCount?: number;
-  entitlements?: TeamEntitlementsResponse;
-  showEntitlements: boolean;
-  hasSubscription: boolean;
-  hasFilter: boolean;
-  error?: any;
-};
-
-// Helper to aggregate usage metrics across regions
-// aws-us-east-1 counts towards "Included", other regions go to "On-demand"
-function aggregateRegionalMetric(
-  teamSummary: UsageSummary[] | undefined,
-  metricKey: keyof Omit<UsageSummary, "region">,
-): { total: number; primaryRegion: number } | undefined {
-  if (!teamSummary || teamSummary.length === 0) {
-    return undefined;
-  }
-
-  const primaryRegionData = teamSummary.find(
-    (s) => s.region === "aws-us-east-1",
-  );
-  const primaryRegion = primaryRegionData?.[metricKey] ?? 0;
-  const total = teamSummary.reduce((sum, s) => sum + s[metricKey], 0);
-
-  return { total, primaryRegion };
-}
-
-export function PlanSummaryForTeam({
-  chefTokenUsage,
-  teamSummary,
-  deploymentCount,
-  entitlements,
-  hasSubscription,
-  showEntitlements,
-  hasFilter,
-  error,
-}: PlanSummaryForTeamProps) {
-  const hasEuDeployments = teamSummary?.some(
-    (s) => s.region !== "aws-us-east-1",
-  );
-
-  return (
-    <>
-      {hasEuDeployments && (
-        <Callout variant="instructions" className="flex items-start gap-2">
-          <InfoCircledIcon className="mt-0.5 size-4 shrink-0" />
-          <p>
-            {hasSubscription ? (
-              <>
-                <span className="font-semibold">
-                  EU region usage is billed on-demand.
-                </span>{" "}
-                Included plan limits only apply to US-hosted deployments. All
-                usage on EU deployments is charged at on-demand rates, plus a
-                30% regional surcharge.
-              </>
-            ) : (
-              <>
-                <span className="font-semibold">
-                  EU region usage has no included limits on paid plans.
-                </span>{" "}
-                If you upgrade, included plan limits will only apply to
-                US-hosted deployments. EU deployment usage will be billed
-                on-demand at plan rates, plus a 30% regional surcharge.
-              </>
-            )}
-          </p>
-        </Callout>
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+      {spend === undefined || spend.missingDimensions.length > 0 ? (
+        <span className="text-content-secondary">–</span>
+      ) : (
+        formatSpend(spend.amount)
       )}
-      <Sheet
-        className="animate-fadeInFromLoading overflow-hidden"
-        padding={false}
-      >
-        <div className="flex flex-col gap-1 overflow-x-clip">
-          <div
-            className={cn(
-              "grid items-center gap-2 rounded-t border-b px-4 py-2 text-sm text-content-secondary",
-              hasSubscription
-                ? "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
-                : "grid-cols-[5fr_4fr_auto]",
-            )}
-          >
-            <div>Resource</div>
-            <div>
-              {hasSubscription ? (
-                <div className="flex items-center gap-1">
-                  Included{" "}
-                  <Tooltip
-                    tip="The amount of usage used within the included limits of your plan. Built-in usage limits are only applied to deployments hosted in the US region."
-                    side="right"
-                    className="hidden sm:block"
-                  >
-                    <QuestionMarkCircledIcon />
-                  </Tooltip>
-                </div>
-              ) : (
-                "Usage"
-              )}
-            </div>
-            {hasSubscription && (
-              <div className="flex items-center gap-1">
-                On-demand{" "}
-                <Tooltip
-                  tip="Usage beyond your plan's included limits, plus all usage from EU-hosted deployments. On-demand usage is charged at your plan's per-unit rates."
-                  side="right"
-                  className="hidden sm:block"
-                >
-                  <QuestionMarkCircledIcon />
-                </Tooltip>
-              </div>
-            )}
-            <span className="invisible flex items-center gap-1 text-xs">
-              <span className="hidden whitespace-nowrap sm:inline">
-                View breakdown by day
-              </span>
-              <ChevronRightIcon className="size-4" />
-            </span>
-          </div>
-          {error ? (
-            <PlanSummaryError />
-          ) : !teamSummary ? (
-            <PlanSummaryLoading />
-          ) : (
-            sections.map((section, index) => {
-              let metric: number | undefined;
-              let primaryRegionMetric: number | undefined;
-
-              if (section.metric === "chefTokens") {
-                metric = chefTokenUsage
-                  ? chefTokenUsage.centitokensUsed / 100
-                  : undefined;
-                primaryRegionMetric = metric; // Chef tokens are not region-specific
-              } else if (section.metric === "deploymentCount") {
-                metric = deploymentCount;
-                primaryRegionMetric = deploymentCount; // Deployment count is not region-specific
-              } else {
-                const aggregated = aggregateRegionalMetric(
-                  teamSummary,
-                  section.metric,
-                );
-                metric = aggregated?.total;
-                primaryRegionMetric = aggregated?.primaryRegion;
-              }
-
-              return (
-                <UsageSection
-                  key={index}
-                  metric={metric}
-                  primaryRegionMetric={primaryRegionMetric}
-                  entitlement={
-                    section.metric === "chefTokens"
-                      ? chefTokenUsage
-                        ? chefTokenUsage.centitokensQuota / 100
-                        : undefined
-                      : entitlements
-                        ? (entitlements[section.entitlement] ?? 0)
-                        : undefined
-                  }
-                  isNotSubjectToFilter={
-                    section.metric === "chefTokens" && hasFilter
-                  }
-                  hasSubscription={hasSubscription}
-                  metricName={section.metric}
-                  format={section.format}
-                  detail={section.detail}
-                  title={section.title}
-                  suffix={section.suffix}
-                  showEntitlements={showEntitlements}
-                  noOnDemand={section.noOnDemand}
-                />
-              );
-            })
+      {spend === undefined
+        ? showUnavailableWarning && <SpendWarning sectionTitle={sectionTitle} />
+        : spend.missingDimensions.length > 0 && (
+            <SpendWarning
+              sectionTitle={sectionTitle}
+              missingDimensions={spend.missingDimensions}
+            />
           )}
-        </div>
-      </Sheet>
-    </>
+    </span>
+  );
+}
+
+function SpendWarning({
+  sectionTitle,
+  missingDimensions,
+}: {
+  sectionTitle: string;
+  missingDimensions?: string[];
+}) {
+  return (
+    <Tooltip
+      aria-label={
+        missingDimensions
+          ? "Incomplete billing information"
+          : "Missing billing information"
+      }
+      className="inline-flex shrink-0 items-center text-content-warning"
+      tip={
+        missingDimensions ? (
+          <div className="space-y-2 p-1 text-left">
+            <p>
+              Spend unavailable: billing information is missing for some
+              metrics, deployment classes, or regions.
+            </p>
+            <div>
+              <p className="mb-1 font-semibold">Missing billing information</p>
+              <ul className="list-none space-y-1 text-content-secondary">
+                {missingDimensions.map((dimension) => (
+                  <li key={dimension}>{dimension}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ) : (
+          <p className="p-1 text-left">
+            Spend unavailable: {sectionTitle} spend cannot be calculated from
+            the available billing information.
+          </p>
+        )
+      }
+    >
+      <ExclamationTriangleIcon className="size-4" />
+    </Tooltip>
   );
 }
 
 function PlanSummaryError() {
   return (
     <div className="flex h-56 flex-col items-center justify-center p-4 text-center">
-      <CrossCircledIcon className="h-6 w-6 text-content-error" />
+      <CrossCircledIcon className="size-6 text-content-error" />
       <h5 className="mt-2">Error fetching Usage summary data</h5>
       <p className="mt-1 text-sm text-content-secondary">
         An error occurred while fetching usage summary data. Please try again
@@ -858,236 +661,11 @@ function PlanSummaryError() {
 
 function PlanSummaryLoading() {
   return (
-    <div className="flex h-[25rem] items-center justify-center p-4">
+    <div className="flex h-100 items-center justify-center p-4">
       <div className="flex items-center justify-center">
         <Spinner className="size-12" />
       </div>
     </div>
-  );
-}
-
-export function UsageOverview(props: {
-  metric?: number;
-  primaryRegionMetric?: number;
-  entitlement?: number;
-  hasSubscription?: boolean;
-  format: (value: number) => string;
-  detail?: string;
-  title?: string;
-  suffix?: string;
-  showEntitlements: boolean;
-  noOnDemand?: boolean;
-}) {
-  return (
-    <div className="mb-4 flex items-center gap-2">
-      <UsageAmount {...props} />
-    </div>
-  );
-}
-function UsageAmount({
-  metric,
-  primaryRegionMetric,
-  entitlement,
-  hasSubscription = false,
-  format,
-  detail,
-  title,
-  suffix = "",
-  showEntitlements,
-  noOnDemand = false,
-}: {
-  metric?: number;
-  primaryRegionMetric?: number;
-  entitlement?: number;
-  hasSubscription?: boolean;
-  format: (value: number) => string;
-  detail?: string;
-  title?: string;
-  suffix?: string;
-  showEntitlements: boolean;
-  noOnDemand?: boolean;
-}) {
-  // primaryRegionMetric is aws-us-east-1 usage, ONLY this counts for "Included"
-  const includedMetric = primaryRegionMetric;
-  const totalMetric = metric;
-
-  // Calculate included and on-demand amounts
-  // Included: min(aws-us-east-1 usage, entitlement)
-  // On-demand: total - included
-  const includedAmount =
-    includedMetric !== undefined && entitlement !== undefined
-      ? Math.min(includedMetric, entitlement)
-      : undefined;
-  const onDemandAmount =
-    totalMetric !== undefined && includedAmount !== undefined
-      ? totalMetric - includedAmount
-      : undefined;
-
-  return (
-    <>
-      <div className="flex items-center gap-2">
-        {showEntitlements &&
-          includedMetric !== undefined &&
-          entitlement !== undefined && (
-            <Tooltip
-              side="bottom"
-              tip={`Your team has used ${Math.floor(100 * (includedMetric / entitlement))}% of the included amount${title ? ` of ${title}` : ``}.`}
-              className="flex animate-fadeInFromLoading items-center"
-            >
-              <Donut current={includedMetric} max={entitlement} />
-            </Tooltip>
-          )}
-        {title && <SectionLabel detail={detail}>{title}</SectionLabel>}
-      </div>
-      {totalMetric === undefined || entitlement === undefined ? (
-        <Loading />
-      ) : (
-        <Value
-          limit={
-            showEntitlements && !(noOnDemand && totalMetric > entitlement)
-              ? format(entitlement) + (suffix ? ` ${suffix}` : "")
-              : null
-          }
-        >
-          {format(
-            hasSubscription && !noOnDemand && includedAmount !== undefined
-              ? includedAmount
-              : totalMetric,
-          )}
-          {!showEntitlements && suffix ? ` ${suffix}` : ""}
-        </Value>
-      )}
-      {hasSubscription &&
-        (totalMetric === undefined || entitlement === undefined ? (
-          <Loading />
-        ) : (
-          <Value>
-            {!noOnDemand &&
-              onDemandAmount !== undefined &&
-              onDemandAmount > 0 &&
-              `+${format(onDemandAmount)}${suffix ? ` ${suffix}` : ""}`}
-          </Value>
-        ))}
-    </>
-  );
-}
-function UsageSection({
-  metric,
-  primaryRegionMetric,
-  metricName,
-  entitlement,
-  hasSubscription,
-  format,
-  detail,
-  title,
-  suffix = "",
-  showEntitlements,
-  isNotSubjectToFilter,
-  noOnDemand = false,
-}: {
-  metric?: number;
-  primaryRegionMetric?: number;
-  metricName: string;
-  entitlement?: number;
-  hasSubscription: boolean;
-  format: (value: number) => string;
-  detail: string;
-  title: string;
-  suffix?: string;
-  showEntitlements: boolean;
-  isNotSubjectToFilter: boolean;
-  noOnDemand?: boolean;
-}) {
-  const router = useRouter();
-  const className = cn(
-    "group grid min-h-10 items-center gap-2 rounded-sm px-4 py-2 text-left transition-colors focus-visible:outline-2 focus-visible:outline-border-selected",
-    hasSubscription
-      ? "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
-      : "grid-cols-[5fr_4fr_auto]",
-    isNotSubjectToFilter
-      ? "bg-stripes"
-      : "hover:bg-background-primary focus-visible:bg-background-primary",
-  );
-
-  if (metricName === "chefTokens") {
-    const content = (
-      <div className={className}>
-        <UsageAmount
-          {...{
-            metric,
-            primaryRegionMetric,
-            entitlement,
-            hasSubscription,
-            format,
-            detail,
-            title,
-            suffix,
-            showEntitlements,
-            noOnDemand,
-          }}
-        />
-        <span className="invisible flex items-center gap-1 text-xs">
-          <span className="hidden whitespace-nowrap sm:inline">
-            View breakdown by day
-          </span>
-          <ChevronRightIcon className="size-4" />
-        </span>
-      </div>
-    );
-    if (isNotSubjectToFilter) {
-      return (
-        <Tooltip
-          tip="This metric does not support filtering by project or component"
-          side="bottom"
-          asChild
-        >
-          {content}
-        </Tooltip>
-      );
-    }
-    return content;
-  }
-
-  const section = METRIC_TO_SECTION[metricName];
-  const { section: _s, tab: _t, ...restQuery } = router.query;
-  const linkQuery = section
-    ? {
-        ...restQuery,
-        section,
-      }
-    : restQuery;
-
-  const linkHref = { pathname: router.pathname, query: linkQuery };
-
-  return (
-    <Button
-      variant="unstyled"
-      onClick={() => {
-        void router.push(linkHref, undefined, { shallow: true });
-      }}
-      className={className}
-    >
-      <UsageAmount
-        {...{
-          metric,
-          primaryRegionMetric,
-          entitlement,
-          hasSubscription,
-          format,
-          detail,
-          title,
-          suffix,
-          showEntitlements,
-          noOnDemand,
-        }}
-      />
-      <span className="flex items-center gap-1 text-xs text-content-secondary">
-        <span className="hidden whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 sm:inline">
-          View breakdown by day
-        </span>
-        <ChevronRightIcon className="size-4" />
-      </span>
-    </Button>
   );
 }
 
@@ -1107,21 +685,5 @@ function SectionLabel({
         </Tooltip>
       ) : null}
     </p>
-  );
-}
-
-function Value({
-  limit,
-  children,
-}: {
-  limit?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <div className="animate-fadeInFromLoading">
-      <span>{children}</span>
-      {/* Wrapping in a span here is purposeful https://github.com/facebook/react/issues/11538#issuecomment-390386520 */}
-      {limit !== null && limit !== undefined ? <span> / {limit}</span> : null}
-    </div>
   );
 }

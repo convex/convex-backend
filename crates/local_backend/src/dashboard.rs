@@ -21,6 +21,7 @@ use common::{
         ExtractRequestMetadata,
         HttpResponseError,
     },
+    runtime::try_join,
     shapes::{
         dashboard_shape_json,
         reduced::ReducedShape,
@@ -30,16 +31,17 @@ use common::{
 };
 use database::IndexModel;
 use http::StatusCode;
-use isolate::UdfArgsJson;
 use model::{
     config::types::ModuleConfig,
     virtual_system_mapping,
 };
+use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
     Serialize,
 };
 use serde_json::json;
+use udf::helpers::UdfArgsJson;
 use utoipa::ToSchema;
 use utoipa_axum::router::OpenApiRouter;
 use value::{
@@ -97,30 +99,40 @@ pub async fn shapes2(
     ExtractIdentity(identity): ExtractIdentity,
     Query(ShapesArgs { component }): Query<ShapesArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let mut out = serde_json::Map::new();
-
     identity.require_operation(keybroker::DeploymentOp::ViewData)?;
     let component = ComponentId::deserialize_from_string(component.as_deref())?;
     let snapshot = st.application.latest_snapshot()?;
+    let table_shapes = st.application.table_shapes();
     let mapping = snapshot.table_mapping().namespace(component.into());
 
-    for (namespace, table_name) in snapshot.table_registry.user_table_names() {
-        if TableNamespace::from(component) != namespace {
-            continue;
-        }
-        let table_summary = snapshot.table_summary(namespace, table_name);
+    // This can block the CPU for a long time so as a stopgap, spawn
+    // it onto its own task
+    let out = try_join("shapes2", async move {
+        let mut out = serde_json::Map::new();
+        for (namespace, table_name) in snapshot.table_registry.user_table_names() {
+            if TableNamespace::from(component) != namespace {
+                continue;
+            }
+            let table_shape = table_shapes
+                .as_ref()
+                .and_then(|shapes| shapes.table_shape(&mapping, table_name));
 
-        let shape = match table_summary {
-            Some(table_summary) => ReducedShape::from_type(
-                table_summary.inferred_type(),
-                &mapping.table_number_exists(),
-            ),
-            // Table summaries are still bootstrapping, use `Unknown` in the meantime
-            None => ReducedShape::Unknown,
-        };
-        let json = dashboard_shape_json(&shape, &mapping, virtual_system_mapping())?;
-        out.insert(String::from(table_name.clone()), json);
-    }
+            let shape = match table_shape {
+                Some(table_shape) => ReducedShape::from_type(
+                    table_shape.inferred_type(),
+                    &mapping.table_number_exists(),
+                ),
+                // Table shapes haven't been published yet, or the table was
+                // created after the last shape checkpoint; use `Unknown` in the
+                // meantime.
+                None => ReducedShape::Unknown,
+            };
+            let json = dashboard_shape_json(&shape, &mapping, virtual_system_mapping())?;
+            out.insert(String::from(table_name.clone()), json);
+        }
+        Ok(out)
+    })
+    .await?;
     Ok(Json(out))
 }
 
@@ -136,6 +148,7 @@ pub async fn shapes2(
 pub async fn delete_tables(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(DeleteTableArgs {
         table_names,
         component_id,
@@ -148,7 +161,7 @@ pub async fn delete_tables(
         .collect::<anyhow::Result<_>>()?;
     let component_id = ComponentId::deserialize_from_string(component_id.as_deref())?;
     st.application
-        .delete_tables(&identity, table_names, component_id)
+        .delete_tables(&identity, request_metadata, table_names, component_id)
         .await?;
     Ok(StatusCode::OK)
 }
@@ -165,12 +178,13 @@ pub async fn delete_tables(
 pub async fn delete_component(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(DeleteComponentArgs { component_id }): Json<DeleteComponentArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
     identity.require_operation(keybroker::DeploymentOp::WriteData)?;
     let component_id = ComponentId::deserialize_from_string(component_id.as_deref())?;
     st.application
-        .delete_component(&identity, component_id)
+        .delete_component(&identity, request_metadata, component_id)
         .await?;
     Ok(StatusCode::OK)
 }
@@ -243,7 +257,10 @@ pub async fn check_admin_key(
             );
         },
     };
-    let allowed_ops = admin.allowed_ops().to_vec();
+    let allowed_ops = admin
+        .allowed_ops()
+        .map_err(|e| anyhow::anyhow!(e))?
+        .to_vec();
     let is_read_only = admin.is_read_only();
     let serialized_ops: Vec<serde_json::Value> = allowed_ops
         .iter()

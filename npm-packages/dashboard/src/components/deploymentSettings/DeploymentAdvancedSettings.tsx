@@ -23,6 +23,7 @@ import type { DeploymentType } from "@convex-dev/platform/managementApi";
 import { THIRTY_MINUTES_MS, toDateTimeLocalValue } from "@common/lib/format";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { DeploymentReference } from "./DeploymentReference";
+import { DEPLOYMENT_SETTINGS_SECTIONS } from "lib/sectionAnchors";
 
 type TriStateValue = boolean | null;
 
@@ -124,7 +125,7 @@ function TriStateRadioGroup({
             className={cn(
               "flex items-center gap-2 text-sm",
               disabled ? "cursor-not-allowed" : "cursor-pointer",
-              "rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-util-accent",
+              "rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-util-accent",
             )}
           >
             <div
@@ -219,6 +220,7 @@ export function DeploymentAdvancedSettings() {
         onUpdate={(reference) => modifySettings({ reference })}
       />
       <TriStateSettingSheet
+        id={DEPLOYMENT_SETTINGS_SECTIONS.sendLogsToClient.id}
         title="Send Logs to Client"
         description="Whether function logs and errors are sent to the calling client."
         value={deployment.sendLogsToClient ?? null}
@@ -250,6 +252,7 @@ export function DeploymentAdvancedSettings() {
         onSave={modifySettings}
       />
       <TriStateSettingSheet
+        id={DEPLOYMENT_SETTINGS_SECTIONS.dashboardEditConfirmation.id}
         title="Dashboard Edit Confirmation"
         description="Whether the dashboard requires confirmation before allowing edits."
         value={deployment.dashboardEditConfirmation ?? null}
@@ -298,6 +301,7 @@ export function DeploymentAdvancedSettings() {
 }
 
 function TriStateSettingSheet({
+  id,
   title,
   description,
   value: initialValue,
@@ -310,6 +314,7 @@ function TriStateSettingSheet({
   disabledTip,
   onSave,
 }: {
+  id: string;
   title: string;
   description: string;
   value: TriStateValue;
@@ -358,7 +363,7 @@ function TriStateSettingSheet({
   }, [onSave, fieldName, pendingValue]);
 
   return (
-    <Sheet>
+    <Sheet id={id}>
       <h4 className="mb-2">{title}</h4>
       <p className="mb-4 text-xs text-content-secondary">{description}</p>
       <div className="flex flex-col gap-3">
@@ -477,7 +482,7 @@ export function DeploymentExpirySheet({
   }, []);
 
   return (
-    <Sheet>
+    <Sheet id={DEPLOYMENT_SETTINGS_SECTIONS.deploymentExpiry.id}>
       <h4 className="mb-2">Deployment Expiry</h4>
       <p className="mb-4 text-xs text-content-secondary">
         Set a time at which this deployment will be automatically deleted.

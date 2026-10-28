@@ -8,8 +8,17 @@ const QUERY_MODULE_PREAMBLE =
 export const RUN_ONEOFF_QUERY_SOURCE_DESCRIPTION =
   'JavaScript module source for a single file (testQuery.js) that exports a default readonly query, for example: export default query({ handler: async (ctx) => ({ count: (await ctx.db.query("messages").take(10)).length }) });';
 
-export const INLINE_QUERY_DESCRIPTION =
-  "JavaScript to evaluate as a readonly query, for example: 'await ctx.db.query(\"messages\").take(5)'. Simple expressions are returned automatically. For multi-statement queries, use an explicit return. Full `export default query(...)` modules are also supported. This is a one-shot query and cannot be combined with `--watch`. Use `--component` to target a mounted component. For more examples, see `npx convex docs`.";
+export const INLINE_QUERY_DESCRIPTION = [
+  "JavaScript to evaluate as a readonly query. The query is completely sandboxed, so it can only read data and cannot modify the database or access the network.",
+  "",
+  "This is a one-shot query and cannot be combined with `--watch`.",
+  "Use `--component` to target a mounted component.",
+  "",
+  "To format the query:",
+  '• Simple expressions are returned automatically, for example: `await ctx.db.query("messages").take(5)`.',
+  '• For multi-statement queries, use an explicit return, for example: `const firstMessage = await ctx.db.query("messages").first(); console.log(firstMessage?._id); return firstMessage;`.',
+  '• For full control, pass a module source that exports a default query, for example: `export default query({ handler: async (ctx) => { return await ctx.db.query("messages").take(10); } })`.',
+].join("\n");
 
 export type RunTestFunctionQuerySuccess = {
   kind: "success";

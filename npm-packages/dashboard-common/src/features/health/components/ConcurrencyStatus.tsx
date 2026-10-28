@@ -114,13 +114,13 @@ export function useConcurrencyStatus(
       <span className="flex animate-fadeInFromLoading items-center gap-3 text-xs">
         {criticalIssues.length > 0 && (
           <span className="flex items-center gap-1 text-content-error">
-            <CrossCircledIcon className="h-3 w-3 min-w-3" />
+            <CrossCircledIcon className="size-3 min-w-3" />
             {criticalIssues[0].message}
           </span>
         )}
         {warningIssues.length > 0 && (
           <span className="flex items-center gap-1 text-content-warning">
-            <ExclamationTriangleIcon className="h-3 w-3 min-w-3" />
+            <ExclamationTriangleIcon className="size-3 min-w-3" />
             {warningIssues[0].message}
           </span>
         )}

@@ -54,7 +54,7 @@ export class ErrorBoundary extends React.Component<
               Log Out
             </Button>
           </div>
-          <Sheet className="max-h-[50vh] w-[50rem] max-w-[80vw] overflow-auto font-mono text-sm">
+          <Sheet className="max-h-[50vh] w-200 max-w-[80vw] overflow-auto font-mono text-sm">
             {error.message}
             <pre>
               <code>{error.stack}</code>

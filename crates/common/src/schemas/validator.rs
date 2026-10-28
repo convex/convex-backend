@@ -40,6 +40,7 @@ use value::{
 
 use super::DocumentSchema;
 use crate::{
+    bootstrap_model::components::handles::FunctionHandle,
     document::{
         CREATION_TIME_FIELD,
         ID_FIELD,
@@ -60,9 +61,13 @@ pub enum Validator {
     Null,
     Float64,
     Int64,
+    /// CommitTs at rest should be an `Int64`, but in a pending write can be a
+    /// placeholder value. The CommitTs is injected at commit time.
+    CommitTs,
     Boolean,
     String,
     Bytes,
+    Function(FunctionValidator),
     Literal(LiteralValidator),
     Array(Box<Validator>),
     Record(Box<Validator>, Box<Validator>),
@@ -78,6 +83,8 @@ impl Display for Validator {
             Validator::Null => write!(f, "v.null()"),
             Validator::Float64 => write!(f, "v.float64()"),
             Validator::Int64 => write!(f, "v.int64()"),
+            Validator::CommitTs => write!(f, "v.commitTs()"),
+            Validator::Function(function_validator) => write!(f, "{function_validator}"),
             Validator::Boolean => write!(f, "v.boolean()"),
             Validator::String => write!(f, "v.string()"),
             Validator::Bytes => write!(f, "v.bytes()"),
@@ -102,14 +109,13 @@ impl Validator {
     ) -> Result<(), ValidationError> {
         let all_tables_number_to_name =
             all_tables_number_to_name(table_mapping, virtual_system_mapping);
-        self.check_value_internal(value, &all_tables_number_to_name, ValidationContext::new())
+        self.check_value_internal(value, &all_tables_number_to_name)
     }
 
     fn check_value_internal(
         &self,
         value: &ConvexValue,
         all_tables_number_to_name: &impl Fn(TableNumber) -> anyhow::Result<TableName>,
-        context: ValidationContext,
     ) -> Result<(), ValidationError> {
         match (self, value) {
             (Validator::Id(validator_table), ConvexValue::String(s)) => {
@@ -118,85 +124,88 @@ impl Validator {
                 {
                     if &table_name != validator_table {
                         if table_name.is_system() {
-                            let err = ValidationError::SystemTableReference {
+                            return Err(ValidationError::SystemTableReference {
                                 id,
                                 validator_table: validator_table.clone(),
-                                context,
-                            };
-                            return Err(err);
+                                context: ValidationContext::new(),
+                            });
                         } else {
-                            let err = ValidationError::TableNamesDoNotMatch {
+                            return Err(ValidationError::TableNamesDoNotMatch {
                                 id,
                                 found_table_name: table_name,
                                 validator_table: validator_table.clone(),
-                                context,
-                            };
-                            return Err(err);
+                                context: ValidationContext::new(),
+                            });
                         }
                     }
                 } else {
-                    let err = ValidationError::NoMatch {
+                    return Err(ValidationError::NoMatch {
                         value: value.clone(),
                         validator: self.clone(),
-                        context,
-                    };
-                    return Err(err);
+                        context: ValidationContext::new(),
+                    });
                 }
             },
             (Validator::Null, ConvexValue::Null)
             | (Validator::Float64, ConvexValue::Float64(_))
             | (Validator::Int64, ConvexValue::Int64(_))
+            | (Validator::CommitTs, ConvexValue::Int64(_))
             | (Validator::Boolean, ConvexValue::Boolean(_))
             | (Validator::String, ConvexValue::String(_))
             | (Validator::Bytes, ConvexValue::Bytes(_)) => return Ok(()),
+            (Validator::Function(_), ConvexValue::String(s)) => {
+                if s.parse::<FunctionHandle>().is_err() {
+                    return Err(ValidationError::NoMatch {
+                        value: value.clone(),
+                        validator: self.clone(),
+                        context: ValidationContext::new(),
+                    });
+                }
+                return Ok(());
+            },
             (Validator::Literal(literal), value) => {
                 let literal_as_value: ConvexValue = literal.clone().into();
                 if value != &literal_as_value {
                     return Err(ValidationError::LiteralValuesDoNotMatch {
                         value: value.clone(),
                         literal_validator: literal.clone(),
-                        context,
+                        context: ValidationContext::new(),
                     });
                 }
             },
             (Validator::Array(t), ConvexValue::Array(v)) => {
                 for (i, elt) in v.into_iter().enumerate() {
-                    t.check_value_internal(
-                        elt,
-                        all_tables_number_to_name,
-                        context.with(format!("[{i}]")),
-                    )?;
+                    t.check_value_internal(elt, all_tables_number_to_name)
+                        .map_err(|e| e.with_context(format!("[{i}]")))?;
                 }
             },
             (Validator::Record(key_type, value_type), ConvexValue::Object(object)) => {
                 for (key, value) in object.iter() {
-                    key_type.check_value_internal(
-                        &ConvexValue::from(key.clone()),
-                        all_tables_number_to_name,
-                        context.with(format!(".keys()")),
-                    )?;
-                    value_type.check_value_internal(
-                        value,
-                        all_tables_number_to_name,
-                        context.with(format!(".values()")),
-                    )?;
+                    key_type
+                        .check_value_internal(
+                            &ConvexValue::from(key.clone()),
+                            all_tables_number_to_name,
+                        )
+                        .map_err(|e| e.with_context(".keys()".to_string()))?;
+                    value_type
+                        .check_value_internal(value, all_tables_number_to_name)
+                        .map_err(|e| e.with_context(".values()".to_string()))?;
                 }
             },
             (Validator::Object(object_validator), ConvexValue::Object(object)) => {
                 for (field_name, field_type) in &object_validator.0 {
                     let maybe_value = object.get::<str>(field_name.borrow());
                     if let Some(value) = maybe_value {
-                        field_type.validator.check_value_internal(
-                            value,
-                            all_tables_number_to_name,
-                            context.with(format!(".{field_name}")),
-                        )?
+                        field_type
+                            .validator
+                            .check_value_internal(value, all_tables_number_to_name)
+                            .map_err(|e| e.with_context(format!(".{field_name}")))?
                     } else if !field_type.optional {
                         return Err(ValidationError::MissingRequiredField {
                             object: object.clone(),
                             field_name: field_name.clone(),
                             object_validator: object_validator.clone(),
-                            context,
+                            context: ValidationContext::new(),
                         });
                     }
                 }
@@ -206,24 +215,20 @@ impl Validator {
                             object: object.clone(),
                             field_name: field.clone(),
                             object_validator: object_validator.clone(),
-                            context,
+                            context: ValidationContext::new(),
                         });
                     }
                 }
             },
             (Validator::Union(validators), value) => {
                 if validators.len() == 1 {
-                    return validators[0].check_value_internal(
-                        value,
-                        all_tables_number_to_name,
-                        context,
-                    );
+                    return validators[0].check_value_internal(value, all_tables_number_to_name);
                 }
 
                 // TODO: This is dropping the error messages from the individual
                 // validators. Maybe we should combine them if this fails?
                 for t in validators {
-                    if t.check_value_internal(value, all_tables_number_to_name, context.clone())
+                    if t.check_value_internal(value, all_tables_number_to_name)
                         .is_ok()
                     {
                         return Ok(());
@@ -232,7 +237,7 @@ impl Validator {
                 return Err(ValidationError::NoMatch {
                     value: value.clone(),
                     validator: self.clone(),
-                    context,
+                    context: ValidationContext::new(),
                 });
             },
             (Validator::Any, _) => return Ok(()),
@@ -240,7 +245,7 @@ impl Validator {
                 return Err(ValidationError::NoMatch {
                     value: value.clone(),
                     validator: self.clone(),
-                    context,
+                    context: ValidationContext::new(),
                 })
             },
         };
@@ -361,13 +366,21 @@ impl Validator {
             // Identical types
             (v1, v2) if v1 == v2 => true,
 
+            // Function handles are considered identical
+            (Validator::Function(_), Validator::Function(_)) => true,
+
             // Types that are subsets of other ones
             (_, Validator::Any)
             | (Validator::Literal(LiteralValidator::String(_)), Validator::String)
             | (Validator::Literal(LiteralValidator::Int64(_)), Validator::Int64)
+            // CommitTs and Int64 accept the same set of values.
+            | (Validator::CommitTs, Validator::Int64)
+            | (Validator::Int64, Validator::CommitTs)
+            | (Validator::Literal(LiteralValidator::Int64(_)), Validator::CommitTs)
             | (Validator::Literal(LiteralValidator::Float64(_)), Validator::Float64)
             | (Validator::Literal(LiteralValidator::Boolean(_)), Validator::Boolean)
-            | (Validator::Id(_), Validator::String) => true,
+            | (Validator::Id(_), Validator::String)
+            | (Validator::Function(_), Validator::String) => true,
 
             // Unions
             (Validator::Union(left_cases), _) => left_cases
@@ -411,9 +424,11 @@ impl Validator {
             | Validator::Null
             | Validator::Float64
             | Validator::Int64
+            | Validator::CommitTs
             | Validator::Boolean
             | Validator::String
             | Validator::Bytes
+            | Validator::Function(_)
             | Validator::Array(_)
             | Validator::Record(..)
             | Validator::Object(_)
@@ -510,9 +525,11 @@ impl Validator {
             | Validator::Null
             | Validator::Float64
             | Validator::Int64
+            | Validator::CommitTs
             | Validator::Boolean
             | Validator::String
             | Validator::Bytes
+            | Validator::Function(_)
             | Validator::Literal(_)
             // Values that map to `any`
             | Validator::Record(_, _)
@@ -553,9 +570,11 @@ impl Validator {
             Validator::Null => json_schemas::null(),
             Validator::Float64 => json_schemas::float64(true, value_format),
             Validator::Int64 => json_schemas::int64(value_format),
+            Validator::CommitTs => json_schemas::int64(value_format),
             Validator::Boolean => json_schemas::boolean(),
             Validator::String => json_schemas::string(),
             Validator::Bytes => json_schemas::bytes(value_format),
+            Validator::Function(_) => json_schemas::string(),
             Validator::Literal(literal_validator) => match literal_validator {
                 LiteralValidator::Float64(_) => json_schemas::float64(true, value_format),
                 LiteralValidator::Int64(_) => json_schemas::int64(value_format),
@@ -618,7 +637,9 @@ impl Validator {
                 | Self::Literal(_)
                 | Self::Null
                 | Self::Float64
-                | Self::Int64 => {},
+                | Self::Int64
+                | Self::CommitTs
+                | Self::Function(_) => {},
             },
         ))
     }
@@ -630,9 +651,11 @@ impl Validator {
             | Validator::Null
             | Validator::Float64
             | Validator::Int64
+            | Validator::CommitTs
             | Validator::Boolean
             | Validator::String
             | Validator::Bytes
+            | Validator::Function(_)
             | Validator::Literal(_)
             | Validator::Array(_)
             | Validator::Record(..)
@@ -669,29 +692,78 @@ impl From<Option<DocumentSchema>> for Validator {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ValidationContext(Option<String>);
+pub struct ValidationContext {
+    reversed_path: Vec<String>,
+}
 
 impl ValidationContext {
     pub fn new() -> Self {
-        ValidationContext(None)
-    }
-
-    pub fn with(&self, new_context: String) -> Self {
-        match &self.0 {
-            Some(context) => Self(Some(format!("{context}{new_context}"))),
-            None => Self(Some(new_context)),
+        ValidationContext {
+            reversed_path: vec![],
         }
     }
 }
 
 impl Display for ValidationContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(context) = &self.0 {
-            write!(f, "Path: {context}")
+        if !self.reversed_path.is_empty() {
+            write!(f, "Path: ")?;
+            for elem in self.reversed_path.iter().rev() {
+                write!(f, "{elem}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// These parameters are only used in codegen for function validator types, and
+/// should not be checked at runtime.
+#[derive(Clone, Debug, Default, Eq, Ord, PartialOrd, PartialEq)]
+pub struct FunctionValidator {
+    pub fn_type: Option<FunctionHandleType>,
+    pub args: Option<Box<Validator>>,
+    pub returns: Option<Box<Validator>>,
+}
+
+impl Display for FunctionValidator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut fields = vec![];
+        if let Some(fn_type) = self.fn_type {
+            fields.push(format!("fnType: \"{fn_type}\""));
+        }
+        if let Some(args) = &self.args {
+            fields.push(format!("args: {args}"));
+        }
+        if let Some(returns) = &self.returns {
+            fields.push(format!("returns: {returns}"));
+        }
+        if fields.is_empty() {
+            write!(f, "v.function()")
         } else {
-            Ok(())
+            write!(f, "v.function({{ {} }})", fields.join(", "))
         }
     }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    Ord,
+    PartialOrd,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    strum::Display,
+    strum::EnumString,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum FunctionHandleType {
+    Query,
+    Mutation,
+    Action,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialOrd, PartialEq)]
@@ -942,4 +1014,22 @@ Validator: {validator}"
         validator: Validator,
         context: ValidationContext,
     },
+}
+
+impl ValidationError {
+    fn context(&mut self) -> &mut ValidationContext {
+        match self {
+            ValidationError::TableNamesDoNotMatch { context, .. }
+            | ValidationError::SystemTableReference { context, .. }
+            | ValidationError::LiteralValuesDoNotMatch { context, .. }
+            | ValidationError::MissingRequiredField { context, .. }
+            | ValidationError::ExtraField { context, .. }
+            | ValidationError::NoMatch { context, .. } => context,
+        }
+    }
+
+    fn with_context(mut self, context: String) -> Self {
+        self.context().reversed_path.push(context);
+        self
+    }
 }

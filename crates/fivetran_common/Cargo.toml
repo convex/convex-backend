@@ -1,21 +1,23 @@
 [package]
 name = "fivetran_common"
-description = "Common files for the Fivetran source and destination connectors for Convex (convex.dev)"
+description = "Common files for Fivetran connectors for Convex (convex.dev)"
 version = "0.0.1"
 authors = ["Convex, Inc. <no-reply@convex.dev>"]
 edition = "2024"
 resolver = "2"
 license = "Apache-2.0"
-repository = "https://github.com/get-convex/convex-fivetran-source"
+repository = "https://github.com/convex/convex-fivetran-source"
 homepage = "https://www.convex.dev/"
 
 [package.metadata.cargo-machete]
 ignored = [
     # Build dependencies not understood
-    "cfg_if",
-    "tonic_prost_build",
+    "cfg-if",
+    "fxhash",
+    "tonic-prost-build",
     # Prost required via tonic macro
     "prost",
+    "tonic-prost",
 ]
 
 [lib]
@@ -37,7 +39,6 @@ url = { workspace = true }
 [build-dependencies]
 cfg-if = { workspace = true }
 fxhash = { workspace = true }
-pb_build = { workspace = true }
 tonic-prost-build = { workspace = true }
 
 [dev-dependencies]

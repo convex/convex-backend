@@ -1,10 +1,31 @@
 use std::sync::Arc;
 
 use futures::Stream;
+use reqwest::Url;
 use sentry::{
+    transports::ReqwestHttpTransport,
+    ClientOptions,
     Hub,
     Scope,
+    Transport,
+    TransportFactory,
 };
+
+/// Creates a Sentry transport factory with Convex's egress proxy and TLS
+/// policy. Defers HTTP client allocation until `create_transport` is called.
+pub fn proxied_sentry_transport_factory(
+    proxy_url: Option<Url>,
+    client_id: String,
+) -> Arc<dyn TransportFactory> {
+    Arc::new(move |options: &ClientOptions| -> Arc<dyn Transport> {
+        let client = crate::http::fetch::build_proxied_reqwest_client(
+            proxy_url.clone(),
+            client_id.clone(),
+            reqwest::redirect::Policy::none(),
+        );
+        Arc::new(ReqwestHttpTransport::with_client(options, client))
+    })
+}
 
 pub fn set_sentry_tags(scope: &mut Scope) {
     if let Ok(alloc_id) = std::env::var("NOMAD_ALLOC_ID") {

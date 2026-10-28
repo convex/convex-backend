@@ -29,7 +29,6 @@ use sentry::{
         Frame,
         Stacktrace,
     },
-    transports::DefaultTransportFactory,
     ClientOptions,
     Envelope,
     Level,
@@ -43,7 +42,7 @@ use crate::{
     consts,
     sinks::utils::{
         build_event_batches,
-        only_exceptions_log_filter,
+        SinkFilter,
     },
     LogSinkClient,
     LoggingDeploymentMetadata,
@@ -61,7 +60,7 @@ impl SentrySink {
     pub async fn start<RT: Runtime>(
         runtime: RT,
         config: SentryConfig,
-        transport_override: Option<Arc<dyn TransportFactory>>,
+        transport: Arc<dyn TransportFactory>,
         deployment_metadata: Arc<Mutex<LoggingDeploymentMetadata>>,
         should_verify: bool,
     ) -> anyhow::Result<LogSinkClient> {
@@ -70,7 +69,7 @@ impl SentrySink {
 
         let sentry_client = sentry::Client::with_options(ClientOptions {
             dsn: Some(config.dsn.clone().into_value()),
-            transport: transport_override.or(Some(Arc::new(DefaultTransportFactory))),
+            transport: Some(transport),
             ..Default::default()
         });
         anyhow::ensure!(sentry_client.is_enabled());
@@ -118,7 +117,7 @@ impl SentrySink {
                     let batches = build_event_batches(
                         ev,
                         consts::SENTRY_SINK_MAX_LOGS_PER_BATCH,
-                        only_exceptions_log_filter,
+                        &SinkFilter::OnlyExceptions,
                     );
 
                     // Process each batch and send to Sentry
@@ -150,6 +149,7 @@ impl SentrySink {
                 user_identifier,
                 source,
                 udf_server_version,
+                request_metadata,
             } = &event.event
             else {
                 continue;
@@ -253,9 +253,13 @@ impl SentrySink {
                 level: Level::Error,
                 timestamp: event.timestamp.as_system_time(),
                 sdk,
-                platform: "javascript".into(),
+                platform: "node".into(),
                 user: Some(User {
                     id: user_identifier.clone().map(|i| i.to_string()),
+                    ip_address: request_metadata
+                        .ip
+                        .clone()
+                        .and_then(|ip| ip.as_str().parse().ok()),
                     ..Default::default()
                 }),
                 server_name: Some(deployment_metadata.deployment_name.clone().into()),

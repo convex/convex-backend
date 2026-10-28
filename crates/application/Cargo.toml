@@ -14,7 +14,6 @@ testing = [
     "database/testing",
     "errors/testing",
     "events/testing",
-    "fivetran_destination/testing",
     "function_runner/testing",
     "indexing/testing",
     "isolate/testing",
@@ -25,8 +24,10 @@ testing = [
     "node_executor/testing",
     "proptest",
     "proptest-derive",
+    "roles/testing",
     "runtime/testing",
     "search/testing",
+    "search_index_workers/testing",
     "storage/testing",
     "shape_inference/testing",
     "udf/testing",
@@ -35,6 +36,7 @@ testing = [
     "vector/testing",
     "exports/testing",
     "storage_zip_reader/testing",
+    "streaming_export/testing",
     "convex_macro/testing",
 ]
 
@@ -45,16 +47,17 @@ async-recursion = { workspace = true }
 async-trait = { workspace = true }
 async_lru = { workspace = true }
 authentication = { workspace = true }
-aws-sdk-firehose = { workspace = true }
 aws_s3 = { workspace = true }
 aws_utils = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cmd_util = { workspace = true }
 common = { workspace = true }
+const-hex = { workspace = true }
 const_format = { workspace = true }
 convex_macro = { workspace = true }
 csv-async = { workspace = true }
+csv-core = { workspace = true }
 database = { workspace = true }
 either = { workspace = true }
 errors = { workspace = true }
@@ -62,13 +65,11 @@ events = { workspace = true }
 exports = { workspace = true }
 fastrace = { workspace = true }
 file_storage = { workspace = true }
-fivetran_destination = { workspace = true }
 function_runner = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
 governor = { workspace = true }
 headers = { workspace = true }
-hex = { workspace = true }
 http = { workspace = true }
 http_client = { workspace = true }
 humansize = { workspace = true }
@@ -88,7 +89,9 @@ proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 rand = { workspace = true }
 regex = { workspace = true }
+roles = { workspace = true }
 search = { workspace = true }
+search_index_workers = { workspace = true }
 semver = { workspace = true }
 sentry = { workspace = true }
 serde = { workspace = true }
@@ -99,6 +102,7 @@ slugify = { workspace = true }
 smallvec = { workspace = true }
 storage = { workspace = true }
 storage_zip_reader = { workspace = true }
+streaming_export = { workspace = true }
 strum = { workspace = true }
 sync_types = { workspace = true }
 tempfile = { workspace = true }
@@ -112,12 +116,12 @@ udf = { workspace = true }
 udf_metrics = { workspace = true }
 url = { workspace = true }
 usage_gauges_tracking_worker = { workspace = true }
+usage_limits = { workspace = true }
 usage_tracking = { workspace = true }
 value = { workspace = true }
 vector = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = { workspace = true }
 
 [dev-dependencies]
 async_zip = { workspace = true }
@@ -128,7 +132,6 @@ database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 events = { workspace = true, features = ["testing"] }
 exports = { workspace = true, features = ["testing"] }
-fivetran_destination = { workspace = true, features = ["testing"] }
 function_runner = { workspace = true, features = ["testing"] }
 indexing = { workspace = true, features = ["testing"] }
 isolate = { workspace = true, features = ["testing"] }
@@ -139,14 +142,16 @@ model = { workspace = true, features = ["testing"] }
 must-let = { workspace = true }
 node_executor = { workspace = true, features = ["testing"] }
 openidconnect = { workspace = true }
-pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
+roles = { workspace = true, features = ["testing"] }
 runtime = { workspace = true, features = ["testing"] }
 search = { workspace = true, features = ["testing"] }
+search_index_workers = { workspace = true, features = ["testing"] }
 shape_inference = { workspace = true, features = ["testing"] }
 storage = { workspace = true, features = ["testing"] }
 storage_zip_reader = { workspace = true, features = ["testing"] }
+streaming_export = { workspace = true, features = ["testing"] }
 udf = { workspace = true, features = ["testing"] }
 usage_tracking = { workspace = true, features = ["testing"] }
 value = { workspace = true, features = ["testing"] }

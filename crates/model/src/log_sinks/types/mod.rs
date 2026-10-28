@@ -1,5 +1,10 @@
-use std::fmt;
+use std::{
+    collections::BTreeSet,
+    fmt,
+    str::FromStr,
+};
 
+use common::log_streaming::LogTopic;
 use serde::{
     Deserialize,
     Serialize,
@@ -11,11 +16,14 @@ pub mod datadog;
 pub mod mock_sink;
 pub mod posthog_error_tracking;
 pub mod posthog_logs;
+pub mod s3_export;
 pub mod sentry;
 pub mod webhook;
 
 /// Constants/Limits
-pub const LOG_SINKS_LIMIT: usize = 5;
+/// At most one sink per `SinkType`, so this bounds the number of distinct
+/// integrations a deployment can configure at once.
+pub const LOG_SINKS_LIMIT: usize = 8;
 
 /// Data model for an entry in the LOG_SINKS_TABLE
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +62,26 @@ impl TryFrom<SerializedLogSinksRow> for LogSinksRow {
 }
 
 codegen_convex_serialization!(LogSinksRow, SerializedLogSinksRow);
+
+/// Serialize a set of subscribed topics for storage. `None` (subscribe to all
+/// topics, including ones added in the future) is preserved as `None`.
+pub(crate) fn serialize_topics(topics: Option<BTreeSet<LogTopic>>) -> Option<Vec<String>> {
+    topics.map(|topics| topics.iter().map(|t| t.to_string()).collect())
+}
+
+/// Parse a stored set of subscribed topics back into `LogTopic`s.
+pub(crate) fn deserialize_topics(
+    topics: Option<Vec<String>>,
+) -> anyhow::Result<Option<BTreeSet<LogTopic>>> {
+    topics
+        .map(|topics| {
+            topics
+                .iter()
+                .map(|t| LogTopic::from_str(t).map_err(anyhow::Error::from))
+                .collect::<anyhow::Result<BTreeSet<_>>>()
+        })
+        .transpose()
+}
 
 /// Status of a configured LogSink
 /// LogSink SinkState state machine:
@@ -147,6 +175,7 @@ pub enum SinkType {
     Sentry,
     PostHogLogs,
     PostHogErrorTracking,
+    S3Export,
 }
 
 impl SinkType {
@@ -161,6 +190,7 @@ impl SinkType {
             SinkType::Sentry => "sentry",
             SinkType::PostHogLogs => "postHogLogs",
             SinkType::PostHogErrorTracking => "postHogErrorTracking",
+            SinkType::S3Export => "s3Export",
         }
     }
 }
@@ -176,6 +206,7 @@ pub enum SinkConfig {
     Sentry(sentry::SentryConfig),
     PostHogLogs(posthog_logs::PostHogLogsConfig),
     PostHogErrorTracking(posthog_error_tracking::PostHogErrorTrackingConfig),
+    S3Export(s3_export::S3ExportConfig),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -191,6 +222,7 @@ pub enum SerializedSinkConfig {
     Sentry(sentry::SerializedSentryConfig),
     PostHogLogs(posthog_logs::SerializedPostHogLogsConfig),
     PostHogErrorTracking(posthog_error_tracking::SerializedPostHogErrorTrackingConfig),
+    S3Export(s3_export::SerializedS3ExportConfig),
 }
 
 impl TryFrom<SerializedSinkConfig> for SinkConfig {
@@ -211,10 +243,13 @@ impl TryFrom<SerializedSinkConfig> for SinkConfig {
             SerializedSinkConfig::Sentry(config) => {
                 Ok(SinkConfig::Sentry(sentry::SentryConfig::try_from(config)?))
             },
-            SerializedSinkConfig::PostHogLogs(config) => Ok(SinkConfig::PostHogLogs(config.into())),
+            SerializedSinkConfig::PostHogLogs(config) => {
+                Ok(SinkConfig::PostHogLogs(config.try_into()?))
+            },
             SerializedSinkConfig::PostHogErrorTracking(config) => {
                 Ok(SinkConfig::PostHogErrorTracking(config.into()))
             },
+            SerializedSinkConfig::S3Export(config) => Ok(SinkConfig::S3Export(config.try_into()?)),
         }
     }
 }
@@ -241,6 +276,7 @@ impl TryFrom<SinkConfig> for SerializedSinkConfig {
             SinkConfig::PostHogErrorTracking(config) => {
                 Ok(SerializedSinkConfig::PostHogErrorTracking(config.into()))
             },
+            SinkConfig::S3Export(config) => Ok(SerializedSinkConfig::S3Export(config.into())),
         }
     }
 }
@@ -257,6 +293,7 @@ impl fmt::Display for SinkConfig {
             Self::Sentry(config) => write!(f, "Sentry({config})"),
             Self::PostHogLogs(config) => write!(f, "PostHogLogs({config})"),
             Self::PostHogErrorTracking(config) => write!(f, "PostHogErrorTracking({config})"),
+            Self::S3Export(config) => write!(f, "S3Export({config})"),
         }
     }
 }
@@ -271,6 +308,23 @@ impl SinkConfig {
             Self::Sentry(_) => SinkType::Sentry,
             Self::PostHogLogs(_) => SinkType::PostHogLogs,
             Self::PostHogErrorTracking(_) => SinkType::PostHogErrorTracking,
+            Self::S3Export(_) => SinkType::S3Export,
+        }
+    }
+
+    /// The set of topics this sink is subscribed to. `Some(None)` for
+    /// subscriptions to all topics, and `None` for sink types that do not
+    /// support topic subscriptions.
+    pub fn topics_mut(&mut self) -> Option<&mut Option<BTreeSet<LogTopic>>> {
+        match self {
+            Self::Datadog(config) => Some(&mut config.topics),
+            Self::Webhook(config) => Some(&mut config.topics),
+            Self::Axiom(config) => Some(&mut config.topics),
+            Self::PostHogLogs(config) => Some(&mut config.topics),
+            Self::Local(_)
+            | Self::Sentry(_)
+            | Self::PostHogErrorTracking(_)
+            | Self::S3Export(_) => None,
         }
     }
 }

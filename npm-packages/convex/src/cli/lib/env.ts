@@ -11,6 +11,7 @@ import { runSystemQuery } from "./run.js";
 import { deploymentFetch, logAndHandleFetchError } from "./utils/utils.js";
 import { readFromStdin } from "./utils/stdin.js";
 import { promptSecret } from "./utils/prompts.js";
+import { detectAiAgent } from "./utils/aiAgent.js";
 import {
   EXPECTED_CONVEX_URL_NAMES,
   EXPECTED_SITE_URL_NAMES,
@@ -171,18 +172,36 @@ export async function envRemove(
   );
 }
 
-export async function envList(ctx: Context, backend: EnvVarBackend) {
+export async function envList(
+  ctx: Context,
+  backend: EnvVarBackend,
+  options?: { namesOnly?: boolean; includeValues?: boolean },
+) {
   const envs = await backend.list();
   if (envs.length === 0) {
     logMessage(`No environment variables set${backend.notice}`);
     return;
   }
+  // Agents tend to run `env list` to check what is set, which copies every
+  // secret into their context. They get names unless they ask for values.
+  const agent =
+    options?.namesOnly || options?.includeValues ? null : await detectAiAgent();
+  const namesOnly = options?.namesOnly || agent !== null;
   for (const { name, value } of envs) {
+    if (namesOnly) {
+      logOutput(name);
+      continue;
+    }
     const { formatted, warning } = formatEnvValueForDotfile(value);
     if (warning) {
       logMessage(`Warning (${name}): ${warning}`);
     }
     logOutput(`${name}=${formatted}`);
+  }
+  if (agent !== null) {
+    logMessage(
+      `Listed names only because an AI agent (${agent}) appears to be running this command. Pass --include-values to print the values too.`,
+    );
   }
 }
 

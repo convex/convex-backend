@@ -16,6 +16,7 @@ import {
   EyeOpenIcon,
   DotsVerticalIcon,
   QuestionMarkCircledIcon,
+  PersonIcon,
 } from "@radix-ui/react-icons";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import {
@@ -40,6 +41,7 @@ import { captureException, captureMessage } from "@sentry/nextjs";
 import { useProfile } from "api/profile";
 import { Link } from "@ui/Link";
 import { TimestampDistance } from "@common/elements/TimestampDistance";
+import { formatNumberCompact } from "@common/lib/format";
 
 // Utility function to validate URLs without side effects
 function isValidOauthRedirectUri(uri: string): boolean {
@@ -104,11 +106,17 @@ const VERIFICATION_REQUEST_SCHEMA = Yup.object({
     .min(10, "Description must be at least 10 characters")
     .max(2000, "Description must be at most 2000 characters")
     .required("Description is required"),
+  appUrl: Yup.string()
+    .url("Must be a valid URL (including https://)")
+    .max(2000, "URL must be at most 2000 characters")
+    .required(
+      "A link where the Convex team can test your application is required",
+    ),
 });
 
 // Handler for verification request submission
 async function handleVerificationRequest(
-  description: string,
+  values: { description: string; appUrl: string },
   app: OauthAppResponse,
   teamId: number,
   setVerificationError: (error: string) => void,
@@ -126,9 +134,10 @@ async function handleVerificationRequest(
 Team ID: ${teamId}
 Client ID: ${app.clientId}
 App Name: ${app.appName}
+Application URL (for testing): ${values.appUrl}
 
 Description:
-${description}
+${values.description}
 
 Please review this OAuth application for verification.`,
       teamId,
@@ -272,7 +281,7 @@ function VerificationRequestForm({
   error,
 }: {
   app: OauthAppResponse;
-  onSubmit: (description: string) => Promise<void>;
+  onSubmit: (values: { description: string; appUrl: string }) => Promise<void>;
   loading: boolean;
   error?: string;
 }) {
@@ -285,10 +294,10 @@ function VerificationRequestForm({
 
   return (
     <Formik
-      initialValues={{ description: "" }}
+      initialValues={{ description: "", appUrl: "" }}
       validationSchema={VERIFICATION_REQUEST_SCHEMA}
       onSubmit={async (values, { setSubmitting }) => {
-        await onSubmit(values.description);
+        await onSubmit(values);
         setSubmitting(false);
       }}
     >
@@ -334,7 +343,23 @@ function VerificationRequestForm({
             )}
           </label>
 
-          <div className="rounded border bg-blue-50 p-3 dark:bg-blue-900/20">
+          <TextInput
+            id="app-url"
+            name="appUrl"
+            label="Application URL"
+            description="A link where the Convex team can access and test your application. A working application is required for verification."
+            placeholder="https://example.com"
+            value={values.appUrl}
+            onChange={handleChange}
+            error={
+              touched.appUrl && typeof errors.appUrl === "string"
+                ? errors.appUrl
+                : undefined
+            }
+            required
+          />
+
+          <div className="mt-4 rounded-sm border bg-blue-50 p-3 dark:bg-blue-900/20">
             <p className="text-sm text-content-secondary">
               <strong>Note:</strong> The Convex team will review your request
               and respond to you at{" "}
@@ -362,6 +387,40 @@ function VerificationRequestForm({
         </form>
       )}
     </Formik>
+  );
+}
+
+// Shows how many distinct teams have authorized the app. For unverified apps,
+// it shows progress toward the connected-teams limit and warns as it fills up.
+function AuthorizedTeamCount({ app }: { app: OauthAppResponse }) {
+  const count = app.authorizedTeamCount;
+  const limit = app.unverifiedTeamLimit;
+  const atLimit = !app.verified && count >= limit;
+  const nearLimit = !app.verified && !atLimit && count >= limit * 0.8;
+
+  return (
+    <Tooltip
+      tip={
+        app.verified
+          ? `${count} ${count === 1 ? "team has" : "teams have"} authorized this application.`
+          : `${count} of ${limit} teams have authorized this application. Unverified applications can be authorized by up to ${limit} teams. Verify your application to remove this limit.`
+      }
+      side="right"
+    >
+      <div
+        className={cn(
+          "flex items-center gap-1 rounded-sm border p-1 text-xs text-content-secondary",
+          atLimit && "bg-background-errorSecondary text-content-error",
+          nearLimit &&
+            "border-yellow-700 bg-yellow-100/50 text-yellow-700 dark:border-yellow-200 dark:bg-yellow-900/50 dark:text-yellow-200",
+        )}
+      >
+        <PersonIcon />
+        {app.verified
+          ? `${formatNumberCompact(count)} ${count === 1 ? "team" : "teams"}`
+          : `${formatNumberCompact(count)} / ${formatNumberCompact(limit)} teams`}
+      </div>
+    </Tooltip>
   );
 }
 
@@ -421,7 +480,7 @@ export function OauthApps({ teamId }: { teamId: number }) {
   }
 
   return (
-    <Sheet className="max-w-fit">
+    <Sheet>
       {createModalOpen && (
         <Modal
           onClose={() => setCreateModalOpen(false)}
@@ -466,7 +525,7 @@ export function OauthApps({ teamId }: { teamId: number }) {
           />
         </Modal>
       )}
-      <LoadingTransition loadingProps={{ className: "w-[28.125rem] h-80" }}>
+      <LoadingTransition loadingProps={{ className: "h-80 w-full" }}>
         {isLoading ? null : oauthApps && oauthApps.length ? (
           <div className="flex flex-col gap-4">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
@@ -615,14 +674,14 @@ function OauthAppListItem({
   const [regenerateSecretError, setRegenerateSecretError] = useState("");
 
   return (
-    <div className="scrollbar flex w-full flex-col gap-2 overflow-x-auto rounded border bg-background-secondary p-3">
+    <div className="scrollbar flex w-full flex-col gap-2 overflow-x-auto rounded-sm border bg-background-secondary p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-3">
           <h4>{app.appName}</h4>
           <Tooltip
             tip={
               !app.verified
-                ? "This app is not verified yet. You may test this app by authorizing it to the team that registered it. To allow this app to work for other teams, you must request verification."
+                ? `This app is not verified yet. Unverified apps can be authorized by up to ${app.unverifiedTeamLimit} teams. Verify your app to remove this limit and let an unlimited number of teams connect.`
                 : undefined
             }
             side="right"
@@ -638,6 +697,7 @@ function OauthAppListItem({
               {!app.verified && <QuestionMarkCircledIcon />}
             </div>
           </Tooltip>
+          <AuthorizedTeamCount app={app} />
         </div>
         <div className="flex items-center gap-2">
           <TimestampDistance date={new Date(app.createTime)} prefix="Created" />
@@ -752,7 +812,7 @@ function OauthAppListItem({
                 Only team admins can see the client secret.
               </HelpTooltip>
             </div>
-            <span className="text-xs leading-6.5">
+            <span className="text-xs/6.5">
               •••••••••••••••••••••••••••••••••
             </span>
           </div>
@@ -762,7 +822,7 @@ function OauthAppListItem({
         <span className="leading-6 font-semibold">Redirect URIs</span>
         <ul className="list-inside list-disc">
           {app.redirectUris.map((uri: string, i: number) => (
-            <li key={i} className="max-w-prose break-all">
+            <li key={i} className="break-all">
               {uri}
             </li>
           ))}
@@ -857,9 +917,9 @@ function OauthAppListItem({
         >
           <VerificationRequestForm
             app={app}
-            onSubmit={(description) =>
+            onSubmit={(values) =>
               handleVerificationRequest(
-                description,
+                values,
                 app,
                 teamId,
                 setVerificationError,

@@ -1,4 +1,4 @@
-import { BackspaceIcon, FingerPrintIcon } from "@heroicons/react/24/outline";
+import { BackspaceIcon } from "@heroicons/react/24/outline";
 import {
   BarChartIcon,
   TrashIcon,
@@ -13,6 +13,7 @@ import { useNents } from "@common/lib/useNents";
 import { Menu, MenuItem } from "@ui/Menu";
 import { TableSchemaStatus } from "@common/features/data/components/TableSchema";
 import { PermissionDeniedTip } from "@common/elements/NoPermissionMessage";
+import { IndexIcon } from "@common/elements/icons";
 
 export function DataOverflowMenu({
   tableSchemaStatus,
@@ -70,7 +71,7 @@ export function DataOverflowMenu({
         Schema
       </MenuItem>
       <MenuItem action={onClickIndexes}>
-        <FingerPrintIcon className="size-4" />
+        <IndexIcon kind="database" />
         Indexes
       </MenuItem>
       <MenuItem action={onClickRenameTable}>
@@ -99,7 +100,7 @@ export function DataOverflowMenu({
         action={onClickClearTable}
         disabled={numRows === 0 || !canManageTable || isInUnmountedComponent}
       >
-        <BackspaceIcon className="h-4 w-4" />
+        <BackspaceIcon className="size-4" />
         Clear Table
       </MenuItem>
       <MenuItem

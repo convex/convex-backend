@@ -115,10 +115,11 @@
   --color-util-brand-yellow: var(--brand-yellow);
 
   /* Font families */
-  --font-display: "GT America", "Inter Variable", ui-sans-serif, system-ui,
-    -apple-system, "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue",
-    "Arial", "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol", "Noto Color Emoji", sans-serif;
+  --font-display:
+    "GT America", "Inter Variable", ui-sans-serif, system-ui, -apple-system,
+    "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue", "Arial",
+    "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
+    "Noto Color Emoji", sans-serif;
 
   /* Animations */
   --animate-blink: blink 2s linear infinite;
@@ -136,6 +137,7 @@
   --animate-dashLength: dashLength 1.5s ease-in-out infinite;
   --animate-slideUp: slideUp 0.3s ease-out;
   --animate-fadeInBackdrop: fadeIn 0.3s ease-out;
+  --animate-indeterminateBar: indeterminateBar 1.3s ease-in-out infinite;
 
   /* Keyframes */
   @keyframes rotate {
@@ -295,6 +297,15 @@
     }
     100% {
       transform: translateX(-1rem);
+    }
+  }
+
+  @keyframes indeterminateBar {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(400%);
     }
   }
 }

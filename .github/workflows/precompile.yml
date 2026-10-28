@@ -6,50 +6,66 @@ on:
       - release
   workflow_dispatch:
 
+permissions:
+  actions: read
+  contents: write
+
 jobs:
+  release_metadata:
+    name: Select release name
+    runs-on: ubuntu-latest
+    outputs:
+      release_name: ${{ steps.release_name.outputs.release_name }}
+    steps:
+      - name: Select release name
+        id: release_name
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          # Reruns retain their run ID, so this date is stable across workflow attempts.
+          release_date=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.created_at[0:10]')
+          echo "release_name=$release_date-${COMMIT_SHA:0:7}" >> "$GITHUB_OUTPUT"
+
   release_dashboard:
     name: Build Convex Dashboard
+    needs: release_metadata
     runs-on: [self-hosted, aws, x64, xlarge]
     steps:
       - name: Check out code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Cache pnpm artifacts
-        uses: runs-on/cache@a5f51d6f3fece787d03b7b4e981c82538a0654ed # v4
+      # Restore-only: OSS can't write this cache (cache-write role is convex/convex-only).
+      - name: Restore pnpm artifacts
+        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
           RUNS_ON_S3_BUCKET_CACHE: ${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
         with:
           path: |
-            npm-packages/common/temp/build-cache
-            npm-packages/common/temp/pnpm-store
-          key:
-            pnpm-cache-${{
-            hashFiles('npm-packages/common/config/rush/pnpm-lock.yaml') }}-2
+            ~/.local/share/pnpm/store
+            npm-packages/.turbo/cache
+          key: pnpm-cache-${{ hashFiles('npm-packages/pnpm-lock.yaml') }}-3
           restore-keys: pnpm-cache-
 
-      - name: Node setup
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Install mise tools
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
-          node-version-file: ".nvmrc"
-
-      - name: Install just
-        uses: taiki-e/install-action@481c34c1cf3a84c68b5e46f4eccfc82af798415a # v2
-        with:
-          tool: just
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          cache: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: NPM install globals
         run: npm ci --prefix scripts
 
-      - name: Rush install
+      - name: Install JS dependencies
         run: |
-          just rush install
+          just install-js
 
       - name: Build dashboard dependencies
         run: |
-          just rush build -T dashboard-self-hosted
+          just turbo run build --filter=dashboard-self-hosted^...
 
       - name: Build dashboard
         run: |
@@ -59,26 +75,24 @@ jobs:
         run: |
           cd npm-packages/dashboard-self-hosted/out && zip -r ../../../dashboard.zip .
 
-      - name: Precompute release name
-        id: release_name
-        shell: bash
-        run: |
-          echo "RELEASE_NAME=$(date +'%Y-%m-%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-
       - name: Create Upload Precompiled Artifacts
         id: create_release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dashboard.zip
-          tag_name: precompiled-${{ steps.release_name.outputs.RELEASE_NAME }}
-          name: Precompiled ${{ steps.release_name.outputs.RELEASE_NAME }}
+          tag_name:
+            precompiled-${{ needs.release_metadata.outputs.release_name }}
+          name: Precompiled ${{ needs.release_metadata.outputs.release_name }}
+          target_commitish: ${{ github.sha }}
           draft: false
           prerelease: true
+          make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release_backend:
+    needs: release_metadata
     strategy:
       fail-fast: false
       matrix:
@@ -92,14 +106,36 @@ jobs:
             # xlarge are on arm
             os: "'macos-latest-xlarge'"
           - target: x86_64-pc-windows-msvc
-            os: "'windows-latest'"
+            os: "'windows-large-runner'"
           - target: aarch64-unknown-linux-gnu
-            os: "['self-hosted', 'aws', 'arm64', 'xlarge']"
+            # xlarge-c8g: precompiled binaries run on arbitrary user hardware,
+            # so build on the oldest-generation arm64 pool.
+            os: "['self-hosted', 'aws', 'arm64', 'xlarge-c8g']"
     name: Build Convex Backend
     runs-on: ${{ fromJSON(matrix.os) }}
     steps:
       - name: Check out code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # rusty_v8 contains deeply nested Chromium sources that exceed MAX_PATH
+      # under the default user-profile Cargo directory.
+      - name: Use short CARGO_HOME on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo 'CARGO_HOME=C:\c' >> "$GITHUB_ENV"
+
+      # Windows-only: Defender's real-time scan of every small file dominates the
+      # cargo/JS build wall-clock. Exclude the file-heavy dirs (best-effort).
+      - name: Exclude build dirs from Windows Defender
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          foreach ($p in @(
+            "${{ github.workspace }}",
+            "$env:LOCALAPPDATA\pnpm",
+            "$env:CARGO_HOME"
+          )) { Add-MpPreference -ExclusionPath $p -ErrorAction SilentlyContinue }
+          Add-MpPreference -ExclusionProcess node.exe -ErrorAction SilentlyContinue
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust
@@ -108,37 +144,47 @@ jobs:
           r2-access-key: ${{ secrets.R2_ACCESS_KEY_ID }}
           r2-secret-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
-      - name: Cache pnpm artifacts
-        uses: runs-on/cache@a5f51d6f3fece787d03b7b4e981c82538a0654ed # v4
+      # Restore-only: OSS can't write this cache (cache-write role is convex/convex-only).
+      - name: Restore pnpm artifacts
+        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
           RUNS_ON_S3_BUCKET_CACHE: ${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
         with:
           path: |
-            npm-packages/common/temp/build-cache
-            npm-packages/common/temp/pnpm-store
-          key:
-            pnpm-cache-${{
-            hashFiles('npm-packages/common/config/rush/pnpm-lock.yaml') }}-2
+            ~/.local/share/pnpm/store
+            ~\AppData\Local\pnpm\store
+            npm-packages/.turbo/cache
+          key: pnpm-cache-${{ hashFiles('npm-packages/pnpm-lock.yaml') }}-3
           restore-keys: pnpm-cache-
 
-      - name: Node setup
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - name: Install mise tools
+        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
         with:
-          node-version-file: ".nvmrc"
+          cache: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: NPM install globals
         run: npm ci --prefix scripts
 
-      - name: Install JS
-        run: |
-          just rush install
+      # pnpm only defaults to this store path when the workspace shares a drive
+      # with $HOME; Windows runners check out on another drive, where the
+      # default would miss the cache path above.
+      - name: Pin pnpm store to the cached path (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run:
+          echo "npm_config_store_dir=$LOCALAPPDATA/pnpm/store" >> "$GITHUB_ENV"
 
-      - name: Precompute release name
-        id: release_name
+      - name: Install JS
         shell: bash
         run: |
-          echo "RELEASE_NAME=$(date +'%Y-%m-%d')-$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          just install-js
+
+      - name: Precompute artifact names
+        id: artifact_names
+        shell: bash
+        run: |
           ZIP_NAME=convex-local-backend-${{ matrix.target }}.zip
           BINARY_NAME=convex-local-backend${{ runner.os == 'Windows' && '.exe' || '' }}
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_OUTPUT
@@ -152,26 +198,73 @@ jobs:
           unset SODIUM_USE_PKG_CONFIG
           unset SNAPPY_LIB_DIR
           export AWS_LC_SYS_PREBUILT_NASM=1
+          # Ninja avoids cmake-rs's MSVC-generator autodetect, which panics
+          # building aws-lc-sys on windows-latest's VS2026 (aws/aws-lc-rs#780).
+          if [ "$RUNNER_OS" = "Windows" ]; then export CMAKE_GENERATOR=Ninja; fi
           cargo build --release -p local_backend --bin convex-local-backend
-          mv target/release/${{ steps.release_name.outputs.BINARY_NAME }} .
+          mv target/release/${{ steps.artifact_names.outputs.BINARY_NAME }} .
 
       - name: Zip backend into arch
         uses: thedoctor0/zip-release@7fddfdd07cadb5b8c6c0dbcdcec17f8cd7784b80 # 0.7.5
         with:
           type: zip
-          filename: ${{ steps.release_name.outputs.ZIP_NAME }}
-          path: ${{ steps.release_name.outputs.BINARY_NAME }}
+          filename: ${{ steps.artifact_names.outputs.ZIP_NAME }}
+          path: ${{ steps.artifact_names.outputs.BINARY_NAME }}
 
       - name: Create Upload Precompiled Artifacts
         id: create_release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
-            ${{ steps.release_name.outputs.ZIP_NAME }}
+            ${{ steps.artifact_names.outputs.ZIP_NAME }}
             LICENSE.md
-          tag_name: precompiled-${{ steps.release_name.outputs.RELEASE_NAME }}
-          name: Precompiled ${{ steps.release_name.outputs.RELEASE_NAME }}
+          tag_name:
+            precompiled-${{ needs.release_metadata.outputs.release_name }}
+          name: Precompiled ${{ needs.release_metadata.outputs.release_name }}
+          target_commitish: ${{ github.sha }}
           draft: false
           prerelease: true
+          make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  validate_release:
+    name: Validate release
+    needs: [release_metadata, release_dashboard, release_backend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tag and assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG:
+            precompiled-${{ needs.release_metadata.outputs.release_name }}
+        run: |
+          required_assets='[
+            "convex-local-backend-aarch64-apple-darwin.zip",
+            "convex-local-backend-aarch64-unknown-linux-gnu.zip",
+            "convex-local-backend-x86_64-apple-darwin.zip",
+            "convex-local-backend-x86_64-pc-windows-msvc.zip",
+            "convex-local-backend-x86_64-unknown-linux-gnu.zip",
+            "dashboard.zip",
+            "LICENSE.md"
+          ]'
+          release=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,isPrerelease,url)
+          missing_assets=$(jq -r --argjson required "$required_assets" '
+            [.assets[] | select(.state == "uploaded" and .size > 0) | .name] as $uploaded
+            | ($required - $uploaded)[]?
+          ' <<< "$release")
+          if [[ -n "$missing_assets" ]]; then
+            echo "::error::Release $RELEASE_TAG is missing uploaded assets: $(tr '\n' ' ' <<< "$missing_assets")"
+            exit 1
+          fi
+          if [[ $(jq -r '.isDraft == false and .isPrerelease == true' <<< "$release") != true ]]; then
+            echo "::error::Release $RELEASE_TAG must be a published pre-release"
+            exit 1
+          fi
+          tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
+          if [[ "$tag_sha" != "${GITHUB_SHA}" ]]; then
+            echo "::error::Release tag $RELEASE_TAG points to $tag_sha instead of $GITHUB_SHA"
+            exit 1
+          fi
+          echo "Validated $(jq -r .url <<< "$release")"

@@ -42,13 +42,13 @@ export function SmallInsightsSummary({
     <span className="flex animate-fadeInFromLoading items-center gap-3 text-xs text-content-secondary">
       {criticalCount > 0 && (
         <span className="flex items-center gap-1 text-content-error">
-          <CrossCircledIcon className="h-3 w-3 min-w-3" />
+          <CrossCircledIcon className="size-3 min-w-3" />
           {criticalCount} critical
         </span>
       )}
       {warningCount > 0 && (
         <span className="flex items-center gap-1 text-content-warning">
-          <ExclamationTriangleIcon className="h-3 w-3 min-w-3" />
+          <ExclamationTriangleIcon className="size-3 min-w-3" />
           {warningCount} warning{warningCount !== 1 ? "s" : ""}
         </span>
       )}

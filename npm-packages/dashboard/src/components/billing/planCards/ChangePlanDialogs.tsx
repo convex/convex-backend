@@ -78,7 +78,7 @@ export function UpgradePlanDialog({
   team,
 }: {
   onClose: () => void;
-  onConfirm: (planId: string) => Promise<void>;
+  onConfirm: (planId: string, promoCode?: string) => Promise<void>;
   newPlan: PlanResponse;
   team: TeamResponse;
 }) {
@@ -141,10 +141,19 @@ export function UpgradePlanDialog({
           )}
         </div>
       }
-      disableConfirm={team.managedBy === "vercel" || couponData.isLoading}
+      disableConfirm={
+        team.managedBy === "vercel" ||
+        couponData.isLoading ||
+        promoCode !== debouncedPromoCode
+      }
       variant="primary"
       confirmText="Upgrade"
-      onConfirm={() => onConfirm(couponData.coupon?.planId ?? newPlan.id)}
+      onConfirm={() =>
+        onConfirm(
+          couponData.coupon?.planId ?? newPlan.id,
+          debouncedPromoCode || undefined,
+        )
+      }
     />
   );
 }

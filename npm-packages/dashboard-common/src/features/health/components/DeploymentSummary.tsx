@@ -18,12 +18,12 @@ import {
   Pencil2Icon,
   RocketIcon,
   ArchiveIcon,
-  CubeIcon,
   CodeIcon,
   DimensionsIcon,
   ExternalLinkIcon,
   QuestionMarkCircledIcon,
 } from "@radix-ui/react-icons";
+import { PackageVersionIcon } from "@common/elements/icons";
 import { Link } from "@ui/Link";
 import { useContext, useEffect, useState } from "react";
 import semver from "semver";
@@ -34,7 +34,15 @@ import {
   DeploymentInfoContext,
   PermissionsContext,
 } from "@common/lib/deploymentContext";
-import { deploymentTypeColorClasses } from "@common/lib/deploymentTypeColorClasses";
+import {
+  deploymentTypeColorClasses,
+  deploymentTypeLabel,
+} from "@common/lib/deploymentTypeColorClasses";
+import {
+  IndexCreationStatus,
+  SchemaValidationStatus,
+  useDeployProgress,
+} from "@common/features/health/components/DeployProgress";
 
 function useLatestConvexVersion(currentVersion: string | undefined) {
   const [hasUpdate, setHasUpdate] = useState(false);
@@ -114,25 +122,6 @@ function DeploymentIcon({
   return null;
 }
 
-function getDeploymentTypeLabel(
-  deploymentType: PlatformDeploymentResponse["deploymentType"],
-): string {
-  switch (deploymentType) {
-    case "prod":
-      return "Production";
-    case "preview":
-      return "Preview";
-    case "dev":
-      return "Development";
-    case "custom":
-      return "Custom";
-    default: {
-      deploymentType satisfies never;
-      return "";
-    }
-  }
-}
-
 export function DeploymentSummary({
   deployment,
   teamSlug,
@@ -140,6 +129,7 @@ export function DeploymentSummary({
   lastBackupTime,
   teamMembers,
   regions,
+  showDeployProgress = false,
 }: {
   deployment: PlatformDeploymentResponse;
   teamSlug: string;
@@ -147,11 +137,17 @@ export function DeploymentSummary({
   lastBackupTime?: number | null;
   teamMembers?: Array<{ id: number; name?: string | null; email: string }>;
   regions?: Array<{ name: string; displayName: string }>;
+  showDeployProgress?: boolean;
 }) {
-  const { TeamMemberLink } = useContext(DeploymentInfoContext);
+  const { TeamMemberLink, healthDeployProgressEnabled } = useContext(
+    DeploymentInfoContext,
+  );
   const { useIsOperationAllowed } = useContext(PermissionsContext);
   const canViewData = useIsOperationAllowed("ViewData");
   const canViewBackups = useIsOperationAllowed("ViewBackups");
+  const deployProgress = useDeployProgress(
+    showDeployProgress && healthDeployProgressEnabled,
+  );
 
   const lastPushEvent = useQuery(
     udfs.deploymentEvents.lastPushEvent,
@@ -205,7 +201,7 @@ export function DeploymentSummary({
   if (isLoading) {
     return (
       <Sheet className="flex w-fit flex-col bg-transparent" padding={false}>
-        <div className="flex min-h-[7.5rem] min-w-[32rem] items-center justify-center rounded-lg bg-background-secondary p-2 py-3">
+        <div className="flex min-h-30 min-w-lg items-center justify-center rounded-lg bg-background-secondary p-2 py-3">
           <div>
             <Spinner className="size-8" />
           </div>
@@ -242,7 +238,7 @@ export function DeploymentSummary({
               )}
             >
               <DeploymentIcon deployment={deployment} className="size-3.5" />
-              <span>{getDeploymentTypeLabel(deployment.deploymentType)}</span>
+              <span>{deploymentTypeLabel(deployment.deploymentType)}</span>
             </div>
             {deployment.kind === "cloud" ? (
               <div className="flex flex-wrap gap-x-1.5 text-sm text-content-primary">
@@ -323,8 +319,8 @@ export function DeploymentSummary({
             {lastPushEvent && (
               <div className="flex items-center gap-2">
                 <Tooltip tip="Convex package version">
-                  <CubeIcon
-                    className="size-4 shrink-0 text-content-secondary"
+                  <PackageVersionIcon
+                    className="text-content-secondary"
                     aria-label="Convex package version"
                   />
                 </Tooltip>
@@ -348,10 +344,10 @@ export function DeploymentSummary({
                       size="xs"
                       inline
                       aria-label="Convex NPM Package Upgrade Available"
-                      href="https://github.com/get-convex/convex-js/blob/main/CHANGELOG.md#changelog"
+                      href="https://github.com/convex/convex-js/blob/main/CHANGELOG.md#changelog"
                       target="_blank"
                       // eslint-disable-next-line no-restricted-syntax -- manual Link-Button hybrid implementation
-                      className="h-[1.25rem] text-content-link"
+                      className="h-5 text-content-link"
                     >
                       <div>({latestVersion} available)</div>
                     </Button>
@@ -446,7 +442,16 @@ export function DeploymentSummary({
             )}
           </div>
 
-          {/* Row 4: Expiry warning (ephemeral deployments) */}
+          {/* Row 4: Work the last deploy is still doing. Each line unfolds
+              its progress inline on hover rather than in a popover. */}
+          {deployProgress.schema && (
+            <SchemaValidationStatus schema={deployProgress.schema} />
+          )}
+          {deployProgress.indexes.length > 0 && (
+            <IndexCreationStatus indexes={deployProgress.indexes} />
+          )}
+
+          {/* Row 5: Expiry warning (ephemeral deployments) */}
           {deployment.kind === "cloud" && deployment.expiresAt && (
             <div className="flex items-center gap-2">
               <Tooltip tip="This deployment will be automatically deleted">
@@ -480,7 +485,7 @@ export function DeploymentSummary({
         {/* Deployment URLs (cloud only, hidden when the member lacks
             `deployment:data:view` since the URL queries are gated). */}
         {showUrlPanel && (
-          <div className="flex flex-col justify-center gap-4 rounded-b-lg border-t bg-background-secondary/70 p-2 py-4 lg:rounded-r-lg lg:rounded-bl-none lg:border-t-0 lg:border-l lg:py-3 lg:pl-4">
+          <div className="flex flex-col justify-start gap-4 rounded-b-lg border-t bg-background-secondary/70 p-2 py-4 lg:rounded-r-lg lg:rounded-bl-none lg:border-t-0 lg:border-l lg:py-3 lg:pl-4">
             <div className="flex flex-col gap-1">
               <span className="text-xs font-medium text-content-secondary">
                 Cloud URL

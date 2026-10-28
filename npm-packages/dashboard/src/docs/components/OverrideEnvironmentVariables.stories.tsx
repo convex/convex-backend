@@ -46,7 +46,6 @@ const vanityDomains = [
 const meta = {
   component: CanonicalDomainForm,
   args: {
-    deploymentName,
     vanityDomains,
   },
   render: (args) => (

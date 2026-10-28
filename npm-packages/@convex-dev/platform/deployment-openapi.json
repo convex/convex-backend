@@ -97,6 +97,80 @@
         ]
       }
     },
+    "/list_audit_log_events": {
+      "get": {
+        "tags": [
+          "Audit Log"
+        ],
+        "summary": "List audit log events",
+        "description": "List a deployment's audit log events on or after a timestamp, from least to\nmost recent. Pass the returned `cursor` (along with the same `from`) to\nfetch the next page.",
+        "operationId": "list_audit_log_events",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Only return events on or after this time, in milliseconds since epoch.\nPass the same value on every page of a paginated request.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of events to return (defaults to 15, capped at 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a previous response to fetch the next page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListDeploymentAuditLogEventsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
     "/deployment_info": {
       "get": {
         "tags": [
@@ -115,6 +189,222 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/get_current_usage": {
+      "get": {
+        "tags": [
+          "Usage Limits",
+          "beta"
+        ],
+        "summary": "Get current usage",
+        "description": "Get the values for each usage metric for the current day and month (UTC)\n\nThe reported usage is only guaranteed to reflect the full window when\n`seedStatus` is `complete`. A `pending` or `partial` status means the\nbackfill is still in progress and the returned usage may understate actual\nusage, so retry later for an accurate total.",
+        "operationId": "get_current_usage",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetCurrentUsageResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/list_usage_limits": {
+      "get": {
+        "tags": [
+          "Usage Limits"
+        ],
+        "summary": "List usage limits",
+        "description": "Get all usage limit configs for a deployment.",
+        "operationId": "list_usage_limits",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListUsageLimitsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/create_usage_limit": {
+      "post": {
+        "tags": [
+          "Usage Limits"
+        ],
+        "summary": "Create usage limit",
+        "description": "Create a new usage limit config for a deployment.",
+        "operationId": "create_usage_limit",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimitConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageLimitResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/update_usage_limit/{id}": {
+      "post": {
+        "tags": [
+          "Usage Limits"
+        ],
+        "summary": "Update usage limit",
+        "description": "Replace an existing usage limit config for a deployment.",
+        "operationId": "update_usage_limit",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "id of the usage limit to update",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UsageLimitConfigRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageLimitResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/delete_usage_limit/{id}": {
+      "post": {
+        "tags": [
+          "Usage Limits"
+        ],
+        "summary": "Delete usage limit",
+        "description": "Delete an existing usage limit config for a deployment.",
+        "operationId": "delete_usage_limit",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "id of the usage limit to delete",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
           }
         },
         "security": [
@@ -534,10 +824,459 @@
           }
         ]
       }
+    },
+    "/data/sync": {
+      "post": {
+        "tags": [
+          "Data Sync",
+          "pro"
+        ],
+        "summary": "Data sync",
+        "description": "Paginated streamable export of some or all of a deployment's data.\n\nCall this endpoint repeatedly, passing the opaque `pagination.nextCursor`\nfrom each response back in the next request as `cursor`. Omit `cursor` on\nthe first call.\n\nApply each page's `truncates` before its `values`, and persist these changes\natomically with `pagination.nextCursor`. Retrying the same input cursor may\nreturn a different page, so non-atomic updates can lead to data\ninconsistency.\n\nTo do a one time data sync, keep fetching pages until reaching an `upToDate`\npage. For a continuous streaming export, continue fetching pages\nperiodically. It's recommended to sleep between `upToDate` pages to reduce\noverhead.\n\nThe caller must have the `deployment:data:view` permission.",
+        "operationId": "data_sync",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DataSyncArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DataSyncResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/data/list_active_syncs": {
+      "get": {
+        "tags": [
+          "Data Sync",
+          "pro"
+        ],
+        "summary": "List active data syncs",
+        "description": "Returns the progress of active data sync (/v1/data/sync).\n\nA data sync is considered active for 3 days after the most recent API call.\nfrom `/data/sync` within the past 3 days.",
+        "operationId": "list_active_syncs",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of syncs to return (defaults to 50, capped at 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from a previous response to fetch the next page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListActiveSyncsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/data/sync/{sync_id}": {
+      "get": {
+        "tags": [
+          "Data Sync",
+          "pro"
+        ],
+        "summary": "Get an active data sync",
+        "description": "Returns the progress of a single data sync (/v1/data/sync), identified by\nthe `syncId` that endpoint returns. The status is the same one\n`/data/list_active_syncs` reports for each sync it lists.\n\nA data sync is considered active for 3 days after the most recent API call\nfrom `/data/sync`. Ids of syncs that are unknown or no longer active return\na 404.\n\nThe caller must have the `deployment:data:view` permission.",
+        "operationId": "get_active_sync",
+        "parameters": [
+          {
+            "name": "sync_id",
+            "in": "path",
+            "description": "`syncId` of the sync, as returned by /data/sync",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/SyncId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActiveDataSync"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "AccessTokenId": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0
+      },
+      "ActiveDataSync": {
+        "type": "object",
+        "description": "The status of one active data sync, as of its most recent page. Returned\nby `/api/v1/data/sync/{syncId}` and for each sync listed by\n`/api/v1/data/list_active_syncs`.",
+        "required": [
+          "syncId",
+          "lastUpdated",
+          "status"
+        ],
+        "properties": {
+          "syncId": {
+            "$ref": "#/components/schemas/SyncId",
+            "description": "Unique id of the sync, assigned when it started (i.e. when\n`/api/v1/data/sync` was called without a cursor) and stable across its\npages."
+          },
+          "lastUpdated": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Wall-clock time of the last `/data/sync` call made by this sync, as a\nunix timestamp in milliseconds."
+          },
+          "status": {
+            "$ref": "#/components/schemas/ActiveDataSyncStatus",
+            "description": "The sync's progress as of its most recently recorded page."
+          }
+        }
+      },
+      "ActiveDataSyncSnapshotting": {
+        "type": "object",
+        "description": "The sync is still traversing its selected tables; the data returned so\nfar is not yet a consistent snapshot.",
+        "required": [
+          "type",
+          "numTablesSynced",
+          "totalTables",
+          "currentComponent",
+          "currentTable",
+          "numDocumentsInCurrentTable",
+          "totalDocumentsInCurrentTable",
+          "numDocumentsSynced",
+          "totalDocuments"
+        ],
+        "properties": {
+          "type": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "The literal string `snapshotting`, discriminating \"snapshotting\" status\nobjects.",
+                "enum": [
+                  "snapshotting"
+                ]
+              }
+            ],
+            "description": "Always `snapshotting`."
+          },
+          "numTablesSynced": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Tables whose initial traversal has completed.",
+            "minimum": 0
+          },
+          "totalTables": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total tables selected for the sync.",
+            "minimum": 0
+          },
+          "currentComponent": {
+            "type": "string",
+            "description": "The component of the table currently being traversed (the empty\nstring for the root component)."
+          },
+          "currentTable": {
+            "type": "string",
+            "description": "The table currently being traversed."
+          },
+          "numDocumentsInCurrentTable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Documents synced so far from the current table.",
+            "minimum": 0
+          },
+          "totalDocumentsInCurrentTable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total documents in the current table, as of a recent snapshot.",
+            "minimum": 0
+          },
+          "numDocumentsSynced": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Documents synced over the sync's lifetime, including deletions and\nre-synced revisions of documents that changed mid-sync — so this can\nslightly exceed `totalDocuments`.",
+            "minimum": 0
+          },
+          "totalDocuments": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total documents across all selected tables, as of a recent snapshot.",
+            "minimum": 0
+          }
+        }
+      },
+      "ActiveDataSyncStale": {
+        "type": "object",
+        "description": "The sync reached a consistent snapshot at `syncedTs`, but its timestamp is\nstale; it is streaming later changes (CDC). Newer data may be available.",
+        "required": [
+          "type",
+          "totalTables",
+          "numDocumentsSynced",
+          "syncedTs"
+        ],
+        "properties": {
+          "type": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "The literal string `stale`, discriminating \"stale\" status objects.",
+                "enum": [
+                  "stale"
+                ]
+              }
+            ],
+            "description": "Always `stale`."
+          },
+          "totalTables": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total tables selected for the sync.",
+            "minimum": 0
+          },
+          "numDocumentsSynced": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Documents synced over the sync's lifetime, including deletions and\nre-synced revisions.",
+            "minimum": 0
+          },
+          "syncedTs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The database timestamp at which the synced data is consistent."
+          }
+        }
+      },
+      "ActiveDataSyncStatus": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ActiveDataSyncSnapshotting",
+            "description": "The sync has not yet reached a consistent snapshot. The entries emitted\nso far are an incomplete initial traversal of the selected tables.\nSyncs begin in this state, and may reenter this state if tables are\nadded/replaced"
+          },
+          {
+            "$ref": "#/components/schemas/ActiveDataSyncStale",
+            "description": "The entries emitted so far represent a consistent snapshot at\na stale `snapshotTs`. The sync is \"catching up\"."
+          },
+          {
+            "$ref": "#/components/schemas/ActiveDataSyncUpToDate",
+            "description": "The sync is up to date and represents a latest consistent snapshot."
+          }
+        ],
+        "description": "The progress of an active data sync, discriminated by `type`.",
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "snapshotting": "#/components/schemas/ActiveDataSyncSnapshotting",
+            "stale": "#/components/schemas/ActiveDataSyncStale",
+            "upToDate": "#/components/schemas/ActiveDataSyncUpToDate"
+          }
+        }
+      },
+      "ActiveDataSyncUpToDate": {
+        "type": "object",
+        "description": "The sync reached a consistent snapshot at `syncedTs` and has caught up to\nthe latest data.",
+        "required": [
+          "type",
+          "totalTables",
+          "numDocumentsSynced",
+          "syncedTs"
+        ],
+        "properties": {
+          "type": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "The literal string `upToDate`, discriminating \"up to date\" status objects.",
+                "enum": [
+                  "upToDate"
+                ]
+              }
+            ],
+            "description": "Always `upToDate`."
+          },
+          "totalTables": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total tables selected for the sync.",
+            "minimum": 0
+          },
+          "numDocumentsSynced": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Documents synced over the sync's lifetime, including deletions and\nre-synced revisions.",
+            "minimum": 0
+          },
+          "syncedTs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The database timestamp at which the synced data is consistent."
+          }
+        }
+      },
+      "AuditLogActor": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "System",
+            "description": "The internal Convex system.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "system"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Member",
+            "description": "A member acting via the dashboard.",
+            "required": [
+              "member_id",
+              "kind"
+            ],
+            "properties": {
+              "member_id": {
+                "$ref": "#/components/schemas/MemberId",
+                "description": "Member ID"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "member"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "title": "Token",
+            "description": "A deploy key or access token.",
+            "required": [
+              "token_id",
+              "kind"
+            ],
+            "properties": {
+              "member_id": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MemberId",
+                    "description": "Member ID the token belongs to, if any."
+                  }
+                ]
+              },
+              "token_id": {
+                "$ref": "#/components/schemas/AccessTokenId",
+                "description": "Token ID. `0` for legacy audit log rows created before token IDs\nwere recorded."
+              },
+              "client_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Client ID of the OAuth application, if the token belongs to one."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "token"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The identity that performed an audit log action."
+      },
       "AxiomAttribute": {
         "type": "object",
         "required": [
@@ -563,19 +1302,23 @@
           "attributes"
         ],
         "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LogStreamStatus",
+            "description": "Status of the log stream"
+          },
+          "datasetName": {
+            "type": "string",
+            "description": "Name of the dataset in Axiom. This is where the logs will be sent."
+          },
           "attributes": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/AxiomAttribute"
             },
             "description": "Optional list of attributes. These are extra fields and values sent to\nAxiom in each log event."
-          },
-          "datasetName": {
-            "type": "string",
-            "description": "Name of the dataset in Axiom. This is where the logs will be sent."
-          },
-          "id": {
-            "type": "string"
           },
           "ingestUrl": {
             "type": [
@@ -584,11 +1327,56 @@
             ],
             "description": "Optional ingest endpoint for Axiom"
           },
-          "status": {
-            "$ref": "#/components/schemas/LogStreamStatus",
-            "description": "Status of the log stream"
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. `null` means subscribed to\nall topics, including ones added in the future."
           }
         }
+      },
+      "ColumnSelection": {
+        "type": "string",
+        "description": "Whether the column is exported.",
+        "enum": [
+          "excluded",
+          "included"
+        ]
+      },
+      "ComponentSelection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "Included",
+            "description": "Export some of this component's tables.",
+            "required": [
+              "_other"
+            ],
+            "properties": {
+              "_other": {
+                "$ref": "#/components/schemas/InclusionDefault",
+                "description": "Whether tables not explicitly listed are exported"
+              }
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TableSelection",
+              "description": "Set of tables to include/exclude in sync within the component.\n\nMapping from the table name to the inclusion/exclusion."
+            }
+          },
+          {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExcludedTag",
+                "description": "Exclude this component entirely."
+              }
+            ],
+            "title": "Excluded"
+          }
+        ]
       },
       "CreateAxiomLogStreamArgs": {
         "type": "object",
@@ -602,6 +1390,10 @@
             "type": "string",
             "description": "Axiom API key for authentication."
           },
+          "datasetName": {
+            "type": "string",
+            "description": "Name of the dataset in Axiom. This is where the logs will be sent."
+          },
           "attributes": {
             "type": "array",
             "items": {
@@ -609,16 +1401,22 @@
             },
             "description": "Optional list of attributes. These are extra fields and values sent to\nAxiom in each log event."
           },
-          "datasetName": {
-            "type": "string",
-            "description": "Name of the dataset in Axiom. This is where the logs will be sent."
-          },
           "ingestUrl": {
             "type": [
               "string",
               "null"
             ],
             "description": "Optional ingest endpoint for Axiom"
+          },
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. Omit to\nsubscribe to all topics, including ones added in the future."
           }
         }
       },
@@ -630,6 +1428,10 @@
           "ddTags"
         ],
         "properties": {
+          "siteLocation": {
+            "$ref": "#/components/schemas/DatadogSiteLocation",
+            "description": "Location of your Datadog deployment."
+          },
           "ddApiKey": {
             "type": "string",
             "description": "Datadog API key for authentication."
@@ -648,9 +1450,15 @@
             ],
             "description": "Service name used as a special tag in Datadog."
           },
-          "siteLocation": {
-            "$ref": "#/components/schemas/DatadogSiteLocation",
-            "description": "Location of your Datadog deployment."
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. Omit to\nsubscribe to all topics, including ones added in the future."
           }
         }
       },
@@ -787,6 +1595,28 @@
               }
             ],
             "title": "PostHogErrorTracking"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CreateS3ExportLogStreamArgs"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "logStreamType"
+                ],
+                "properties": {
+                  "logStreamType": {
+                    "type": "string",
+                    "enum": [
+                      "s3Export"
+                    ]
+                  }
+                }
+              }
+            ],
+            "title": "S3Export"
           }
         ]
       },
@@ -908,6 +1738,32 @@
                 ]
               }
             }
+          },
+          {
+            "type": "object",
+            "title": "S3Export",
+            "required": [
+              "id",
+              "logStreamType"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "roleExternalId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Set for role exports. The role's trust policy must require it as\n`sts:ExternalId`."
+              },
+              "logStreamType": {
+                "type": "string",
+                "enum": [
+                  "s3Export"
+                ]
+              }
+            }
           }
         ]
       },
@@ -953,6 +1809,76 @@
               "null"
             ],
             "description": "OTLP service.name attribute. Defaults to the deployment name."
+          },
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. Omit to\nsubscribe to all topics, including ones added in the future."
+          }
+        }
+      },
+      "CreateS3ExportLogStreamArgs": {
+        "type": "object",
+        "required": [
+          "bucket",
+          "region",
+          "period"
+        ],
+        "properties": {
+          "bucket": {
+            "type": "string",
+            "description": "Name of the S3 bucket to mirror into."
+          },
+          "region": {
+            "type": "string",
+            "description": "AWS region the bucket lives in, e.g. `us-east-1`."
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Key prefix within the bucket. Omit to write at the bucket root."
+          },
+          "accessKeyId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Access key of an IAM user that can write to the bucket. Send both key\nfields, or `roleArn` instead."
+          },
+          "secretAccessKey": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roleArn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ARN of a role in the bucket's account that Convex assumes to write.\nSend an empty string to create the export first: the response carries\nthe `roleExternalId` the role's trust policy needs, and the export waits\nuntil an update supplies the ARN."
+          },
+          "selection": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Selection",
+                "description": "The components and tables to export. Defaults to everything. Each table\nexports whole documents, so filtering fields within a table is rejected."
+              }
+            ]
+          },
+          "period": {
+            "$ref": "#/components/schemas/SyncPeriod",
+            "description": "How often the mirror is refreshed."
           }
         }
       },
@@ -988,13 +1914,23 @@
           "format"
         ],
         "properties": {
+          "url": {
+            "type": "string",
+            "description": "URL to send logs to."
+          },
           "format": {
             "$ref": "#/components/schemas/WebhookFormat",
             "description": "Format for the webhook payload. JSONL sends one object per line of\nrequest, JSON sends one array per request."
           },
-          "url": {
-            "type": "string",
-            "description": "URL to send logs to."
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. Omit to\nsubscribe to all topics, including ones added in the future."
           }
         }
       },
@@ -1005,12 +1941,217 @@
           "hmacSecret"
         ],
         "properties": {
+          "id": {
+            "type": "string"
+          },
           "hmacSecret": {
             "type": "string",
             "description": "Use this secret to verify webhook signatures."
+          }
+        }
+      },
+      "DataSyncArgs": {
+        "type": "object",
+        "description": "Arguments to the data sync (streaming export) API (`/api/v1/data/sync`).",
+        "properties": {
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque cursor returned by a previous call. Omit to start from scratch."
           },
-          "id": {
-            "type": "string"
+          "selection": {
+            "$ref": "#/components/schemas/Selection",
+            "description": "When set, only sync the selected subset of the data.\n\nSelects the components, tables, and columns to export. Each key is a\ncomponent path (`\"\"` for the root component), mapped to the selection\nfor that component.\n\nThe selection may change between calls of the same sync: newly selected\ntables are synced from scratch, possibly moving the sync into\n`snapshotting` state if necessary, and emit a truncate on the first page\nthey appear so the consumer starts them from a clean slate. Deselected\ntables stop being synced."
+          }
+        }
+      },
+      "DataSyncResponse": {
+        "type": "object",
+        "description": "One page returned by the data sync API.",
+        "required": [
+          "status",
+          "truncates",
+          "values",
+          "syncId",
+          "pagination"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/DataSyncStatus",
+            "description": "The status of the sync after this page."
+          },
+          "truncates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataSyncTruncate"
+            },
+            "description": "Tables truncated by this page. The consumer should drop everything it\npreviously synced for each table, then apply `values` (which re-sync\nthem from scratch). Logically applies before `values`.\n\nA table is truncated whenever it (re)enters the export from scratch —\nthe first page it is synced (including on a cold start), when it is\nnewly selected, or when it is replaced by a bulk operation such as\n`npx convex import`."
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataSyncValue"
+            },
+            "description": "Documents created, updated, or deleted in this page."
+          },
+          "syncId": {
+            "$ref": "#/components/schemas/SyncId",
+            "description": "Unique id of the sync, assigned on the first page and stable across\nthe sync's lifetime. Identifies this sync in `/data/sync/{syncId}` and\n`/data/list_active_syncs`."
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata",
+            "description": "Pagination information. The data sync endpoint is an infinite streaming\nendpoint, so `nextCursor` is always present and `hasMore` is always\n`true` — another page can always be fetched with the cursor. Use\n`status` to pace calls: back off significantly to wait for more writes\nonce it reports `upToDate`."
+          }
+        }
+      },
+      "DataSyncSnapshotting": {
+        "type": "object",
+        "description": "The sync has not yet reached a consistent snapshot. The entries emitted\nso far are an incomplete initial traversal of the selected tables.\nSyncs begin in this state. The sync's\nprogress can be monitored via `/data/sync/{syncId}` or\n`/data/list_active_syncs`, keyed by the response's `syncId`. Syncs may\nreturn to this state if the table selection has changes that requires large\ndata sync.",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "The literal string `snapshotting`, discriminating \"snapshotting\" status\nobjects.",
+                "enum": [
+                  "snapshotting"
+                ]
+              }
+            ],
+            "description": "Always `snapshotting`."
+          }
+        }
+      },
+      "DataSyncStale": {
+        "type": "object",
+        "description": "The entries emitted so far represent a consistent snapshot at\na stale `snapshotTs`.",
+        "required": [
+          "type",
+          "snapshotTs"
+        ],
+        "properties": {
+          "type": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "The literal string `stale`, discriminating \"stale\" status objects.",
+                "enum": [
+                  "stale"
+                ]
+              }
+            ],
+            "description": "Always `stale`."
+          },
+          "snapshotTs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The database timestamp at which the synced data is consistent."
+          }
+        }
+      },
+      "DataSyncStatus": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/DataSyncSnapshotting"
+          },
+          {
+            "$ref": "#/components/schemas/DataSyncStale"
+          },
+          {
+            "$ref": "#/components/schemas/DataSyncUpToDate"
+          }
+        ],
+        "description": "The consistency state reported alongside a data sync page, discriminated\nby `type`.",
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "snapshotting": "#/components/schemas/DataSyncSnapshotting",
+            "stale": "#/components/schemas/DataSyncStale",
+            "upToDate": "#/components/schemas/DataSyncUpToDate"
+          }
+        }
+      },
+      "DataSyncTruncate": {
+        "type": "object",
+        "description": "An entry indicating that the table should be truncated. Emitted when a table\nis newly syncing or replaced wholesale (e.g. by `npx convex import`).\nReported separately from `values` since it carries none of the per-document\nfields.",
+        "required": [
+          "component",
+          "table"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "The path of the component the table is in."
+          },
+          "table": {
+            "type": "string",
+            "description": "The name of the truncated table."
+          }
+        }
+      },
+      "DataSyncUpToDate": {
+        "type": "object",
+        "description": "The sync is up to date and represents a latest consistent snapshot.\nFor a streaming export in this state, it is recommended to backoff for\nsome time, wait for more data, and then continue the streaming sync.",
+        "required": [
+          "type",
+          "snapshotTs"
+        ],
+        "properties": {
+          "type": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "The literal string `upToDate`, discriminating \"up to date\" status objects.",
+                "enum": [
+                  "upToDate"
+                ]
+              }
+            ],
+            "description": "Always `upToDate`."
+          },
+          "snapshotTs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The database timestamp at which the synced data is consistent."
+          }
+        }
+      },
+      "DataSyncValue": {
+        "type": "object",
+        "description": "A single document-level entry emitted by the data sync API: a Convex\ndocument (or a tombstone, for a deletion) nested under `value`, with\nmetadata fields alongside it.",
+        "required": [
+          "component",
+          "table",
+          "ts",
+          "deleted",
+          "value"
+        ],
+        "properties": {
+          "component": {
+            "type": "string",
+            "description": "The path of the component this entry is from."
+          },
+          "table": {
+            "type": "string",
+            "description": "The name of the table this entry is from."
+          },
+          "ts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The timestamp at which this revision was written."
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "Whether the document was deleted (a tombstone)."
+          },
+          "value": {
+            "type": "object",
+            "description": "The fields of the document, including the built-in `_id` and\n`_creationTime`. For `deleted` documents, only `_id` is present."
           }
         }
       },
@@ -1024,15 +2165,23 @@
           "ddTags"
         ],
         "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LogStreamStatus",
+            "description": "Status of the log stream"
+          },
+          "siteLocation": {
+            "$ref": "#/components/schemas/DatadogSiteLocation",
+            "description": "Location of your Datadog deployment."
+          },
           "ddTags": {
             "type": "array",
             "items": {
               "type": "string"
             },
             "description": "Optional comma-separated list of tags. These are sent to Datadog in each\nlog event via the `ddtags` field."
-          },
-          "id": {
-            "type": "string"
           },
           "service": {
             "type": [
@@ -1041,13 +2190,15 @@
             ],
             "description": "Service name used as a special tag in Datadog."
           },
-          "siteLocation": {
-            "$ref": "#/components/schemas/DatadogSiteLocation",
-            "description": "Location of your Datadog deployment."
-          },
-          "status": {
-            "$ref": "#/components/schemas/LogStreamStatus",
-            "description": "Status of the log stream"
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. `null` means subscribed to\nall topics, including ones added in the future."
           }
         }
       },
@@ -1062,6 +2213,88 @@
           "US1_FED",
           "AP1"
         ]
+      },
+      "DeploymentAuditLogEventResponse": {
+        "type": "object",
+        "required": [
+          "actor",
+          "action",
+          "createTime",
+          "metadata"
+        ],
+        "properties": {
+          "actor": {
+            "$ref": "#/components/schemas/AuditLogActor",
+            "description": "The identity that performed the action."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "create_environment_variable",
+              "update_environment_variable",
+              "delete_environment_variable",
+              "create_usage_limit",
+              "update_usage_limit",
+              "delete_usage_limit",
+              "usage_limit_exceeded",
+              "change_usage_limit_stop_state",
+              "replace_environment_variable",
+              "update_canonical_url",
+              "delete_canonical_url",
+              "push_config",
+              "push_config_with_components",
+              "build_indexes",
+              "change_deployment_state",
+              "pause_deployment",
+              "unpause_deployment",
+              "change_system_stop_state",
+              "clear_tables",
+              "snapshot_import",
+              "delete_scheduled_jobs_table",
+              "delete_tables",
+              "delete_component",
+              "cancel_all_scheduled_functions",
+              "cancel_scheduled_function",
+              "request_export",
+              "download_export",
+              "cancel_export",
+              "set_export_expiration",
+              "create_integration",
+              "update_integration",
+              "delete_integration",
+              "add_documents",
+              "delete_documents",
+              "update_documents",
+              "create_table",
+              "delete_files",
+              "generate_upload_url",
+              "create_data_sync"
+            ]
+          },
+          "createTime": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Time the event was created, in milliseconds since epoch."
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/Value",
+            "description": "Additional JSON metadata about the audit log event."
+          },
+          "clientIp": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "IP address of the client that performed the action, if known."
+          },
+          "clientUserAgent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "User agent of the client that performed the action, if known."
+          }
+        }
       },
       "DeploymentId": {
         "type": "integer",
@@ -1080,17 +2313,8 @@
               "kind"
             ],
             "properties": {
-              "deploymentType": {
-                "$ref": "#/components/schemas/DeploymentType"
-              },
-              "id": {
-                "$ref": "#/components/schemas/DeploymentId"
-              },
-              "kind": {
-                "type": "string",
-                "enum": [
-                  "cloud"
-                ]
+              "teamId": {
+                "$ref": "#/components/schemas/TeamId"
               },
               "projectId": {
                 "$ref": "#/components/schemas/ProjectId"
@@ -1107,14 +2331,23 @@
                   "null"
                 ]
               },
+              "id": {
+                "$ref": "#/components/schemas/DeploymentId"
+              },
+              "deploymentType": {
+                "$ref": "#/components/schemas/DeploymentType"
+              },
               "reference": {
                 "type": [
                   "string",
                   "null"
                 ]
               },
-              "teamId": {
-                "$ref": "#/components/schemas/TeamId"
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cloud"
+                ]
               }
             }
           },
@@ -1143,6 +2376,14 @@
           "custom"
         ]
       },
+      "ExcludedTag": {
+        "type": "string",
+        "title": "Excluded",
+        "description": "The literal string `\"excluded\"`, excluding the item entirely.",
+        "enum": [
+          "excluded"
+        ]
+      },
       "GetCanonicalUrlsResponse": {
         "type": "object",
         "required": [
@@ -1155,6 +2396,74 @@
           },
           "convexSiteUrl": {
             "type": "string"
+          }
+        }
+      },
+      "GetCurrentUsageResponse": {
+        "type": "object",
+        "description": "Current usage across every metric, keyed by the same metric name the usage\nlimit config API uses.",
+        "required": [
+          "metrics",
+          "seedStatus"
+        ],
+        "properties": {
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MetricUsageResponse"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "seedStatus": {
+            "$ref": "#/components/schemas/SeedStatusResponse"
+          }
+        }
+      },
+      "InclusionDefault": {
+        "type": "string",
+        "enum": [
+          "excluded",
+          "included"
+        ]
+      },
+      "ListActiveSyncsResponse": {
+        "type": "object",
+        "description": "Response of the active-syncs listing API\n(`/api/v1/data/list_active_syncs`).",
+        "required": [
+          "syncs",
+          "pagination"
+        ],
+        "properties": {
+          "syncs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActiveDataSync"
+            },
+            "description": "Page of active data syncs, most recently updated first. A sync is\nactive if it fetched a page from `/api/v1/data/sync` within the past 3\ndays."
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
+      },
+      "ListDeploymentAuditLogEventsResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeploymentAuditLogEventResponse"
+            },
+            "description": "The audit log events for this page, from least to most recent."
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
           }
         }
       },
@@ -1171,6 +2480,20 @@
             },
             "propertyNames": {
               "type": "string"
+            }
+          }
+        }
+      },
+      "ListUsageLimitsResponse": {
+        "type": "object",
+        "required": [
+          "usageLimits"
+        ],
+        "properties": {
+          "usageLimits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageLimitConfigResponse"
             }
           }
         }
@@ -1308,6 +2631,28 @@
               }
             ],
             "title": "PostHogErrorTracking"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/S3ExportLogStreamConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "logStreamType"
+                ],
+                "properties": {
+                  "logStreamType": {
+                    "type": "string",
+                    "enum": [
+                      "s3Export"
+                    ]
+                  }
+                }
+              }
+            ],
+            "title": "S3Export"
           }
         ]
       },
@@ -1390,6 +2735,74 @@
         ],
         "description": "Status of a log stream"
       },
+      "LogTopic": {
+        "type": "string",
+        "enum": [
+          "verification",
+          "console",
+          "function_execution",
+          "exception",
+          "audit_log",
+          "scheduler_stats",
+          "scheduled_job_lag",
+          "current_storage_usage",
+          "concurrency_stats",
+          "storage_api_bandwidth",
+          "ai_gateway_usage",
+          "log_stream_egress",
+          "custom_audit"
+        ]
+      },
+      "MemberId": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0
+      },
+      "MetricUnit": {
+        "type": "string",
+        "description": "The user-facing unit a metric's limits and usage are expressed in.",
+        "enum": [
+          "calls",
+          "GB",
+          "Query-GB",
+          "GB-hours",
+          "dollars"
+        ]
+      },
+      "MetricUsageResponse": {
+        "type": "object",
+        "description": "Current-window usage for a single metric.",
+        "required": [
+          "unit",
+          "usage"
+        ],
+        "properties": {
+          "unit": {
+            "$ref": "#/components/schemas/MetricUnit",
+            "description": "The unit `usage` is expressed in, matching the unit this metric's\nconfigured limits use."
+          },
+          "usage": {
+            "$ref": "#/components/schemas/WindowUsageResponse"
+          }
+        }
+      },
+      "PaginationMetadata": {
+        "type": "object",
+        "required": [
+          "hasMore"
+        ],
+        "properties": {
+          "hasMore": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "PostHogErrorTrackingLogStreamConfig": {
         "type": "object",
         "title": "PostHogErrorTrackingConfig",
@@ -1398,19 +2811,19 @@
           "status"
         ],
         "properties": {
-          "host": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "PostHog host URL."
-          },
           "id": {
             "type": "string"
           },
           "status": {
             "$ref": "#/components/schemas/LogStreamStatus",
             "description": "Status of the log stream"
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "PostHog host URL."
           }
         }
       },
@@ -1422,15 +2835,19 @@
           "status"
         ],
         "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LogStreamStatus",
+            "description": "Status of the log stream"
+          },
           "host": {
             "type": [
               "string",
               "null"
             ],
             "description": "PostHog host URL."
-          },
-          "id": {
-            "type": "string"
           },
           "serviceName": {
             "type": [
@@ -1439,9 +2856,15 @@
             ],
             "description": "OTLP service.name attribute."
           },
-          "status": {
-            "$ref": "#/components/schemas/LogStreamStatus",
-            "description": "Status of the log stream"
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. `null` means subscribed to\nall topics, including ones added in the future."
           }
         }
       },
@@ -1480,6 +2903,110 @@
           }
         ]
       },
+      "S3ExportLogStreamConfig": {
+        "type": "object",
+        "title": "S3ExportConfig",
+        "required": [
+          "id",
+          "status",
+          "bucket",
+          "region",
+          "selection",
+          "period"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LogStreamStatus",
+            "description": "Status of the integration"
+          },
+          "bucket": {
+            "type": "string",
+            "description": "Name of the S3 bucket being mirrored into."
+          },
+          "region": {
+            "type": "string",
+            "description": "AWS region the bucket lives in."
+          },
+          "prefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Key prefix within the bucket."
+          },
+          "accessKeyId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "AWS access key ID used to write to the bucket. The matching secret\naccess key is write-only and is never returned. Absent for role exports."
+          },
+          "roleArn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ARN of the role Convex assumes to write. Empty until the admin pastes\nit. Absent for access-key exports."
+          },
+          "roleExternalId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Value the role's trust policy must require as `sts:ExternalId`."
+          },
+          "selection": {
+            "$ref": "#/components/schemas/Selection",
+            "description": "The components and tables being exported."
+          },
+          "period": {
+            "$ref": "#/components/schemas/SyncPeriod",
+            "description": "How often the mirror is refreshed."
+          }
+        }
+      },
+      "SeedStatusResponse": {
+        "type": "string",
+        "description": "Progress of the historical-usage backfill. Only `complete` guarantees the\nreported usage reflects the full window. While the status is `pending` or\n`partial`, history from before this deployment was loaded may not be\nhydrated yet and the numbers can understate actual usage, so retry later for\nan accurate total. `failed` means the backfill couldn't hydrate any history.",
+        "enum": [
+          "pending",
+          "partial",
+          "complete",
+          "failed"
+        ]
+      },
+      "Selection": {
+        "type": "object",
+        "required": [
+          "_other"
+        ],
+        "properties": {
+          "_other": {
+            "$ref": "#/components/schemas/InclusionDefault",
+            "description": "Whether components not explicitly listed are exported"
+          }
+        },
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ComponentSelection",
+          "description": "Set of components to include/exclude in sync.\n\nMapping from the component path to the inclusion/exclusion.\nUse the empty string to represent the root component."
+        },
+        "example": {
+          "_other": "excluded",
+          "": {
+            "_other": "excluded",
+            "posts": {
+              "_other": "included"
+            },
+            "users": {
+              "_other": "included",
+              "ssn": "excluded"
+            }
+          }
+        }
+      },
       "SentryLogStreamConfig": {
         "type": "object",
         "title": "SentryConfig",
@@ -1510,6 +3037,49 @@
           }
         }
       },
+      "SyncId": {
+        "type": "string",
+        "description": "Unique id of a data sync, assigned by `/api/v1/data/sync` on the sync's\nfirst page and stable across its lifetime."
+      },
+      "SyncPeriod": {
+        "type": "string",
+        "description": "How often the mirror is refreshed from the deployment.",
+        "enum": [
+          "continuous",
+          "hourly",
+          "daily"
+        ]
+      },
+      "TableSelection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "title": "Included",
+            "required": [
+              "_other"
+            ],
+            "properties": {
+              "_other": {
+                "$ref": "#/components/schemas/InclusionDefault",
+                "description": "Whether columns not explicitly listed are exported"
+              }
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ColumnSelection",
+              "description": "Set of columns to include/exclude in sync within the table.\n\nMapping from the column name to the inclusion/exclusion. `_id`\ncannot be excluded."
+            }
+          },
+          {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ExcludedTag",
+                "description": "Exclude this table entirely."
+              }
+            ],
+            "title": "Excluded"
+          }
+        ]
+      },
       "TeamId": {
         "type": "integer",
         "format": "int64",
@@ -1525,6 +3095,13 @@
             ],
             "description": "Axiom API key for authentication."
           },
+          "datasetName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the dataset in Axiom. This is where the logs will be sent."
+          },
           "attributes": {
             "type": [
               "array",
@@ -1535,19 +3112,22 @@
             },
             "description": "Optional list of attributes. These are extra fields and values sent to\nAxiom in each log event."
           },
-          "datasetName": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Name of the dataset in Axiom. This is where the logs will be sent."
-          },
           "ingestUrl": {
             "type": [
               "string",
               "null"
             ],
             "description": "Optional ingest endpoint for Axiom"
+          },
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. Omit to keep the current\nsubscription, or pass `null` to subscribe to all topics (including ones\nadded in the future)."
           }
         }
       },
@@ -1573,6 +3153,17 @@
       "UpdateDatadogSinkArgs": {
         "type": "object",
         "properties": {
+          "siteLocation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DatadogSiteLocation",
+                "description": "Location of your Datadog deployment."
+              }
+            ]
+          },
           "ddApiKey": {
             "type": [
               "string",
@@ -1597,16 +3188,15 @@
             ],
             "description": "Service name used as a special tag in Datadog."
           },
-          "siteLocation": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/DatadogSiteLocation",
-                "description": "Location of your Datadog deployment."
-              }
-            ]
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. Omit to keep the current\nsubscription, or pass `null` to subscribe to all topics (including ones\nadded in the future)."
           }
         }
       },
@@ -1774,6 +3364,28 @@
               }
             ],
             "title": "PostHogErrorTracking"
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpdateS3ExportSinkArgs"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "logStreamType"
+                ],
+                "properties": {
+                  "logStreamType": {
+                    "type": "string",
+                    "enum": [
+                      "s3Export"
+                    ]
+                  }
+                }
+              }
+            ],
+            "title": "S3Export"
           }
         ]
       },
@@ -1819,8 +3431,61 @@
               "null"
             ],
             "description": "OTLP service.name attribute."
+          },
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. Omit to keep the current\nsubscription, or pass `null` to subscribe to all topics (including ones\nadded in the future)."
           }
         }
+      },
+      "UpdateS3ExportSinkArgs": {
+        "type": "object",
+        "description": "Destination and AWS access key ID are fixed at creation.",
+        "properties": {
+          "secretAccessKey": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new secret for the export's access key ID. Access-key exports only."
+          },
+          "roleArn": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The role ARN from the customer's stack. Role exports only; sets or\nreplaces the ARN, within the same AWS account."
+          },
+          "selection": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Selection",
+                "description": "The components and tables to export. Each table exports whole\ndocuments, so filtering fields within a table is rejected."
+              }
+            ]
+          },
+          "period": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SyncPeriod",
+                "description": "How often the mirror is refreshed."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "UpdateSentrySinkArgs": {
         "type": "object",
@@ -1850,6 +3515,13 @@
       "UpdateWebhookSinkArgs": {
         "type": "object",
         "properties": {
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "URL to send logs to."
+          },
           "format": {
             "oneOf": [
               {
@@ -1861,15 +3533,121 @@
               }
             ]
           },
-          "url": {
+          "topics": {
             "type": [
-              "string",
+              "array",
               "null"
             ],
-            "description": "URL to send logs to."
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. Omit to keep the current\nsubscription, or pass `null` to subscribe to all topics (including ones\nadded in the future)."
           }
         }
       },
+      "UsageLimitConfigRequest": {
+        "type": "object",
+        "required": [
+          "metric",
+          "window",
+          "limitType",
+          "limit",
+          "enabled"
+        ],
+        "properties": {
+          "metric": {
+            "$ref": "#/components/schemas/UsageLimitMetric"
+          },
+          "window": {
+            "$ref": "#/components/schemas/UsageLimitWindow"
+          },
+          "limitType": {
+            "$ref": "#/components/schemas/UsageLimitType"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UsageLimitConfigResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "metric",
+          "window",
+          "limitType",
+          "limit",
+          "enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "metric": {
+            "$ref": "#/components/schemas/UsageLimitMetric"
+          },
+          "window": {
+            "$ref": "#/components/schemas/UsageLimitWindow"
+          },
+          "limitType": {
+            "$ref": "#/components/schemas/UsageLimitType"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "UsageLimitMetric": {
+        "type": "string",
+        "enum": [
+          "functionCalls",
+          "databaseIoGb",
+          "dataEgressGb",
+          "searchQueryGb",
+          "queryMutationComputeGbHours",
+          "actionComputeConvexGbHours",
+          "actionComputeNodeJsGbHours",
+          "actionComputeCpuGbHours",
+          "aiGatewayCostDollars"
+        ]
+      },
+      "UsageLimitResponse": {
+        "type": "object",
+        "required": [
+          "usageLimit"
+        ],
+        "properties": {
+          "usageLimit": {
+            "$ref": "#/components/schemas/UsageLimitConfigResponse"
+          }
+        }
+      },
+      "UsageLimitType": {
+        "type": "string",
+        "enum": [
+          "warning",
+          "disable"
+        ]
+      },
+      "UsageLimitWindow": {
+        "type": "string",
+        "description": "The calendar-aligned window a limit is measured over.",
+        "enum": [
+          "day",
+          "month"
+        ]
+      },
+      "Value": {},
       "WebhookFormat": {
         "type": "string",
         "enum": [
@@ -1888,14 +3666,6 @@
           "hmacSecret"
         ],
         "properties": {
-          "format": {
-            "$ref": "#/components/schemas/WebhookFormat",
-            "description": "Format for the webhook payload. JSONL sends one object per line of\nrequest, JSON sends one array per request."
-          },
-          "hmacSecret": {
-            "type": "string",
-            "description": "Use this secret to verify webhook signatures."
-          },
           "id": {
             "type": "string"
           },
@@ -1906,6 +3676,42 @@
           "url": {
             "type": "string",
             "description": "URL to send logs to."
+          },
+          "format": {
+            "$ref": "#/components/schemas/WebhookFormat",
+            "description": "Format for the webhook payload. JSONL sends one object per line of\nrequest, JSON sends one array per request."
+          },
+          "hmacSecret": {
+            "type": "string",
+            "description": "Use this secret to verify webhook signatures."
+          },
+          "topics": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/LogTopic"
+            },
+            "description": "The topics this log stream is subscribed to. `null` means subscribed to\nall topics, including ones added in the future."
+          }
+        }
+      },
+      "WindowUsageResponse": {
+        "type": "object",
+        "description": "Usage in each calendar-aligned window currently in progress.",
+        "required": [
+          "current_day",
+          "current_month"
+        ],
+        "properties": {
+          "current_day": {
+            "type": "number",
+            "format": "double"
+          },
+          "current_month": {
+            "type": "number",
+            "format": "double"
           }
         }
       }

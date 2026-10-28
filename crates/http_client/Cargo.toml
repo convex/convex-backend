@@ -13,6 +13,7 @@ doctest = false
 anyhow = { workspace = true }
 bytes = { workspace = true }
 common = { workspace = true }
+fastrace = { workspace = true }
 futures = { workspace = true }
 http-body-util = { workspace = true }
 http-cache = { workspace = true }

@@ -5,7 +5,7 @@ import { useTeamEntitlements } from "api/teams";
 import { useCurrentProject } from "api/projects";
 import { useAccessToken } from "hooks/useServerSideData";
 import { useRouter } from "next/router";
-import { useEffect } from "react";
+import { JSX, useEffect } from "react";
 import { usePostHog } from "hooks/usePostHog";
 import {
   useGlobalLDContext,

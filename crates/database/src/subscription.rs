@@ -54,7 +54,6 @@ use futures::{
     FutureExt as _,
     StreamExt as _,
 };
-use imbl::Vector;
 use interval_map::IntervalMap;
 use parking_lot::Mutex;
 use prometheus::VMHistogram;
@@ -70,10 +69,7 @@ use tokio::sync::{
     },
     watch,
 };
-use value::{
-    heap_size::WithHeapSize,
-    TabletId,
-};
+use value::TabletId;
 
 use crate::{
     metrics::{
@@ -84,6 +80,7 @@ use crate::{
     write_log::{
         LogOwner,
         LogReader,
+        WriteInIndex,
         WriteSource,
     },
     Token,
@@ -145,7 +142,7 @@ pub struct SubscriptionsClient {
 
 impl SubscriptionsClient {
     pub fn subscribe(&self, token: Token, is_system: bool) -> anyhow::Result<Subscription> {
-        let token = match self.log.refresh_reads_until_max_ts(token)? {
+        let token = match self.log.refresh_reads_until_max_ts(token) {
             Ok(t) => t,
             Err(invalid_ts) => return Ok(Subscription::invalid(invalid_ts)),
         };
@@ -668,19 +665,16 @@ impl SubscriptionManager {
         notify: &mut (impl FnMut(SubscriberId, Timestamp, Option<WriteSource>) + ?Sized),
         num_index_updates: &mut usize,
     ) where
-        I: Iterator<
-            Item = (
-                &'a Timestamp,
-                &'a (WithHeapSize<Vector<DatabaseIndexWrite>>, WriteSource),
-            ),
-        >,
+        I: Iterator<Item = &'a WriteInIndex<DatabaseIndexWrite>>,
     {
-        for (write_ts, (doc_updates, write_source)) in ordered_index_updates {
+        for update in ordered_index_updates {
+            let write_ts = update.ts;
+            let write_source = &update.write_source;
             let mut notify_with_ts_and_write_source = |subscriber_id| {
                 let write_source_clone = write_source.is_udf().then(|| write_source.clone());
-                notify(subscriber_id, *write_ts, write_source_clone)
+                notify(subscriber_id, write_ts, write_source_clone)
             };
-            for index_update in doc_updates.iter() {
+            for index_update in &update.index_updates {
                 *num_index_updates += 1;
                 for index_key in index_update.update.iter() {
                     interval_map.query(&index_key.0, &mut notify_with_ts_and_write_source);
@@ -696,19 +690,16 @@ impl SubscriptionManager {
         notify: &mut (impl FnMut(SubscriberId, Timestamp, Option<WriteSource>) + ?Sized),
         num_index_updates: &mut usize,
     ) where
-        I: Iterator<
-            Item = (
-                &'a Timestamp,
-                &'a (WithHeapSize<Vector<TextIndexWrite>>, WriteSource),
-            ),
-        >,
+        I: Iterator<Item = &'a WriteInIndex<TextIndexWrite>>,
     {
-        for (write_ts, (doc_updates, write_source)) in ordered_index_updates {
+        for update in ordered_index_updates {
+            let write_ts = update.ts;
+            let write_source = &update.write_source;
             let mut notify_with_ts_and_write_source = |subscriber_id| {
                 let write_source_clone = write_source.is_udf().then(|| write_source.clone());
-                notify(subscriber_id, *write_ts, write_source_clone)
+                notify(subscriber_id, write_ts, write_source_clone)
             };
-            for index_update in doc_updates.iter() {
+            for index_update in &update.index_updates {
                 *num_index_updates += 1;
                 for index_key in index_update.update.iter() {
                     self.subscriptions.search.add_matches(

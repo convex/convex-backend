@@ -4,7 +4,7 @@ import { useConvex } from "./client.js";
 import { CreateWatch, QueriesObserver } from "./queries_observer.js";
 import { useSubscription } from "./use_subscription.js";
 import { QueryJournal } from "../browser/index.js";
-import { FunctionReference } from "../server/api.js";
+import { FunctionReference, FunctionReference_future } from "../server/api.js";
 import { SubscribeToPaginatedQueryOptions } from "../browser/sync/paginated_query_client.js";
 
 /**
@@ -15,9 +15,10 @@ import { SubscribeToPaginatedQueryOptions } from "../browser/sync/paginated_quer
  * of queries without violating the rules of React hooks.
  *
  * This hook accepts an object whose keys are identifiers for each query and the
- * values are objects of `{ query: FunctionReference, args: Record<string, Value> }`. The
- * `query` is a FunctionReference for the Convex query function to load, and the `args` are
- * the arguments to that function.
+ * values are objects of
+ * `{ query: FunctionReference | FunctionReference_future, args: Record<string, Value> }`.
+ * The `query` is a reference to the Convex query function to load, and the
+ * `args` are the arguments to that function.
  *
  * The hook returns an object that maps each identifier to the result of the query,
  * `undefined` if the query is still loading, or an instance of `Error` if the query
@@ -59,7 +60,7 @@ import { SubscribeToPaginatedQueryOptions } from "../browser/sync/paginated_quer
  * @public
  */
 export function useQueries(
-  queries: RequestForQueries,
+  queries: RequestForQueriesCompat,
 ): Record<string, any | undefined | Error> {
   const convex = useConvex();
   if (convex === undefined) {
@@ -73,7 +74,7 @@ export function useQueries(
   }
   const createWatch = useMemo(() => {
     return (
-      query: FunctionReference<"query">,
+      query: FunctionReference<"query"> | FunctionReference_future<"query">,
       args: Record<string, Value>,
       {
         journal,
@@ -97,7 +98,7 @@ export function useQueries(
  * Internal version of `useQueries` that is exported for testing.
  */
 export function useQueriesHelper(
-  queries: RequestForQueries,
+  queries: RequestForQueriesCompat,
   createWatch: CreateWatch,
 ): Record<string, any | undefined | Error> {
   const [observer] = useState(() => new QueriesObserver(createWatch));
@@ -140,6 +141,21 @@ export type RequestForQueries = Record<
     query: FunctionReference<"query">;
     args: Record<string, Value>;
     /** @internal */
+    paginationOptions?: SubscribeToPaginatedQueryOptions;
+  }
+>;
+
+// The `queries` parameter of `useQueries`: `RequestForQueries` with `query`
+// also accepting a `FunctionReference_future`. The exported type stays a plain
+// reference so that code reading a `query` out of one gets a
+// `FunctionReference` it can forward anywhere. Module-local so that a
+// consumer's declaration file inlines it rather than importing it from a path
+// outside the package's public entry points.
+type RequestForQueriesCompat = Record<
+  string,
+  {
+    query: FunctionReference<"query"> | FunctionReference_future<"query">;
+    args: Record<string, Value>;
     paginationOptions?: SubscribeToPaginatedQueryOptions;
   }
 >;

@@ -12,8 +12,8 @@ import { TeamMemberLink } from "elements/TeamMemberLink";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { usePostHog } from "hooks/usePostHog";
 import {
-  OPERATION_GROUPS,
-  formatOperationName,
+  ACTION_GROUPS,
+  DeployKeyAction,
 } from "components/deploymentSettings/GenerateDeployKeyButton";
 
 export function DeployKeyListItem({
@@ -35,14 +35,14 @@ export function DeployKeyListItem({
 
   const member = members?.find((m) => m.id === deployKey.creator);
 
-  // @ts-expect-error allowedOperations is not in the public API spec yet
-  const allowedOperations: string[] | undefined = deployKey.allowedOperations;
+  const allowedActions: DeployKeyAction[] | undefined =
+    deployKey.allowedActions;
 
-  const knownOperationKeys = new Set(
-    OPERATION_GROUPS.flatMap((g) => g.operations.map((op) => op.key)),
+  const knownActionKeys = new Set<string>(
+    ACTION_GROUPS.flatMap((g) => g.actions.map((a) => a.key)),
   );
-  const unknownOperations = allowedOperations?.filter(
-    (op) => !knownOperationKeys.has(op),
+  const unknownActions = allowedActions?.filter(
+    (action) => !knownActionKeys.has(action),
   );
 
   return (
@@ -99,9 +99,9 @@ export function DeployKeyListItem({
               "aria-label": "Deploy key options",
             }}
           >
-            {allowedOperations !== undefined ? (
+            {allowedActions !== undefined ? (
               <MenuItem action={() => setShowOperations(true)}>
-                View allowed operations
+                View allowed actions
               </MenuItem>
             ) : null}
             <MenuItem
@@ -144,52 +144,52 @@ export function DeployKeyListItem({
           }
         />
       )}
-      {showOperations && allowedOperations !== undefined && (
+      {showOperations && allowedActions !== undefined && (
         <Modal
-          title="Allowed Operations"
+          title="Allowed Actions"
           onClose={() => setShowOperations(false)}
           size="md"
         >
           <div className="scrollbar max-h-[60dvh] overflow-y-auto">
             <div className="flex flex-col gap-3">
-              {OPERATION_GROUPS.map((group) => {
-                const groupOps = group.operations.filter((op) =>
-                  allowedOperations.includes(op.key),
+              {ACTION_GROUPS.map((group) => {
+                const groupActions = group.actions.filter((a) =>
+                  allowedActions.includes(a.key),
                 );
-                if (groupOps.length === 0) return null;
+                if (groupActions.length === 0) return null;
                 return (
                   <div key={group.label}>
                     <div className="mb-1 text-sm font-semibold text-content-secondary">
                       {group.label}
                     </div>
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-x-4 gap-y-1">
-                      {groupOps.map((op) => (
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-x-4 gap-y-1">
+                      {groupActions.map((a) => (
                         <label
-                          key={op.key}
-                          className="flex items-center gap-2 rounded px-1 py-1 text-xs"
+                          key={a.key}
+                          className="flex items-center gap-2 rounded-sm p-1 text-xs"
                         >
                           <Checkbox checked disabled onChange={() => {}} />
-                          {op.label}
-                          <HelpTooltip>{op.description}</HelpTooltip>
+                          <span className="font-mono">{a.key}</span>
+                          <HelpTooltip>{a.description}</HelpTooltip>
                         </label>
                       ))}
                     </div>
                   </div>
                 );
               })}
-              {unknownOperations && unknownOperations.length > 0 && (
+              {unknownActions && unknownActions.length > 0 && (
                 <div>
                   <div className="mb-1 text-sm font-semibold text-content-secondary">
                     Other
                   </div>
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-x-4 gap-y-1">
-                    {unknownOperations.map((op) => (
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-x-4 gap-y-1">
+                    {unknownActions.map((action) => (
                       <label
-                        key={op}
-                        className="flex items-center gap-2 rounded px-1 py-1 text-xs"
+                        key={action}
+                        className="flex items-center gap-2 rounded-sm p-1 text-xs"
                       >
                         <Checkbox checked disabled onChange={() => {}} />
-                        {formatOperationName(op)}
+                        <span className="font-mono">{action}</span>
                       </label>
                     ))}
                   </div>

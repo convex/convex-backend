@@ -7,7 +7,6 @@
   "scripts": {
     "build": "rm -rf dist && tsc",
     "clean": "rm -rf dist",
-    "prepare": "npm run build",
     "test": "vitest run --pass-with-no-tests"
   },
   "dependencies": {
@@ -20,7 +19,6 @@
     "id-encoding": "workspace:*",
     "js-base64": "~3.7.4",
     "convex": "workspace:*",
-    "prettier": "3.8.1",
     "udf-syscall-ffi": "workspace:*"
   },
   "devDependencies": {
@@ -29,7 +27,6 @@
     "@types/node": "^18.17.0",
     "convex-test": "^0.0.41",
     "typescript": "~5.0.3",
-    "typescript-eslint": "^8.45.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.0"
   }
 }

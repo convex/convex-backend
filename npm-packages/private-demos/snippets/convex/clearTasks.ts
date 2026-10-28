@@ -1,4 +1,3 @@
-import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 import { handleTaskDeletion } from "./lib/tasks";
 import { internal } from "./_generated/api";
@@ -14,7 +13,7 @@ export const clearTasks = internalMutation({
 
     for await (const task of tasks) {
       await handleTaskDeletion(ctx, task);
-      await ctx.db.delete(task._id);
+      await ctx.db.delete("tasks", task._id);
       const metrics = await ctx.meta.getTransactionMetrics();
       if (
         metrics.bytesRead.used > 4 * MiB ||

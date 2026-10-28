@@ -15,7 +15,9 @@ export function Screenshot({ story, alt }: { story: StoryTitle; alt: string }) {
 
   return (
     <img
-      className="img-screenshot border border-neutral-n13/15 dark:border-neutral-n1/15"
+      // Block, so the vertical margin that sets a screenshot apart from the
+      // prose around it applies at all.
+      className="img-screenshot my-8 block border border-neutral-n13/15 dark:border-neutral-n1/15"
       src={`/screenshots/storybook/${img.filename}`}
       alt={alt}
       width={img.width / 2}

@@ -45,7 +45,7 @@ export function Snippet({
   snippet?: string | string[];
   prefix?: string;
   suffix?: string;
-  highlightPatterns?: string[];
+  highlightPatterns?: (string | { from: string; to: string })[];
   replacements?: [RegExp | string, string][];
 }) {
   const lines = source.split("\n");
@@ -166,15 +166,59 @@ function trimLeftWhitespace(lines: string[]): string[] {
   return lines.map((line) => (line !== "" ? line.slice(toTrim) : ""));
 }
 
-function highlightLines(source: string, patterns: string[]): string {
+/**
+ * Insert Docusaurus `// highlight-next-line` markers above lines selected by
+ * `patterns`. A string pattern highlights every line it matches. A
+ * `{ from, to }` pattern highlights the inclusive block from the first line
+ * matching `from` to the first line at or after it matching `to`.
+ *
+ * Throws if any pattern matches no lines, so a stale or mistyped pattern fails
+ * the Docusaurus build instead of silently highlighting nothing.
+ */
+function highlightLines(
+  source: string,
+  patterns: (string | { from: string; to: string })[],
+): string {
   const linesToHighlight = new Set<number>();
   const lines = source.split("\n");
   for (const pattern of patterns) {
-    lines.forEach((line, i) => {
-      if (line.match(pattern)) {
+    if (typeof pattern === "string") {
+      const matchedIndices = lines
+        .map((line, i) => (line.match(pattern) ? i : -1))
+        .filter((i) => i !== -1);
+      if (matchedIndices.length === 0) {
+        throw new Error(
+          `Snippet highlightPatterns: no line matched ${JSON.stringify(pattern)}`,
+        );
+      }
+      for (const i of matchedIndices) {
         linesToHighlight.add(i);
       }
-    });
+    } else {
+      const { from, to } = pattern;
+      const startIndex = lines.findIndex((line) => line.match(from));
+      if (startIndex === -1) {
+        throw new Error(
+          `Snippet highlightPatterns: no line matched from=${JSON.stringify(from)}`,
+        );
+      }
+      const endOffset = lines
+        .slice(startIndex)
+        .findIndex((line) => line.match(to));
+      if (endOffset === -1) {
+        throw new Error(
+          `Snippet highlightPatterns: no line matched to=${JSON.stringify(to)} after from=${JSON.stringify(from)}`,
+        );
+      }
+      const endIndex = startIndex + endOffset;
+      const range = Array.from(
+        { length: endIndex - startIndex + 1 },
+        (_, k) => startIndex + k,
+      );
+      for (const i of range) {
+        linesToHighlight.add(i);
+      }
+    }
   }
   for (const i of Array.from(linesToHighlight).sort((a, b) => b - a)) {
     lines.splice(i, 0, "// highlight-next-line");

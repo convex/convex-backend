@@ -24,8 +24,9 @@ export interface LocalDbReader<DataModel extends GenericDataModel> {
   ): QueryInitializer<NamedTableInfo<DataModel, T>>;
 }
 
-interface QueryInitializer<TableInfo extends GenericTableInfo>
-  extends Query<TableInfo> {
+interface QueryInitializer<
+  TableInfo extends GenericTableInfo,
+> extends Query<TableInfo> {
   withIndex<IndexName extends IndexNames<TableInfo>>(
     indexName: IndexName,
     builder?: (
@@ -48,8 +49,9 @@ interface Query<TableInfo extends GenericTableInfo> {
   order(order: "asc" | "desc"): Query<TableInfo>;
 }
 
-export interface LocalDbWriter<DataModel extends GenericDataModel>
-  extends LocalDbReader<DataModel> {
+export interface LocalDbWriter<
+  DataModel extends GenericDataModel,
+> extends LocalDbReader<DataModel> {
   insert<T extends TableNamesInDataModel<DataModel>>(
     tableName: T,
     id: string,

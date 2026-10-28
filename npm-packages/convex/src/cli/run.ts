@@ -24,8 +24,21 @@ import {
 } from "./lib/utils/utils.js";
 
 export const run = new Command("run")
-  .description(
+  .summary(
     "Run a function or evaluate an inline readonly query on your deployment",
+  )
+  .description(
+    [
+      "Run a function or evaluate an inline readonly query on your deployment.",
+      "",
+      '• Run a function with JSON arguments: `npx convex run messages:send \'{"body": "hello", "author": "me"}\'`',
+      "• Run a function on prod: `npx convex run messages:list --prod`",
+      "• Live-update a query's result: `npx convex run messages:list --watch`",
+      "• Push local code before running: `npx convex run messages:send '{}' --push`",
+      "• Evaluate an inline readonly query: `npx convex run --inline-query 'await ctx.db.query(\"messages\").take(5)'`",
+      "",
+      "Arguments are specified as a JSON object. By default, this runs on your dev deployment.",
+    ].join("\n"),
   )
   .allowExcessArguments(false)
   .addRunOptions()

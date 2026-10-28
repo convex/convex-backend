@@ -3,6 +3,7 @@ use std::sync::{
     Arc,
 };
 
+use anyhow::Context;
 use bytes::Bytes;
 use chrono::{
     DateTime,
@@ -10,9 +11,7 @@ use chrono::{
 };
 use common::{
     backoff::Backoff,
-    errors::report_error,
     http::{
-        categorize_http_response_stream,
         fetch::FetchClient,
         HttpRequestStream,
         APPLICATION_JSON_CONTENT_TYPE,
@@ -22,10 +21,6 @@ use common::{
         StructuredLogEvent,
     },
     runtime::Runtime,
-};
-use errors::{
-    ErrorMetadata,
-    ErrorMetadataAnyhowExt,
 };
 use http::{
     header::CONTENT_TYPE,
@@ -42,11 +37,18 @@ use tokio::sync::mpsc;
 use crate::{
     consts,
     metrics::posthog_et_sink_network_egress_bytes,
-    sinks::utils::{
-        self,
-        build_event_batches,
-        only_exceptions_log_filter,
-        EgressCounter,
+    sinks::{
+        failure::{
+            classify_sink_response,
+            SinkEgressFailure,
+            SinkFailureReporter,
+        },
+        utils::{
+            self,
+            build_event_batches,
+            EgressCounter,
+            SinkFilter,
+        },
     },
     LogSinkClient,
     LoggingDeploymentMetadata,
@@ -61,6 +63,7 @@ pub struct PostHogErrorTrackingSink<RT: Runtime> {
     backoff: Backoff,
     deployment_metadata: Arc<Mutex<LoggingDeploymentMetadata>>,
     egress_counter: EgressCounter,
+    failure_reporter: SinkFailureReporter,
 }
 
 impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
@@ -70,6 +73,7 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
         fetch_client: Arc<dyn FetchClient>,
         deployment_metadata: Arc<Mutex<LoggingDeploymentMetadata>>,
         egress_counter: EgressCounter,
+        failure_reporter: SinkFailureReporter,
         should_verify: bool,
     ) -> anyhow::Result<LogSinkClient> {
         tracing::info!("Starting PostHogErrorTrackingSink");
@@ -90,6 +94,7 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
                 consts::POSTHOG_ET_SINK_MAX_BACKOFF,
             ),
             egress_counter,
+            failure_reporter,
         };
 
         if should_verify {
@@ -125,20 +130,12 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
                 url: decide_url,
                 method: http::Method::POST,
                 headers: header_map,
-                body: Box::pin(futures::stream::once(async { Ok(body) })),
+                body: Some(Box::pin(futures::stream::once(async { Ok(body) }))),
                 signal: Box::pin(futures::future::pending()),
             })
             .await;
 
-        match response.and_then(categorize_http_response_stream) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                anyhow::bail!(ErrorMetadata::bad_request(
-                    "PostHogErrorTrackingInvalidProjectToken",
-                    format!("Failed to verify PostHog project token: {e}"),
-                ));
-            },
-        }
+        classify_sink_response(response).context("Failed to verify PostHog project token")
     }
 
     async fn go(mut self) {
@@ -152,18 +149,16 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
                     let batches = build_event_batches(
                         ev,
                         consts::POSTHOG_ET_SINK_MAX_LOGS_PER_BATCH,
-                        only_exceptions_log_filter,
+                        &SinkFilter::OnlyExceptions,
                     );
 
                     for batch in batches {
-                        if let Err(mut e) = self.process_events(batch).await {
-                            tracing::error!(
-                                "Error emitting log event batch in PostHogErrorTrackingSink: \
-                                 {e:?}."
-                            );
-                            report_error(&mut e).await;
-                        } else {
-                            self.backoff.reset();
+                        match self.process_events(batch).await {
+                            Ok(()) => {
+                                self.backoff.reset();
+                                self.failure_reporter.reset();
+                            },
+                            Err(e) => self.failure_reporter.record_failure(e).await,
                         }
                     }
                 },
@@ -187,6 +182,7 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
                 user_identifier,
                 source,
                 udf_server_version,
+                request_metadata: _,
             } = &event.event
             else {
                 continue;
@@ -259,20 +255,24 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
+            let mut exception = json!({
+                "type": "Error",
+                "value": error.message,
+                "mechanism": { "handled": false, "type": "generic" },
+            });
+            if !frames.is_empty() {
+                exception["stacktrace"] = json!({
+                    "type": "raw",
+                    "frames": frames,
+                });
+            }
+
             let capture_event = json!({
                 "event": "$exception",
                 "distinct_id": distinct_id,
                 "timestamp": timestamp_str,
                 "properties": {
-                    "$exception_list": [{
-                        "type": "Error",
-                        "value": error.message,
-                        "mechanism": { "handled": false, "type": "generic" },
-                        "stacktrace": {
-                            "type": "raw",
-                            "frames": frames,
-                        }
-                    }],
+                    "$exception_list": [exception],
                     "$exception_level": "error",
                     "$exception_types": ["Error"],
                     "$exception_values": [error.message],
@@ -314,6 +314,7 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
         let header_map = HeaderMap::from_iter([(CONTENT_TYPE, APPLICATION_JSON_CONTENT_TYPE)]);
         let batch_json = Bytes::from(batch_json);
 
+        let mut last_failure = None;
         for _ in 0..consts::POSTHOG_ET_SINK_MAX_REQUEST_ATTEMPTS {
             let batch_json = batch_json.clone();
             let response = self
@@ -322,7 +323,7 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
                     url: self.capture_url.clone(),
                     method: http::Method::POST,
                     headers: header_map.clone(),
-                    body: Box::pin(futures::stream::once(async { Ok(batch_json) })),
+                    body: Some(Box::pin(futures::stream::once(async { Ok(batch_json) }))),
                     signal: Box::pin(futures::future::pending()),
                 })
                 .await;
@@ -336,32 +337,24 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
                 );
             }
 
-            match response.and_then(categorize_http_response_stream) {
-                Ok(_) => return Ok(()),
-                Err(e) => {
-                    if e.is_deterministic_user_error() {
-                        anyhow::bail!(e.map_error_metadata(|e| ErrorMetadata {
-                            code: e.code,
-                            short_msg: "PostHogErrorTrackingRequestFailed".into(),
-                            msg: e.msg,
-                            source: None,
-                        }));
-                    } else {
-                        let delay = self.backoff.fail(&mut self.runtime.rng());
-                        tracing::warn!(
-                            "Failed to send in PostHog Error Tracking sink: {e}. Waiting \
-                             {delay:?} before retrying."
-                        );
-                        self.runtime.wait(delay).await;
-                    }
+            match classify_sink_response(response) {
+                Ok(()) => return Ok(()),
+                Err(failure) if failure.is_rejected() => anyhow::bail!(failure),
+                Err(failure) => {
+                    let delay = self.backoff.fail(&mut self.runtime.rng());
+                    tracing::warn!(
+                        "Failed to send in PostHog Error Tracking sink: {failure}. Waiting \
+                         {delay:?} before retrying."
+                    );
+                    last_failure = Some(failure);
+                    self.runtime.wait(delay).await;
                 },
             }
         }
 
-        anyhow::bail!(ErrorMetadata::overloaded(
-            "PostHogETMaxRetriesExceeded",
-            "Exceeded max number of retry requests to PostHog Error Tracking. Please try again \
-             later."
+        anyhow::bail!(SinkEgressFailure::retries_exhausted(
+            consts::POSTHOG_ET_SINK_MAX_REQUEST_ATTEMPTS,
+            last_failure,
         ))
     }
 }

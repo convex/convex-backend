@@ -44,7 +44,7 @@ use crate::{
 
 /// Table name for the sync protocol requests.
 /// This is used to make session requests idempotent
-pub static SESSION_REQUESTS_TABLE: TableName = TableName::const_new("_session_requests");
+pub const SESSION_REQUESTS_TABLE: TableName = TableName::const_new("_session_requests");
 
 static SESSION_ID_FIELD: LazyLock<FieldPath> =
     LazyLock::new(|| "sessionId".parse().expect("Invalid built-in field"));
@@ -65,9 +65,7 @@ pub struct SessionRequestsTable;
 impl SystemTable for SessionRequestsTable {
     type Metadata = SessionRequestRecord;
 
-    fn table_name() -> &'static TableName {
-        &SESSION_REQUESTS_TABLE
-    }
+    const TABLE_NAME: TableName = SESSION_REQUESTS_TABLE;
 
     fn indexes() -> Vec<SystemIndex<Self>> {
         vec![SESSION_REQUESTS_INDEX.clone()]

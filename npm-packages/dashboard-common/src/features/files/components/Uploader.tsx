@@ -91,7 +91,6 @@ export function useUploadFiles(options?: {
   async function handleUpload(files: FileList) {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
-      // eslint-disable-next-line no-param-reassign
       event.returnValue = "File upload is in progress";
     };
 

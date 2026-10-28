@@ -78,3 +78,70 @@ pub fn format_duration(d: Duration) -> String {
     }
     format!("{ms}ms")
 }
+
+/// Given how long the last window spent reading from the source, writing to the
+/// destination, and waiting on a rate limiter (throttle), describe whether a
+/// copy phase is read-, write-, or throttle-bound.
+///
+/// The verdict names the largest bucket, or "balanced" when the top two are
+/// within ~10% (of the total) of each other. The percentage is taken over
+/// `read + write + throttle`, so unaccounted CPU or idle time never distorts
+/// it. The throttle segment is omitted when there was no throttling (e.g. the
+/// document-copy phase has no rate limiter).
+///
+/// ```
+/// use std::time::Duration;
+/// use common::fmt::format_read_write_balance;
+/// assert_eq!(
+///     format_read_write_balance(Duration::from_secs(11), Duration::from_secs(49), Duration::ZERO),
+///     "write-bound 82% (read 11 seconds, write 49 seconds)",
+/// );
+/// assert_eq!(
+///     format_read_write_balance(
+///         Duration::from_secs(10),
+///         Duration::from_secs(30),
+///         Duration::from_secs(60),
+///     ),
+///     "throttle-bound 60% (read 10 seconds, write 30 seconds, throttle 60 seconds)",
+/// );
+/// assert_eq!(
+///     format_read_write_balance(Duration::ZERO, Duration::ZERO, Duration::ZERO),
+///     "no read/write activity",
+/// );
+/// ```
+pub fn format_read_write_balance(read: Duration, write: Duration, throttle: Duration) -> String {
+    let read_secs = read.as_secs_f64();
+    let write_secs = write.as_secs_f64();
+    let throttle_secs = throttle.as_secs_f64();
+    let total = read_secs + write_secs + throttle_secs;
+    if total <= 0.0 {
+        return "no read/write activity".to_string();
+    }
+    let mut buckets = [
+        ("read-bound", read_secs),
+        ("write-bound", write_secs),
+        ("throttle-bound", throttle_secs),
+    ];
+    buckets.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let verdict = if (buckets[0].1 - buckets[1].1) / total <= 0.10 {
+        "balanced"
+    } else {
+        buckets[0].0
+    };
+    let pct = buckets[0].1 / total * 100.0;
+    let segments = if throttle_secs > 0.0 {
+        format!(
+            "read {}, write {}, throttle {}",
+            format_duration(read),
+            format_duration(write),
+            format_duration(throttle),
+        )
+    } else {
+        format!(
+            "read {}, write {}",
+            format_duration(read),
+            format_duration(write),
+        )
+    };
+    format!("{verdict} {pct:.0}% ({segments})")
+}

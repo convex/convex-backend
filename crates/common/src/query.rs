@@ -143,7 +143,7 @@ impl HeapSize for Cursor {
     }
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord, Debug)]
 /// The order to scan a range.
 pub enum Order {
     /// Ascending order, e.g. 1, 2, 3.
@@ -719,7 +719,7 @@ fn binary_arithmetic<I, F>(
     do_floats: F,
 ) -> anyhow::Result<ConvexValue>
 where
-    I: FnOnce(i64, i64) -> i64,
+    I: FnOnce(i64, i64) -> Option<i64>,
     F: FnOnce(f64, f64) -> f64,
 {
     let l = l_expr.eval(environ)?;
@@ -727,7 +727,15 @@ where
 
     let result = match (&l.0, &r.0) {
         (Some(ConvexValue::Int64(l)), Some(ConvexValue::Int64(r))) => {
-            val!(do_ints(*l, *r))
+            let result = do_ints(*l, *r).ok_or_else(|| {
+                let message = if *r == 0 {
+                    format!("Cannot {name} {l} by zero")
+                } else {
+                    format!("Cannot {name} {l} and {r}: the result is out of range for Int64")
+                };
+                ErrorMetadata::bad_request("EvalError", message)
+            })?;
+            val!(result)
         },
         (Some(ConvexValue::Float64(l)), Some(ConvexValue::Float64(r))) => {
             val!(do_floats(*l, *r))
@@ -797,14 +805,16 @@ impl Expression {
             // Arithmetic operations only work on Int64 and Float64, so we don't have to worry about
             // mapping those from table names to table IDs.
             Expression::Add(l_expr, r_expr) => {
-                binary_arithmetic("add", environ, l_expr, r_expr, |l, r| l + r, |l, r| l + r)?
+                binary_arithmetic("add", environ, l_expr, r_expr, i64::checked_add, |l, r| {
+                    l + r
+                })?
             },
             Expression::Sub(l_expr, r_expr) => binary_arithmetic(
                 "subtract",
                 environ,
                 l_expr,
                 r_expr,
-                |l, r| l - r,
+                i64::checked_sub,
                 |l, r| l - r,
             )?,
             Expression::Mul(l_expr, r_expr) => binary_arithmetic(
@@ -812,7 +822,7 @@ impl Expression {
                 environ,
                 l_expr,
                 r_expr,
-                |l, r| l * r,
+                i64::checked_mul,
                 |l, r| l * r,
             )?,
             Expression::Div(l_expr, r_expr) => binary_arithmetic(
@@ -820,16 +830,26 @@ impl Expression {
                 environ,
                 l_expr,
                 r_expr,
-                |l, r| l / r,
+                i64::checked_div,
                 |l, r| l / r,
             )?,
             Expression::Mod(l_expr, r_expr) => {
-                binary_arithmetic("mod", environ, l_expr, r_expr, |l, r| l % r, |l, r| l % r)?
+                binary_arithmetic("mod", environ, l_expr, r_expr, i64::checked_rem, |l, r| {
+                    l % r
+                })?
             },
             Expression::Neg(x_expr) => {
                 let x = x_expr.eval(environ)?;
                 match &x.0 {
-                    Some(ConvexValue::Int64(x)) => ConvexValue::from(-*x),
+                    Some(ConvexValue::Int64(x)) => {
+                        let result = x.checked_neg().ok_or_else(|| {
+                            ErrorMetadata::bad_request(
+                                "EvalError",
+                                format!("Cannot negate {x}: the result is out of range for Int64"),
+                            )
+                        })?;
+                        ConvexValue::from(result)
+                    },
                     Some(ConvexValue::Float64(x)) => ConvexValue::from(-*x),
                     _ => anyhow::bail!(ErrorMetadata::bad_request(
                         "EvalError",

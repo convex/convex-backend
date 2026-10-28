@@ -1,8 +1,4 @@
 //! Code for interacting with our metrics logging
-#![feature(iter_intersperse)]
-#![feature(try_blocks)]
-#![feature(type_alias_impl_trait)]
-#![feature(impl_trait_in_assoc_type)]
 
 use std::{
     env,
@@ -12,6 +8,7 @@ use std::{
     },
 };
 
+mod eviction;
 mod labels;
 mod macros;
 mod metrics;
@@ -20,6 +17,14 @@ mod reporting;
 mod timer;
 
 pub use crate::{
+    eviction::{
+        register_evictable,
+        spawn_sweep_task,
+        sweep_now,
+        ttl_from_env,
+        DEFAULT_SWEEP_INTERVAL,
+        DEFAULT_TTL,
+    },
     labels::*,
     macros::*,
     metrics::*,

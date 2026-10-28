@@ -1,12 +1,12 @@
 //! Tools for dynamically loading a configuration file from disk upon receiving
 //! a signal
 
-#![feature(try_blocks)]
 #![feature(trait_alias)]
 
 use std::{
     future,
     path::PathBuf,
+    pin::pin,
 };
 
 use anyhow::Context;
@@ -19,12 +19,17 @@ use common::{
 };
 use decoding::ConfigDecoder;
 use futures::{
+    stream::FusedStream,
     Stream,
     StreamExt,
+    TryFutureExt as _,
 };
 use tokio::{
     signal::unix::SignalKind,
-    sync::watch,
+    sync::{
+        mpsc,
+        watch,
+    },
 };
 use tokio_stream::wrappers::{
     ReceiverStream,
@@ -77,7 +82,7 @@ mod mode {
 /// Requires running inside a Tokio runtime due to usage of [`tokio::fs`].
 pub struct ConfigLoader<D: ConfigDecoder + Send + 'static, M: mode::ConfigLoaderMode<D::Output>> {
     config_rx: watch::Receiver<M::Maybe>,
-    reload_tx: tokio::sync::mpsc::Sender<()>,
+    reload_tx: mpsc::Sender<()>,
     handle: Box<dyn SpawnHandle>,
 }
 
@@ -90,7 +95,7 @@ impl<D: ConfigDecoder + Send + 'static> ConfigLoader<D, ImmediateMode> {
         config_path: PathBuf,
         decoder: D,
     ) -> anyhow::Result<Self> {
-        Self::new(
+        Self::file_reloader(
             rt,
             signal_kind,
             config_path,
@@ -110,12 +115,12 @@ impl<D: ConfigDecoder + Send + 'static> ConfigLoader<D, LazyMode> {
         config_path: PathBuf,
         decoder: D,
     ) -> anyhow::Result<Self> {
-        Self::new(rt, signal_kind, config_path, decoder, async |_, _| Ok(None)).await
+        Self::file_reloader(rt, signal_kind, config_path, decoder, async |_, _| Ok(None)).await
     }
 }
 
 impl<D: ConfigDecoder + Send + 'static, M: mode::ConfigLoaderMode<D::Output>> ConfigLoader<D, M> {
-    async fn new<RT: Runtime>(
+    async fn file_reloader<RT: Runtime>(
         rt: RT,
         signal_kind: SignalKind,
         config_path: PathBuf,
@@ -128,31 +133,67 @@ impl<D: ConfigDecoder + Send + 'static, M: mode::ConfigLoaderMode<D::Output>> Co
         let signal_fut =
             tokio::signal::unix::signal(signal_kind).context("Couldn't set up signal handler")?;
         let initial_value = init(&config_path, &decoder).await?;
-        let (config_tx, mut config_rx) = watch::channel(initial_value);
-        config_rx.mark_changed();
-        let (reload_tx, reload_rx) = tokio::sync::mpsc::channel(1);
+        let (reload_tx, reload_rx) = mpsc::channel(1);
         if M::LAZY {
             reload_tx.try_send(())?;
         }
+        let config_source = format!("{config_path:?}");
+        let short_config_source = config_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let stream = futures::stream::select(
+            SignalStream::new(signal_fut),
+            ReceiverStream::new(reload_rx),
+        )
+        .then(move |()| tokio::fs::read(config_path.clone()).map_err(anyhow::Error::from));
+        Ok(Self::new_custom(
+            rt,
+            stream,
+            config_source,
+            short_config_source,
+            decoder,
+            initial_value,
+            reload_tx,
+        ))
+    }
+
+    pub fn new_custom<RT: Runtime>(
+        rt: RT,
+        config_stream: impl FusedStream<Item = anyhow::Result<Vec<u8>>> + Send + 'static,
+        config_source: String,
+        short_config_source: String,
+        decoder: D,
+        initial_value: M::Maybe,
+        reload_tx: mpsc::Sender<()>,
+    ) -> Self {
+        let (config_tx, mut config_rx) = watch::channel(initial_value);
+        config_rx.mark_changed();
         let handle = rt.spawn("config_loader", async move {
-            let config_path = config_path;
-            tracing::info!("Starting config loader thread for {config_path:?}");
-            let mut stream = futures::stream::select(
-                SignalStream::new(signal_fut),
-                ReceiverStream::new(reload_rx),
-            );
+            tracing::info!("Starting config loader thread for {config_source}");
+            let mut stream = pin!(config_stream);
             let mut invalid_config_gauge = None;
             loop {
-                let () = stream.select_next_some().await;
-                match tokio::fs::read(&config_path)
-                    .await
-                    .map_err(anyhow::Error::from)
-                    .and_then(|s| decoder.decode(s))
-                    .with_context(|| format!("Failed to reload config from {config_path:?}"))
+                let config = stream.select_next_some().await;
+                // The invalid-config gauge reflects the last decode result, so a
+                // fetch error (e.g. a Consul leader election) leaves it unchanged.
+                let config = match config
+                    .with_context(|| format!("Failed to reload config from {config_source}"))
+                {
+                    Ok(config) => config,
+                    Err(mut e) => {
+                        report_error(&mut e).await;
+                        continue;
+                    },
+                };
+                match decoder
+                    .decode(config)
+                    .with_context(|| format!("Failed to reload config from {config_source}"))
                 {
                     Ok(config) => {
                         invalid_config_gauge = None;
-                        tracing::info!("Reloading config from {config_path:?}");
+                        tracing::info!("Reloading config from {config_source}");
                         let config = <M::Maybe>::from(config);
                         config_tx.send_if_modified(|old_config| {
                             if old_config != &config {
@@ -164,7 +205,9 @@ impl<D: ConfigDecoder + Send + 'static, M: mode::ConfigLoaderMode<D::Output>> Co
                     },
                     Err(mut e) => {
                         invalid_config_gauge
-                            .get_or_insert_with(|| metrics::invalid_config_gauge(&config_path))
+                            .get_or_insert_with(|| {
+                                metrics::invalid_config_gauge(&short_config_source)
+                            })
                             .set(1);
                         report_error(&mut e).await;
                         continue;
@@ -172,11 +215,11 @@ impl<D: ConfigDecoder + Send + 'static, M: mode::ConfigLoaderMode<D::Output>> Co
                 }
             }
         });
-        Ok(ConfigLoader {
+        ConfigLoader {
             handle,
             config_rx,
             reload_tx,
-        })
+        }
     }
 
     /// Returns a stream of updates to the config file. This stream only emits a

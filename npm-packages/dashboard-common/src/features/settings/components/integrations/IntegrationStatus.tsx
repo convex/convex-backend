@@ -4,6 +4,7 @@ import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import {
   LogIntegration,
   ExceptionReportingIntegration,
+  AnalyticsIntegration,
   integrationUsingLegacyFormat,
 } from "@common/lib/integrationHelpers";
 import { HealthIndicator } from "./HealthIndicator";
@@ -11,7 +12,10 @@ import { HealthIndicator } from "./HealthIndicator";
 export function IntegrationStatus({
   integration,
 }: {
-  integration: LogIntegration | ExceptionReportingIntegration;
+  integration:
+    | LogIntegration
+    | ExceptionReportingIntegration
+    | AnalyticsIntegration;
 }) {
   return !integration.existing ? null : (
     <div className="flex flex-col gap-2">

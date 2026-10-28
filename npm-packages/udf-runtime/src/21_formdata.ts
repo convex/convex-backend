@@ -25,7 +25,7 @@ export class FormData {
         new File([value], filename ?? "blob", { type: value.type }),
       );
     } else {
-      this.addValue(name, value);
+      this.addValue(name, `${value}`.toWellFormed());
     }
   }
 
@@ -81,7 +81,7 @@ export class FormData {
     if (value instanceof Blob) {
       newValue = new File([value], filename ?? "");
     } else {
-      newValue = value;
+      newValue = `${value}`.toWellFormed();
     }
     // Insert in the same location as the first existing entry with the same
     // name, and delete the rest.
@@ -89,7 +89,7 @@ export class FormData {
     for (let i = 0; i < this._entries.length; i++) {
       if (this._entries[i][0] === name) {
         if (added) {
-          this._entries[i].splice(i);
+          this._entries.splice(i, 1);
           i--;
         } else {
           this._entries[i][1] = newValue;
@@ -109,11 +109,14 @@ export class FormData {
   [Symbol.iterator](): IterableIterator<[string, FormDataEntryValue]> {
     return this.entries();
   }
-
-  get [Symbol.toStringTag]() {
-    return "FormData";
-  }
 }
+
+Object.defineProperty(FormData.prototype, Symbol.toStringTag, {
+  value: "FormData",
+  enumerable: false,
+  writable: false,
+  configurable: true,
+});
 
 export type MimeType = {
   essence: string;
@@ -149,7 +152,9 @@ export const parseFormData = async (
         formData.append(
           formEntry.name,
           new Blob([formEntry.file.data], {
-            type: formEntry.file.contentType,
+            // A part without a Content-Type header arrives as `null`, which
+            // the Blob constructor would stringify to "null".
+            type: formEntry.file.contentType ?? undefined,
           }),
           formEntry.file.fileName,
         );

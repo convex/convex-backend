@@ -34,6 +34,7 @@ export const list = queryPrivateSystem("ViewData")({
       path: computeIdToPath(doc),
       args: Object.fromEntries(doc.args ?? []),
       state: doc.state ?? "active",
+      httpPrefix: doc.httpPrefix ?? null,
     }));
   },
 });

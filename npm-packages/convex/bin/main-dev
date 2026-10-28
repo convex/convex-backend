@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# Run the Convex CLI directly from source code.
+# Run the Convex CLI directly from source code, or from the prebuilt bundle in
+# environments without dev tooling (e.g. `pnpm deploy`ed artifacts, where
+# devDependencies like tsx are not installed).
 
 if [ "$(uname)" == "Darwin" ] || [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
   SCRIPTDIR="$(echo "$0" | python3 -c 'import os; print(os.path.dirname(os.path.realpath(input())))')"
+  if [ ! -e "$SCRIPTDIR/../node_modules/.bin/tsx" ]; then
+    "exec" "$SCRIPTDIR/main.js" "$@"
+  fi
   CONVEX_RUNNING_LIVE_IN_MONOREPO=1 "exec" "$SCRIPTDIR/../node_modules/.bin/tsx" "$SCRIPTDIR/../src/cli/index.ts" "$@"
 else # it's probably Windows
   # This doesn't follow symlinks quite as correctly as the Mac/Linux solution above

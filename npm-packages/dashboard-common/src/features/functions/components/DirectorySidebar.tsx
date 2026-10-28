@@ -29,7 +29,7 @@ export function DirectorySidebar({
       ref={ref}
     >
       <div className="mb-2 flex flex-col px-3">
-        <NentSwitcher />
+        <NentSwitcher className="mb-4" />
         <h5>Functions</h5>
       </div>
       <div className="flex items-center gap-1 border-b px-3 py-1.5">

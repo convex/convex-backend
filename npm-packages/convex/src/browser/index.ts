@@ -24,6 +24,8 @@ export type {
   ConnectionState,
   AuthTokenFetcher,
 } from "./sync/client.js";
+/** @internal */
+export type { BaseConvexClientInterface } from "./sync/client.js";
 export type { PaginationStatus } from "./sync/pagination.js";
 export type { ConvexClientOptions } from "./simple_client.js";
 export { ConvexClient } from "./simple_client.js";

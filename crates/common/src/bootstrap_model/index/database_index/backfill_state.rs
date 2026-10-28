@@ -4,8 +4,8 @@ use serde::{
 };
 use sync_types::Timestamp;
 
-/// Represents state of currently backfilling index.
-/// We currently do not checkpoint. Will extend the struct when we do.
+/// State for an index that is currently backfilling.
+/// Progress checkpoints are stored in `_index_backfills`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseIndexBackfillState {
     // A timestamp when the index was created. Note that this timestamp is slightly
@@ -13,7 +13,7 @@ pub struct DatabaseIndexBackfillState {
     // We need to run retention from this timestamp, because live writes write to
     // the index the moment the index committed.
     pub index_created_lower_bound: Timestamp,
-    // We have done the backfill and the only step left is catch up retention.
+    // Once true, live writes use `ScanComplete` while retention catches up.
     pub retention_started: bool,
     /// Whether the index is staged.
     pub staged: bool,

@@ -58,7 +58,7 @@ impl<T: Sync> FromRequestParts<T> for ExtractAuthenticationToken {
                 .ok_or_else(|| anyhow!("Invalid Header"))
                 .context(ErrorMetadata::bad_request(
                     "InvalidHeaderFailure",
-                    format!("Invalid authentication header"),
+                    "Invalid authentication header".to_string(),
                 ))?
                 .eq_ignore_ascii_case("convex ");
 

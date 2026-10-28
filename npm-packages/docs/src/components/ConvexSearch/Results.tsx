@@ -67,43 +67,63 @@ export default function Results({ query }: ResultsProps) {
         });
 
       // Search Kapa
-      const kapaSearch = fetch(
-        `https://api.kapa.ai/query/v1/projects/${siteConfig.customFields.KAPA_AI_PROJECT}/search/`,
-        {
-          method: "POST",
-          headers: {
-            "X-API-KEY": siteConfig.customFields.KAPA_AI_KEY as string,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            query: query,
-          }),
-        },
-      )
-        .then((response) => response.json())
-        .then((data: KapaResponse) => {
-          setKapaResults(
-            data.search_results.map((hit) => {
-              // The API returns titles in the format "page|heading", where
-              // heading may be blank.
-              let [page, heading] = hit.title.split("|");
-
-              // Remove prefix before Discord results.
-              page = page.replace("Discord support thread: ", "");
-
-              // Clear heading if it matches the page exactly.
-              if (heading === page) {
-                heading = "";
-              }
-
-              return {
-                title: heading !== "" ? heading : page,
-                url: toRelativeUrl(hit.source_url),
-                ...(heading !== "" && { subtext: page }),
-              };
+      const kapaProject = siteConfig.customFields.KAPA_AI_PROJECT;
+      const kapaKey = siteConfig.customFields.KAPA_AI_KEY;
+      let kapaSearch: Promise<unknown> | null = null;
+      if (!kapaProject || !kapaKey) {
+        // Skip Kapa search if the required env vars are missing to avoid crashes in dev
+        console.warn(
+          "Kapa API key or project ID is missing; skipping Kapa search results.",
+        );
+      } else {
+        kapaSearch = fetch(
+          `https://api.kapa.ai/query/v1/projects/${kapaProject}/search/`,
+          {
+            method: "POST",
+            headers: {
+              "X-API-KEY": kapaKey as string,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              query: query,
             }),
-          );
-        });
+          },
+        )
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(
+                `Kapa search request failed with status ${response.status}`,
+              );
+            }
+            return response.json();
+          })
+          .then((data: KapaResponse) => {
+            setKapaResults(
+              data.search_results.map((hit) => {
+                // The API returns titles in the format "page|heading", where
+                // heading may be blank.
+                let [page, heading] = hit.title.split("|");
+
+                // Remove prefix before Discord results.
+                page = page.replace("Discord support thread: ", "");
+
+                // Clear heading if it matches the page exactly.
+                if (heading === page) {
+                  heading = "";
+                }
+
+                return {
+                  title: heading !== "" ? heading : page,
+                  url: toRelativeUrl(hit.source_url),
+                  ...(heading !== "" && { subtext: page }),
+                };
+              }),
+            );
+          })
+          .catch((error) => {
+            console.warn("Skipping Kapa search results:", error);
+          });
+      }
 
       Promise.all([algoliaSearch, kapaSearch]).finally(() => {
         setLoading(false);

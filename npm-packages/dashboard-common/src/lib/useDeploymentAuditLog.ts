@@ -44,6 +44,11 @@ function processDeploymentAuditLogEvent(
     case "update_environment_variable":
     case "delete_environment_variable":
     case "replace_environment_variable":
+    case "create_usage_limit":
+    case "update_usage_limit":
+    case "delete_usage_limit":
+    case "usage_limit_exceeded":
+    case "change_usage_limit_stop_state":
     case "update_canonical_url":
     case "delete_canonical_url":
     case "push_config":
@@ -61,6 +66,7 @@ function processDeploymentAuditLogEvent(
     case "cancel_all_scheduled_functions":
     case "cancel_scheduled_function":
     case "request_export":
+    case "download_export":
     case "cancel_export":
     case "set_export_expiration":
     case "create_integration":
@@ -72,6 +78,7 @@ function processDeploymentAuditLogEvent(
     case "create_table":
     case "delete_files":
     case "generate_upload_url":
+    case "create_data_sync":
       break;
     default:
       return null;
@@ -123,8 +130,10 @@ export function useDeploymentAuditLogs(
   // briefly return only the newest page, making older events disappear and then
   // reappear as pagination catches up; keeping the longest results avoids this
   // flicker. When any of those inputs change we clear the cache and start over.
-  const longestResultsRef = useRef<DeploymentAuditLogEvent[] | undefined>();
-  const resetKeyRef = useRef<string | undefined>();
+  const longestResultsRef = useRef<DeploymentAuditLogEvent[] | undefined>(
+    undefined,
+  );
+  const resetKeyRef = useRef<string | undefined>(undefined);
   const resetKey = [
     team?.id ?? "no-team",
     fromTimestamp ?? "no-timestamp",

@@ -3,9 +3,11 @@ import type {
   ProjectMemberRoleResponse,
   UpdateProjectRolesArgs,
   TeamResponse,
-  TeamMember,
 } from "generatedApi";
-import type { CustomRoleResponse } from "@convex-dev/platform/managementApi";
+import type {
+  CustomRoleResponse,
+  TeamMember,
+} from "@convex-dev/platform/managementApi";
 import { useRouter } from "next/router";
 import { useRef, useState, type ReactNode } from "react";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
@@ -28,7 +30,6 @@ type TeamMemberListItemProps = {
   canChangeRole: boolean;
   customRoles: CustomRoleResponse[];
   customRolesEnabled: boolean;
-  customRolesVisible: boolean;
   onChangeRole: (body: {
     memberId: number;
     role?: "admin" | "developer";
@@ -49,7 +50,6 @@ export function TeamMemberListItem({
   canChangeRole,
   customRoles,
   customRolesEnabled,
-  customRolesVisible,
   onChangeRole,
   onUpdateProjectRoles,
   onRemoveMember,
@@ -215,7 +215,6 @@ export function TeamMemberListItem({
             member={member}
             customRoles={customRoles}
             customRolesEnabled={customRolesEnabled}
-            customRolesVisible={customRolesVisible}
             onSave={onChangeRole}
             onClose={() => setShowEditRole(false)}
           />

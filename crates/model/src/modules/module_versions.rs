@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    mem,
     ops::Deref,
     str::FromStr,
     sync::Arc,
@@ -17,6 +16,7 @@ use common::{
     },
 };
 use errors::ErrorMetadata;
+use packed_value::StringBuffer;
 use serde::{
     Deserialize,
     Serialize,
@@ -40,30 +40,17 @@ use crate::cron_jobs::types::{
     SerializedCronSpec,
 };
 
-/// System-assigned version number for modules.
-pub type ModuleVersion = i64;
-
 /// User-specified JavaScript source code for a module.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleSource {
     source: Arc<str>,
-    is_ascii: bool,
 }
 
 impl ModuleSource {
     pub fn new(source: &str) -> Self {
         Self {
-            is_ascii: source.is_ascii(),
             source: source.into(),
         }
-    }
-
-    pub fn is_ascii(&self) -> bool {
-        self.is_ascii
-    }
-
-    pub fn source_arc(&self) -> &Arc<str> {
-        &self.source
     }
 }
 
@@ -88,7 +75,7 @@ impl From<&str> for ModuleSource {
 }
 
 /// Bundler-generated source map for a `ModuleSource`.
-pub type SourceMap = String;
+pub type SourceMap = Arc<str>;
 
 #[derive(Debug, Clone)]
 pub struct FullModuleSource {
@@ -109,6 +96,12 @@ pub struct AnalyzedModule {
     pub cron_specs: Option<WithHeapSize<BTreeMap<CronIdentifier, CronSpec>>>,
     /// Index of the module's original source in the source map.
     pub source_index: Option<u32>,
+    /// Whether to keep around the JS context after running a function from this
+    /// module. If true, state will non-deterministically leak from UDF to UDF
+    /// (e.g. on the global object or module attributes).
+    ///
+    /// This is experimental for now and the reuse isn't guaranteed to happen.
+    pub reuse_context: bool,
 }
 
 impl HeapSize for AnalyzedModule {
@@ -127,6 +120,9 @@ pub struct SerializedAnalyzedModule {
     http_routes: Option<Vec<SerializedAnalyzedHttpRoute>>,
     cron_specs: Option<Vec<SerializedNamedCronSpec>>,
     source_mapped: Option<SerializedMappedModule>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    reuse_context: bool,
 }
 
 impl TryFrom<AnalyzedModule> for SerializedAnalyzedModule {
@@ -153,6 +149,7 @@ impl TryFrom<AnalyzedModule> for SerializedAnalyzedModule {
                 .map(|specs| specs.into_iter().map(TryFrom::try_from).try_collect())
                 .transpose()?,
             source_mapped,
+            reuse_context: m.reuse_context,
         })
     }
 }
@@ -181,6 +178,7 @@ impl TryFrom<SerializedAnalyzedModule> for AnalyzedModule {
             source_index: m
                 .source_mapped
                 .and_then(|mapped_module| mapped_module.source_index),
+            reuse_context: m.reuse_context,
         })
     }
 }
@@ -285,9 +283,11 @@ pub struct AnalyzedFunction {
     // case of reading ModuleMetadata without needing to validate the function.
 
     // JSON-serialized ArgsValidator
-    pub args_str: Option<String>,
+    // Note that we use `StringBuffer` so that this can be a refcounted slice
+    // into the `PackedDocument` stored in the `ModulesTable` memory index
+    pub args_str: Option<StringBuffer>,
     // JSON-serialized ReturnsValidator
-    pub returns_str: Option<String>,
+    pub returns_str: Option<StringBuffer>,
 }
 
 impl AnalyzedFunction {
@@ -306,8 +306,8 @@ impl AnalyzedFunction {
             pos,
             udf_type,
             visibility,
-            args_str: Some(args_json),
-            returns_str: Some(returns_json),
+            args_str: Some(StringBuffer::new(args_json)),
+            returns_str: Some(StringBuffer::new(returns_json)),
         })
     }
 
@@ -328,11 +328,10 @@ impl AnalyzedFunction {
 
 impl HeapSize for AnalyzedFunction {
     fn heap_size(&self) -> usize {
-        // Undercount ArgsValidator for simplicity sake.
         self.name.heap_size()
-            + mem::size_of::<UdfType>()
-            + mem::size_of::<Visibility>()
-            + mem::size_of::<ArgsValidator>()
+            + self.pos.heap_size()
+            + self.args_str.heap_size()
+            + self.returns_str.heap_size()
     }
 }
 
@@ -343,8 +342,8 @@ pub struct SerializedAnalyzedFunction {
     pos: Option<SerializedAnalyzedSourcePosition>,
     udf_type: String,
     visibility: Option<Visibility>,
-    args: Option<String>,
-    returns: Option<String>,
+    args: Option<StringBuffer>,
+    returns: Option<StringBuffer>,
 }
 
 impl TryFrom<AnalyzedFunction> for SerializedAnalyzedFunction {
@@ -539,7 +538,7 @@ impl Deref for AnalyzedHttpRoutes {
 // TODO: consider denormalizing SerializedMappedModule into
 // SerializedAnalyzedModule and  instead just include source information. This
 // requires a decent migration from Dashboard  schema.
-//  See https://github.com/get-convex/convex/pull/14382/files#r1252372646 for further discussion.
+//  See https://github.com/convex/convex/pull/14382/files#r1252372646 for further discussion.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SerializedMappedModule {

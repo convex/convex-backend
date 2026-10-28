@@ -1,7 +1,8 @@
+import { syncSelection, syncPeriod } from "./tableDefs/streamingExport";
+export { syncSelection } from "./tableDefs/streamingExport";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import deploymentAuditLogTable, {
-  oldBackendState,
   systemStopState,
 } from "./tableDefs/deploymentAuditLogTable";
 import { snapshotImportsTable } from "./tableDefs/snapshotImport";
@@ -69,23 +70,23 @@ const CronSchedule = v.union(
   }),
   v.object({
     type: v.literal("hourly"),
-    minuteUTC: v.int64(),
+    minuteUTC: v.optional(v.int64()),
   }),
   v.object({
     type: v.literal("daily"),
-    minuteUTC: v.int64(),
+    minuteUTC: v.optional(v.int64()),
     hourUTC: v.int64(),
   }),
   v.object({
     type: v.literal("weekly"),
     dayOfWeek: v.int64(),
     hourUTC: v.int64(),
-    minuteUTC: v.int64(),
+    minuteUTC: v.optional(v.int64()),
   }),
   v.object({
     type: v.literal("monthly"),
     day: v.int64(),
-    minuteUTC: v.int64(),
+    minuteUTC: v.optional(v.int64()),
     hourUTC: v.int64(),
   }),
   v.object({
@@ -187,6 +188,25 @@ export const sinkState = v.union(
   }),
 );
 
+// The subscribable log stream topics.
+export const logTopic = v.union(
+  v.literal("console"),
+  v.literal("function_execution"),
+  v.literal("audit_log"),
+  v.literal("scheduler_stats"),
+  v.literal("scheduled_job_lag"),
+  v.literal("current_storage_usage"),
+  v.literal("concurrency_stats"),
+  v.literal("storage_api_bandwidth"),
+  v.literal("ai_gateway_usage"),
+  v.literal("log_stream_egress"),
+  v.literal("custom_audit"),
+);
+
+// The topics a log stream is subscribed to. Absent means subscribed to all
+// topics, including ones added in the future.
+const subscribedTopics = v.optional(v.array(logTopic));
+
 export const datadogConfig = v.object({
   type: v.literal("datadog"),
   siteLocation: v.union(
@@ -201,6 +221,7 @@ export const datadogConfig = v.object({
   ddTags: v.array(v.string()),
   service: v.optional(v.string()),
   version: v.optional(v.union(v.literal("1"), v.literal("2"))),
+  topics: subscribedTopics,
 });
 
 export const webhookConfig = v.object({
@@ -208,6 +229,7 @@ export const webhookConfig = v.object({
   url: v.string(),
   format: v.union(v.literal("json"), v.literal("jsonl")),
   hmacSecret: v.string(),
+  topics: subscribedTopics,
 });
 
 export const axiomConfig = v.object({
@@ -222,6 +244,7 @@ export const axiomConfig = v.object({
   ),
   version: v.optional(v.union(v.literal("1"), v.literal("2"))),
   ingestUrl: v.optional(v.string()),
+  topics: subscribedTopics,
 });
 
 export const sentryConfig = v.object({
@@ -236,12 +259,43 @@ export const postHogLogsConfig = v.object({
   apiKey: v.string(),
   host: v.optional(v.string()),
   serviceName: v.optional(v.string()),
+  topics: subscribedTopics,
 });
 
 export const postHogErrorTrackingConfig = v.object({
   type: v.literal("postHogErrorTracking"),
   apiKey: v.string(),
   host: v.optional(v.string()),
+});
+
+const s3ExportProgress = v.union(
+  v.object({
+    type: v.literal("snapshotting"),
+    numTablesSynced: v.int64(),
+    totalTables: v.int64(),
+    currentComponent: v.string(),
+    currentTable: v.string(),
+    numDocumentsInCurrentTable: v.int64(),
+    totalDocumentsInCurrentTable: v.union(v.int64(), v.null()),
+    numDocumentsSynced: v.int64(),
+    totalDocuments: v.union(v.int64(), v.null()),
+  }),
+  v.object({ type: v.literal("stale"), ts: v.int64() }),
+  v.object({ type: v.literal("upToDate"), ts: v.int64() }),
+);
+
+export const s3ExportConfig = v.object({
+  type: v.literal("s3Export"),
+  bucket: v.string(),
+  region: v.string(),
+  prefix: v.optional(v.string()),
+  accessKeyId: v.optional(v.string()),
+  secretAccessKey: v.optional(v.string()),
+  // Empty until the admin pastes the ARN from their CloudFormation stack.
+  roleArn: v.optional(v.string()),
+  roleExternalId: v.optional(v.string()),
+  selection: syncSelection,
+  period: syncPeriod,
 });
 
 export const sinkConfig = v.union(
@@ -251,6 +305,7 @@ export const sinkConfig = v.union(
   sentryConfig,
   postHogLogsConfig,
   postHogErrorTrackingConfig,
+  s3ExportConfig,
 );
 
 const logSinksTable = defineTable({
@@ -260,17 +315,13 @@ const logSinksTable = defineTable({
 
 const userStopState = v.union(v.literal("none"), v.literal("paused"));
 
-export const newBackendState = v.object({
+const usageLimitStopState = v.union(v.literal("none"), v.literal("disabled"));
+
+export const backendState = v.object({
   system: systemStopState,
+  usage_limit: usageLimitStopState,
   user: userStopState,
 });
-
-export const backendState = v.union(
-  // TODO(nicolas) Remove this once the migration is completed
-  v.object({ state: oldBackendState }),
-
-  newBackendState,
-);
 
 const backendStateTable = defineTable(backendState);
 
@@ -369,6 +420,9 @@ export default defineSchema({
     name: v.union(v.string(), v.null()),
     args: v.union(v.array(v.any()), v.null()),
     state: v.optional(v.union(v.literal("active"), v.literal("unmounted"))),
+    // Absolute path this component's HTTP routes are served under: the app's
+    // `httpPrefix` for the root, the mount path in the parent for children.
+    httpPrefix: v.optional(v.union(v.string(), v.null())),
   }),
   _modules: defineTable({
     path: v.string(),
@@ -424,7 +478,12 @@ export default defineSchema({
         state: v.literal("requested"),
         requestor: exportRequestor,
       }),
-      // TODO: add canceled
+      v.object({
+        state: v.literal("canceled"),
+        start_ts: v.optional(v.union(v.null(), v.int64())),
+        canceled_ts: v.int64(),
+        requestor: exportRequestor,
+      }),
     ),
   ).index("by_requestor", ["requestor"]),
   _deployment_audit_log: deploymentAuditLogTable,
@@ -470,12 +529,28 @@ export default defineSchema({
   }).index("by_name_and_ts", ["name", "ts"]),
   _udf_config: defineTable({ serverVersion: v.string() }),
   _schemas: defineTable(schemaMetadata).index("by_state", ["state"]),
-  _schema_validation_progress: defineTable({
+  _schema_validations: defineTable({
     schemaId: v.id("_schemas"),
+    tableName: v.string(),
+    validatorHash: v.optional(v.string()),
+    state: v.union(
+      v.object({ state: v.literal("pending") }),
+      v.object({ state: v.literal("valid") }),
+      v.object({ state: v.literal("failed"), error: v.string() }),
+    ),
+  }).index("by_schema_id_and_table_name", ["schemaId", "tableName"]),
+  _schema_validation_progress: defineTable({
+    validationId: v.id("_schema_validations"),
     numDocsValidated: v.int64(),
     totalDocs: v.union(v.int64(), v.null()),
-  }).index("by_schema_id", ["schemaId"]),
+  }).index("by_validation_id", ["validationId"]),
   _log_sinks: logSinksTable,
+  _s3_export_state: defineTable({
+    configId: v.id("_log_sinks"),
+    checkpoint: v.object({
+      progress: s3ExportProgress,
+    }),
+  }).index("by_config_id", ["configId"]),
   _backend_state: backendStateTable,
   _snapshot_imports: snapshotImportsTable,
   _aws_lambda_versions: awsLambdaVersionsTable,

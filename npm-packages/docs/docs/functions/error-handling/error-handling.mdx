@@ -149,8 +149,8 @@ trace. Server
 still include their custom `data`.
 
 Both development and production deployments log full errors with stack traces
-which can be found on the [Logs](/dashboard/deployments/logs.md) page of a given
-deployment.
+which can be found on the [Logs](/dashboard/deployments/logs.mdx) page of a
+given deployment.
 
 ## Application errors, expected failures
 
@@ -177,11 +177,11 @@ query from subscribing to too many index ranges, or a mutation from reading from
 too many ranges that could cause conflicts.
 
 In general, if you're running into these limits frequently, we recommend
-[indexing your queries](/database/reading-data/indexes/indexes.md) to reduce the
-number of documents scanned, allowing you to avoid unnecessary reads. Queries
-that scan large swaths of your data may look innocent at first, but can easily
-blow up at any production scale. If your functions are close to hitting these
-limits they will log a warning.
+[indexing your queries](/database/reading-data/indexes/indexes.mdx) to reduce
+the number of documents scanned, allowing you to avoid unnecessary reads.
+Queries that scan large swaths of your data may look innocent at first, but can
+easily blow up at any production scale. If your functions are close to hitting
+these limits they will log a warning.
 
 For information on other limits, see [here](/production/state/limits.mdx).
 

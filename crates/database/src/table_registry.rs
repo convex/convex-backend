@@ -149,7 +149,7 @@ impl TableRegistry {
                             matches!(new_metadata.namespace, TableNamespace::ByComponent(_))
                                 || bootstrap_system_tables()
                                     .iter()
-                                    .all(|t| t.table_name() != &new_metadata.name),
+                                    .all(|t| t.table_name() != new_metadata.name),
                             "cannot delete bootstrap system table"
                         );
                         anyhow::ensure!(index_registry.has_no_indexes(tablet_id));

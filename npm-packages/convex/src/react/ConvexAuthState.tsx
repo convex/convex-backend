@@ -3,6 +3,7 @@ import React, {
   ReactNode,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import { AuthTokenFetcher } from "../browser/sync/client.js";
@@ -129,15 +130,22 @@ export function ConvexProviderWithAuth({
 
   const isAuthenticated =
     authProviderAuthenticated && (isConvexAuthenticated ?? false);
+  const isLoading = isConvexAuthenticated === null;
+  const isRefreshingWhileAuthenticated = isRefreshing && isAuthenticated;
+
+  // Stabilize the context value's identity so `useConvexAuth()` consumers
+  // only re-render when the derived auth state actually changes.
+  const authState = useMemo<ConvexAuthState>(
+    () => ({
+      isLoading,
+      isAuthenticated,
+      isRefreshing: isRefreshingWhileAuthenticated,
+    }),
+    [isLoading, isAuthenticated, isRefreshingWhileAuthenticated],
+  );
 
   return (
-    <ConvexAuthContext.Provider
-      value={{
-        isLoading: isConvexAuthenticated === null,
-        isAuthenticated,
-        isRefreshing: isRefreshing && isAuthenticated,
-      }}
-    >
+    <ConvexAuthContext.Provider value={authState}>
       <ConvexAuthStateFirstEffect
         authProviderAuthenticated={authProviderAuthenticated}
         fetchAccessToken={fetchAccessToken}

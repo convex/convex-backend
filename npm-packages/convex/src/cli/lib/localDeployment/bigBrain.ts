@@ -10,7 +10,12 @@ export async function bigBrainStart(
     teamSlug: string;
     instanceName: string | null;
   },
-): Promise<{ deploymentName: string; adminKey: string; projectId: number }> {
+): Promise<{
+  deploymentName: string;
+  /** @deprecated */
+  adminKey: string;
+  projectId: number;
+}> {
   return bigBrainAPI({
     ctx,
     method: "POST",
@@ -38,6 +43,7 @@ export async function bigBrainRecordActivity(
   ctx: Context,
   data: {
     instanceName: string;
+    adminKey: string;
   },
 ) {
   return bigBrainAPI({
@@ -59,20 +65,6 @@ export async function bigBrainEnableFeatureMetadata(
   });
 }
 
-export async function bigBrainGenerateAdminKeyForAnonymousDeployment(
-  ctx: Context,
-  data: {
-    instanceName: string;
-    instanceSecret: string;
-  },
-) {
-  return bigBrainAPI({
-    ctx,
-    method: "POST",
-    path: "local_deployment/generate_admin_key",
-    data,
-  });
-}
 /** Whether a project already has a cloud dev deployment for this user. */
 export async function projectHasExistingCloudDev(
   ctx: Context,

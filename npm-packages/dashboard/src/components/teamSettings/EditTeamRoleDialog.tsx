@@ -4,8 +4,11 @@ import { Link } from "@ui/Link";
 import { Modal } from "@ui/Modal";
 import { Tooltip } from "@ui/Tooltip";
 import { useState } from "react";
-import type { CustomRoleResponse } from "@convex-dev/platform/managementApi";
-import type { TeamMember, TeamResponse } from "generatedApi";
+import type {
+  CustomRoleResponse,
+  TeamMember,
+} from "@convex-dev/platform/managementApi";
+import type { TeamResponse } from "generatedApi";
 import { useHasCustomRolePermission } from "api/roles";
 import { CUSTOM_ROLE_RESOURCE } from "lib/permissions";
 import { CustomRolesSelector } from "./CustomRolesSelector";
@@ -24,7 +27,6 @@ export function EditTeamRoleDialog({
   member,
   customRoles,
   customRolesEnabled,
-  customRolesVisible,
   onSave,
   onClose,
 }: {
@@ -32,7 +34,6 @@ export function EditTeamRoleDialog({
   member: TeamMember;
   customRoles: CustomRoleResponse[];
   customRolesEnabled: boolean;
-  customRolesVisible: boolean;
   onSave: (body: {
     memberId: number;
     role?: "admin" | "developer";
@@ -63,15 +64,11 @@ export function EditTeamRoleDialog({
   const roleOptions = [
     { label: "Admin", value: "admin" as const, disabled: false },
     { label: "Developer", value: "developer" as const, disabled: false },
-    ...(customRolesVisible
-      ? [
-          {
-            label: "Custom",
-            value: "custom" as const,
-            disabled: customDisabledReason !== undefined,
-          },
-        ]
-      : []),
+    {
+      label: "Custom",
+      value: "custom" as const,
+      disabled: customDisabledReason !== undefined,
+    },
   ];
 
   const isUnchanged =

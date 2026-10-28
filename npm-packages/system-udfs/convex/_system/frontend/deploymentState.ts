@@ -17,9 +17,6 @@ export const deploymentState = queryPrivateSystem(noPermissionRequired)({
 });
 
 function toOldBackendStateLossy(row: BackendState): OldBackendState {
-  // TODO(nicolas) Remove this once the migration has run
-  if ("state" in row) return row.state;
-
   if (row.system === "disabled") return "disabled";
   if (row.system === "suspended") return "suspended";
   if (row.user === "paused") return "paused";

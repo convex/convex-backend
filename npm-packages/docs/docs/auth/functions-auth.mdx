@@ -12,9 +12,10 @@ import Fetch from "!!raw-loader!@site/../private-demos/snippets/src/httpAuthCall
 _If you're using Convex Auth, see the
 [authorization doc](https://labs.convex.dev/auth/authz#use-authentication-state-in-backend-functions)._
 
-Within a Convex [function](/functions.mdx), you can access information about the
-currently logged-in user by using the [`auth`](/api/interfaces/server.Auth)
-property of the [`QueryCtx`](/generated-api/server#queryctx),
+Within a Convex [function](/functions/overview.mdx), you can access information
+about the currently logged-in user by using the
+[`auth`](/api/interfaces/server.Auth) property of the
+[`QueryCtx`](/generated-api/server#queryctx),
 [`MutationCtx`](/generated-api/server#mutationctx), or
 [`ActionCtx`](/generated-api/server#actionctx) object:
 
@@ -44,6 +45,16 @@ standard definition in the
 If you're using Clerk, the fields returned by `getUserIdentity` are determined
 by the claims configured in your Clerk integration. If you've set custom claims,
 they will be returned by `getUserIdentity` as well.
+
+Not every claim in the token is returned by `getUserIdentity`:
+
+- Standard OIDC claims are surfaced as named fields (`subject`, `issuer`,
+  `name`, `email`, and so on) rather than as custom claims.
+- A few claims are dropped entirely. JWT housekeeping claims (`jti`, `nbf`) and
+  Clerk's `fva` (factor verification age) are not available, the latter because
+  it's time-varying and would bust the query cache. See
+  [our Clerk docs](/auth/clerk.mdx#factor-verification-age) for an alternative
+  to `fva`.
 
 ### Custom JWT Auth
 

@@ -39,6 +39,7 @@ use super::{
         TokenMatch,
         TokenQuery,
     },
+    searchlight_knobs::MAX_ARCHIVE_CACHE_SIZE_BYTES,
     FragmentedTextStorageKeys,
     SearcherImpl,
     TermValue,
@@ -144,7 +145,7 @@ impl<RT: Runtime> InProcessSearcher<RT> {
         Ok(Self {
             searcher: Arc::new(SearcherImpl::new(
                 tmpdir.path(),
-                bytesize::mib(500u64),
+                MAX_ARCHIVE_CACHE_SIZE_BYTES.get(),
                 100,
                 false,
                 runtime,

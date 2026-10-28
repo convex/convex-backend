@@ -230,13 +230,13 @@ impl IndexRange {
             let component_path = tx.must_component_path(ComponentId::from(self.namespace))?;
             tx.usage_tracker.track_database_egress(
                 component_path.clone(),
-                self.printable_index_name.table().to_string(),
+                self.printable_index_name.table(),
                 index_bytes as u64,
                 self.printable_index_name.is_system_owned(),
             );
             tx.usage_tracker.track_database_egress_v2(
                 component_path,
-                self.printable_index_name.table().to_string(),
+                self.printable_index_name.table(),
                 index_bytes as u64,
                 self.printable_index_name.is_system_owned(),
             );

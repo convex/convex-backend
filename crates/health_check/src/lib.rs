@@ -7,9 +7,15 @@ use convex_sync_types::backoff::Backoff;
 use rand::rng;
 use reqwest::Url;
 
-pub async fn health_check(service_url: &Url) -> anyhow::Result<Option<String>> {
+/// Every request sends the caller's `client_id` in this header, so the
+/// backend's client-version metrics attribute health checks to the service
+/// that made them.
+const CONVEX_CLIENT_HEADER: &str = "Convex-Client";
+
+pub async fn health_check(service_url: &Url, client_id: &str) -> anyhow::Result<Option<String>> {
     health_check_with_retries(
         service_url,
+        client_id,
         None,
         None,
         "instance_version",
@@ -21,72 +27,20 @@ pub async fn health_check(service_url: &Url) -> anyhow::Result<Option<String>> {
 
 pub async fn wait_for_http_health(
     service_url: &Url,
+    client_id: &str,
     expected_version: Option<&str>,
     expected_deployment_name: Option<&str>,
-    num_retries: usize,
-    initial_backoff: Duration,
-) -> anyhow::Result<String> {
-    wait_for_http_health_inner(
-        service_url,
-        None,
-        expected_version,
-        expected_deployment_name,
-        "instance_version",
-        num_retries,
-        initial_backoff,
-    )
-    .await
-}
-
-pub async fn wait_for_conductor_http_health(
-    service_name: &str,
-    service_url: &Url,
-    expected_version: Option<&str>,
-    num_retries: usize,
-    initial_backoff: Duration,
-) -> anyhow::Result<String> {
-    let version = wait_for_http_health_inner(
-        service_url,
-        Some(service_name),
-        expected_version,
-        None,
-        "version",
-        num_retries,
-        initial_backoff,
-    )
-    .await?;
-
-    // Provide a better error message than parse if we hit a common default version.
-    if version == "unknown" {
-        anyhow::bail!(
-            "Health check on {service_name} on url {service_url} failed with invalid version: \
-             {version}"
-        )
-    }
-
-    Ok(version)
-}
-
-async fn wait_for_http_health_inner(
-    service_url: &Url,
-    service_name: Option<&str>,
-    expected_version: Option<&str>,
-    expected_deployment_name: Option<&str>,
-    health_check_endpoint: &str,
     num_retries: usize,
     initial_backoff: Duration,
 ) -> anyhow::Result<String> {
     let start = Instant::now();
-    let service_name = service_name
-        .map(|n| format!(" ({n}) "))
-        .unwrap_or_else(|| "".into());
-
-    tracing::info!("Waiting for health to {service_url}{service_name}");
+    tracing::info!("Waiting for health to {service_url}");
     match health_check_with_retries(
         service_url,
+        client_id,
         expected_version,
         expected_deployment_name,
-        health_check_endpoint,
+        "instance_version",
         num_retries,
         initial_backoff,
     )
@@ -100,7 +54,7 @@ async fn wait_for_http_health_inner(
             Ok(version)
         },
         None => anyhow::bail!(
-            "Timed out waiting for service health: {service_url}{service_name} after {:?}",
+            "Timed out waiting for service health: {service_url} after {:?}",
             start.elapsed()
         ),
     }
@@ -108,6 +62,7 @@ async fn wait_for_http_health_inner(
 
 async fn health_check_with_retries(
     service_url: &Url,
+    client_id: &str,
     expected_version: Option<&str>,
     expected_deployment_name: Option<&str>,
     health_check_endpoint: &str,
@@ -121,11 +76,19 @@ async fn health_check_with_retries(
             let delay = backoff.fail(&mut rng());
             tokio::time::sleep(delay).await;
         }
-        match health_check_once(service_url, expected_version, health_check_endpoint).await {
+        match health_check_once(
+            service_url,
+            client_id,
+            expected_version,
+            health_check_endpoint,
+        )
+        .await
+        {
             Ok(version) => {
                 if let Some(expected_deployment_name) = expected_deployment_name
                     && let Err(e) =
-                        verify_deployment_name(service_url, expected_deployment_name).await
+                        verify_deployment_name(service_url, expected_deployment_name, client_id)
+                            .await
                 {
                     last_error = Some(e);
                     continue;
@@ -141,6 +104,7 @@ async fn health_check_with_retries(
 
 async fn health_check_once(
     service_url: &Url,
+    client_id: &str,
     expected_version: Option<&str>,
     health_check_endpoint: &str,
 ) -> anyhow::Result<String> {
@@ -148,6 +112,7 @@ async fn health_check_once(
     let health_url = service_url.join(health_check_endpoint)?;
     let response = client
         .get(health_url.clone())
+        .header(CONVEX_CLIENT_HEADER, client_id)
         .timeout(Duration::from_secs(15))
         .send()
         .await;
@@ -172,12 +137,14 @@ async fn health_check_once(
 pub async fn verify_deployment_name(
     service_url: &Url,
     deployment_name: &str,
+    client_id: &str,
 ) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
     let instance_name_url = service_url.join("instance_name")?;
     let response = client
         .get(instance_name_url)
         .header("x-convex-instance", deployment_name)
+        .header(CONVEX_CLIENT_HEADER, client_id)
         .timeout(Duration::from_secs(5))
         .send()
         .await?;
