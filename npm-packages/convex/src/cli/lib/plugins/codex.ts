@@ -164,7 +164,7 @@ export const codex = {
     //    updated.
 
     // Add the marketplace
-    ["plugin", "marketplace", "add", "get-convex/convex-codex-plugin"],
+    ["plugin", "marketplace", "add", "convex/convex-codex-plugin"],
     // Update the local copy from GitHub, so the latest plugin version is
     // available to install - this is important
     upgradeStep,
