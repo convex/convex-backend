@@ -10,6 +10,12 @@ inputs:
   r2-secret-key:
     required: true
     description: "pass secrets.R2_SECRET_ACCESS_KEY"
+  in-vpc-cache:
+    required: false
+    default: "true"
+    description:
+      "Use the in-VPC S3 caches on self-hosted runners. Pass false where the
+      instance profile is unreachable, e.g. from a job container."
 
 runs:
   using: composite
@@ -113,7 +119,9 @@ runs:
         SCCACHE_IDLE_TIMEOUT: "0"
         R2_ACCESS_KEY: ${{ inputs.r2-access-key }}
         R2_SECRET_KEY: ${{ inputs.r2-secret-key }}
-        IS_SELF_HOSTED: ${{ runner.environment == 'self-hosted' }}
+        IS_SELF_HOSTED:
+          ${{ runner.environment == 'self-hosted' && inputs.in-vpc-cache ==
+          'true' }}
       run: |
         if [ "$IS_SELF_HOSTED" = "true" ]; then
           # In-VPC S3 (assumed-role env creds when present, else the instance
@@ -157,7 +165,8 @@ runs:
         # can't, so the empty bucket makes the fork fall back to the GitHub
         # cache provider there.
         s3-bucket:
-          ${{ runner.environment == 'self-hosted' && 'convex-ci-cache' || '' }}
+          ${{ runner.environment == 'self-hosted' && inputs.in-vpc-cache ==
+          'true' && 'convex-ci-cache' || '' }}
         # One shared cache entry for all jobs instead of a per-job key; the
         # jobs' cargo registries are near-identical and the entry is only
         # ~/.cargo (registry + git checkouts), not job-specific artifacts.

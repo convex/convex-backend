@@ -29,68 +29,6 @@ jobs:
           release_date=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.created_at[0:10]')
           echo "release_name=$release_date-${COMMIT_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
-  release_dashboard:
-    name: Build Convex Dashboard
-    needs: release_metadata
-    runs-on: [self-hosted, aws, x64, xlarge]
-    steps:
-      - name: Check out code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # Restore-only: OSS can't write this cache (cache-write role is convex/convex-only).
-      - name: Restore pnpm artifacts
-        uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
-        env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          RUNS_ON_S3_BUCKET_CACHE: ${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
-        with:
-          path: |
-            ~/.local/share/pnpm/store
-            npm-packages/.turbo/cache
-          key: pnpm-cache-${{ hashFiles('npm-packages/pnpm-lock.yaml') }}-3
-          restore-keys: pnpm-cache-
-
-      - name: Install mise tools
-        uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
-        with:
-          cache: true
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: NPM install globals
-        run: npm ci --prefix scripts
-
-      - name: Install JS dependencies
-        run: |
-          just install-js
-
-      - name: Build dashboard dependencies
-        run: |
-          just turbo run build --filter=dashboard-self-hosted^...
-
-      - name: Build dashboard
-        run: |
-          cd npm-packages/dashboard-self-hosted && npm run build:export
-
-      - name: Zip output
-        run: |
-          cd npm-packages/dashboard-self-hosted/out && zip -r ../../../dashboard.zip .
-
-      - name: Create Upload Precompiled Artifacts
-        id: create_release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          files: |
-            dashboard.zip
-          tag_name:
-            precompiled-${{ needs.release_metadata.outputs.release_name }}
-          name: Precompiled ${{ needs.release_metadata.outputs.release_name }}
-          target_commitish: ${{ github.sha }}
-          draft: false
-          prerelease: true
-          make_latest: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   release_backend:
     needs: release_metadata
     strategy:
@@ -99,21 +37,38 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: "['self-hosted', 'aws', 'x64', 'xlarge']"
-          - target: x86_64-apple-darwin
-            # large are on intel
-            os: "'macos-latest-large'"
-          - target: aarch64-apple-darwin
-            # xlarge are on arm
-            os: "'macos-latest-xlarge'"
-          - target: x86_64-pc-windows-msvc
-            os: "'windows-large-runner'"
+            container: public.ecr.aws/docker/library/ubuntu:22.04
           - target: aarch64-unknown-linux-gnu
             # xlarge-c8g: precompiled binaries run on arbitrary user hardware,
             # so build on the oldest-generation arm64 pool.
             os: "['self-hosted', 'aws', 'arm64', 'xlarge-c8g']"
+            container: public.ecr.aws/docker/library/ubuntu:22.04
     name: Build Convex Backend
     runs-on: ${{ fromJSON(matrix.os) }}
+    # Linux binaries run on arbitrary user machines, and glibc is only
+    # backwards-compatible, so build them against an older distro than the
+    # runner image: Ubuntu 22.04 (glibc 2.35, libstdc++ GLIBCXX_3.4.30).
+    # The container can't reach the instance profile, so it skips the in-VPC
+    # S3 caches (see setup-rust's in-vpc-cache).
+    container:
+      image: ${{ matrix.container }}
     steps:
+      - name: Install build dependencies (container)
+        if: matrix.container
+        shell: bash
+        run: |
+          set -ex
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            binutils build-essential ca-certificates cmake curl g++-12 gcc-12 \
+            git libclang-dev libsnappy-dev libsodium-dev libssl-dev pkg-config \
+            python3 sudo unzip xz-utils zip
+          # ada-url needs C++20 support beyond jammy's default gcc 11.
+          echo "CC=gcc-12" >> "$GITHUB_ENV"
+          echo "CXX=g++-12" >> "$GITHUB_ENV"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -143,9 +98,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           r2-access-key: ${{ secrets.R2_ACCESS_KEY_ID }}
           r2-secret-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          in-vpc-cache: ${{ !matrix.container }}
 
       # Restore-only: OSS can't write this cache (cache-write role is convex/convex-only).
       - name: Restore pnpm artifacts
+        if: ${{ !matrix.container }}
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
@@ -204,67 +161,22 @@ jobs:
           cargo build --release -p local_backend --bin convex-local-backend
           mv target/release/${{ steps.artifact_names.outputs.BINARY_NAME }} .
 
-      - name: Zip backend into arch
-        uses: thedoctor0/zip-release@7fddfdd07cadb5b8c6c0dbcdcec17f8cd7784b80 # 0.7.5
-        with:
-          type: zip
-          filename: ${{ steps.artifact_names.outputs.ZIP_NAME }}
-          path: ${{ steps.artifact_names.outputs.BINARY_NAME }}
-
-      - name: Create Upload Precompiled Artifacts
-        id: create_release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          files: |
-            ${{ steps.artifact_names.outputs.ZIP_NAME }}
-            LICENSE.md
-          tag_name:
-            precompiled-${{ needs.release_metadata.outputs.release_name }}
-          name: Precompiled ${{ needs.release_metadata.outputs.release_name }}
-          target_commitish: ${{ github.sha }}
-          draft: false
-          prerelease: true
-          make_latest: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  validate_release:
-    name: Validate release
-    needs: [release_metadata, release_dashboard, release_backend]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate release tag and assets
+      - name: Check glibc and libstdc++ symbol versions
+        if: runner.os == 'Linux'
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG:
-            precompiled-${{ needs.release_metadata.outputs.release_name }}
+          BINARY_NAME: ${{ steps.artifact_names.outputs.BINARY_NAME }}
         run: |
-          required_assets='[
-            "convex-local-backend-aarch64-apple-darwin.zip",
-            "convex-local-backend-aarch64-unknown-linux-gnu.zip",
-            "convex-local-backend-x86_64-apple-darwin.zip",
-            "convex-local-backend-x86_64-pc-windows-msvc.zip",
-            "convex-local-backend-x86_64-unknown-linux-gnu.zip",
-            "dashboard.zip",
-            "LICENSE.md"
-          ]'
-          release=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,isPrerelease,url)
-          missing_assets=$(jq -r --argjson required "$required_assets" '
-            [.assets[] | select(.state == "uploaded" and .size > 0) | .name] as $uploaded
-            | ($required - $uploaded)[]?
-          ' <<< "$release")
-          if [[ -n "$missing_assets" ]]; then
-            echo "::error::Release $RELEASE_TAG is missing uploaded assets: $(tr '\n' ' ' <<< "$missing_assets")"
-            exit 1
-          fi
-          if [[ $(jq -r '.isDraft == false and .isPrerelease == true' <<< "$release") != true ]]; then
-            echo "::error::Release $RELEASE_TAG must be a published pre-release"
-            exit 1
-          fi
-          tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq '.object.sha')
-          if [[ "$tag_sha" != "${GITHUB_SHA}" ]]; then
-            echo "::error::Release tag $RELEASE_TAG points to $tag_sha instead of $GITHUB_SHA"
-            exit 1
-          fi
-          echo "Validated $(jq -r .url <<< "$release")"
+          set -euo pipefail
+          check() {
+            local prefix=$1 max=$2 newest
+            newest=$(objdump -T "$BINARY_NAME" | grep -o "${prefix}_[0-9.]*" |
+              sed "s/^${prefix}_//" | sort -uV | tail -1)
+            echo "newest ${prefix} symbol version: ${newest}"
+            if [ "$(printf '%s\n%s\n' "$newest" "$max" | sort -V | tail -1)" != "$max" ]; then
+              echo "::error::$BINARY_NAME needs ${prefix}_${newest}, newer than ${prefix}_${max}"
+              exit 1
+            fi
+          }
+          check GLIBC 2.35
+          check GLIBCXX 3.4.30
