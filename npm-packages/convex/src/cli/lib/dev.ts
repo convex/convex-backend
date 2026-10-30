@@ -194,6 +194,9 @@ export async function watchAndPush(
   let pushed = false;
   let shellChild: ChildProcess | undefined;
   let shellExited: Promise<void> | undefined;
+  // Set when the shell command fails, so the clean exit path can wait for
+  // this failure exit instead of letting the caller exit with code 0.
+  let shellFailureExit: Promise<never> | undefined;
   let shellCleanupHandle: string | undefined;
   let shellSigintListener: (() => void) | undefined;
   let tableNameTriggeringRetry;
@@ -333,7 +336,7 @@ export async function watchAndPush(
                   );
                   shellChild = undefined;
                   resolve();
-                  void outerCtx.flushAndExit(1);
+                  shellFailureExit = outerCtx.flushAndExit(1);
                 });
                 shellChild!.on("exit", (code, signal) => {
                   shellChild = undefined;
@@ -348,7 +351,7 @@ export async function watchAndPush(
                     logError(
                       `Command \`${shellCommand}\` exited with code ${code}`,
                     );
-                    void outerCtx.flushAndExit(1);
+                    shellFailureExit = outerCtx.flushAndExit(1);
                   }
                 });
               });
@@ -456,6 +459,9 @@ export async function watchAndPush(
     // already killed it.
     if (shellExited) {
       await shellExited;
+    }
+    if (shellFailureExit) {
+      await shellFailureExit;
     }
     if (shellSigintListener) {
       process.off("SIGINT", shellSigintListener);
