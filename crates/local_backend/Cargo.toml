@@ -113,6 +113,9 @@ vector = { workspace = true }
 anyhow = { workspace = true }
 vergen = { workspace = true, features = ["git", "gitcl"] }
 
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+tikv-jemallocator = { workspace = true }
+
 [dev-dependencies]
 application = { workspace = true, features = ["testing"] }
 authentication = { workspace = true, features = ["testing"] }
