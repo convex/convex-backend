@@ -11,6 +11,7 @@ use chrono::{
 };
 use common::{
     backoff::Backoff,
+    errors::MappedFrame,
     http::{
         fetch::FetchClient,
         HttpRequestStream,
@@ -64,6 +65,24 @@ pub struct PostHogErrorTrackingSink<RT: Runtime> {
     deployment_metadata: Arc<Mutex<LoggingDeploymentMetadata>>,
     egress_counter: EgressCounter,
     failure_reporter: SinkFailureReporter,
+}
+
+fn serialize_frame(frame: &MappedFrame) -> JsonValue {
+    let function = frame
+        .function_name
+        .as_deref()
+        .or(frame.method_name.as_deref())
+        .unwrap_or("<anonymous>");
+    json!({
+        "platform": "custom",
+        "lang": "javascript",
+        "filename": frame.file_name,
+        "function": function,
+        "lineno": frame.line_number,
+        "colno": frame.column_number,
+        "in_app": true,
+        "resolved": frame.is_source_mapped,
+    })
 }
 
 impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
@@ -200,28 +219,7 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
             let frames: Vec<JsonValue> = error
                 .frames
                 .as_ref()
-                .map(|js_frames| {
-                    js_frames
-                        .0
-                        .iter()
-                        .map(|frame| {
-                            let function = frame
-                                .function_name
-                                .as_deref()
-                                .or(frame.method_name.as_deref())
-                                .unwrap_or("<anonymous>");
-                            json!({
-                                "platform": "custom",
-                                "lang": "javascript",
-                                "filename": frame.file_name,
-                                "function": function,
-                                "lineno": frame.line_number,
-                                "colno": frame.column_number,
-                                "in_app": true,
-                            })
-                        })
-                        .collect()
-                })
+                .map(|js_frames| js_frames.0.iter().map(serialize_frame).collect())
                 .unwrap_or_default();
 
             let exception_sources: Vec<&str> = error
@@ -356,5 +354,41 @@ impl<RT: Runtime> PostHogErrorTrackingSink<RT> {
             consts::POSTHOG_ET_SINK_MAX_REQUEST_ATTEMPTS,
             last_failure,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_preserve_their_source_mapping_status() {
+        for (filename, is_source_mapped) in [
+            ("functions/example.ts", true),
+            ("convex:/user/example.js", false),
+        ] {
+            let frame = MappedFrame {
+                file_name: Some(filename.to_string()),
+                function_name: Some("handler".to_string()),
+                line_number: Some(12),
+                column_number: Some(4),
+                is_source_mapped,
+                ..Default::default()
+            };
+
+            assert_eq!(
+                serialize_frame(&frame),
+                json!({
+                    "platform": "custom",
+                    "lang": "javascript",
+                    "filename": filename,
+                    "function": "handler",
+                    "lineno": 12,
+                    "colno": 4,
+                    "in_app": true,
+                    "resolved": is_source_mapped,
+                })
+            );
+        }
     }
 }

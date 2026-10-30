@@ -362,6 +362,8 @@ pub struct FrameData {
     pub is_async: bool,
     pub is_promise_all: bool,
     pub promise_index: Option<u32>,
+    #[serde(skip)]
+    pub is_source_mapped: bool,
 }
 
 impl From<FrameData> for FrameDataProto {
@@ -381,6 +383,7 @@ impl From<FrameData> for FrameDataProto {
             is_async,
             is_promise_all,
             promise_index,
+            is_source_mapped,
         }: FrameData,
     ) -> Self {
         Self {
@@ -398,6 +401,7 @@ impl From<FrameData> for FrameDataProto {
             is_async: Some(is_async),
             is_promise_all: Some(is_promise_all),
             promise_index,
+            is_source_mapped: Some(is_source_mapped),
         }
     }
 }
@@ -458,6 +462,7 @@ impl TryFrom<FrameDataProto> for FrameData {
             is_async,
             is_promise_all,
             promise_index,
+            is_source_mapped,
         }: FrameDataProto,
     ) -> anyhow::Result<Self> {
         Ok(Self {
@@ -477,6 +482,7 @@ impl TryFrom<FrameDataProto> for FrameData {
             is_promise_all: is_promise_all
                 .ok_or_else(|| anyhow::anyhow!("Missing is_promise_all"))?,
             promise_index,
+            is_source_mapped: is_source_mapped.unwrap_or_default(),
         })
     }
 }
@@ -497,6 +503,7 @@ impl HeapSize for FrameData {
             + self.is_async.heap_size()
             + self.is_promise_all.heap_size()
             + self.promise_index.heap_size()
+            + self.is_source_mapped.heap_size()
     }
 }
 
@@ -700,6 +707,7 @@ impl JsError {
         let mut source_maps = BTreeMap::new();
         let mut mapped_frames = Vec::with_capacity(frame_data.len());
         for mut frame in frame_data {
+            frame.is_source_mapped = false;
             if let FrameData {
                 file_name: Some(ref f),
                 line_number: Some(l),
@@ -737,6 +745,7 @@ impl JsError {
                 if let Some(token) = source_map.lookup_token(l, c) {
                     if let Some(mapped_name) = token.get_source() {
                         frame.file_name = Some(mapped_name.to_string());
+                        frame.is_source_mapped = true;
                     }
                     frame.line_number = Some(token.get_src_line());
                     frame.column_number = Some(token.get_src_col());
@@ -770,7 +779,6 @@ impl JsError {
             frames: Some(JsFrames(mapped_frames.into())),
         }
     }
-
 }
 
 // Based on deno's `02_error.js:formatLocation`.
@@ -872,3 +880,104 @@ pub fn is_db_deadlock_error(e: &anyhow::Error) -> bool {
 }
 
 pub const AUTH_ERROR: &str = "AuthError";
+
+#[cfg(test)]
+mod tests {
+    use sourcemap::SourceMapBuilder;
+
+    use super::*;
+
+    #[test]
+    fn source_mapping_status_requires_an_original_source() {
+        let mut builder = SourceMapBuilder::new(None);
+        builder.add(2, 0, 12, 4, Some("functions/example.ts"), None, false);
+        builder.add(3, 0, 18, 6, None, None, false);
+        let source_map = builder.into_sourcemap();
+
+        for (line, column, filename, mapped_line, mapped_column, is_source_mapped) in [
+            (
+                Some(2),
+                Some(0),
+                "functions/example.ts",
+                Some(12),
+                Some(4),
+                true,
+            ),
+            (
+                Some(1),
+                Some(0),
+                "convex:/user/example.js",
+                Some(1),
+                Some(0),
+                false,
+            ),
+            (
+                Some(3),
+                Some(0),
+                "convex:/user/example.js",
+                Some(18),
+                Some(6),
+                false,
+            ),
+            (None, None, "convex:/user/example.js", None, None, false),
+        ] {
+            let frame = FrameData {
+                file_name: Some("convex:/user/example.js".to_string()),
+                function_name: Some("handler".to_string()),
+                line_number: line,
+                column_number: column,
+                is_source_mapped: true,
+                ..Default::default()
+            };
+            let expected = FrameData {
+                file_name: Some(filename.to_string()),
+                line_number: mapped_line,
+                column_number: mapped_column,
+                is_source_mapped,
+                ..frame.clone()
+            };
+            let error = JsError::from_frames("example".to_string(), vec![frame], None, |_| {
+                Ok(Some(source_map.clone()))
+            });
+
+            assert_eq!(error.frames.unwrap().0.as_slice(), &[expected]);
+        }
+    }
+
+    #[test]
+    fn protobuf_mapping_status_handles_round_trips_and_older_messages() -> anyhow::Result<()> {
+        for (is_source_mapped, omit_status, expected) in [
+            (false, false, false),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            let mut frame = FrameData {
+                is_source_mapped,
+                ..Default::default()
+            };
+            let mut proto = FrameDataProto::from(frame.clone());
+            if omit_status {
+                proto.is_source_mapped = None;
+            }
+            frame.is_source_mapped = expected;
+
+            assert_eq!(FrameData::try_from(proto)?, frame);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn javascript_frames_cannot_claim_to_be_source_mapped() -> anyhow::Result<()> {
+        let frame: FrameData = serde_json::from_value(serde_json::json!({
+            "isEval": false,
+            "isNative": false,
+            "isConstructor": false,
+            "isAsync": false,
+            "isPromiseAll": false,
+            "isSourceMapped": true,
+        }))?;
+
+        assert!(!frame.is_source_mapped);
+        Ok(())
+    }
+}

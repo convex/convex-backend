@@ -98,6 +98,7 @@ message FrameData {
   optional bool is_async = 12;
   optional bool is_promise_all = 13;
   optional uint32 promise_index = 14;
+  optional bool is_source_mapped = 15;
 }
 
 message ExecutionContext {
