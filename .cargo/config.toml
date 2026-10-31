@@ -28,6 +28,11 @@ RUSTY_V8_MIRROR = "https://github.com/convex/rusty_v8/releases/download"
 # V8 and the other C++ dependencies link the dynamic CRT (/MD), and the linker
 # rejects the mix. cc-rs passes CXXFLAGS after its own CRT flag, so this /MD wins.
 CXXFLAGS_x86_64_pc_windows_msvc = "-MD"
+# jemalloc fixes its page size at build time and aborts on startup if the
+# running kernel's page size is larger. Pin lg_page=16 (64K) for aarch64
+# Linux so a future jemalloc/jemalloc-sys change can't lower it and break
+# machines with 16K or 64K pages (e.g. Raspberry Pi 5, Asahi Linux).
+AARCH64_UNKNOWN_LINUX_GNU_JEMALLOC_SYS_WITH_LG_PAGE = "16"
 
 [target.aarch64-unknown-linux-gnu]
 rustflags = ["-Cforce-frame-pointers=yes"]
