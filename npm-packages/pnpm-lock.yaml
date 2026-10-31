@@ -612,8 +612,8 @@ importers:
   '@convex-dev/workos':
     dependencies:
       '@workos-inc/authkit-react':
-        specifier: ^0.16.0
-        version: 0.16.1(react@18.3.1)
+        specifier: ^0.16.2
+        version: 0.16.2(react@18.3.1)
       react:
         specifier: ^18.0.0 || ^19.0.0-0 || ^19.0.0
         version: 18.3.1
@@ -16557,8 +16557,8 @@ packages:
   '@workflow/serde@4.1.0':
     resolution: {integrity: sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ==}
 
-  '@workos-inc/authkit-js@0.20.0':
-    resolution: {integrity: sha512-8+sw8eH1+XCt3NDoIB2bKKbHvq1N7CVFJeyq1uVrUWG83GCIbNNrFwWrocVNfeQJyhKsVVuDpRcp03iSVsK5Gg==}
+  '@workos-inc/authkit-js@0.20.2':
+    resolution: {integrity: sha512-EEo8VitBko7ON5shVRS4AMmgezWhWfxKKtGV7QpJMgsejKBXi0DujCFf7blR7z46z3xr3Ge55yVEMSrOMtMOzg==}
 
   '@workos-inc/authkit-nextjs@2.17.0':
     resolution: {integrity: sha512-bvy7cyfG7NAc6nRgeutYIQKAdcKfQaNZpfkGqXSXtetS6X4biudSQOHreCaZNsMWGGshN8vDK+NG/y/sv010wA==}
@@ -16567,8 +16567,8 @@ packages:
       react: ^18.0 || ^19.0.0
       react-dom: ^18.0 || ^19.0.0
 
-  '@workos-inc/authkit-react@0.16.1':
-    resolution: {integrity: sha512-u8IJsAAyZFFM02+3JhvvNTopSNQoJk/hjOoBlmOkh6j+AnVYrR8hjzJn8j3m9Vi5tRE0il7mpsEDT9fI2xRNjg==}
+  '@workos-inc/authkit-react@0.16.2':
+    resolution: {integrity: sha512-Q10bTJ3sd8zfbIlxl8KavLeHLuW7v2aJLfq+syyWsVa9VzbrBVFyr7HNxt3aAVJq1kcMfTJu1p9gSJT3Gswulg==}
     peerDependencies:
       react: '>=17'
 
@@ -43489,7 +43489,7 @@ snapshots:
 
   '@workflow/serde@4.1.0': {}
 
-  '@workos-inc/authkit-js@0.20.0': {}
+  '@workos-inc/authkit-js@0.20.2': {}
 
   '@workos-inc/authkit-nextjs@2.17.0(next@16.4.2(@babel/core@7.29.7(supports-color@10.2.2))(@opentelemetry/api@1.9.1)(@playwright/test@1.59.1)(@types/node@22.19.1)(@types/react-dom@19.2.3(@types/react@19.2.8))(@types/react@19.2.8)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.94.0))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
@@ -43501,9 +43501,9 @@ snapshots:
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
 
-  '@workos-inc/authkit-react@0.16.1(react@18.3.1)':
+  '@workos-inc/authkit-react@0.16.2(react@18.3.1)':
     dependencies:
-      '@workos-inc/authkit-js': 0.20.0
+      '@workos-inc/authkit-js': 0.20.2
       react: 18.3.1
 
   '@workos-inc/node@7.69.2(express@5.2.1(supports-color@10.2.2))(next@16.4.2(@babel/core@7.29.7(supports-color@10.2.2))(@opentelemetry/api@1.9.1)(@playwright/test@1.59.1)(@types/node@22.19.1)(@types/react-dom@19.2.3(@types/react@19.2.8))(@types/react@19.2.8)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(sass@1.94.0))':
