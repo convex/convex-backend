@@ -51,6 +51,7 @@ export const DataTool: ConvexTool<typeof inputSchema, typeof outputSchema> = {
       ctx,
       deploymentSelection,
     );
+    await ctx.checkResolvedDeploymentReadOnly(credentials);
     const paginationResult = (await runSystemQuery(ctx, {
       deploymentUrl: credentials.url,
       adminKey: credentials.adminKey,

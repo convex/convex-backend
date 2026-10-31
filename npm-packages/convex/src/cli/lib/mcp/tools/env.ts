@@ -54,6 +54,7 @@ export const EnvListTool: ConvexTool<
       ctx,
       deploymentSelection,
     );
+    await ctx.checkResolvedDeployment(credentials);
     const variables = (await runSystemQuery(ctx, {
       deploymentUrl: credentials.url,
       adminKey: credentials.adminKey,
@@ -107,6 +108,7 @@ export const EnvGetTool: ConvexTool<
       ctx,
       deploymentSelection,
     );
+    await ctx.checkResolvedDeployment(credentials);
     const envVar = (await runSystemQuery(ctx, {
       deploymentUrl: credentials.url,
       adminKey: credentials.adminKey,
@@ -154,6 +156,7 @@ export const EnvSetTool: ConvexTool<
       ctx,
       deploymentSelection,
     );
+    await ctx.checkResolvedDeployment(credentials);
     const deploymentInfo = {
       deploymentUrl: credentials.url,
       adminKey: credentials.adminKey,
@@ -200,6 +203,7 @@ export const EnvRemoveTool: ConvexTool<
       ctx,
       deploymentSelection,
     );
+    await ctx.checkResolvedDeployment(credentials);
     const deploymentInfo = {
       deploymentUrl: credentials.url,
       adminKey: credentials.adminKey,
