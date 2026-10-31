@@ -79,6 +79,46 @@ function parseMetadataFile(contents: string): MetadataJson {
   };
 }
 
+function extractedModulePathOnDisk(dir: string, modulePath: string): string {
+  return path.join(dir, "modules", ...modulePath.split("/"));
+}
+
+function assertExtractedSourcePackageOnDisk(
+  dir: string,
+  modulePaths: string[],
+): void {
+  const metadataPath = path.join(dir, "metadata.json");
+  if (!fs.existsSync(metadataPath)) {
+    throw new Error(
+      `Extracted source package at ${dir} is missing metadata.json on disk`,
+    );
+  }
+  for (const modulePath of modulePaths) {
+    const filePath = extractedModulePathOnDisk(dir, modulePath);
+    if (!fs.existsSync(filePath)) {
+      throw new Error(
+        `Extracted source package at ${dir} is missing modules/${modulePath} on disk`,
+      );
+    }
+  }
+}
+
+function isExtractedSourcePackageOnDisk(dir: string): boolean {
+  try {
+    const metadataPath = path.join(dir, "metadata.json");
+    if (!fs.existsSync(metadataPath)) {
+      return false;
+    }
+    const metadata = parseMetadataFile(
+      fs.readFileSync(metadataPath, { encoding: "utf-8" }),
+    );
+    assertExtractedSourcePackageOnDisk(dir, metadata.modulePaths);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // In-flight `removeDir` promises
 const pendingRemovals = new Map<string, Promise<void>>();
 
@@ -105,6 +145,7 @@ function removeDir(dir: string): Promise<void> {
  *
  * This runs to completion synchronously so that callers can register their
  * interest in a package (via the refcount) before yielding to other requests.
+ * Settled entries are dropped when `isPresentOnDisk` reports the files gone.
  */
 function getOrStartDownload<T>(
   context: PackageRefcounts,
@@ -112,10 +153,24 @@ function getOrStartDownload<T>(
   key: string,
   dir: string,
   startDownload: (dir: string) => Promise<T>,
+  isPresentOnDisk?: (dir: string) => boolean,
 ): PackageCacheEntry<T> {
   const cached = cache.get(key);
   if (cached !== undefined) {
-    return context.adopt(cached);
+    if (
+      cached.settled &&
+      isPresentOnDisk !== undefined &&
+      !isPresentOnDisk(cached.dir)
+    ) {
+      logDebug(
+        `Cached package ${key} is missing files on disk at ${cached.dir}; re-downloading`,
+      );
+      if (cache.get(key) === cached) {
+        cache.delete(key);
+      }
+    } else {
+      return context.adopt(cached);
+    }
   }
   const entry: PackageCacheEntry<T> = {
     dir,
@@ -166,6 +221,7 @@ export async function maybeDownloadAndLinkPackages(
     path.join(os.tmpdir(), `source/${sourcePackage.key}`),
     (dir) =>
       downloadAndLinkSourcePackage(dir, sourcePackage.bundled_source, external),
+    isExtractedSourcePackageOnDisk,
   );
 
   const [modules] = await Promise.all([source.ready, external?.ready]);
@@ -425,6 +481,8 @@ async function processSourcePackageStream(
     );
   }
 
+  assertExtractedSourcePackageOnDisk(dir, metadataJson.modulePaths);
+
   return modulesFromMetadataJson(metadataJson);
 }
 
@@ -464,6 +522,10 @@ export async function populatePrebuildPackages() {
         fs.readFileSync(`${pkgDir}/metadata.json`, { encoding: "utf-8" }),
       );
       modules = modulesFromMetadataJson(metadata);
+      if (!isExtractedSourcePackageOnDisk(pkgDir)) {
+        logDebug(`Incomplete prebuild source package at ${pkgDir}, skipping`);
+        continue;
+      }
     } catch (e: any) {
       logDebug(`Failed to parse metadata.json during prebuild, skipping: ${e}`);
       continue;
