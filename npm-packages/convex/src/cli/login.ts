@@ -1,9 +1,9 @@
 import { Command, Option } from "@commander-js/extra-typings";
-import * as dotenv from "dotenv";
-import { BigBrainAuth, Context, oneoffContext } from "../bundler/context.js";
+import { Context, oneoffContext } from "../bundler/context.js";
 import { logFinishedStep, logMessage, logWarning } from "../bundler/log.js";
 import {
   checkAuthorization,
+  identifyLegacyAccounts,
   isAuthorizedHeader,
   performLogin,
 } from "./lib/login.js";
@@ -20,13 +20,12 @@ import {
   deploymentDashboardUrlPage,
   teamDashboardUrl,
 } from "./lib/dashboard.js";
-import { promptSearch, promptYesNo } from "./lib/utils/prompts.js";
 import {
-  CONVEX_DEPLOY_KEY_ENV_VAR_NAME,
-  CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME,
-  ENV_VAR_FILE_PATH,
-  validateOrSelectTeam,
-} from "./lib/utils/utils.js";
+  promptOptions,
+  promptSearch,
+  promptYesNo,
+} from "./lib/utils/prompts.js";
+import { validateOrSelectTeam } from "./lib/utils/utils.js";
 import {
   selectProject,
   updateEnvAndConfigForDeploymentSelection,
@@ -40,64 +39,46 @@ import {
   removeAnonymousPrefix,
 } from "./lib/deployment.js";
 import {
+  ResolvedAccessToken,
+  findInstanceForDirectory,
+  formatPathForPrinting,
   readGlobalConfig,
   globalConfigPath,
+  resolveAccessToken,
+  accessTokenAuth,
+  UNIDENTIFIED_ACCOUNT,
+  isMemberId,
+  updateGlobalConfig,
+  withAccount,
 } from "./lib/utils/globalConfig.js";
+import {
+  accountLabel,
+  accountLabelSentence,
+  bindDirectoryToAccount,
+  deploymentAccessWarning,
+  formatSavedAccount,
+  listSavedAccounts,
+  logAccountsInEffect,
+} from "./account.js";
+import { chalkStderr } from "chalk";
 import { getTeamsForUser } from "./lib/api.js";
+import { printDeployKeyBanner } from "./lib/deployKeyWarning.js";
 
 /**
- * The env file a deploy key came from, or null if it came from the shell.
- * `dotenv` doesn't overwrite variables that are already set, so a value from
- * the shell outranks these files -- match on the value to tell them apart.
+ * The account token commands in this directory would use if no deploy key
+ * were set. Unlike `ctx.bigBrainAuth()`, a deploy key doesn't shadow it, so
+ * checking it tells whether this device is logged in.
  */
-function deployKeyEnvFile(
-  ctx: Context,
-  envVarName: string,
-  value: string,
-): string | null {
-  for (const file of [ENV_VAR_FILE_PATH, ".env"]) {
-    if (!ctx.fs.exists(file)) {
-      continue;
-    }
-    if (dotenv.parse(ctx.fs.readUtf8File(file))[envVarName] === value) {
-      return file;
-    }
+function accountTokenForDirectory(ctx: Context): ResolvedAccessToken | null {
+  if (process.env.CONVEX_OVERRIDE_ACCESS_TOKEN) {
+    return {
+      accessToken: process.env.CONVEX_OVERRIDE_ACCESS_TOKEN,
+      accountId: null,
+      source: "legacy",
+    };
   }
-  return null;
-}
-
-/**
- * A project or deployment key in the environment outranks the account token for
- * commands run from this directory, and an expired one makes the CLI look
- * logged out, so report it separately from the account.
- */
-async function reportDeployKeyInWorkingDirectory(
-  ctx: Context,
-  auth: BigBrainAuth | null,
-) {
-  // A preview deploy key is only used when there's no account token at all.
-  if (
-    auth === null ||
-    auth.kind === "accessToken" ||
-    auth.kind === "previewDeployKey"
-  ) {
-    return;
-  }
-  const key = auth.kind === "projectKey" ? auth.projectKey : auth.deploymentKey;
-  const envVarName = process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
-    ? CONVEX_DEPLOY_KEY_ENV_VAR_NAME
-    : CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME;
-  const envFile = deployKeyEnvFile(ctx, envVarName, key);
-  const source = envFile ?? "shell environment";
-  // Big Brain only strips a `project:`/`team:` prefix itself, so a deployment
-  // key authorizes only without its `dev:`/`prod:` prefix. Split on the first
-  // `|` like the server does, so a secret containing one survives.
-  const secret = key.slice(key.indexOf("|") + 1);
-  if (await isAuthorizedHeader(ctx, `Bearer ${secret}`)) {
-    logMessage(`Working Directory: Valid ${envVarName} in ${source}`);
-    return;
-  }
-  logWarning(`Working Directory: Invalid ${envVarName} in ${source}`);
+  const config = readGlobalConfig(ctx);
+  return config !== null ? resolveAccessToken(config, process.cwd()) : null;
 }
 
 const loginStatus = new Command("status")
@@ -109,24 +90,26 @@ const loginStatus = new Command("status")
       adminKey: undefined,
       envFile: undefined,
     });
-
-    // `_updateBigBrainAuth` below replaces any deploy key in `ctx` with the
-    // account token, so read the deploy key first.
-    const auth = ctx.bigBrainAuth();
+    await printDeployKeyBanner(ctx);
 
     const globalConfig = readGlobalConfig(ctx);
-    if (globalConfig === null) {
+    const resolved =
+      globalConfig !== null
+        ? resolveAccessToken(globalConfig, process.cwd())
+        : null;
+    if (resolved === null) {
       logMessage(`No Convex account token found in: ${globalConfigPath()}`);
       logMessage("Status: Not logged in");
-      await reportDeployKeyInWorkingDirectory(ctx, auth);
       return;
     }
     logMessage(`Convex account token found in: ${globalConfigPath()}`);
+    if (resolved.accountId !== null && globalConfig !== null) {
+      logAccountsInEffect(ctx, globalConfig);
+    }
 
-    const accessToken = globalConfig.accessToken;
+    const accessToken = resolved.accessToken;
     if (!(await isAuthorizedHeader(ctx, `Bearer ${accessToken}`))) {
       logMessage("Status: Not logged in");
-      await reportDeployKeyInWorkingDirectory(ctx, auth);
       return;
     }
 
@@ -144,7 +127,6 @@ const loginStatus = new Command("status")
     for (const team of teams) {
       logMessage(`  - ${team.name} (${team.slug})`);
     }
-    await reportDeployKeyInWorkingDirectory(ctx, auth);
   });
 
 export const login = new Command("login")
@@ -169,6 +151,18 @@ export const login = new Command("login")
     )
       .choices(["paste", "auto", "poll"] as const)
       .default("auto" as const),
+  )
+  .option(
+    "--account [member-id]",
+    "List the Convex accounts logged in on this device, then pick one for this directory or log in to another. Accounts are saved by Convex member id. Existing accounts stay logged in.",
+  )
+  .option(
+    "--description <text>",
+    "A note about the account, shown by `npx convex account list`",
+  )
+  .option(
+    "-y, --yes",
+    "Accept the default answer to every prompt. With --account and no name, logs in to a new account.",
   )
   .addOption(new Option("--link-deployments").hideHelp())
   // These options are hidden from the help/usage message, but allow overriding settings for testing.
@@ -203,27 +197,13 @@ export const login = new Command("login")
       envFile: undefined,
     });
     if (
-      !options.force &&
-      (await checkAuthorization(ctx, !!options.acceptOptIns))
+      typeof options.account === "string" &&
+      !isMemberId(options.account) &&
+      options.account !== UNIDENTIFIED_ACCOUNT
     ) {
-      logFinishedStep(
-        "This device has previously been authorized and is ready for use with Convex.",
+      cmd.error(
+        `--account takes a Convex member id, not "${options.account}". To see the saved accounts, run \`npx convex account list\`.`,
       );
-      await handleLinkingDeployments(ctx, {
-        interactive: !!options.linkDeployments,
-      });
-      return;
-    }
-    if (!options.force && options.checkLogin) {
-      const isLoggedIn = await checkAuthorization(ctx, !!options.acceptOptIns);
-      if (!isLoggedIn) {
-        return ctx.crash({
-          exitCode: 1,
-          errorType: "fatal",
-          errForSentry: "You are not logged in.",
-          printedMessage: "You are not logged in.",
-        });
-      }
     }
     if (!!options.overrideAuthUsername !== !!options.overrideAuthPassword) {
       cmd.error(
@@ -231,9 +211,56 @@ export const login = new Command("login")
       );
     }
 
+    if (options.account !== undefined) {
+      await loginToNamedAccount(ctx, {
+        ...options,
+        account: options.account === true ? undefined : options.account,
+      });
+      await handleLinkingDeployments(ctx, {
+        interactive: !!options.linkDeployments,
+      });
+      return;
+    }
+
+    await printDeployKeyBanner(ctx);
+
+    // Check the account token itself: a deploy key outranks it in `ctx`, and
+    // checking the key instead made every login look logged out.
+    const accountToken = accountTokenForDirectory(ctx);
+    ctx._updateBigBrainAuth(
+      accountToken === null ? null : accessTokenAuth(accountToken.accessToken),
+    );
+    const isLoggedIn = await checkAuthorization(ctx, !!options.acceptOptIns);
+    if (!options.force && isLoggedIn) {
+      logFinishedStep(
+        "This device has previously been authorized and is ready for use with Convex.",
+      );
+      const config = readGlobalConfig(ctx);
+      if (accountToken?.accountId && config !== null) {
+        logAccountsInEffect(ctx, config);
+      }
+      logMessage(
+        `To log in to another Convex account as well, run ${chalkStderr.bold("npx convex login --account")}.`,
+      );
+      await handleLinkingDeployments(ctx, {
+        interactive: !!options.linkDeployments,
+      });
+      return;
+    }
+    if (!options.force && options.checkLogin) {
+      return ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        errForSentry: "You are not logged in.",
+        printedMessage: "You are not logged in.",
+      });
+    }
+
     const uuid = loadUuidForAnonymousUser(ctx);
     await performLogin(ctx, {
       ...options,
+      account: undefined,
+      acceptDefaults: !!options.yes,
       anonymousId: uuid,
       vercel: options.vercel,
       vercelOverride: options.vercelOverride,
@@ -243,6 +270,171 @@ export const login = new Command("login")
       interactive: !!options.linkDeployments,
     });
   });
+
+/**
+ * `npx convex login --account [name]`: show the accounts already logged in,
+ * then use one of them or log in to a new one, keeping the others.
+ */
+async function loginToNamedAccount(
+  ctx: Context,
+  options: Parameters<typeof performLogin>[1] & {
+    account: string | undefined;
+    description?: string | undefined;
+    force?: boolean | undefined;
+    yes?: boolean | undefined;
+  },
+) {
+  await printDeployKeyBanner(ctx);
+  const acceptDefaults = !!options.yes;
+  await identifyLegacyAccounts(ctx);
+
+  const config = readGlobalConfig(ctx);
+  const saved = await listSavedAccounts(ctx, config);
+  const current =
+    config !== null ? resolveAccessToken(config, process.cwd()) : null;
+  const currentId =
+    current?.accountId ?? (current !== null ? UNIDENTIFIED_ACCOUNT : null);
+  // Only say what bears on this login: the account asked for, or the
+  // accounts to pick from when there's no terminal to show the picker.
+  if (options.account !== undefined) {
+    const entry = saved.find((account) => account.id === options.account);
+    if (entry === undefined) {
+      logMessage(`Member ${options.account} isn't saved on this device yet.`);
+    } else if (!entry.isLoggedIn) {
+      logMessage(
+        `${accountLabelSentence(entry.id, entry.account)}: token revoked or expired, logging in again.`,
+      );
+    }
+  }
+
+  let accountId = options.account;
+  let chosenFromList = false;
+  if (accountId === undefined && !acceptDefaults && saved.length > 0) {
+    if (!process.stdin.isTTY) {
+      logMessage("Convex accounts on this device (* used in this directory):");
+      for (const account of saved) {
+        logMessage(
+          `  ${account.id === currentId ? "*" : " "} ${formatSavedAccount(account)}`,
+        );
+      }
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: `Pass ${chalkStderr.bold("--account <member-id>")} to use a saved account, or ${chalkStderr.bold("--account --yes")} to log in to a new one.`,
+      });
+    }
+    const choice = await promptOptions<string | null>(ctx, {
+      message: `Which Convex account should ${formatPathForPrinting(process.cwd())} use?`,
+      choices: [
+        ...saved.map((account) => ({
+          name: formatSavedAccount(account),
+          value: account.id,
+        })),
+        { name: "Log in to another account", value: null },
+      ],
+      ...(currentId !== null ? { default: currentId } : {}),
+    });
+    if (choice !== null) {
+      accountId = choice;
+      chosenFromList = true;
+    }
+  }
+
+  const existing = saved.find((account) => account.id === accountId);
+  // A working token saved before its member was recorded still needs one
+  // browser login to find out whose it is.
+  const needsIdentifying =
+    accountId !== undefined && existing?.isLoggedIn && !isMemberId(accountId);
+  if (needsIdentifying) {
+    logMessage(
+      `${accountLabelSentence(accountId!, existing!.account)} works, but its member isn't recorded. Log in once to record it.`,
+    );
+  }
+  if (
+    accountId !== undefined &&
+    !options.force &&
+    existing?.isLoggedIn &&
+    !needsIdentifying
+  ) {
+    const id = accountId;
+    // Converts a single-token config to named accounts, keeping the token.
+    await updateGlobalConfig(ctx, (current) =>
+      withAccount(current, id, {
+        accessToken: existing.account.accessToken,
+        description: options.description,
+      }),
+    );
+    logFinishedStep(
+      `Already logged in as ${accountLabel(accountId, existing.account)}.`,
+    );
+  } else {
+    const savedAs = await performLogin(ctx, {
+      ...options,
+      anonymousId: loadUuidForAnonymousUser(ctx),
+      account: accountId,
+      accountDescription: options.description,
+      nameNewAccount: accountId === undefined,
+      acceptDefaults,
+    });
+    accountId = savedAs ?? accountId;
+  }
+  if (accountId === undefined) {
+    return;
+  }
+
+  if (chosenFromList) {
+    await bindDirectoryToAccount(ctx, accountId, { acceptDefaults });
+  } else {
+    await offerToBindDirectory(ctx, accountId, acceptDefaults);
+  }
+}
+
+/**
+ * After logging in to an account, offer to use it for this directory. The
+ * default is yes only when the directory looks like a project, isn't bound
+ * to another account, and the account can reach the deployment it's
+ * configured for.
+ */
+async function offerToBindDirectory(
+  ctx: Context,
+  accountId: string,
+  acceptDefaults: boolean,
+) {
+  const config = readGlobalConfig(ctx);
+  const account = config?.accounts?.[accountId];
+  const current =
+    config !== null ? findInstanceForDirectory(config, process.cwd()) : null;
+  if (current?.account === accountId || account === undefined) {
+    return;
+  }
+  const label = accountLabel(accountId, account);
+  const accessWarning = await deploymentAccessWarning(ctx, accountId, account);
+  if (accessWarning !== null) {
+    logWarning(chalkStderr.yellow(accessWarning));
+  }
+  const suggestBinding =
+    current === null &&
+    accessWarning === null &&
+    (ctx.fs.exists("convex.json") || ctx.fs.exists("package.json"));
+  const bind =
+    acceptDefaults || !process.stdin.isTTY
+      ? suggestBinding
+      : await promptYesNo(ctx, {
+          message:
+            current === null
+              ? `Use ${label} for ${formatPathForPrinting(process.cwd())}?`
+              : `${formatPathForPrinting(current.directory)} uses ${accountLabel(current.account, config?.accounts?.[current.account])}. Switch it to ${label}?`,
+          default: suggestBinding,
+        });
+  if (bind) {
+    // Any access problem was shown above and the user chose to go ahead.
+    await bindDirectoryToAccount(ctx, accountId, { force: true });
+  } else {
+    logMessage(
+      `To use ${label} for a project, run ${chalkStderr.bold(`npx convex account use ${accountId}`)} in its directory.`,
+    );
+  }
+}
 
 async function handleLinkingDeployments(
   ctx: Context,

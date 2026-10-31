@@ -32,7 +32,12 @@ import {
 } from "./localDeployment/projectMismatch.js";
 import { chalkStderr } from "chalk";
 import { getBuildEnvironment } from "./envvars.js";
-import { readGlobalConfig } from "./utils/globalConfig.js";
+import {
+  accessTokenAuth,
+  readGlobalConfig,
+  resolveAccessToken,
+} from "./utils/globalConfig.js";
+import { warnIfDeployKeyOverridesLogin } from "./deployKeyWarning.js";
 import {
   CONVEX_DEPLOYMENT_ENV_VAR_NAME,
   CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME,
@@ -53,7 +58,8 @@ import * as dotenv from "dotenv";
 
 /**
  * The auth header can be a few different things:
- * * An access token (corresponds to device authorization, usually stored in `~/.convex/config.json`)
+ * * An access token (corresponds to device authorization, usually stored in `~/.convex/config.json`,
+ *   which can hold several accounts and which project directory uses each one)
  * * A preview deploy key (set via the `CONVEX_DEPLOY_KEY` environment variable)
  * * A project key (set via the `CONVEX_DEPLOY_KEY` environment variable)
  * * A deployment key if a deployment key (set via `CONVEX_DEPLOY_KEY` environment variable)
@@ -201,12 +207,17 @@ function getBigBrainAuth(
     };
   }
   const globalConfig = readGlobalConfig(ctx);
-  if (globalConfig) {
-    return {
-      kind: "accessToken",
-      header: `Bearer ${globalConfig.accessToken}`,
-      accessToken: globalConfig.accessToken,
-    };
+  const resolved =
+    globalConfig !== null
+      ? resolveAccessToken(globalConfig, process.cwd())
+      : null;
+  if (resolved !== null) {
+    if (resolved.accountId !== null) {
+      logVerbose(
+        `Using Convex account "${resolved.accountId}" (${resolved.source})`,
+      );
+    }
+    return accessTokenAuth(resolved.accessToken);
   }
   if (opts.previewDeployKey !== null) {
     return {
@@ -371,6 +382,7 @@ export async function getDeploymentSelection(
   ctx: Context,
   cliArgs: DeploymentSelectionOptions,
 ): Promise<DeploymentSelection> {
+  await warnIfDeployKeyOverridesLogin(ctx, readGlobalConfig(ctx) !== null);
   const metadata = await _getDeploymentSelection(ctx, cliArgs);
   if (metadata.kind === "existingDeployment") {
     const selectionWithinProject =
