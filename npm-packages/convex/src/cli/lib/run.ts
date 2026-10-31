@@ -1,5 +1,5 @@
-import { chalkStderr } from "chalk";
-import util from "util";
+// eslint-disable-next-line no-restricted-imports -- default chalk formats stdout output (logOutput)
+import chalk, { chalkStderr } from "chalk";
 import ws from "ws";
 import { ConvexHttpClient } from "../../browser/http_client.js";
 import { BaseConvexClient } from "../../browser/index.js";
@@ -335,12 +335,32 @@ export async function runSystemQuery(
 export function formatValue(value: Value) {
   const json = convexToJson(value);
   if (process.stdout.isTTY) {
-    // TODO (Tom) add JSON syntax highlighting like https://stackoverflow.com/a/51319962/398212
-    // until then, just spit out something that isn't quite JSON because it's easy
-    return util.inspect(value, { colors: true, depth: null });
+    return highlightJson(JSON.stringify(json, null, 2));
   } else {
     return JSON.stringify(json, null, 2);
   }
+}
+
+// Syntax-highlight a pretty-printed JSON string for TTY output. Only ANSI
+// color codes are added; the underlying JSON is unchanged, so stripping the
+// codes yields the exact `JSON.stringify(value, null, 2)` output.
+export function highlightJson(jsonString: string): string {
+  return jsonString.replace(
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+    (match) => {
+      if (match.startsWith('"')) {
+        const keyMatch = /^(.*?)(\s*:)$/.exec(match);
+        if (keyMatch !== null) {
+          return `${chalk.cyan(keyMatch[1])}${keyMatch[2]}`;
+        }
+        return chalk.green(match);
+      }
+      if (match === "null") {
+        return chalk.gray(match);
+      }
+      return chalk.yellow(match);
+    },
+  );
 }
 
 export async function subscribeAndLog(
