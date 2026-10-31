@@ -29,5 +29,7 @@ impl NodeExecutor for NoopNodeExecutor {
         anyhow::bail!("NoopNodeExecutor cannot be used to invoke code.");
     }
 
-    fn shutdown(&self) {}
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
 }

@@ -833,7 +833,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     }
 
     pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
-        self.node_actions.shutdown();
+        self.node_actions.shutdown().await?;
         Ok(())
     }
 
