@@ -27,6 +27,7 @@ import {
   entryPointsByEnvironment,
 } from "../../../../bundler/index.js";
 import { NodeDependency } from "../../deployApi/modules.js";
+import { bundleRust, rejectRustInComponent } from "../../rust.js";
 
 const VIRTUAL_CONFIG_NAMESPACE = "convex-virtual-config";
 const VIRTUAL_CONFIG_CONTENTS = `import { defineApp } from "convex/server";\nconst app = defineApp();\nexport default app;`;
@@ -754,10 +755,14 @@ export async function bundleImplementations({
         schema,
         functions: functions
           .concat(nodeResult.modules)
-          .concat(authResult.modules),
+          .concat(authResult.modules)
+          .concat(await bundleRust(ctx, resolvedPath)),
         externalNodeDependencies,
       };
     } else {
+      // "use rust" actions are only supported in the root app; fail fast
+      // instead of silently ignoring a crate inside a component.
+      await rejectRustInComponent(ctx, resolvedPath);
       // Reject push if components have node bundles in non-root directories.
       if (directory.path !== rootComponentDirectory.path) {
         const nodeResult: {

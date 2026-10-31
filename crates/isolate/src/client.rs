@@ -170,6 +170,7 @@ use crate::{
         CachedContexts,
         ContextCache,
     },
+    environment::rust::RustActionRuntime,
     isolate::{
         Isolate,
         IsolateHeapStats,
@@ -470,6 +471,7 @@ impl<RT: Runtime> Clone for IsolateClient<RT> {
             internal_sender: self.internal_sender.clone(),
             active_workers: self.active_workers.clone(),
             max_workers: self.max_workers,
+            rust_runtime: self.rust_runtime.clone(),
         }
     }
 }
@@ -559,6 +561,8 @@ pub struct IsolateClient<RT: Runtime> {
     /// workers across all clients.
     active_workers: Arc<AtomicUsize>,
     max_workers: usize,
+    /// `"use rust"` actions run here instead of on a V8 worker.
+    pub(crate) rust_runtime: Arc<RustActionRuntime<RT>>,
 }
 
 impl<RT: Runtime> IsolateClient<RT> {
@@ -600,6 +604,7 @@ impl<RT: Runtime> IsolateClient<RT> {
             scheduler.run(receiver, internal_receiver).await
         });
         Ok(Self {
+            rust_runtime: Arc::new(RustActionRuntime::new(rt.clone())),
             rt,
             sender,
             internal_sender,

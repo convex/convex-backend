@@ -265,6 +265,9 @@ value = { path = "crates/value" }
 vector = { path = "crates/vector" }
 vergen = "8.1.0"
 walkdir = "2"
+wasmparser = { version = "0.261", default-features = false, features = ["std"] }
+wasmtime = { version = "50.0.0", default-features = false, features = ["cranelift", "runtime", "std", "async", "parallel-compilation"] }
+wasmtime-wasi = { version = "50.0.0", default-features = false, features = ["p1"] }
 webcrypto = { path = "crates/webcrypto" }
 xorf = { git = "https://github.com/sujayakar/xorf.git", rev = "62a32de47bb3ad8b34d6d4feac034a24be2c881a" }
 

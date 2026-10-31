@@ -108,6 +108,7 @@ pub mod parse;
 pub mod proxy;
 pub mod public_api;
 pub mod router;
+pub mod rust_native;
 pub mod scheduling;
 pub mod schema;
 pub mod snapshot_export;

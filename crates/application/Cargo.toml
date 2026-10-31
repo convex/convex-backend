@@ -49,6 +49,7 @@ async_lru = { workspace = true }
 authentication = { workspace = true }
 aws_s3 = { workspace = true }
 aws_utils = { workspace = true }
+base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 cmd_util = { workspace = true }
@@ -82,6 +83,8 @@ lru = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
 model = { workspace = true }
+# WN-08: push-time ELF/Mach-O validation. 0.40.0 is already in Cargo.lock.
+object = { version = "0.40", default-features = false, features = ["read_core", "std", "elf", "macho"] }
 node_executor = { workspace = true }
 parking_lot = { workspace = true }
 pb = { workspace = true }
@@ -95,7 +98,9 @@ search_index_workers = { workspace = true }
 semver = { workspace = true }
 sentry = { workspace = true }
 serde = { workspace = true }
+sha2 = { workspace = true }
 serde_json = { workspace = true }
+wasmparser = { workspace = true }
 shape_inference = { workspace = true }
 short_future = { workspace = true }
 slugify = { workspace = true }

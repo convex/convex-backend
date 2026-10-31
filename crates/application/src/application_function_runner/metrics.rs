@@ -113,6 +113,7 @@ impl ModuleEnvironmentExt for ModuleEnvironment {
         let value = match self {
             ModuleEnvironment::Isolate => "isolate",
             ModuleEnvironment::Node => "node",
+            ModuleEnvironment::Rust => "rust",
             ModuleEnvironment::Invalid => "invalid",
         };
         StaticMetricLabel::new("env_type", value)

@@ -1,0 +1,11 @@
+warning: patch `reqwest v0.12.99 (/Users/tomasdomingos/convex-rs/crates/convex_reqwest)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+warning: ring@0.17.14: 1 error generated.
+warning: ring@0.17.14: ToolExecError: command did not execute successfully (status code exit status: 1): "clang" "-O3" "-ffunction-sections" "-fdata-sections" "--target=wasm32-wasip1" "-I" "/Users/tomasdomingos/.cargo/registry/src/index.cra
+error: failed to run custom build command for `ring v0.17.14`
+
+Caused by:
+  process didn't exit successfully: `/Users/tomasdomingos/convex-rs/target-e2e/release/build/ring-e6311f693aded621/build-script-build` (exit status: 1)
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1): "clang" "-O3" "-ffunction-sections" "-fdata-sections" "--target=wasm32-wasip1" "-I" "/Users/tomasdomingos/.cargo/registry/src/index.crates.io-1949
+warning: build failed, waiting for other jobs to finish...

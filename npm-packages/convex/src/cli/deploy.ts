@@ -18,6 +18,12 @@ import {
   bigBrainAPI,
 } from "./lib/utils/utils.js";
 import { runFunctionAndLog } from "./lib/run.js";
+import {
+  RUST_RUNTIMES,
+  setRustBackend,
+  setRustRuntimeFlag,
+  setRustNoSimdFlag,
+} from "./lib/rust.js";
 import { usageStateWarning } from "./lib/usage.js";
 import { getTeamAndProjectFromPreviewAdminKey } from "./lib/deployment.js";
 import { runPush } from "./lib/components.js";
@@ -87,6 +93,18 @@ export const deploy = new Command("deploy")
       .default("enable" as const)
       .hideHelp(),
   )
+  .addOption(
+    new Option(
+      "--no-simd",
+      "Build Rust wasm functions without SIMD (also CONVEX_RUST_NO_SIMD=1)",
+    ),
+  )
+  .addOption(
+    new Option(
+      "--rust-runtime <runtime>",
+      'Runtime for "use rust" actions: wasm (default), native, or auto',
+    ).choices(RUST_RUNTIMES),
+  )
   // Hidden options to pass in admin key and url for tests and local development
   .addOption(new Option("--admin-key <adminKey>").hideHelp())
   .addOption(new Option("--url <url>").hideHelp())
@@ -132,6 +150,8 @@ Same format as .env.local or .env files, and overrides them.`,
   .showHelpAfterError()
   .action(async (cmdOptions) => {
     const ctx = await oneoffContext(cmdOptions);
+    setRustRuntimeFlag(cmdOptions.rustRuntime);
+    setRustNoSimdFlag(cmdOptions.simd === false);
 
     const deploymentSelection = await getDeploymentSelection(ctx, {
       ...cmdOptions,
@@ -315,6 +335,7 @@ async function deployToNewPreviewDeployment(
       isDefault: false,
     },
   });
+  setRustBackend({ url: previewUrl, adminKey: previewAdminKey });
 
   // Provision WorkOS before building the client bundle (if configured)
   const { projectConfig } = await readProjectConfig(ctx);
@@ -418,6 +439,7 @@ async function deployToExistingDeployment(
     deploymentSelection,
   );
   announceDeploymentTarget("Deploying code to deployment:", deploymentToActOn);
+  setRustBackend(deploymentToActOn);
   const { deploymentFields } = deploymentToActOn;
 
   const configuredDeployment =
