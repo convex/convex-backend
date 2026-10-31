@@ -1050,6 +1050,17 @@ pub static ISOLATE_IDLE_TIMEOUT: LazyLock<Duration> =
 pub static ISOLATE_MAX_LIFETIME: LazyLock<Duration> =
     LazyLock::new(|| Duration::from_secs(env_config("ISOLATE_MAX_LIFETIME_SECONDS", 60 * 60)));
 
+/// Seconds a local node executor may sit idle, with nothing in flight, before
+/// the background reaper retires it. `0` leaves the process up until the
+/// container restarts, which is the default so existing installs do not change.
+pub static NODE_EXECUTOR_IDLE_TIMEOUT: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("NODE_EXECUTOR_IDLE_TIMEOUT_SECONDS", 0)));
+
+/// Maximum seconds a local node executor may stay alive before the reaper
+/// retires it, once nothing is in flight. `0` disables the lifetime backstop.
+pub static NODE_EXECUTOR_MAX_LIFETIME: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("NODE_EXECUTOR_MAX_LIFETIME_SECONDS", 0)));
+
 /// System timeout for V8 actions.
 /// This doesn't count most syscalls, but it does count module loading.
 pub static V8_ACTION_SYSTEM_TIMEOUT: LazyLock<Duration> =
