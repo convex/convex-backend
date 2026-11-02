@@ -282,7 +282,7 @@ impl DeploymentJwtKey {
         }
         if expires_in.is_zero() || expires_in > *DEPLOYMENT_JWT_MAX_LIFETIME {
             anyhow::bail!(invalid_request(format!(
-                "expiresIn must be between 1 second and {} seconds",
+                "expiresInSeconds must be between 1 second and {} seconds",
                 DEPLOYMENT_JWT_MAX_LIFETIME.as_secs()
             )));
         }
