@@ -1,17 +1,8 @@
 import { Context } from "aws-lambda";
-import { disableBrotliDecompressionIfFlagged } from "./brotliMitigation";
-import { distrustEmudhraCertificatesIfFlagged } from "./emudhraMitigation";
 import { invoke, ogProcessExit } from "./executor";
 import { logDebug, setDebugLogging } from "./log";
 import { populatePrebuildPackages } from "./source_package";
 import { finished, Writable } from "node:stream";
-
-// Runs before any user code loads, so user modules only see the replaced
-// `node:zlib` exports.
-disableBrotliDecompressionIfFlagged(process.env);
-// Runs before any TLS connection, since the root store change applies only to
-// TLS contexts created afterwards.
-distrustEmudhraCertificatesIfFlagged(process.env);
 
 const warmupPromise = populatePrebuildPackages();
 
