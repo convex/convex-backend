@@ -63,10 +63,14 @@ use keybroker::Identity;
 use metrics::{
     log_document_bytes,
     log_document_validated,
+    log_staged_outcome,
+    log_staged_resolution,
     log_walk_started,
     log_walk_ts_lag,
     schema_validation_timer,
+    StagedOutcome,
     TableWalkMetrics,
+    WalkKind,
 };
 use shape_inference::{
     CountedShape,
@@ -136,6 +140,7 @@ pub struct StagedSchemaValidation {
 }
 
 struct TableWalk {
+    kind: WalkKind,
     namespace: TableNamespace,
     table_mapping: Arc<NamespacedTableMapping>,
     /// The timestamp the validation was read at. Every page of the walk is
@@ -416,6 +421,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
                 .start_table_validation(id, table_name, None, total_docs)
                 .await?;
             walks.push(TableWalk {
+                kind: WalkKind::Pending,
                 namespace,
                 table_mapping: table_mapping.clone(),
                 min_ts: ts,
@@ -523,13 +529,15 @@ impl<RT: Runtime> SchemaWorker<RT> {
             // Never-written tables have no tablet or documents, so their staged
             // validators hold vacuously.
             if !table_mapping.name_exists(&table_name) {
-                self.commit_progress_write(
-                    namespace,
-                    validation_id,
-                    ValidationAttemptUpdate::MarkValid,
-                    "schema_worker_staged_valid",
-                )
-                .await?;
+                let marked = self
+                    .commit_progress_write(
+                        namespace,
+                        validation_id,
+                        ValidationAttemptUpdate::MarkValid,
+                        "schema_worker_staged_valid",
+                    )
+                    .await?;
+                log_staged_resolution(marked, StagedOutcome::ValidUnwrittenTable);
                 continue;
             }
             let table_shape = shape_provider(&table_name)?;
@@ -548,13 +556,15 @@ impl<RT: Runtime> SchemaWorker<RT> {
             );
             if !matches!(outcome, TableValidationOutcome::MustWalk) {
                 // A subset relation proves every existing document conforms.
-                self.commit_progress_write(
-                    namespace,
-                    validation_id,
-                    ValidationAttemptUpdate::MarkValid,
-                    "schema_worker_staged_valid",
-                )
-                .await?;
+                let marked = self
+                    .commit_progress_write(
+                        namespace,
+                        validation_id,
+                        ValidationAttemptUpdate::MarkValid,
+                        "schema_worker_staged_valid",
+                    )
+                    .await?;
+                log_staged_resolution(marked, StagedOutcome::ValidByShape);
                 continue;
             }
 
@@ -578,6 +588,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
                 )
                 .await?
             {
+                log_staged_outcome(StagedOutcome::Canceled);
                 continue;
             }
             let by_id = *by_id_indexes
@@ -586,6 +597,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
             walks.push((
                 table_name,
                 TableWalk {
+                    kind: WalkKind::Staged,
                     namespace,
                     table_mapping: table_mapping.clone(),
                     min_ts: ts,
@@ -615,12 +627,13 @@ impl<RT: Runtime> SchemaWorker<RT> {
                     let outcome = worker.walk_table(walk, check_document).await?;
                     match outcome {
                         WalkOutcome::Complete => {
-                            tracing::info!("Staged validator for {table_name} is valid")
+                            tracing::info!("Staged validator for {table_name} is valid");
+                            log_staged_outcome(StagedOutcome::ValidByWalk);
                         },
-                        WalkOutcome::Canceled => {},
+                        WalkOutcome::Canceled => log_staged_outcome(StagedOutcome::Canceled),
                         WalkOutcome::Violation(error) => {
                             tracing::info!("Staged validator for {table_name} is invalid: {error}");
-                            worker
+                            let marked = worker
                                 .commit_progress_write(
                                     namespace,
                                     validation_id,
@@ -630,6 +643,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
                                     "schema_worker_staged_failed",
                                 )
                                 .await?;
+                            log_staged_resolution(marked, StagedOutcome::Invalid);
                         },
                     }
                     anyhow::Ok(())
@@ -658,6 +672,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
         check_document: DocumentChecker,
     ) -> anyhow::Result<WalkOutcome> {
         let TableWalk {
+            kind,
             namespace,
             table_mapping,
             min_ts,
@@ -666,14 +681,14 @@ impl<RT: Runtime> SchemaWorker<RT> {
             validation_id,
             mut total_docs,
         } = walk;
-        log_walk_started();
+        log_walk_started(kind);
         let update_threshold = progress_update_threshold(total_docs);
         let stream = self
             .database
             .latest_table_iterator(min_ts, *SCHEMA_WORKER_PAGE_SIZE)
             .stream_documents_in_table(tablet_id, by_id);
         pin_mut!(stream);
-        let mut walk_metrics = TableWalkMetrics::start(self.runtime.clone());
+        let mut walk_metrics = TableWalkMetrics::start(self.runtime.clone(), kind);
         let mut last_progress_update = self.runtime.monotonic_now();
         let mut current_page_ts = None;
         let mut fresh_mapping = (*table_mapping).clone();
@@ -744,9 +759,12 @@ impl<RT: Runtime> SchemaWorker<RT> {
         {
             return Ok(WalkOutcome::Canceled);
         }
-        log_walk_ts_lag(Duration::from_nanos(
-            (i64::from(*current_page_ts.unwrap_or(min_ts)) - i64::from(*min_ts)).max(0) as u64,
-        ));
+        log_walk_ts_lag(
+            kind,
+            Duration::from_nanos(
+                (i64::from(*current_page_ts.unwrap_or(min_ts)) - i64::from(*min_ts)).max(0) as u64,
+            ),
+        );
         let marked = self
             .commit_progress_write(
                 namespace,
