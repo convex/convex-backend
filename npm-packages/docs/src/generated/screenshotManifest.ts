@@ -149,13 +149,13 @@ export const screenshots = [
     "storyTitle": "docs/components/ProjectCard",
     "light": {
       "filename": "components_project_card_light.webp",
-      "width": 1086,
-      "height": 454
+      "width": 1092,
+      "height": 435
     },
     "dark": {
       "filename": "components_project_card_dark.webp",
-      "width": 1086,
-      "height": 447
+      "width": 1092,
+      "height": 428
     }
   },
   {
@@ -1027,6 +1027,110 @@ export const screenshots = [
       "filename": "pages_projects_team_switcher_with_invitation_dark.webp",
       "width": 1344,
       "height": 1027
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Filtered By Tag",
+    "light": {
+      "filename": "pages_projects_filtered_by_tag_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_filtered_by_tag_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Tag Filter Without Permission",
+    "light": {
+      "filename": "pages_projects_tag_filter_without_permission_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_tag_filter_without_permission_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Tag Filter Without Tags",
+    "light": {
+      "filename": "pages_projects_tag_filter_without_tags_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_tag_filter_without_tags_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Create Project With Tags",
+    "light": {
+      "filename": "pages_projects_create_project_with_tags_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_create_project_with_tags_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/components/ProjectCard#With Recent Deployment",
+    "light": {
+      "filename": "components_project_card_with_recent_deployment_light.webp",
+      "width": 1216,
+      "height": 286
+    },
+    "dark": {
+      "filename": "components_project_card_with_recent_deployment_dark.webp",
+      "width": 1216,
+      "height": 286
+    }
+  },
+  {
+    "storyTitle": "docs/components/ProjectCard#Grid",
+    "light": {
+      "filename": "components_project_card_grid_light.webp",
+      "width": 2048,
+      "height": 986
+    },
+    "dark": {
+      "filename": "components_project_card_grid_dark.webp",
+      "width": 2048,
+      "height": 986
+    }
+  },
+  {
+    "storyTitle": "docs/components/ProjectCard#List",
+    "light": {
+      "filename": "components_project_card_list_light.webp",
+      "width": 2052,
+      "height": 636
+    },
+    "dark": {
+      "filename": "components_project_card_list_dark.webp",
+      "width": 2052,
+      "height": 636
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/ProjectSettings#Tags",
+    "light": {
+      "filename": "pages_project_project_settings_tags_light.webp",
+      "width": 1552,
+      "height": 928
+    },
+    "dark": {
+      "filename": "pages_project_project_settings_tags_dark.webp",
+      "width": 1552,
+      "height": 928
     }
   }
 ] as const;

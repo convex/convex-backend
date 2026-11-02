@@ -95,6 +95,12 @@ const previewDeployment: PlatformDeploymentResponse = {
 };
 
 export const WithRecentDeployment: Story = {
+  // Wide enough that none of the deployment pills truncate.
+  render: (args) => (
+    <div className="w-full max-w-xl">
+      <ProjectCard {...args} />
+    </div>
+  ),
   beforeEach: () => {
     mocked(useDeploymentByName).mockReturnValue({
       deployment: previewDeployment,

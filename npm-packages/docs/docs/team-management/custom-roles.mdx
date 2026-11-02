@@ -135,10 +135,13 @@ statement.
 
 | Kind                                                                                                              | Selectors                                                                           |
 | ----------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `project`                                                                                                         | `*`, `id=<project-id>`, `slug=<project-slug>`                                       |
+| `project`                                                                                                         | `*`, `id=<project-id>`, `slug=<project-slug>`, `tag=<tag>`                          |
 | `deployment`                                                                                                      | `*`, `id=<deployment-id>`, `type=prod\|dev\|preview\|custom`, `creator=<member-id>` |
 | `token`                                                                                                           | `*`, `creator=<member-id>`                                                          |
 | `team`, `member`, `customRole`, `billing`, `oauthApplication`, `sso`, `integration`, `defaultEnvironmentVariable` | `*` only: these resources do not currently support any selectors.                   |
+
+A `tag=<tag>` selector matches every project that carries the
+[tag](/dashboard/projects.mdx#project-tags).
 
 #### Nesting
 
@@ -161,6 +164,7 @@ Most resource kinds appear at the top level of a path. A few must be nested:
 | `member:*`                                | All team members.                                    |
 | `project:*`                               | All projects in the team.                            |
 | `project:slug=my-app`                     | The project whose slug is `my-app`.                  |
+| `project:tag=live-service`                | Every project tagged `live-service`.                 |
 | `project:*:deployment:*`                  | All deployments in any project.                      |
 | `project:*:deployment:type=prod`          | All production deployments.                          |
 | `project:*:deployment:type=dev,creator=5` | Dev deployments OR deployments created by member 5.  |
@@ -220,7 +224,10 @@ a privilege escalation:
   an `allow` or `deny` rule. A holder could rename a project to match a more
   permissive `allow` selector, or away from a `deny` selector, to gain access
   the role would otherwise withhold. Selectors that use `id=<project-id>` are
-  not affected, since project IDs are immutable.
+  not affected, since project IDs are immutable. The same applies to a project's
+  [tags](/dashboard/projects.mdx#project-tags): `project:update` lets the holder
+  add or remove tags, moving the project into or out of rules that match by
+  `tag=<tag>`.
 - **`deployment:updateType`** lets the holder change a deployment's type. A
   holder who can manage non-prod deployments could create one, then promote it
   to `type=prod`, or downgrade an existing prod deployment to a less protected

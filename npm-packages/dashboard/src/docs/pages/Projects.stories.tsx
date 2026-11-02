@@ -1,11 +1,21 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { useState } from "react";
 import { mocked, screen, userEvent } from "storybook/test";
+import {
+  PlatformDeploymentResponse,
+  ProjectResponse,
+} from "@convex-dev/platform/managementApi";
 import { useDirectorySyncOffers } from "api/directorySync";
 import { useTeams } from "api/teams";
-import { usePaginatedProjects, useTeamProjectTags } from "api/projects";
+import { useDeploymentByName } from "api/deployments";
+import {
+  usePaginatedProjects,
+  useProjectById,
+  useTeamProjectTags,
+} from "api/projects";
 import { useHasCustomRolePermission } from "api/roles";
 import { useProjectTagFilter } from "hooks/useProjectTagFilter";
+import { CreateProjectModal } from "hooks/useCreateProjectModal";
 import { TeamIndexPage } from "../../pages/t/[team]";
 
 const meta = {
@@ -21,7 +31,113 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const Default: Story = {};
+const projectDefaults = {
+  teamId: 2,
+  teamSlug: "acme",
+  prodDeploymentReference: "production",
+  devDeploymentReference: "dev/nicolas",
+};
+
+const projects: ProjectResponse[] = [
+  {
+    ...projectDefaults,
+    id: 7,
+    name: "My amazing app",
+    slug: "my-amazing-app",
+    createTime: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    prodDeploymentName: "musical-otter-456",
+    devDeploymentName: "happy-capybara-123",
+    tags: ["frontend", "billing"],
+  },
+  {
+    ...projectDefaults,
+    id: 8,
+    name: "Analytics pipeline",
+    slug: "analytics-pipeline",
+    createTime: Date.now() - 60 * 24 * 60 * 60 * 1000,
+    prodDeploymentName: "brave-falcon-219",
+    devDeploymentName: "gentle-lemur-874",
+    tags: ["data", "internal"],
+  },
+  {
+    ...projectDefaults,
+    id: 9,
+    name: "Payments worker",
+    slug: "payments-worker",
+    createTime: Date.now() - 120 * 24 * 60 * 60 * 1000,
+    prodDeploymentName: "steady-moose-602",
+    devDeploymentName: "clever-badger-331",
+    tags: ["backend", "billing"],
+  },
+  {
+    ...projectDefaults,
+    id: 10,
+    name: "Marketing site",
+    slug: "marketing-site",
+    createTime: Date.now() - 365 * 24 * 60 * 60 * 1000,
+    prodDeploymentName: "sunny-otter-145",
+    devDeploymentName: null,
+    devDeploymentReference: null,
+    tags: ["frontend"],
+  },
+];
+
+// The deployment the member most recently opened in "My amazing app", which
+// its card suggests after the project's default deployments.
+const recentDeployment: PlatformDeploymentResponse = {
+  kind: "cloud",
+  id: 321,
+  name: "quiet-heron-321",
+  createTime: Date.now(),
+  deploymentType: "preview",
+  projectId: 7,
+  region: "aws-us-east-1",
+  isDefault: false,
+  reference: "preview/fix-login-redirect",
+  previewIdentifier: "fix-login-redirect",
+  deploymentUrl: "https://quiet-heron-321.convex.cloud",
+  class: "s16",
+};
+
+export const Default: Story = {
+  beforeEach: () => {
+    const key = `/lastViewedNonDefaultDeploymentForProject/${recentDeployment.projectId}`;
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        name: recentDeployment.name,
+        reference: recentDeployment.reference,
+        deploymentType: recentDeployment.deploymentType,
+      }),
+    );
+    return () => window.localStorage.removeItem(key);
+  },
+  decorators: [
+    (storyFn) => {
+      mocked(usePaginatedProjects).mockReturnValue({
+        items: projects,
+        pagination: { hasMore: false },
+        isLoading: false,
+      });
+      mocked(useProjectById).mockImplementation((projectId) => ({
+        project: projects.find((p) => p.id === projectId),
+        isLoading: false,
+        error: undefined,
+      }));
+      mocked(useTeamProjectTags).mockReturnValue([
+        ...new Set(projects.flatMap((p) => p.tags ?? [])),
+      ]);
+      mocked(useDeploymentByName).mockImplementation((deploymentName) => ({
+        deployment:
+          deploymentName === recentDeployment.name
+            ? recentDeployment
+            : undefined,
+        notFound: false,
+      }));
+      return storyFn();
+    },
+  ],
+};
 
 // The team the docs decorator mocks, plus enough others for the switcher to
 // look like a list rather than a single row.
@@ -124,9 +240,6 @@ const taggedProject = {
  * The project list filtered to the projects with one tag.
  */
 export const FilteredByTag: Story = {
-  parameters: {
-    docsPage: { launchDarkly: { tagEditUi: true } },
-  },
   decorators: [
     (storyFn) => {
       mocked(useProjectTagFilter).mockImplementation(
@@ -168,9 +281,6 @@ export const FilteredByTag: Story = {
  * disabled.
  */
 export const TagFilterWithoutPermission: Story = {
-  parameters: {
-    docsPage: { launchDarkly: { tagEditUi: true } },
-  },
   decorators: [
     (storyFn) => {
       mocked(useHasCustomRolePermission).mockImplementation(
@@ -185,7 +295,41 @@ export const TagFilterWithoutPermission: Story = {
  * The tag filter is disabled while none of the team's projects have tags.
  */
 export const TagFilterWithoutTags: Story = {
+  decorators: [
+    (storyFn) => {
+      mocked(useTeamProjectTags).mockReturnValue([]);
+      mocked(usePaginatedProjects).mockReturnValue({
+        items: [{ ...projects[0], tags: [] }],
+        pagination: { hasMore: false },
+        isLoading: false,
+      });
+      return storyFn();
+    },
+  ],
+};
+
+/**
+ * The Create Project dialog with tags added to the new project.
+ */
+export const CreateProjectWithTags: Story = {
   parameters: {
-    docsPage: { launchDarkly: { tagEditUi: true } },
+    screenshotSelector: '[role="dialog"]',
+  },
+  // The dashboard mounts this dialog once in `_app`, outside the page.
+  render: (args) => (
+    <>
+      <TeamIndexPage {...args} />
+      <CreateProjectModal />
+    </>
+  ),
+  play: async () => {
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Create Project" }),
+    );
+    await userEvent.type(await screen.findByLabelText("Project Name"), "Shop");
+    await userEvent.type(
+      screen.getByRole("combobox", { name: "Tags" }),
+      "frontend{Enter}billing{Enter}",
+    );
   },
 };
