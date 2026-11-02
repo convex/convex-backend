@@ -459,7 +459,11 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
             let entry: ParsedDocument<FileStorageEntry> = document.clone().parse()?;
             files.push((entry.into_value(), upload));
         }
-        self.rt
+        if files.is_empty() {
+            return tx.mark_files_uploaded();
+        }
+        let result = self
+            .rt
             .with_timeout(
                 "upload_pending_files",
                 *UDF_FILE_STORAGE_UPLOAD_TIMEOUT,
@@ -469,11 +473,12 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
                         .map(|(entry, upload)| self.upload_pending_file(entry, upload)),
                 ),
             )
-            .await
-            .context(ErrorMetadata::overloaded(
-                FILE_UPLOAD_FAILED_SHORT_MSG,
-                "Failed to upload the files this mutation stored. Try again later.",
-            ))?;
+            .await;
+        metrics::log_mutation_file_upload_result(result.is_ok());
+        result.context(ErrorMetadata::overloaded(
+            FILE_UPLOAD_FAILED_SHORT_MSG,
+            "Failed to upload the files this mutation stored. Try again later.",
+        ))?;
         for (entry, upload) in files {
             Self::track_pending_file_usage(entry, upload.component_path, usage_tracker).await?;
         }
@@ -535,6 +540,7 @@ impl<RT: Runtime> TransactionalFileStorage<RT> {
             )
             .await;
         downloads.add_download_time(start.elapsed());
+        metrics::log_mutation_file_download_batch_result(result.is_ok());
         let files = result.context(ErrorMetadata::overloaded(
             FILE_DOWNLOAD_FAILED_SHORT_MSG,
             "Failed to download the files this mutation read. Try again later.",

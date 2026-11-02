@@ -1,6 +1,9 @@
 use metrics::{
+    log_counter_with_labels,
     log_distribution_with_labels,
+    register_convex_counter,
     register_convex_histogram,
+    MetricLabel,
     StaticMetricLabel,
     StatusTimer,
     STATUS_LABEL,
@@ -44,5 +47,31 @@ pub fn log_get_file_chunk_size(size_bytes: u64, get_file_type: GetFileType) {
         &GET_FILE_CHUNK_SIZE_BYTES,
         size_bytes as f64,
         vec![get_file_type.tag()],
+    );
+}
+
+register_convex_counter!(
+    MUTATION_FILE_UPLOADS_TOTAL,
+    "Number of attempts to upload files stored by mutations",
+    &STATUS_LABEL
+);
+pub(crate) fn log_mutation_file_upload_result(is_ok: bool) {
+    log_counter_with_labels(
+        &MUTATION_FILE_UPLOADS_TOTAL,
+        1,
+        vec![MetricLabel::status(is_ok)],
+    );
+}
+
+register_convex_counter!(
+    MUTATION_FILE_DOWNLOAD_BATCHES_TOTAL,
+    "Number of batches of files downloaded by mutations",
+    &STATUS_LABEL
+);
+pub(crate) fn log_mutation_file_download_batch_result(is_ok: bool) {
+    log_counter_with_labels(
+        &MUTATION_FILE_DOWNLOAD_BATCHES_TOTAL,
+        1,
+        vec![MetricLabel::status(is_ok)],
     );
 }

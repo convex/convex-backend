@@ -227,6 +227,7 @@ use crate::{
         function_total_timer,
         log_function_wait_timeout,
         log_mutation_already_committed,
+        log_mutation_file_storage_failure,
     },
     audit_logging::AuditLogClient,
     cache::{
@@ -1041,19 +1042,24 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         self.runtime.wait(sleep).await;
                         continue;
                     }
-                    if matches!(
-                        e.short_msg(),
-                        FILE_UPLOAD_FAILED_SHORT_MSG | FILE_DOWNLOAD_FAILED_SHORT_MSG
-                    ) && (file_storage_backoff.failures() as usize)
-                        < *UDF_FILE_STORAGE_MAX_RETRIES
-                    {
-                        let sleep = file_storage_backoff.fail(&mut self.runtime.rng());
-                        tracing::warn!(
-                            "File storage failed ({e:#}), retrying {write_source:?} after \
-                             {sleep:?}",
-                        );
-                        self.runtime.wait(sleep).await;
-                        continue;
+                    let file_storage_error = match e.short_msg() {
+                        FILE_UPLOAD_FAILED_SHORT_MSG => Some(FILE_UPLOAD_FAILED_SHORT_MSG),
+                        FILE_DOWNLOAD_FAILED_SHORT_MSG => Some(FILE_DOWNLOAD_FAILED_SHORT_MSG),
+                        _ => None,
+                    };
+                    if let Some(short_msg) = file_storage_error {
+                        let retry = (file_storage_backoff.failures() as usize)
+                            < *UDF_FILE_STORAGE_MAX_RETRIES;
+                        log_mutation_file_storage_failure(short_msg, retry);
+                        if retry {
+                            let sleep = file_storage_backoff.fail(&mut self.runtime.rng());
+                            tracing::warn!(
+                                "File storage failed ({e:#}), retrying {write_source:?} after \
+                                 {sleep:?}",
+                            );
+                            self.runtime.wait(sleep).await;
+                            continue;
+                        }
                     }
                     self.function_log
                         .log_mutation_system_error(

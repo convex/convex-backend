@@ -8,6 +8,7 @@ use metrics::{
     log_distribution_with_labels,
     register_convex_counter,
     register_convex_histogram,
+    IntoLabel,
     StaticMetricLabel,
     StatusTimer,
     STATUS_LABEL,
@@ -48,6 +49,22 @@ register_convex_histogram!(
 );
 pub fn log_mutation_already_committed(age_seconds: f64) {
     log_distribution(&APPLICATION_MUTATION_ALREADY_COMMITTED_SECONDS, age_seconds);
+}
+
+register_convex_counter!(
+    MUTATION_FILE_STORAGE_FAILURES_TOTAL,
+    "Number of mutation attempts that failed to upload or download files",
+    &["error", "retried"]
+);
+pub fn log_mutation_file_storage_failure(short_msg: &'static str, retried: bool) {
+    log_counter_with_labels(
+        &MUTATION_FILE_STORAGE_FAILURES_TOTAL,
+        1,
+        vec![
+            StaticMetricLabel::new("error", short_msg),
+            StaticMetricLabel::new("retried", retried.as_label()),
+        ],
+    );
 }
 
 register_convex_histogram!(OCC_RETRIES_TOTAL, "Number of OCC retries for a commit");
