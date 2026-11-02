@@ -740,7 +740,7 @@ export interface ValidatedFunction<
  * - We use Validator | void instead of Validator | undefined because the latter does
  * not work with `strictNullChecks` since it's equivalent to just `Validator`.
  * - We use a tuple type of length 1 to avoid distribution over the union
- *  https://github.com/microsoft/TypeScript/issues/29368#issuecomment-453529532
+ *  https://www.typescriptlang.org/docs/handbook/2/conditional-types.html#distributive-conditional-types
  */
 
 export type ReturnValueForOptionalValidator<
