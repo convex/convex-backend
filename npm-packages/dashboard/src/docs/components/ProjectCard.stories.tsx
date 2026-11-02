@@ -9,7 +9,7 @@ import { useProjectById } from "api/projects";
 import { useDeploymentByName } from "api/deployments";
 import { useCurrentTeam } from "api/teams";
 import { useProfile } from "api/profile";
-import { useHasProjectAdminPermissions } from "api/roles";
+import { useHasProjectAdminPermissions, useMyCustomRoles } from "api/roles";
 import { mocked, userEvent, within } from "storybook/test";
 import { cn } from "@ui/cn";
 
@@ -54,6 +54,10 @@ const meta = {
       notFound: false,
     });
     mocked(useHasProjectAdminPermissions).mockReturnValue(true);
+    mocked(useMyCustomRoles).mockReturnValue({
+      role: "admin",
+      customRoles: [],
+    });
     mocked(useProfile).mockReturnValue({
       id: 1,
       name: "Jane Doe",
@@ -186,6 +190,68 @@ export const List: Story = {
   render: () => (
     <div className="w-full overflow-hidden rounded-xl bg-background-secondary ring-1 ring-border-transparent">
       {gallery.map((p, i) => (
+        <div
+          key={p.id}
+          className={cn(
+            "first:rounded-t-xl last:rounded-b-xl",
+            i > 0 && "border-t",
+          )}
+        >
+          <ProjectCard project={p} listItem />
+        </div>
+      ))}
+    </div>
+  ),
+};
+
+// Custom-role members only see the default deployments their role can view.
+// One that can view neither falls back to the project's deployments list.
+const customRoleGallery: ProjectResponse[] = [
+  { ...project, id: 201, name: "Can view both defaults" },
+  {
+    ...project,
+    id: 202,
+    name: "Can view production only",
+    devDeploymentName: null,
+    devDeploymentReference: null,
+  },
+  {
+    ...project,
+    id: 203,
+    name: "Can view neither default",
+    prodDeploymentName: null,
+    prodDeploymentReference: null,
+    devDeploymentName: null,
+    devDeploymentReference: null,
+  },
+];
+
+function mockCustomRoleGallery() {
+  mocked(useMyCustomRoles).mockReturnValue({ role: "custom", customRoles: [] });
+  mocked(useHasProjectAdminPermissions).mockReturnValue(false);
+  mocked(useProjectById).mockImplementation((projectId) => ({
+    project: customRoleGallery.find((p) => p.id === projectId),
+    isLoading: false,
+    error: undefined,
+  }));
+}
+
+export const CustomRoleGrid: Story = {
+  beforeEach: mockCustomRoleGallery,
+  render: () => (
+    <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+      {customRoleGallery.map((p) => (
+        <ProjectCard key={p.id} project={p} />
+      ))}
+    </div>
+  ),
+};
+
+export const CustomRoleList: Story = {
+  beforeEach: mockCustomRoleGallery,
+  render: () => (
+    <div className="w-full overflow-hidden rounded-xl bg-background-secondary ring-1 ring-border-transparent">
+      {customRoleGallery.map((p, i) => (
         <div
           key={p.id}
           className={cn(

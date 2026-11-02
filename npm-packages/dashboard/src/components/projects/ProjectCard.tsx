@@ -308,20 +308,6 @@ export function ProjectCard({
   );
 }
 
-// The card itself opens the link `cardTarget` picks. Hovering the card
-// outlines that pill to show where a click lands; hovering a specific pill
-// outlines only that pill.
-//
-// Pills are labeled with the deployment's reference. Local dev deployments have
-// none and read as "local"; any other deployment without one reads as the
-// reference it would be created with. After them comes the member's most
-// recently viewed deployment that isn't one of those two, then an icon pill
-// that opens the deployments list filtered to the member's own deployments in
-// this project.
-//
-// A deployment that doesn't exist gets a pill linking to its provision page
-// only when `showProvisionLinks` is set. When the card falls back to the
-// deployments list, `deploymentsListHref` adds a leading pill for it.
 function DeploymentLinks({
   devHref,
   prodHref,
@@ -356,7 +342,7 @@ function DeploymentLinks({
       {deploymentsListHref !== undefined && (
         <DeploymentPill
           href={deploymentsListHref}
-          label="Deployments"
+          label="All Deployments"
           isDefault={defaultTarget === "deployments"}
           icon={<LayersIcon />}
         />
@@ -414,7 +400,7 @@ function DeploymentLinks({
       <DeploymentPill
         href={myDeploymentsHref}
         label="Your deployments"
-        iconOnly
+        iconOnly={deploymentsListHref === undefined}
         icon={<LayersIcon />}
         tip="Your deployments"
       />
