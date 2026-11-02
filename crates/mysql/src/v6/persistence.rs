@@ -1065,6 +1065,7 @@ impl<RT: Runtime> Lease<RT> {
                 )
                 .await?
         };
+        drop(client);
         anyhow::ensure!(
             rows_modified == 1,
             "failed to acquire V6 lease: already acquired with higher timestamp, or read-only"
@@ -1113,30 +1114,26 @@ impl<RT: Runtime> Lease<RT> {
         F: for<'a> AsyncFnOnce(&'a mut MySqlTransaction<'_>) -> anyhow::Result<T>,
     {
         let mut client = self.pool.acquire("v6_transact", &self.db_name).await?;
-        let result = async {
-            let mut tx = client
-                .transaction(self.pool.cluster_name(), isolation)
-                .await?;
-            let timer = metrics::lease_precond_timer(self.pool.cluster_name());
-            let lease: Option<Row> = tx
-                .exec_first(
-                    super::LEASE_PRECONDITION,
-                    vec![Value::Int(self.lease_ts), self.deployment_id.into()],
-                )
-                .await?;
-            if lease.is_none() {
-                self.lease_lost_shutdown.signal(lease_lost_error());
-                anyhow::bail!(lease_lost_error());
-            }
-            timer.finish();
-            let value = f(&mut tx).await?;
-            let timer = metrics::commit_timer(self.pool.cluster_name(), op);
-            tx.commit().await?;
-            timer.finish();
-            Ok(value)
+        let mut tx = client
+            .transaction(self.pool.cluster_name(), isolation)
+            .await?;
+        let timer = metrics::lease_precond_timer(self.pool.cluster_name());
+        let lease: Option<Row> = tx
+            .exec_first(
+                super::LEASE_PRECONDITION,
+                vec![Value::Int(self.lease_ts), self.deployment_id.into()],
+            )
+            .await?;
+        if lease.is_none() {
+            self.lease_lost_shutdown.signal(lease_lost_error());
+            anyhow::bail!(lease_lost_error());
         }
-        .await;
-        client.handle_errors(result).await
+        timer.finish();
+        let value = f(&mut tx).await?;
+        let timer = metrics::commit_timer(self.pool.cluster_name(), op);
+        tx.commit().await?;
+        timer.finish();
+        Ok(value)
     }
 }
 

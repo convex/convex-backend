@@ -101,67 +101,63 @@ pub(super) async fn register<RT: Runtime>(
     source_is_fresh: bool,
 ) -> anyhow::Result<bool> {
     let mut connection = pool.acquire("v6_replica_state_register", db_name).await?;
-    let result = async {
-        let mut tx = connection
-            .transaction(
-                pool.cluster_name(),
-                Some(mysql_async::IsolationLevel::ReadCommitted),
-            )
-            .await?;
-        let current = tx
-            .exec_first(
-                &format!(
-                    "SELECT {COLUMNS} FROM @db_name.v5_replica_handoffs WHERE deployment_id = ? \
-                     FOR UPDATE"
-                ),
-                vec![state.deployment_id.0.into()],
-            )
-            .await?
-            .map(ReplicaHandoffState::from_row)
-            .transpose()?;
-        let replay = match &current {
-            Some(current) => {
-                anyhow::ensure!(
-                    state.lease_ts > current.lease_ts,
-                    "replica already registered this writer or a newer writer"
-                );
-                !current.retired && current.clean_shutdown && current.same_source(state)
-            },
-            None => source_is_fresh,
-        };
-        if current.is_some() {
-            tx.exec_drop(
-                "UPDATE @db_name.v5_replica_handoffs SET lease_ts = ?, retired = ?, \
-                 clean_shutdown = FALSE WHERE deployment_id = ?",
-                vec![
-                    state.lease_ts.into(),
-                    (!replay).into(),
-                    state.deployment_id.0.into(),
-                ],
-            )
-            .await?;
-        } else {
-            tx.exec_drop(
-                &format!(
-                    "INSERT INTO @db_name.v5_replica_handoffs ({COLUMNS}) VALUES (?, ?, ?, ?, ?, \
-                     ?, FALSE)"
-                ),
-                vec![
-                    state.deployment_id.0.into(),
-                    state.cluster_name.clone().into(),
-                    state.db_name.clone().into(),
-                    state.instance_name.clone().into(),
-                    (!replay).into(),
-                    state.lease_ts.into(),
-                ],
-            )
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(replay)
+    let mut tx = connection
+        .transaction(
+            pool.cluster_name(),
+            Some(mysql_async::IsolationLevel::ReadCommitted),
+        )
+        .await?;
+    let current = tx
+        .exec_first(
+            &format!(
+                "SELECT {COLUMNS} FROM @db_name.v5_replica_handoffs WHERE deployment_id = ? FOR \
+                 UPDATE"
+            ),
+            vec![state.deployment_id.0.into()],
+        )
+        .await?
+        .map(ReplicaHandoffState::from_row)
+        .transpose()?;
+    let replay = match &current {
+        Some(current) => {
+            anyhow::ensure!(
+                state.lease_ts > current.lease_ts,
+                "replica already registered this writer or a newer writer"
+            );
+            !current.retired && current.clean_shutdown && current.same_source(state)
+        },
+        None => source_is_fresh,
+    };
+    if current.is_some() {
+        tx.exec_drop(
+            "UPDATE @db_name.v5_replica_handoffs SET lease_ts = ?, retired = ?, clean_shutdown = \
+             FALSE WHERE deployment_id = ?",
+            vec![
+                state.lease_ts.into(),
+                (!replay).into(),
+                state.deployment_id.0.into(),
+            ],
+        )
+        .await?;
+    } else {
+        tx.exec_drop(
+            &format!(
+                "INSERT INTO @db_name.v5_replica_handoffs ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, \
+                 FALSE)"
+            ),
+            vec![
+                state.deployment_id.0.into(),
+                state.cluster_name.clone().into(),
+                state.db_name.clone().into(),
+                state.instance_name.clone().into(),
+                (!replay).into(),
+                state.lease_ts.into(),
+            ],
+        )
+        .await?;
     }
-    .await;
-    connection.handle_errors(result).await
+    tx.commit().await?;
+    Ok(replay)
 }
 
 /// Call after source writes have stopped and all replay has succeeded.

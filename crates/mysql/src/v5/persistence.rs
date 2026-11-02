@@ -75,7 +75,6 @@ use common::{
     },
     sha256::Sha256,
     shutdown::ShutdownSignal,
-    try_anyhow,
     types::{
         IndexId,
         IndexRef,
@@ -1412,6 +1411,7 @@ impl<RT: Runtime> Lease<RT> {
         let rows_modified = client
             .exec_iter(super::lease_acquire(multitenant, allow_read_only), params)
             .await?;
+        drop(client);
         anyhow::ensure!(
             rows_modified == 1,
             "failed to acquire lease: already acquired with higher timestamp, or read-only"
@@ -1473,43 +1473,40 @@ impl<RT: Runtime> Lease<RT> {
         F: for<'a> AsyncFnOnce(&'a mut MySqlTransaction<'_>) -> anyhow::Result<T>,
     {
         let mut client = self.pool.acquire("transact", &self.db_name).await?;
-        let r = try_anyhow!({
-            let mut tx = client
-                .transaction(self.pool.cluster_name(), isolation)
-                .await?;
+        let mut tx = client
+            .transaction(self.pool.cluster_name(), isolation)
+            .await?;
 
-            let timer = metrics::lease_precond_timer(self.pool.cluster_name());
-            let mut params = vec![mysql_async::Value::Int(self.lease_ts)];
-            if self.multitenant {
-                params.push((&self.instance_name.raw).into());
-            }
-            let rows: Option<Row> = tx
-                .exec_first(super::lease_precond(self.multitenant), params)
-                .in_span(Span::enter_with_local_parent(format!(
-                    "{}::lease_precondition",
-                    func_path!()
-                )))
-                .await?;
-            if rows.is_none() {
-                self.lease_lost_shutdown.signal(lease_lost_error());
-                anyhow::bail!(lease_lost_error());
-            }
-            timer.finish();
+        let timer = metrics::lease_precond_timer(self.pool.cluster_name());
+        let mut params = vec![mysql_async::Value::Int(self.lease_ts)];
+        if self.multitenant {
+            params.push((&self.instance_name.raw).into());
+        }
+        let rows: Option<Row> = tx
+            .exec_first(super::lease_precond(self.multitenant), params)
+            .in_span(Span::enter_with_local_parent(format!(
+                "{}::lease_precondition",
+                func_path!()
+            )))
+            .await?;
+        if rows.is_none() {
+            self.lease_lost_shutdown.signal(lease_lost_error());
+            anyhow::bail!(lease_lost_error());
+        }
+        timer.finish();
 
-            let result = f(&mut tx)
-                .in_span(Span::enter_with_local_parent(format!(
-                    "{}::execute_function",
-                    func_path!()
-                )))
-                .await?;
+        let result = f(&mut tx)
+            .in_span(Span::enter_with_local_parent(format!(
+                "{}::execute_function",
+                func_path!()
+            )))
+            .await?;
 
-            let timer = metrics::commit_timer(self.pool.cluster_name(), op);
-            tx.commit().await?;
-            timer.finish();
+        let timer = metrics::commit_timer(self.pool.cluster_name(), op);
+        tx.commit().await?;
+        timer.finish();
 
-            result
-        });
-        client.handle_errors(r).await
+        Ok(result)
     }
 }
 

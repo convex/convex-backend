@@ -150,7 +150,6 @@ impl<RT: Runtime> DeploymentDeletionPool<RT> {
     pub fn connect(
         cluster_url: &str,
         require_ssl: bool,
-        runtime: RT,
         version: PersistenceVersion,
     ) -> anyhow::Result<Self> {
         let mut url: Url = cluster_url.parse().context("invalid MySQL cluster URL")?;
@@ -172,7 +171,6 @@ impl<RT: Runtime> DeploymentDeletionPool<RT> {
             &url,
             *DATABASE_USE_PREPARED_STATEMENTS,
             true, /* require_leader */
-            Some(runtime),
         )?);
         Ok(Self {
             pool,

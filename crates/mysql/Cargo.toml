@@ -37,6 +37,7 @@ mysql_async = { workspace = true }
 parking_lot = { workspace = true }
 prometheus = { workspace = true }
 rand = { workspace = true }
+scopeguard = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smallvec = { workspace = true }

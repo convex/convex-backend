@@ -72,7 +72,6 @@ impl<RT: Runtime> ReplicaTarget<RT> {
                 &parsed,
                 *DATABASE_USE_PREPARED_STATEMENTS,
                 true, /* require_leader */
-                None,
             )?),
             db_name,
             state_table: Default::default(),

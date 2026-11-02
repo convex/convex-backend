@@ -60,7 +60,7 @@ pub fn persistence_seed<RT: Runtime>(
     flags: ConnectPersistenceFlags,
     deployment_name: &str,
     deployment_id: Option<DeploymentId>,
-    runtime: RT,
+    _runtime: RT,
 ) -> anyhow::Result<PersistenceSeed<RT>> {
     match db {
         DbDriverTag::Sqlite => Ok(PersistenceSeed::Sqlite {
@@ -127,7 +127,6 @@ pub fn persistence_seed<RT: Runtime>(
                             &url,
                             *DATABASE_USE_PREPARED_STATEMENTS,
                             require_leader,
-                            Some(runtime),
                         )?),
                         db_name,
                         options,
