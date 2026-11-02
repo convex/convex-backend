@@ -73,6 +73,8 @@ export function getUsagePricingPeriods(
       !Number.isFinite(sliceStart) ||
       !Number.isFinite(sliceEnd) ||
       sliceStart !== coveredUntil ||
+      (slices.length > 0 &&
+        period.plan.planType !== slices[0].period.plan.planType) ||
       sliceStart % DAY_MS !== 0 ||
       sliceEnd % DAY_MS !== 0
     ) {
