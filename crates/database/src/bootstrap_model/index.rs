@@ -1055,7 +1055,9 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
         source_table: &TableName,
         target_table: TabletId,
     ) -> anyhow::Result<()> {
-        // Copy over enabled indexes from existing active table, if any.
+        // Copy over enabled and staged indexes from existing active table, if
+        // any. Staged indexes stay staged on the new table so a later push that
+        // enables them doesn't need a full backfill.
         let Some(active_table_id) = self
             .tx
             .table_mapping()
@@ -1064,10 +1066,15 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
         else {
             return Ok(());
         };
-        for index in IndexModel::new(self.tx)
+        let indexes = IndexModel::new(self.tx)
             .all_indexes_on_table(active_table_id)
-            .await?
-        {
+            .await?;
+        let enabled_descriptors: BTreeSet<_> = indexes
+            .iter()
+            .filter(|index| index.config.is_enabled())
+            .map(|index| index.name.descriptor().clone())
+            .collect();
+        for index in indexes {
             anyhow::ensure!(
                 !index.config.is_backfilling(),
                 ErrorMetadata::bad_request(
@@ -1078,8 +1085,14 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
                     )
                 )
             );
-            if !index.config.is_enabled() {
-                // Only copy Enabled indexes, otherwise we might get naming conflicts.
+            let staged = index.config.is_staged();
+            // A backfilled index that isn't staged belongs to an in-progress
+            // push. A staged index shares its name with an enabled one only
+            // while a push that changes the index's fields is finishing, and
+            // the new table can hold only one index per name.
+            if !index.config.is_enabled()
+                && (!staged || enabled_descriptors.contains(index.name.descriptor()))
+            {
                 continue;
             }
             if index.name.is_by_id_or_creation_time() {
@@ -1095,7 +1108,21 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
                 IndexConfig::Database {
                     spec: DatabaseIndexSpec { fields },
                     ..
-                } => IndexMetadata::new_backfilling(*self.tx.begin_timestamp(), index_name, fields),
+                } => {
+                    if staged {
+                        IndexMetadata::new_staged_backfilling(
+                            *self.tx.begin_timestamp(),
+                            index_name,
+                            fields,
+                        )
+                    } else {
+                        IndexMetadata::new_backfilling(
+                            *self.tx.begin_timestamp(),
+                            index_name,
+                            fields,
+                        )
+                    }
+                },
                 IndexConfig::Text {
                     spec:
                         TextIndexSpec {
@@ -1103,11 +1130,21 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
                             filter_fields,
                         },
                     ..
-                } => IndexMetadata::new_backfilling_text_index(
-                    index_name,
-                    search_field,
-                    filter_fields,
-                ),
+                } => {
+                    if staged {
+                        IndexMetadata::new_staged_backfilling_text_index(
+                            index_name,
+                            search_field,
+                            filter_fields,
+                        )
+                    } else {
+                        IndexMetadata::new_backfilling_text_index(
+                            index_name,
+                            search_field,
+                            filter_fields,
+                        )
+                    }
+                },
                 IndexConfig::Vector {
                     spec:
                         VectorIndexSpec {
@@ -1116,12 +1153,23 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
                             filter_fields,
                         },
                     ..
-                } => IndexMetadata::new_backfilling_vector_index(
-                    index_name,
-                    vector_field,
-                    dimensions,
-                    filter_fields,
-                ),
+                } => {
+                    if staged {
+                        IndexMetadata::new_staged_backfilling_vector_index(
+                            index_name,
+                            vector_field,
+                            dimensions,
+                            filter_fields,
+                        )
+                    } else {
+                        IndexMetadata::new_backfilling_vector_index(
+                            index_name,
+                            vector_field,
+                            dimensions,
+                            filter_fields,
+                        )
+                    }
+                },
             };
             SystemMetadataModel::new_global(self.tx)
                 .insert_metadata(&INDEX_TABLE, metadata.try_into()?)
