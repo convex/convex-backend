@@ -149,7 +149,8 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                     IndexQueryType::JoinDocuments
                 };
                 let mut connection = self.pool.acquire("v6_index_scan", self.db_name).await?;
-                let buckets = self.published.load()?.covering(snapshot_bucket);
+                let queried_bounds = self.published.load()?;
+                let buckets = queried_bounds.covering(snapshot_bucket);
                 let prepare_timer =
                     metrics::query_index_sql_prepare_timer(self.pool.cluster_name());
                 let (query, params) = sql::index_query(
@@ -196,8 +197,8 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                 let oldest_kept_ts: i64 = state.get_opt(10).context("row[10]")??;
                 self.published.observe(created_through_ts, oldest_kept_ts);
                 let bounds = LogBucketBounds::from_state(created_through_ts, oldest_kept_ts)?;
-                // Both bucket ranges are contiguous, and the maintenance floor only
-                // advances. Only a newer upper endpoint can add a required bucket.
+                // Both bucket ranges are contiguous. Only a newer upper endpoint can
+                // add a required bucket.
                 if bounds.covering(snapshot_bucket).last() > buckets.last() {
                     continue;
                 }
@@ -209,7 +210,11 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                 // into an omitted bucket. `write` requires a document revision for
                 // every displacement, so the documents table provides this check
                 // even after the bucket is dropped.
-                if snapshot_bucket < bounds.floor {
+                //
+                // A lagging replica can expose a floor older than the cached
+                // floor used to select this page's buckets.
+                let floor = bounds.floor.max(queried_bounds.floor);
+                if snapshot_bucket < floor {
                     stats.sql_statements += 1;
                     let displaced_since_snapshot = connection
                         .query_optional(
@@ -217,7 +222,7 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                             vec![
                                 self.documents.tenant_value(self.deployment_id),
                                 Value::Int(i64::from(read_timestamp)),
-                                Value::Int(i64::from(bounds.floor.start_ts()?)),
+                                Value::Int(i64::from(floor.start_ts()?)),
                             ],
                         )
                         .await?
@@ -229,7 +234,7 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                             format!(
                                 "a later commit displaced revisions into a log bucket below the \
                                  maintenance floor {}",
-                                bounds.floor.value()
+                                floor.value()
                             ),
                         ));
                     }
