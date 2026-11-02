@@ -1,8 +1,9 @@
 //! Typed columns: one Iceberg column per top-level document field, after the
 //! metadata columns every table has. A new table's columns come from its
-//! shape ([`seeds`]); later fields come from the pages that carry them
-//! ([`new_columns`]). A value that does not fit its column goes to
-//! `_rescued`, so the shape of the data never fails a page.
+//! enforced validator ([`schema_seeds`]) or else its shape ([`seeds`]); later
+//! fields come from the pages that carry them ([`new_columns`]). A value that
+//! does not fit its column goes to `_rescued`, so the shape of the data never
+//! fails a page.
 
 use std::{
     collections::{
@@ -29,7 +30,16 @@ use arrow_iceberg::{
     ArrayRef,
     RecordBatch,
 };
-use common::shapes::reduced::ReducedShape;
+use common::{
+    schemas::{
+        validator::{
+            LiteralValidator,
+            Validator,
+        },
+        DocumentSchema,
+    },
+    shapes::reduced::ReducedShape,
+};
 pub use iceberg::transaction::AddColumn;
 use iceberg::{
     arrow::{
@@ -185,6 +195,30 @@ impl Kind {
         }
     }
 
+    /// The kind of the values `validator` accepts. `None` for null, which
+    /// decides no column, and for a union, whose members [`flatten`] yields.
+    fn of_validator(validator: &Validator) -> Option<Self> {
+        Some(match validator {
+            Validator::Null | Validator::Union(_) => return None,
+            // A function handle is a string.
+            Validator::Id(_) | Validator::String | Validator::Function(_) => Self::String,
+            Validator::Float64 => Self::Double,
+            // A committed `CommitTs` is an `Int64`.
+            Validator::Int64 | Validator::CommitTs => Self::Long,
+            Validator::Boolean => Self::Boolean,
+            Validator::Bytes => Self::Binary,
+            Validator::Literal(literal) => match literal {
+                LiteralValidator::String(_) => Self::String,
+                LiteralValidator::Float64(_) => Self::Double,
+                LiteralValidator::Int64(_) => Self::Long,
+                LiteralValidator::Boolean(_) => Self::Boolean,
+            },
+            Validator::Array(_) | Validator::Object(_) | Validator::Record(..) | Validator::Any => {
+                Self::Json
+            },
+        })
+    }
+
     /// The kinds a shape's values have. Nothing for null, never and unknown,
     /// which decide no column.
     fn of_shape(shape: &ReducedShape, kinds: &mut BTreeSet<Kind>) {
@@ -336,6 +370,57 @@ pub fn seeds(
         kinds.insert(name, field_kinds);
     }
     Ok(choose(&metadata_schema()?, kinds, &docs))
+}
+
+/// The columns a new table starts with, from its enforced validator, or `None`
+/// when the validator accepts any document. The validator covers every value
+/// the table may hold, where the shape covers only the live documents: a
+/// union field gets a JSON column before its second kind arrives, and an
+/// optional field gets a column before any document sets it.
+pub fn schema_seeds(document: &DocumentSchema) -> Result<Option<Vec<AddColumn>>> {
+    let DocumentSchema::Union(objects) = document else {
+        return Ok(None);
+    };
+    let mut members: BTreeMap<&str, Vec<&Validator>> = BTreeMap::new();
+    for object in objects {
+        for (name, field) in &object.0 {
+            let name: &str = name;
+            if accepts_name(name) {
+                flatten(&field.validator, members.entry(name).or_default());
+            }
+        }
+    }
+    let mut kinds: BTreeMap<&str, BTreeSet<Kind>> = BTreeMap::new();
+    let mut docs: BTreeMap<&str, String> = BTreeMap::new();
+    for (name, members) in members {
+        let field_kinds: BTreeSet<Kind> = members
+            .iter()
+            .filter_map(|v| Kind::of_validator(v))
+            .collect();
+        if field_kinds.is_empty() {
+            continue;
+        }
+        let mut non_null = members.iter().filter(|v| !matches!(v, Validator::Null));
+        if let Some(Validator::Id(table)) = non_null.next()
+            && non_null.all(|v| matches!(v, Validator::Id(t) if t == table))
+        {
+            docs.insert(name, format!("{ID_DOC_PREFIX}{table}"));
+        }
+        kinds.insert(name, field_kinds);
+    }
+    Ok(Some(choose(&metadata_schema()?, kinds, &docs)))
+}
+
+/// The non-union validators `validator` is a union of.
+fn flatten<'a>(validator: &'a Validator, out: &mut Vec<&'a Validator>) {
+    match validator {
+        Validator::Union(members) => {
+            for member in members {
+                flatten(member, out);
+            }
+        },
+        other => out.push(other),
+    }
 }
 
 /// The table a shape's Ids point at, when every non-null value is such an Id.
