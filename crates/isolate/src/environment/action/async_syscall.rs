@@ -81,6 +81,7 @@ impl<RT: Runtime> TaskExecutor<RT> {
                 "1.0/getDeploymentMetadata" => self.async_syscall_getDeploymentMetadata()?.into(),
                 "1.0/getRequestMetadata" => self.async_syscall_getRequestMetadata()?.into(),
                 "1.0/getUserIdentity" => self.async_syscall_getUserIdentity(args).await?.into(),
+                "1.0/getDeploymentJwks" => self.async_syscall_getDeploymentJwks()?.into(),
                 "1.0/storageDelete" => self.async_syscall_storageDelete(args).await?.into(),
                 "1.0/storageGetMetadata" => {
                     self.async_syscall_storageGetMetadata(args).await?.into()
@@ -451,6 +452,12 @@ impl<RT: Runtime> TaskExecutor<RT> {
     #[convex_macro::instrument_future]
     async fn async_syscall_getUserIdentity(&self, _args: JsonValue) -> anyhow::Result<JsonValue> {
         self.user_identity()
+    }
+
+    fn async_syscall_getDeploymentJwks(&self) -> anyhow::Result<JsonValue> {
+        Ok(serde_json::to_value(
+            self.key_broker.deployment_jwt_keys()?.jwks()?,
+        )?)
     }
 
     async fn async_syscall_storageGenerateUploadUrl(

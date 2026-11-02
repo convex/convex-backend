@@ -897,6 +897,7 @@ pub(super) async fn run_async_syscall_batch<RT: Runtime>(
                 // Auth
                 "1.0/getUserIdentity" => Box::pin(get_user_identity(provider, args)).await,
                 "1.0/signJwt" => Box::pin(sign_deployment_jwt(provider, args)).await,
+                "1.0/getDeploymentJwks" => deployment_jwks(provider),
                 // Storage
                 "1.0/storageDelete" => Box::pin(storage_delete(provider, args)).await,
                 "1.0/storageGetMetadata" => Box::pin(storage_get_metadata(provider, args)).await,
@@ -1163,11 +1164,7 @@ async fn sign_deployment_jwt<RT: Runtime>(
     let signer = tx
         .get_component_path(component)
         .context("Calling component not found")?;
-    let keys = provider
-        .key_broker
-        .deployment_jwt_keys
-        .as_ref()
-        .context("Function runner caller didn't send the deployment JWT signing key")?;
+    let keys = provider.key_broker.deployment_jwt_keys()?;
     let token = udf::deployment_jwt::mint(
         keys,
         &origin,
@@ -1176,6 +1173,17 @@ async fn sign_deployment_jwt<RT: Runtime>(
         provider.phase.unix_timestamp()?.as_system_time(),
     )?;
     Ok(serde_json::value::to_raw_value(&token)?)
+}
+
+/// The public keys that verify `ctx.auth.signJwt` tokens, the same JWKS that
+/// `/.well-known/jwks.json` serves. Unlike signing, this is allowed in
+/// queries: the keys are deployment state shared by every caller, not a fresh
+/// value like a token's `iat` and `exp`.
+fn deployment_jwks<RT: Runtime>(
+    provider: &mut DatabaseUdfSyscallProvider<RT>,
+) -> anyhow::Result<Box<RawValue>> {
+    let jwks = provider.key_broker.deployment_jwt_keys()?.jwks()?;
+    Ok(serde_json::value::to_raw_value(&jwks)?)
 }
 
 #[convex_macro::instrument_future]

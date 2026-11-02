@@ -1368,11 +1368,20 @@ pub struct FunctionRunnerKeyBroker {
     pub cursor_encryptor: DeterministicEncryptor,
     pub store_file_encryptor: RandomEncryptor,
     /// `None` only in a function runner whose caller predates the key: old
-    /// callers can run everything but `ctx.auth.signJwt`.
+    /// callers can run everything but `ctx.auth.signJwt` and
+    /// `getDeploymentJwks`.
     pub deployment_jwt_keys: Option<DeploymentJwtKeys>,
 }
 
 impl FunctionRunnerKeyBroker {
+    /// Only a funrun request from a caller older than #59526 omits
+    /// `deployment_jwt_root_key`, so a missing key is a system error.
+    pub fn deployment_jwt_keys(&self) -> anyhow::Result<&DeploymentJwtKeys> {
+        self.deployment_jwt_keys
+            .as_ref()
+            .context("Function runner caller didn't send the deployment JWT signing key")
+    }
+
     pub fn issue_store_file_authorization<RT: Runtime>(
         &self,
         rt: &RT,
