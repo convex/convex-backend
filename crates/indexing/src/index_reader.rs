@@ -96,7 +96,7 @@ impl IndexReader for PersistenceSnapshot {
                 entries.push(Arc::new(IndexEntry {
                     key,
                     ts,
-                    value: PackedDocument::pack(&value),
+                    value: PackedDocument::pack(&value).shrink(),
                 }));
                 if entries.len() >= max_results {
                     let cursor = CursorPosition::After(entries.last().unwrap().key.clone());
