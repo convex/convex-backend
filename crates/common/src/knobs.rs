@@ -2023,6 +2023,11 @@ pub static INSTANCE_LOADER_INSTANCES_PER_SECOND: LazyLock<NonZeroU32> = LazyLock
     )
 });
 
+/// Number of Porter upstreams selected per conductor and capacity of its shared
+/// connection cache. Values are clamped to at least 1 for service discovery.
+pub static NUM_PORTER_CONNECTIONS: LazyLock<usize> =
+    LazyLock::new(|| env_config("NUM_PORTER_CONNECTIONS", 2).max(1));
+
 /// The max number of storage files that can be fetched concurrently during
 /// export. Concurrency is also limited by `EXPORT_MAX_INFLIGHT_PREFETCH_BYTES`.
 pub static EXPORT_STORAGE_GET_CONCURRENCY: LazyLock<usize> =
