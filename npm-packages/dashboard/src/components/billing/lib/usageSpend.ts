@@ -5,6 +5,11 @@ import type {
 } from "generatedApi";
 import type { UsageSummaryRow } from "hooks/usageMetrics";
 
+export type PricedUsageState =
+  | { status: "loading" }
+  | { status: "error"; error: unknown }
+  | { status: "ready"; summaries: PricedUsageSummary[] };
+
 type UsageField = keyof Omit<UsageSummaryRow, "deploymentClass" | "region">;
 type Metric = {
   name: string;
@@ -163,6 +168,32 @@ export function getUsageSpend(
       metric,
       pricesPeriod.metrics[metric.name],
     );
+    if (spend === undefined) return undefined;
+    total += spend.amount;
+    for (const dimension of spend.missingDimensions) {
+      missingDimensions.add(dimension);
+    }
+  }
+  return Number.isFinite(total)
+    ? { amount: total, missingDimensions: [...missingDimensions].sort() }
+    : undefined;
+}
+
+export type PricedUsageSummary = {
+  period: PricesPeriod;
+  summary: UsageSummaryRow[];
+};
+
+export function getMultiPeriodUsageSpend(
+  pricedSummaries: PricedUsageSummary[] | undefined,
+  sectionMetric: string,
+): UsageSpend | undefined {
+  if (!pricedSummaries?.length) return undefined;
+
+  let total = 0;
+  const missingDimensions = new Set<string>();
+  for (const { period, summary } of pricedSummaries) {
+    const spend = getUsageSpend(summary, sectionMetric, period);
     if (spend === undefined) return undefined;
     total += spend.amount;
     for (const dimension of spend.missingDimensions) {

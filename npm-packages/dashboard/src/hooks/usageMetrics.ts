@@ -1,6 +1,8 @@
 import { DatabricksQueryId, DateRange, useUsageQuery } from "api/usage";
 import { DeploymentType } from "generatedApi";
 
+export const USAGE_SUMMARY_QUERY_ID = "b63fe48d-320c-401a-8682-0a0b36b50e2b";
+
 const QUERY_IDS_: {
   summary: DatabricksQueryId;
   backupStorageEstimate: DatabricksQueryId;
@@ -9,7 +11,7 @@ const QUERY_IDS_: {
   deploymentCountByType: DatabricksQueryId;
   deploymentCountByStatus: DatabricksQueryId;
 } = {
-  summary: "b63fe48d-320c-401a-8682-0a0b36b50e2b",
+  summary: USAGE_SUMMARY_QUERY_ID,
   backupStorageEstimate: "b58b3969-d916-460a-a7b6-210af082b24a",
   functionBreakdown: "76c86baa-418e-4d7f-ac21-46f397030595",
   deploymentsByClassAndRegion: "dfc73057-1948-4b99-a3bf-9ae802a395ee",
@@ -186,50 +188,51 @@ export function useUsageTeamSummary(
     return { data: undefined, error: undefined };
   }
 
-  return {
-    data: data.map(
-      ([
-        _teamId,
+  return { data: parseUsageSummary(data), error: undefined };
+}
+
+export function parseUsageSummary(data: string[][]): UsageSummaryRow[] {
+  return data.map(
+    ([
+      _teamId,
+      deploymentClass,
+      region,
+      databaseStorage,
+      databaseIO,
+      functionCalls,
+      queryMutationCompute,
+      actionComputeConvex,
+      actionComputeNode,
+      fileStorage,
+      searchStorage,
+      dataEgress,
+      searchQueries,
+      actionComputeUser,
+      deploymentCount,
+      pausedDeploymentCount,
+      idleDeploymentCount,
+      auditLogBandwidth,
+    ]) =>
+      ({
         deploymentClass,
         region,
-        databaseStorage,
-        databaseIO,
-        functionCalls,
-        queryMutationCompute,
-        actionComputeConvex,
-        actionComputeNode,
-        fileStorage,
-        searchStorage,
-        dataEgress,
-        searchQueries,
-        actionComputeUser,
-        deploymentCount,
-        pausedDeploymentCount,
-        idleDeploymentCount,
-        auditLogBandwidth,
-      ]) =>
-        ({
-          deploymentClass,
-          region,
-          databaseStorage: Number(databaseStorage),
-          databaseIO: Number(databaseIO),
-          functionCalls: Number(functionCalls),
-          queryMutationCompute: Number(queryMutationCompute) / 60 / 60,
-          actionComputeConvex: Number(actionComputeConvex) / 60 / 60,
-          actionComputeNode: Number(actionComputeNode) / 60 / 60,
-          fileStorage: Number(fileStorage),
-          searchStorage: Number(searchStorage),
-          dataEgress: Number(dataEgress),
-          searchQueries: Number(searchQueries),
-          actionComputeUser: Number(actionComputeUser) / 60 / 60,
-          deploymentCount: Number(deploymentCount),
-          pausedDeploymentCount: Number(pausedDeploymentCount),
-          idleDeploymentCount: Number(idleDeploymentCount),
-          auditLogBandwidth: Number(auditLogBandwidth),
-        }) satisfies UsageSummaryRow,
-    ),
-    error: undefined,
-  };
+        databaseStorage: Number(databaseStorage),
+        databaseIO: Number(databaseIO),
+        functionCalls: Number(functionCalls),
+        queryMutationCompute: Number(queryMutationCompute) / 60 / 60,
+        actionComputeConvex: Number(actionComputeConvex) / 60 / 60,
+        actionComputeNode: Number(actionComputeNode) / 60 / 60,
+        fileStorage: Number(fileStorage),
+        searchStorage: Number(searchStorage),
+        dataEgress: Number(dataEgress),
+        searchQueries: Number(searchQueries),
+        actionComputeUser: Number(actionComputeUser) / 60 / 60,
+        deploymentCount: Number(deploymentCount),
+        pausedDeploymentCount: Number(pausedDeploymentCount),
+        idleDeploymentCount: Number(idleDeploymentCount),
+        auditLogBandwidth: Number(auditLogBandwidth),
+      }) satisfies UsageSummaryRow,
+  );
 }
 
 export function useBackupStorageSummary(

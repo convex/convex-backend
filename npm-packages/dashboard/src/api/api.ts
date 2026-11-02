@@ -16,7 +16,11 @@ import { fireGoogleAnalyticsEvent } from "elements/GoogleAnalytics";
 import { toast } from "@common/lib/utils";
 import type { paths as BigBrainPaths } from "generatedApi";
 import type { paths as ManagementApiPaths } from "@convex-dev/platform/managementApi";
-import { SWRConfiguration, SWRResponse, mutate as globalMutate } from "swr";
+import useSWR, {
+  SWRConfiguration,
+  SWRResponse,
+  mutate as globalMutate,
+} from "swr";
 import { useAccessToken } from "hooks/useServerSideData";
 import { useRouter } from "next/router";
 import { useCallback, useEffect } from "react";
@@ -271,6 +275,62 @@ export function useBBQuery<QueryPath extends Path<"get">>({
     use: [createHeaderInjectionMiddleware(headers), ...(swrOptions?.use || [])],
   });
 
+  handleQueryError(res, path);
+  return res;
+}
+
+export function useBBQueries<QueryPath extends Path<"get">>({
+  path,
+  requests,
+  swrOptions,
+}: {
+  path: QueryPath;
+  requests: {
+    pathParams: BigBrainPaths[QueryPath]["get"]["parameters"]["path"];
+    queryParams?: BigBrainPaths[QueryPath]["get"]["parameters"]["query"];
+  }[];
+  swrOptions?: Omit<SWRConfiguration, "onError" | "keepPreviousData">;
+}): SWRResponse<
+  TypesForGetRequest<BigBrainPaths, QueryPath>["Data"][],
+  TypesForGetRequest<BigBrainPaths, QueryPath>["Error"]
+> {
+  const router = useRouter();
+  const [ssoLoginRequired, setSSOLoginRequired] = useSSOLoginRequired();
+  const { headers, accessToken } = useApiHeaders();
+  const paused =
+    !accessToken ||
+    requests.some(
+      ({ pathParams }) =>
+        pathParams && Object.values(pathParams).some((p) => !p),
+    );
+  const res = useSWR<
+    TypesForGetRequest<BigBrainPaths, QueryPath>["Data"][],
+    TypesForGetRequest<BigBrainPaths, QueryPath>["Error"]
+  >(
+    // A null key hides cached batch data while authentication or parameters are missing.
+    paused ? null : ["big-brain-queries", path, requests],
+    async () =>
+      Promise.all(
+        requests.map(async ({ pathParams, queryParams }) => {
+          // @ts-expect-error OpenAPI cannot resolve the generic init tuple; parameters are checked at the hook boundary.
+          const { data, error, response } = await client.GET(path, {
+            headers,
+            params: { path: pathParams, query: queryParams },
+          });
+          if (!response.ok) throw error;
+          return data!;
+        }),
+      ),
+    {
+      ...swrOptions,
+      keepPreviousData: false,
+      onError: (e) => {
+        if ((e as any).code === "SSORequired" && !ssoLoginRequired) {
+          setSSOLoginRequired(router.query.team as string);
+        }
+      },
+    },
+  );
   handleQueryError(res, path);
   return res;
 }

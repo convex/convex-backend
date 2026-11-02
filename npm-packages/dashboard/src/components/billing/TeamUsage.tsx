@@ -1,4 +1,6 @@
 import { BusinessPlanSummary } from "components/billing/PlanSummary";
+import { useUsageByPricingPeriod } from "hooks/useUsageByPricingPeriod";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { Sheet } from "@ui/Sheet";
 import { Spinner } from "@ui/Spinner";
 import { Button } from "@ui/Button";
@@ -201,21 +203,28 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
         } as const)
       : selectedBillingPeriod;
 
-  const dateRange =
-    shownBillingPeriod !== null &&
-    shownBillingPeriod.type !== "currentBillingPeriod"
-      ? { from: shownBillingPeriod.from, to: shownBillingPeriod.to }
-      : null;
-
-  const { subscription } = useTeamOrbSubscription(team?.id);
-  const prices = useTeamPrices(team.id);
-  const pricing = getUsagePricing(prices, shownBillingPeriod);
-
-  const isBusinessPlanType = subscription?.plan.planType === "CONVEX_BUSINESS";
-
   const billingPeriodRange = shownBillingPeriod
     ? { from: shownBillingPeriod.from, to: shownBillingPeriod.to }
     : null;
+  const dateRange =
+    shownBillingPeriod?.type !== "currentBillingPeriod"
+      ? billingPeriodRange
+      : null;
+
+  const { subscription } = useTeamOrbSubscription(team?.id);
+
+  const isBusinessPlanType = subscription?.plan.planType === "CONVEX_BUSINESS";
+
+  const prices = useTeamPrices(team.id, billingPeriodRange);
+  const pricing = getUsagePricing(prices, billingPeriodRange);
+  const spendApplicable =
+    !query.projectSlug && projectId === null && !componentPrefix;
+  const { dashboardShowCashUsage } = useLaunchDarkly();
+  const pricedUsage = useUsageByPricingPeriod({
+    teamId: team.id,
+    pricing,
+    enabled: dashboardShowCashUsage && spendApplicable,
+  });
 
   const { data: aiGatewayCostByDay, error: aiGatewayCostError } =
     useAiGatewayCostPerDayByProject(
@@ -325,9 +334,8 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
                   summary={summary}
                   error={summaryError}
                   pricing={pricing}
-                  spendApplicable={
-                    !query.projectSlug && projectId === null && !componentPrefix
-                  }
+                  pricedUsage={pricedUsage}
+                  spendApplicable={spendApplicable}
                   aiGatewayCost={aiGatewayCost}
                   aiGatewayCostError={aiGatewayCostError}
                   isBusinessPlan={isBusinessPlanType}

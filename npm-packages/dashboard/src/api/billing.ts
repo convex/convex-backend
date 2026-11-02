@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import type { DateRange } from "./usage";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import type { CreditResponse, InvoiceResponse } from "generatedApi";
 import { BILLING_RESOURCE, Permissioned } from "lib/permissions";
@@ -25,7 +26,7 @@ export function useTeamOrbSubscription(teamId?: number) {
   return { isLoading, subscription, hasError: false };
 }
 
-export function useTeamPrices(teamId: number) {
+export function useTeamPrices(teamId: number, range: DateRange | null) {
   const { dashboardShowCashUsage } = useLaunchDarkly();
   const canView = useHasCustomRolePermission(
     teamId,
@@ -37,8 +38,11 @@ export function useTeamPrices(teamId: number) {
     path: "/teams/{team_id}/get_prices",
     pathParams: {
       team_id:
-        dashboardShowCashUsage && canView === true ? teamId.toString() : "",
+        dashboardShowCashUsage && canView === true && range !== null
+          ? teamId.toString()
+          : "",
     },
+    queryParams: range ?? undefined,
     swrOptions: { keepPreviousData: false },
   });
   return { ...result, canView };

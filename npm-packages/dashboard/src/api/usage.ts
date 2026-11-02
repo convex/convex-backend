@@ -39,17 +39,7 @@ export type DatabricksQueryId = string;
 
 export const rootComponentPath = "-root-component-";
 
-export function useUsageQuery({
-  queryId,
-  teamId,
-  projectId,
-  deploymentName,
-  period,
-  componentPrefix,
-  functionId,
-  tableName,
-  skip,
-}: {
+type UsageQueryArgs = {
   queryId: DatabricksQueryId;
   teamId: number;
   projectId: number | null;
@@ -59,35 +49,51 @@ export function useUsageQuery({
   componentPrefix: string | null;
   deploymentName?: string;
   skip?: boolean;
-}) {
+};
+
+function usageQueryParams({
+  queryId,
+  projectId,
+  deploymentName,
+  period,
+  componentPrefix,
+  functionId,
+  tableName,
+}: UsageQueryArgs) {
+  return {
+    queryId,
+    projectId: projectId ?? undefined,
+    ...(deploymentName ? { deploymentName } : {}),
+    ...(functionId ? { udfId: functionId } : {}),
+    ...(tableName ? { tableName } : {}),
+    ...(period ? { from: period.from, to: period.to } : {}),
+    ...(componentPrefix
+      ? {
+          componentPath:
+            componentPrefix === "app" ? rootComponentPath : componentPrefix,
+        }
+      : {}),
+  };
+}
+
+function normalizeUsageData(data: (string | null)[][]): string[][] {
+  return data.map((row) => row.map((cell) => cell ?? ""));
+}
+
+export function useUsageQuery(args: UsageQueryArgs) {
   const result = useBBQuery({
     path: "/teams/{team_id}/usage/query",
-    pathParams: { team_id: teamId.toString() },
-    queryParams: {
-      queryId,
-      projectId: projectId ?? undefined,
-      ...(deploymentName ? { deploymentName } : {}),
-      ...(functionId ? { udfId: functionId } : {}),
-      ...(tableName ? { tableName } : {}),
-      ...(period ? { from: period.from, to: period.to } : {}),
-      ...(componentPrefix
-        ? {
-            componentPath:
-              componentPrefix === "app" ? rootComponentPath : componentPrefix,
-          }
-        : {}),
-    },
+    pathParams: { team_id: args.teamId.toString() },
+    queryParams: usageQueryParams(args),
     swrOptions: {
       keepPreviousData: false,
       refreshInterval: USAGE_REFRESH_INTERVAL_MS,
-      isPaused: () => skip ?? false,
+      isPaused: () => args.skip ?? false,
     },
   });
   return {
     ...result,
-    data: result.data?.map((row) => row.map((cell) => cell ?? "")) as
-      | string[][]
-      | undefined,
+    data: result.data && normalizeUsageData(result.data),
   };
 }
 
