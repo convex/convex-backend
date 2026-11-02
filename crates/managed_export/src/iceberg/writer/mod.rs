@@ -550,7 +550,6 @@ fn source_of(table: &Table, format: Format) -> Result<SourceTable> {
             table.identifier()
         )
     })?;
-    // An unknown encoding is a format a newer Porter writes.
     ensure!(
         encoding == format.to_string(),
         "Glue table {} is in the {encoding} format, but this export writes {format}",

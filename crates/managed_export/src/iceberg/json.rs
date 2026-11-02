@@ -35,7 +35,6 @@ pub(crate) fn change_log_schema() -> Result<Schema> {
         .build()?)
 }
 
-/// `changes` as one Arrow batch with the change log columns.
 pub(crate) fn batch(changes: &[Change]) -> Result<RecordBatch> {
     let payloads = changes
         .iter()
