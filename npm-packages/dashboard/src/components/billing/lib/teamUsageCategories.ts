@@ -142,6 +142,7 @@ const DEPLOYMENT_CLASS_COLORS: Record<string, string> = {
   s256: "fill-chart-line-2",
   d1024: "fill-chart-line-3",
   d2048: "fill-chart-line-4",
+  p256: "fill-chart-line-5",
 };
 
 export const DEPLOYMENT_CLASS_CATEGORIES: Record<

@@ -3299,7 +3299,8 @@
           "s16",
           "s256",
           "d1024",
-          "d2048"
+          "d2048",
+          "p256"
         ]
       },
       "DeploymentClassMetadata": {

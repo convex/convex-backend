@@ -92,9 +92,10 @@ export type DeploymentMetadata = {
    */
   region: string | null;
   /**
-   * The deployment class, e.g. `"s16"`, `"s256"`, `"d1024"`, or `"d2048"`.
+   * The deployment class, e.g. `"s16"`, `"s256"`, `"d1024"`, `"d2048"`, or
+   * `"p256"`.
    */
-  class: "s16" | "s256" | "d1024" | "d2048";
+  class: "s16" | "s256" | "d1024" | "d2048" | "p256";
 };
 
 /**
