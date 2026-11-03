@@ -82,6 +82,37 @@ async function startInitialRefetch(client: BaseConvexClient) {
 }
 
 describe("Convex initial auth refetch socket ownership", () => {
+  test.each([null, "obsolete-token"])(
+    "a synchronous replacement inside a refetch returning %s keeps the query queue paused",
+    async (obsoleteToken) => {
+      const fixture = setup();
+      const replacement = deferred<string | null>();
+      const oldOnAuthChange = vi.fn();
+      const newOnAuthChange = vi.fn();
+      fixture.client.setAuth(async ({ forceRefreshToken }) => {
+        if (!forceRefreshToken) return null;
+        fixture.client.setAuth(() => replacement.promise, newOnAuthChange);
+        return obsoleteToken;
+      }, oldOnAuthChange);
+      await setImmediate();
+      try {
+        expect(fixture.messages).toEqual([]);
+        expect(fixture.client.hasAuth()).toBe(false);
+        expect(oldOnAuthChange).not.toHaveBeenCalled();
+        expect(newOnAuthChange).not.toHaveBeenCalled();
+      } finally {
+        replacement.resolve("replacement-token");
+        await setImmediate();
+      }
+      expect(
+        fixture.messages.find((m) => m.type === "Authenticate"),
+      ).toMatchObject({
+        tokenType: "User",
+        value: "replacement-token",
+      });
+    },
+  );
+
   test("the current initial refetch sends authentication before the queued query", async () => {
     const fixture = setup();
     const current = await startInitialRefetch(fixture.client);

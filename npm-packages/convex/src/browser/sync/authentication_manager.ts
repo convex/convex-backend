@@ -182,10 +182,10 @@ export class AuthenticationManager {
         config,
       });
       // Try again with `forceRefreshToken: true`
+      // The guarded refetch increments the generation before invoking user
+      // code. Capture that generation before a fetcher can replace this config.
+      const refetchConfigVersion = this.configVersion + 1;
       const refetch = this.refetchToken();
-      // refetchToken starts its guarded fetch synchronously. A replacement
-      // config or stop may take ownership of the socket while it is pending.
-      const refetchConfigVersion = this.configVersion;
       await refetch;
       if (this.configVersion !== refetchConfigVersion) {
         return;
