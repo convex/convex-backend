@@ -44,7 +44,7 @@ export function UsagePeriodSelector({
   const lastBillingPeriodStart = startOfDayUTC(
     monthBefore(currentBillingPeriod.start),
   );
-  const lastBillingPeriodEnd = startOfDayUTC(currentBillingPeriod.start);
+  const lastBillingPeriodEnd = subDays(currentBillingPeriodStart, 1);
 
   const today = startOfDayUTC(toDateInputValue(new Date()));
   const weekAgo = startOfDayUTC(toDateInputValue(subDays(today, 7)));
@@ -103,7 +103,7 @@ export function UsagePeriodSelector({
                 ? {
                     type: "presetPeriod",
                     from: monthBefore(currentBillingPeriod.start),
-                    to: currentBillingPeriod.start,
+                    to: toDateInputValue(lastBillingPeriodEnd),
                   }
                 : {
                     type: "customPeriod",
