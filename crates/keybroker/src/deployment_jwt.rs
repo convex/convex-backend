@@ -50,6 +50,7 @@ use common::{
 };
 use errors::ErrorMetadata;
 use parking_lot::Mutex;
+use rand::Rng;
 use serde_json::{
     Map as JsonMap,
     Value as JsonValue,
@@ -92,6 +93,8 @@ const DEPLOYMENT_JWT_MAX_SIZE: usize = 8000;
 /// claim names starting with `convex` or `cvx` are reserved for the framework.
 /// Both get enforced at runtime and user-facing APIs should discourage/prevent
 /// them from being passed in. `claims` must also contain `aud`.
+///
+/// Convex also sets a random `jti` unless `claims` contains one.
 pub struct DeploymentJwtRequest {
     pub origin: String,
     pub signer: ComponentPath,
@@ -230,7 +233,8 @@ impl DeploymentJwtKey {
 
     /// Return a signed JWT based on the given `request`.
     ///
-    /// This function will populate the `iss`, `iat` and `exp` claims.
+    /// This function will populate the `iss`, `iat` and `exp` claims, and a
+    /// random `jti` if the request doesn't set one.
     ///
     /// The `iss` in particular allows verifying code to know that code at a
     /// certain component path generated the JWT. That value can't be passed
@@ -270,6 +274,22 @@ impl DeploymentJwtKey {
             anyhow::bail!(invalid_request(
                 "The 'sub' claim must be a non-empty string"
             ));
+        }
+
+        // A `jti` lets verifiers detect replays (RFC 7519 §4.1.7), so every token
+        // has one. Callers may pick their own, e.g. to correlate tokens in logs.
+        match claims.get("jti") {
+            None => {
+                let jti: [u8; 16] = rand::rng().random();
+                claims.insert(
+                    "jti".to_string(),
+                    base64::encode_config(jti, base64::URL_SAFE_NO_PAD).into(),
+                );
+            },
+            Some(jti) if jti.as_str().is_some_and(|jti| !jti.is_empty()) => {},
+            Some(_) => anyhow::bail!(invalid_request(
+                "The 'jti' claim must be a non-empty string"
+            )),
         }
 
         // The `nbf` claim is a timestamp related to `iat` and `exp` which we set
