@@ -91,7 +91,7 @@ const DEPLOYMENT_JWT_MAX_SIZE: usize = 8000;
 /// Convex sets `iss`, `iat` and `exp`, so `claims` must not contain them, and
 /// claim names starting with `convex` or `cvx` are reserved for the framework.
 /// Both get enforced at runtime and user-facing APIs should discourage/prevent
-/// them from being passed in.
+/// them from being passed in. `claims` must also contain `aud`.
 pub struct DeploymentJwtRequest {
     pub origin: String,
     pub signer: ComponentPath,
@@ -280,6 +280,7 @@ impl DeploymentJwtKey {
                 "The 'nbf' claim is reserved by Convex and can't be provided"
             ));
         }
+        validate_audience(claims.get("aud"))?;
         if expires_in.is_zero() || expires_in > *DEPLOYMENT_JWT_MAX_LIFETIME {
             anyhow::bail!(invalid_request(format!(
                 "expiresInSeconds must be between 1 second and {} seconds",
@@ -319,6 +320,23 @@ impl DeploymentJwtKey {
             )));
         }
         Ok(token)
+    }
+}
+
+/// Every token is signed with the same key, so `aud` is what keeps a token
+/// signed for one purpose from being accepted for another, e.g. by a
+/// `customJwt` provider that checks `applicationID`.
+fn validate_audience(aud: Option<&JsonValue>) -> anyhow::Result<()> {
+    let is_audience = |aud: &JsonValue| aud.as_str().is_some_and(|aud| !aud.is_empty());
+    match aud {
+        Some(JsonValue::Array(auds)) if !auds.is_empty() && auds.iter().all(is_audience) => Ok(()),
+        Some(aud) if is_audience(aud) => Ok(()),
+        Some(_) => anyhow::bail!(invalid_request(
+            "The 'aud' claim must be a non-empty string or a non-empty array of non-empty strings"
+        )),
+        None => anyhow::bail!(invalid_request(
+            "The 'aud' claim is required. Set it to the audience that verifies the token."
+        )),
     }
 }
 
