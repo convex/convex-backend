@@ -12,6 +12,7 @@ import * as Yup from "yup";
 import { SLUG_CHARSET } from "lib/slugs";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { useHasCustomRole } from "hooks/useDeploymentPermissions";
+import { useProjectTagSuggestions } from "hooks/useProjectTagSuggestions";
 import { ProjectTagsInput } from "./ProjectTagsInput";
 
 const TeamSchema = Yup.object().shape({
@@ -42,6 +43,9 @@ export function ProjectForm({
 }) {
   const updateProject = useUpdateProject(project.id);
   const { tagEditUi } = useLaunchDarkly();
+  const tagSuggestions = useProjectTagSuggestions(
+    tagEditUi && hasAdminPermissions ? team.id : undefined,
+  );
   const formState = useFormik({
     initialValues: {
       name: project.name,
@@ -116,6 +120,7 @@ export function ProjectForm({
                     onChange={(tags) =>
                       void formState.setFieldValue("tags", tags)
                     }
+                    suggestions={tagSuggestions}
                     disabled={!hasAdminPermissions}
                   />
                 </Tooltip>

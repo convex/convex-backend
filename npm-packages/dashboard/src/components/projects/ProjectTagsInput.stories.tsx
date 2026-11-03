@@ -36,6 +36,26 @@ export const Typing: Story = {
   },
 };
 
+export const Suggestions: Story = {
+  args: {
+    suggestions: ["backend", "billing", "frontend", "internal", "production"],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("combobox"));
+  },
+};
+
+export const SuggestionsWhileTyping: Story = {
+  args: {
+    suggestions: ["backend", "billing", "frontend", "internal", "production"],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.type(canvas.getByRole("combobox"), "bi");
+  },
+};
+
 export const InvalidTag: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);

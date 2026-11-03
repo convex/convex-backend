@@ -14,6 +14,7 @@ import { cn } from "@ui/cn";
 import { usePostHog } from "hooks/usePostHog";
 import { ProjectTagsInput } from "components/projects/ProjectTagsInput";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+import { useProjectTagSuggestions } from "hooks/useProjectTagSuggestions";
 
 export const useCreateProjectModalRequest = createGlobalState<{
   team?: TeamResponse;
@@ -81,6 +82,9 @@ export function CreateProjectForm({
   onSuccess: (project: PlatformCreateProjectResponse) => void;
 }) {
   const createProject = useCreateProject(team.id);
+  const tagSuggestions = useProjectTagSuggestions(
+    showTags ? team.id : undefined,
+  );
   const { capture } = usePostHog();
   const formState = useFormik({
     initialValues: {
@@ -127,6 +131,7 @@ export function CreateProjectForm({
         <ProjectTagsInput
           tags={formState.values.tags}
           onChange={(tags) => void formState.setFieldValue("tags", tags)}
+          suggestions={tagSuggestions}
           description="Optionally, add tags to organize this project."
         />
       )}

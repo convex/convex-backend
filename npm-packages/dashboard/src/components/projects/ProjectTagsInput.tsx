@@ -8,16 +8,17 @@ import {
 import { cn } from "@ui/cn";
 import { ReactNode, useRef, useState } from "react";
 import { Chip } from "@ui/Chip";
-import { validateProjectTag } from "./projectTags";
+import { MAX_PROJECT_TAGS, validateProjectTag } from "./projectTags";
 
 /**
  * A list of project tags, each a removable pill, plus a text input that adds
  * the typed text as a tag once it passes the rules Big Brain checks tags
- * against.
+ * against, or offers matching `suggestions` to pick from.
  */
 export function ProjectTagsInput({
   tags,
   onChange,
+  suggestions = [],
   label = "Tags",
   labelHidden = false,
   placeholder = "Add tags",
@@ -26,6 +27,8 @@ export function ProjectTagsInput({
 }: {
   tags: string[];
   onChange: (tags: string[]) => void;
+  /** Tags already in use, e.g. on the team's other projects. */
+  suggestions?: string[];
   label?: string;
   labelHidden?: boolean;
   placeholder?: string;
@@ -36,11 +39,34 @@ export function ProjectTagsInput({
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const trimmedQuery = query.trim();
+  const lowerQuery = trimmedQuery.toLowerCase();
 
   const error =
     trimmedQuery === "" ? undefined : validateProjectTag(trimmedQuery, tags);
-  const newTag =
-    trimmedQuery !== "" && error === undefined ? trimmedQuery : undefined;
+  // Big Brain compares tags case-insensitively, so a suggestion that differs
+  // from an added tag or the query only in case is the same tag.
+  const lowerTags = new Set(tags.map((tag) => tag.toLowerCase()));
+  const matchingSuggestions =
+    tags.length >= MAX_PROJECT_TAGS
+      ? []
+      : suggestions.filter(
+          (suggestion) =>
+            !lowerTags.has(suggestion.toLowerCase()) &&
+            suggestion.toLowerCase().includes(lowerQuery),
+        );
+  const exactSuggestion =
+    trimmedQuery === ""
+      ? undefined
+      : matchingSuggestions.find(
+          (suggestion) => suggestion.toLowerCase() === lowerQuery,
+        );
+  // The tag Enter or blur adds: an existing tag keeps its spelling, so the
+  // query "Prod" reuses the team's "prod".
+  const typedTag =
+    trimmedQuery !== "" && error === undefined
+      ? (exactSuggestion ?? trimmedQuery)
+      : undefined;
+  const newTag = exactSuggestion === undefined ? typedTag : undefined;
 
   const setTags = (newTags: string[]) => {
     onChange(newTags);
@@ -114,8 +140,8 @@ export function ProjectTagsInput({
                   event.preventDefault();
                   if (trimmedQuery === "") {
                     event.currentTarget.form?.requestSubmit();
-                  } else if (newTag !== undefined) {
-                    setTags([...tags, newTag]);
+                  } else if (typedTag !== undefined) {
+                    setTags([...tags, typedTag]);
                   }
                 }
                 if (
@@ -129,8 +155,8 @@ export function ProjectTagsInput({
               onBlur={() => {
                 // Keep a typed tag the user didn't confirm with Enter, so
                 // clicking Save right after typing doesn't drop it.
-                if (newTag !== undefined) {
-                  setTags([...tags, newTag]);
+                if (typedTag !== undefined) {
+                  setTags([...tags, typedTag]);
                 }
               }}
               placeholder={tags.length === 0 ? placeholder : undefined}
@@ -144,6 +170,15 @@ export function ProjectTagsInput({
             modal={false}
             className="z-50 max-h-60 min-w-48 overflow-auto rounded-md border bg-background-secondary py-1 text-xs shadow-sm empty:invisible focus:outline-hidden"
           >
+            {matchingSuggestions.map((suggestion) => (
+              <ComboboxOption
+                key={suggestion}
+                value={suggestion}
+                className="cursor-pointer px-2 py-1.5 text-content-primary select-none data-focus:bg-background-tertiary"
+              >
+                {suggestion}
+              </ComboboxOption>
+            ))}
             {newTag !== undefined && (
               <ComboboxOption
                 value={newTag}
