@@ -471,14 +471,10 @@ export function BusinessPlanSummary({
                 : undefined;
 
             return (
-              <Button
+              <div
                 key={index}
-                variant="unstyled"
-                onClick={() => {
-                  void router.push(linkHref, undefined, { shallow: true });
-                }}
                 className={cn(
-                  "group grid min-h-10 items-center gap-2 rounded-sm px-4 py-2 text-left transition-colors hover:bg-background-primary focus-visible:bg-background-primary focus-visible:outline-2 focus-visible:outline-border-selected",
+                  "group grid min-h-10 items-center gap-2 rounded-sm px-4 py-2 text-left transition-colors focus-within:bg-background-primary hover:bg-background-primary",
                   gridColumns,
                 )}
               >
@@ -486,9 +482,10 @@ export function BusinessPlanSummary({
                   {showEntitlements &&
                     (entitlement !== undefined ? (
                       <Tooltip
+                        aria-label={`${section.title} included usage`}
                         side="bottom"
                         tip={`Your team has used ${(100 * (displayedUsage / entitlement)).toFixed(2)}% of the included amount of ${section.title}.`}
-                        className="flex animate-fadeInFromLoading items-center"
+                        className="flex animate-fadeInFromLoading items-center rounded-sm focus-visible:ring-2 focus-visible:ring-border-selected"
                       >
                         <Donut current={displayedUsage} max={entitlement} />
                       </Tooltip>
@@ -497,9 +494,7 @@ export function BusinessPlanSummary({
                       // the gauged ones.
                       <div className="hidden size-6 sm:block" />
                     ))}
-                  <SectionLabel detail={section.detail}>
-                    {section.title}
-                  </SectionLabel>
+                  <SectionLabel title={section.title} detail={section.detail} />
                 </div>
                 <div className="animate-fadeInFromLoading">
                   {hasSubscription && section.allOnDemand ? (
@@ -592,13 +587,20 @@ export function BusinessPlanSummary({
                     )}
                   </div>
                 )}
-                <span className="flex items-center gap-1 text-xs text-content-secondary">
-                  <span className="hidden whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 sm:inline">
+                <Button
+                  variant="unstyled"
+                  aria-label={`View ${section.title} breakdown by day`}
+                  onClick={() => {
+                    void router.push(linkHref, undefined, { shallow: true });
+                  }}
+                  className="flex items-center gap-1 rounded-sm text-xs text-content-secondary hover:text-content-primary focus-visible:outline-2 focus-visible:outline-border-selected"
+                >
+                  <span className="hidden whitespace-nowrap opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 sm:inline">
                     View breakdown by day
                   </span>
                   <ChevronRightIcon className="size-4" />
-                </span>
-              </Button>
+                </Button>
+              </div>
             );
           })
         )}
@@ -676,16 +678,21 @@ function PlanSummaryLoading() {
 
 function SectionLabel({
   detail,
-  children,
+  title,
 }: {
   detail?: ReactNode;
-  children: ReactNode;
+  title: string;
 }) {
   return (
     <p className="flex animate-fadeInFromLoading items-center text-sm">
-      {children}
+      {title}
       {detail !== null && detail !== undefined ? (
-        <Tooltip tip={detail} side="right" className="hidden sm:block">
+        <Tooltip
+          aria-label={`${title} details`}
+          tip={detail}
+          side="right"
+          className="hidden rounded-sm focus-visible:ring-2 focus-visible:ring-border-selected sm:block"
+        >
           <QuestionMarkCircledIcon className="ml-1" />
         </Tooltip>
       ) : null}
