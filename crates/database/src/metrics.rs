@@ -8,6 +8,7 @@ use ::search::metrics::{
     SEARCH_TYPE_LABEL,
 };
 use common::{
+    document::CreationTime,
     identity::IDENTITY_LABEL,
     persistence::PersistenceIndexEntry,
     runtime::Runtime,
@@ -492,6 +493,12 @@ register_convex_counter!(
     &["operation", "is_system_index", "mode"]
 );
 register_convex_counter!(
+    DATABASE_COMMIT_DOCUMENTS_DELETED_TOTAL,
+    "Documents deleted in commits acknowledged by persistence, by how long they had existed: from \
+     their `_creationTime` to the deleting commit. `lifetime` is the upper bound of its bucket.",
+    &["is_system_table", "lifetime"]
+);
+register_convex_counter!(
     DATABASE_COMMIT_INDEX_SUPERSEDED_TOTAL,
     "Index entries in commits acknowledged by persistence that replaced an entry, by how long the \
      replaced entry had been current. `age` is the upper bound of its bucket.",
@@ -518,9 +525,10 @@ impl From<&PersistenceIndexEntry> for IndexWriteOperation {
     }
 }
 
-/// How long a replaced index entry had been current, named by each bucket's
-/// upper bound. Fixed buckets keep the counter to a few series per conductor
-/// across ages that range from milliseconds to months.
+/// How long a replaced index entry had been current, or a deleted document had
+/// existed, named by each bucket's upper bound. Fixed buckets keep each counter
+/// to a few series per conductor across ages that range from milliseconds to
+/// months.
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
 enum SupersededAge {
     #[strum(serialize = "100ms")]
@@ -621,6 +629,41 @@ impl CommitIndexWriteMetrics {
                     StaticMetricLabel::new("operation", <&'static str>::from(operation)),
                     StaticMetricLabel::new("is_system_index", is_system_index.as_label()),
                     StaticMetricLabel::new("age", <&'static str>::from(age)),
+                ],
+            );
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct CommitDocumentDeleteMetrics {
+    /// Deleted documents by whether their table is a system table and how long
+    /// they had existed.
+    deleted: BTreeMap<(bool, SupersededAge), u64>,
+}
+
+impl CommitDocumentDeleteMetrics {
+    pub(crate) fn record(
+        &mut self,
+        created: CreationTime,
+        deleted_at: Timestamp,
+        is_system_table: bool,
+    ) {
+        let lifetime_ms = u64::from(deleted_at) as f64 / 1e6 - f64::from(created);
+        *self
+            .deleted
+            .entry((is_system_table, SupersededAge::of(lifetime_ms / 1e3)))
+            .or_default() += 1;
+    }
+
+    pub(crate) fn log(self) {
+        for ((is_system_table, lifetime), documents) in self.deleted {
+            log_counter_with_labels(
+                &DATABASE_COMMIT_DOCUMENTS_DELETED_TOTAL,
+                documents,
+                vec![
+                    StaticMetricLabel::new("is_system_table", is_system_table.as_label()),
+                    StaticMetricLabel::new("lifetime", <&'static str>::from(lifetime)),
                 ],
             );
         }

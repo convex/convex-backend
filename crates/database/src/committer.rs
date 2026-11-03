@@ -26,6 +26,7 @@ use common::{
         ComponentPath,
     },
     document::{
+        CreationTime,
         DocumentUpdateWithPrevTs,
         ParseDocument,
         ParsedDocument,
@@ -1021,6 +1022,13 @@ impl<RT: Runtime> Committer<RT> {
                 vector_index_write_size,
                 text_index_write_size,
                 prev_ts: document_update.old_document.as_ref().map(|&(_, ts)| ts),
+                deleted_creation_time: match (
+                    &document_update.old_document,
+                    &document_update.new_document,
+                ) {
+                    (Some((old_document, _)), None) => Some(old_document.creation_time()),
+                    _ => None,
+                },
             });
         }
         timer.finish();
@@ -1086,9 +1094,16 @@ impl<RT: Runtime> Committer<RT> {
         );
 
         let mut write_bytes: u64 = 0;
+        let mut document_delete_metrics = metrics::CommitDocumentDeleteMetrics::default();
         let document_writes = document_writes
             .into_iter()
             .map(|write| {
+                if let Some(created) = write.deleted_creation_time {
+                    let is_system_table = table_mapping
+                        .tablet_name(write.id.table())
+                        .is_ok_and(|name| name.is_system());
+                    document_delete_metrics.record(created, write.commit_ts, is_system_table);
+                }
                 let entry = DocumentLogEntry {
                     ts: write.commit_ts,
                     id: write.id,
@@ -1120,6 +1135,7 @@ impl<RT: Runtime> Committer<RT> {
             .with_context(|| format!("Commit ({write_source:?}) failed to write to persistence"))?;
         metrics::log_commit_persisted(submitted_at.elapsed());
         index_write_metrics.log();
+        document_delete_metrics.log();
         Ok((write_volume, index_key_writes))
     }
 
@@ -1489,6 +1505,8 @@ struct ValidatedDocumentWrite {
     vector_index_write_size: VectorIndexWriteSize,
     text_index_write_size: TextIndexWriteSize,
     prev_ts: Option<Timestamp>,
+    /// The deleted document's `_creationTime`, when this write deletes one.
+    deleted_creation_time: Option<CreationTime>,
 }
 
 #[derive(Clone)]
