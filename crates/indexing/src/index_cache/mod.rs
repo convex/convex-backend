@@ -503,6 +503,20 @@ impl IndexCacheHandle {
             begin_ts: ts,
             populate_id,
         };
+        // Moka can evict the entry as soon as it is inserted. Register first so
+        // the eviction listener can decrement the interval's refcount.
+        let intervals = {
+            let deployment_intervals = self
+                .shared_cache
+                .index_to_intervals
+                .entry(deployment_id)
+                .or_default();
+            let intervals = deployment_intervals
+                .entry(index_id)
+                .or_insert_with(IndexIntervals::new);
+            intervals.insert(interval.clone(), order, max_size);
+            intervals.clone()
+        };
         let result = self.shared_cache.cache.compute(key.clone(), |maybe_entry| {
             // Only insert if there's no existing entry — a prior entry with an earlier
             // begin_ts can serve a wider range of reads.
@@ -513,17 +527,10 @@ impl IndexCacheHandle {
             }
         });
         if !matches!(result, CompResult::Inserted(_)) {
+            intervals.remove(interval, order, max_size);
             timer.add_label(StaticMetricLabel::new("result", "already_exists"));
             return;
         }
-
-        self.shared_cache
-            .index_to_intervals
-            .entry(deployment_id)
-            .or_default()
-            .entry(index_id)
-            .or_insert_with(IndexIntervals::new)
-            .insert(interval.clone(), order, max_size);
 
         let (mut s0, mut s1) = (ErasedSlot::new(), ErasedSlot::new());
         let (Ok(mut writes), Ok(index_table_writes)) = (
