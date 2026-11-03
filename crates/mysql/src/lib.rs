@@ -6,6 +6,7 @@ mod chunks;
 mod connection;
 mod deployment_deletion;
 mod document_encoding;
+mod leases;
 mod metrics;
 mod sql;
 mod v5;
@@ -29,6 +30,11 @@ use common::{
     },
 };
 pub use connection::ConvexMySqlPool;
+pub use leases::ClusterLeases;
+pub use mysql_async::{
+    Row,
+    Value as MySqlValue,
+};
 pub use v6::maintenance::{
     IndexesLogMaintenance,
     MaintenanceRound,

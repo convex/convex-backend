@@ -945,6 +945,62 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
         })
     }
 
+    /// Runs a read-only query that returns one or zero rows, retrying on
+    /// operational errors.
+    ///
+    /// The statement runs against the URL's default database and must not
+    /// use `@db_name`. `name` is used for metrics.
+    ///
+    /// # Panics
+    ///
+    /// With prepared statements disabled, only `NULL`, `Bytes`, `Int`, and
+    /// `UInt` parameters are supported. `Float`, `Double`, `Date`, and `Time`
+    /// parameters panic.
+    pub async fn query_optional(
+        &self,
+        name: &'static str,
+        statement: &str,
+        params: Vec<MySqlValue>,
+    ) -> anyhow::Result<Option<Row>> {
+        self.acquire(name, "")
+            .await?
+            .query_optional(statement, params)
+            .await
+    }
+
+    /// Runs a read-only query and maps each row with `f`, retrying on
+    /// operational errors.
+    ///
+    /// The statement runs against the URL's default database and must not
+    /// use `@db_name`. `name` is used for metrics.
+    ///
+    /// # Panics
+    ///
+    /// With prepared statements disabled, only `NULL`, `Bytes`, `Int`, and
+    /// `UInt` parameters are supported. `Float`, `Double`, `Date`, and `Time`
+    /// parameters panic.
+    pub async fn query_collect<R: Send>(
+        &self,
+        name: &'static str,
+        statement: &str,
+        params: Vec<MySqlValue>,
+        f: impl Fn(Row) -> anyhow::Result<R> + Send + Sync + 'static,
+    ) -> anyhow::Result<Vec<R>> {
+        self.acquire(name, "")
+            .await?
+            .query_collect(statement, params, 0 /* size_hint */, f)
+            .await
+    }
+
+    /// Executes one or more statements, separated by semicolons, using the
+    /// text protocol.
+    ///
+    /// The statements run against the URL's default database and must not
+    /// use `@db_name` or `?`. `name` is used for metrics.
+    pub async fn execute(&self, name: &'static str, statement: &str) -> anyhow::Result<()> {
+        self.acquire(name, "").await?.execute_many(statement).await
+    }
+
     fn return_connection(&self, mut conn: PooledConnection) {
         if conn.is_expired() {
             log_discarded_connection(&self.cluster_name, DiscardReason::Expired);
