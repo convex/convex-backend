@@ -20,7 +20,11 @@ import { useRouter } from "next/router";
 import { Donut } from "@ui/Donut";
 import { Loading } from "@ui/Loading";
 import type { UsagePricing } from "./lib/usagePrices";
-import { getMultiPeriodUsageSpend, formatSpend } from "./lib/usageSpend";
+import {
+  getMultiPeriodUsageSpend,
+  getUsageSpend,
+  formatSpend,
+} from "./lib/usageSpend";
 import type { PricedUsageState, UsageSpend } from "./lib/usageSpend";
 
 const BUSINESS_METRIC_TO_SECTION: Record<string, string> = {
@@ -372,7 +376,17 @@ export function BusinessPlanSummary({
               </Tooltip>
             </div>
           )}
-          {showSpend && <span>Spend</span>}
+          {showSpend && (
+            <div className="flex items-center gap-1">
+              Spend
+              <Tooltip
+                tip="Storage metrics show estimated monthly prices based on the most recent usage in the selected period."
+                side="right"
+              >
+                <QuestionMarkCircledIcon />
+              </Tooltip>
+            </div>
+          )}
           <span className="invisible flex items-center gap-1 text-xs">
             <span className="hidden whitespace-nowrap sm:inline">
               View breakdown by day
@@ -423,10 +437,16 @@ export function BusinessPlanSummary({
                 ? includedAmount
                 : metric;
 
+            const estimatedMonthly =
+              section.metric === "databaseStorage" ||
+              section.metric === "fileStorage" ||
+              section.metric === "searchStorage";
             const pricedSummaryFailed =
+              !estimatedMonthly &&
               section.metric !== "aiGatewayCost" &&
               pricedUsage.status === "error";
             const pricedSummaryPending =
+              !estimatedMonthly &&
               section.metric !== "aiGatewayCost" &&
               pricedUsage.status === "loading";
 
@@ -436,12 +456,18 @@ export function BusinessPlanSummary({
                   ? aiCostFailed || aiGatewayCost === undefined
                     ? undefined
                     : { amount: aiGatewayCost, missingDimensions: [] }
-                  : pricedUsage.status === "ready"
-                    ? getMultiPeriodUsageSpend(
-                        pricedUsage.summaries,
+                  : estimatedMonthly
+                    ? getUsageSpend(
+                        summary,
                         section.metric,
+                        pricing.periods.at(-1)?.period,
                       )
-                    : undefined
+                    : pricedUsage.status === "ready"
+                      ? getMultiPeriodUsageSpend(
+                          pricedUsage.summaries,
+                          section.metric,
+                        )
+                      : undefined
                 : undefined;
 
             return (
@@ -557,6 +583,7 @@ export function BusinessPlanSummary({
                       <SpendValue
                         spend={spend}
                         sectionTitle={section.title}
+                        estimatedMonthly={estimatedMonthly}
                         reportUnavailable={
                           pricing.status === "ready" &&
                           section.metric !== "aiGatewayCost"
@@ -584,10 +611,12 @@ function SpendValue({
   spend,
   sectionTitle,
   reportUnavailable,
+  estimatedMonthly,
 }: {
   spend: UsageSpend | undefined;
   sectionTitle: string;
   reportUnavailable: boolean;
+  estimatedMonthly: boolean;
 }) {
   const missingDimensions = spend?.missingDimensions.join(", ");
   const missingBillingInformation =
@@ -610,6 +639,11 @@ function SpendValue({
     <span className="inline-flex items-center gap-1 whitespace-nowrap">
       {spend === undefined || spend.missingDimensions.length > 0 ? (
         <span className="text-content-secondary">N/A</span>
+      ) : estimatedMonthly ? (
+        <span>
+          {formatSpend(spend.amount)}
+          <span className="ml-1 text-content-secondary">/ month</span>
+        </span>
       ) : (
         formatSpend(spend.amount)
       )}

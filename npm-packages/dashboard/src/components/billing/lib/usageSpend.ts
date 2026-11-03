@@ -135,7 +135,7 @@ function metricSpend(
     }
     const rate = discountedRate(amount);
     if (rate === undefined) return undefined;
-    gross += quantity * rate;
+    gross += Math.ceil(quantity) * rate;
   }
   return Number.isFinite(gross)
     ? { amount: gross, missingDimensions: [...missingDimensions].sort() }
