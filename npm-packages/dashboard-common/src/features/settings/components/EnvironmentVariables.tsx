@@ -45,6 +45,12 @@ type FormState<T extends BaseEnvironmentVariable> = {
   deletedVars: T[];
 };
 
+type RenderSaveExtra = (props: {
+  isSubmitting: boolean;
+  isValid: boolean;
+  submitForm: () => Promise<unknown>;
+}) => React.ReactNode;
+
 // This is used for showing both deployment environment variables and project level environment variables
 export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
   environmentVariables,
@@ -61,17 +67,20 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
   onEnvironmentVariablesAdded,
   renderDisplayExtra,
   renderEditExtra,
+  renderSaveExtra,
   validateNameUniqueness = defaultValidateNameUniqueness,
   initEnvVar,
   envVarKey,
 }: {
+  renderSaveExtra?: RenderSaveExtra;
   environmentVariables: Array<T> | undefined;
   initialFormValues?: Array<T>;
+  /** Returns true after saving, or false to preserve pending edits. */
   updateEnvironmentVariables: (
     creations: T[],
     modifications: { oldEnvVar: T; newEnvVar: T }[],
     deletions: T[],
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   /** Default gate for create/edit/delete; per-action props below override
    *  it when the underlying actions need distinct grants (e.g. project
    *  defaults split into `:create` / `:update` / `:delete`). */
@@ -131,11 +140,13 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
       initialValues={initialValues}
       initialTouched={initialTouched}
       onSubmit={async (values, helpers) => {
-        await updateEnvironmentVariables(
+        const saved = await updateEnvironmentVariables(
           values.newVars,
           values.editedVars,
           values.deletedVars,
         );
+        // Cancellation preserves pending edits for the next submission.
+        if (!saved) return;
         const createdCount = values.newVars.length;
         if (createdCount > 0) {
           onEnvironmentVariablesAdded?.(createdCount);
@@ -227,6 +238,7 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
         disabledTipForDelete={disabledTipForDelete ?? disabledTip}
         renderDisplayExtra={renderDisplayExtra}
         renderEditExtra={renderEditExtra}
+        renderSaveExtra={renderSaveExtra}
         initEnvVar={initEnvVar}
         envVarKey={envVarKey}
       />
@@ -244,9 +256,11 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
   disabledTipForDelete,
   renderDisplayExtra,
   renderEditExtra,
+  renderSaveExtra,
   initEnvVar,
   envVarKey,
 }: {
+  renderSaveExtra?: RenderSaveExtra;
   environmentVariables: Array<T> | undefined;
   canCreate: boolean;
   canEdit: boolean;
@@ -340,6 +354,7 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
             canCreate={canCreate}
             disabledTipForCreate={disabledTipForCreate}
             renderEditExtra={renderEditExtra}
+            renderSaveExtra={renderSaveExtra}
             initEnvVar={initEnvVar}
           />
         </>
@@ -780,15 +795,22 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
   canCreate,
   disabledTipForCreate,
   renderEditExtra,
+  renderSaveExtra,
   initEnvVar,
 }: {
   existingEnvVars: Array<T>;
+  renderSaveExtra?: RenderSaveExtra;
   canCreate: boolean;
   disabledTipForCreate?: React.ReactNode;
   renderEditExtra?: (props: { formKey: string; envVar: T }) => React.ReactNode;
   initEnvVar: (envVar: { name: string; value: string }) => T;
 }) {
   const formState = useFormikContext<FormState<T>>();
+
+  const hasPendingChanges =
+    formState.values.editedVars.length > 0 ||
+    formState.values.newVars.length > 0 ||
+    formState.values.deletedVars.length > 0;
 
   const handlePaste = (envVars: Array<BaseEnvironmentVariable>) => {
     const newVars = formState.values.newVars.filter(
@@ -858,7 +880,7 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
               ]);
             }}
             icon={<PlusCircledIcon />}
-            disabled={!canCreate}
+            disabled={formState.isSubmitting || !canCreate}
             tip={
               !canCreate
                 ? (disabledTipForCreate ??
@@ -921,20 +943,25 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
           )}
         </div>
 
-        {(formState.values.editedVars.length > 0 ||
-          formState.values.newVars.length > 0 ||
-          formState.values.deletedVars.length > 0) && (
-          <Button
-            type="submit"
-            disabled={formState.isSubmitting || !formState.isValid}
-          >
-            {formState.values.editedVars.length +
-              formState.values.newVars.length +
-              formState.values.deletedVars.length >=
-            2
-              ? "Save All"
-              : "Save"}
-          </Button>
+        {hasPendingChanges && (
+          <div className="flex flex-wrap items-center gap-3">
+            {renderSaveExtra?.({
+              isSubmitting: formState.isSubmitting,
+              isValid: formState.isValid,
+              submitForm: formState.submitForm,
+            })}
+            <Button
+              type="submit"
+              disabled={formState.isSubmitting || !formState.isValid}
+            >
+              {formState.values.editedVars.length +
+                formState.values.newVars.length +
+                formState.values.deletedVars.length >=
+              2
+                ? "Save All"
+                : "Save"}
+            </Button>
+          </div>
         )}
       </div>
     </div>

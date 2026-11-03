@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { Callout } from "@ui/Callout";
+import { useDeployments } from "api/deployments";
 import { useFormikContext } from "formik";
 import { Sheet } from "@ui/Sheet";
 import { Checkbox } from "@ui/Checkbox";
+import { Button } from "@ui/Button";
 import {
   useProjectEnvironmentVariables,
   useUpdateProjectEnvVars,
@@ -21,6 +24,11 @@ import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { EnvironmentVariables } from "@common/features/settings/components/EnvironmentVariables";
 import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
 import { deploymentTypeLabel } from "@common/lib/deploymentTypeColorClasses";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+import {
+  DefaultEnvironmentVariablesRolloutDialog,
+  RolloutEntry,
+} from "./DefaultEnvironmentVariablesRolloutDialog";
 
 // Deployment types that can be selected via checkboxes (excludes "custom" for now)
 const SELECTABLE_DEPLOYMENT_TYPES: DeploymentTypeType[] = [
@@ -34,6 +42,7 @@ const DEFAULT_DEPLOYMENT_TYPES: DeploymentTypeType[] = [
 ];
 
 export function DefaultEnvironmentVariables() {
+  const { allowDefaultEnvRollout } = useLaunchDarkly();
   const project = useCurrentProject();
   const projectId = project?.id;
   const team = useCurrentTeam();
@@ -83,6 +92,9 @@ export function DefaultEnvironmentVariables() {
     100,
   )?.configs;
   const updateEnvironmentVariables = useUpdateProjectEnvVars(projectId);
+  const { deployments } = useDeployments(
+    canView && allowDefaultEnvRollout ? projectId : undefined,
+  );
 
   if (isViewDenied) {
     return (
@@ -100,6 +112,7 @@ export function DefaultEnvironmentVariables() {
     <DefaultEnvironmentVariablesInner
       environmentVariables={environmentVariables}
       onUpdate={updateEnvironmentVariables}
+      deployments={deployments}
       canCreate={canCreate}
       canEdit={canEdit}
       canDelete={canDelete}
@@ -134,6 +147,7 @@ export function DefaultEnvironmentVariables() {
 export function DefaultEnvironmentVariablesInner({
   environmentVariables,
   onUpdate,
+  deployments,
   hasAdminPermissions,
   disabledTip,
   canCreate,
@@ -145,6 +159,10 @@ export function DefaultEnvironmentVariablesInner({
 }: {
   environmentVariables: ProjectEnvVarConfig[] | undefined;
   onUpdate: (value: UpdateDefaultEnvironmentVariablesArgs) => Promise<void>;
+  deployments?: {
+    kind: "cloud" | "local";
+    deploymentType: DeploymentTypeType;
+  }[];
   /** Default permission used by the EnvironmentVariables form when no
    *  per-action gate is supplied below. Stories and tests can keep
    *  passing this single flag. */
@@ -157,18 +175,58 @@ export function DefaultEnvironmentVariablesInner({
   disabledTipForEdit?: React.ReactNode;
   disabledTipForDelete?: React.ReactNode;
 }) {
+  const { allowDefaultEnvRollout } = useLaunchDarkly();
   const [initialValues, setInitialValues] = useState<
     ProjectEnvVarConfig[] | undefined
   >(undefined);
 
+  const rolloutRequested = useRef(false);
+  const [rollout, setRollout] = useState<RolloutEntry[]>();
+  const [deploymentCountsUnavailable, setDeploymentCountsUnavailable] =
+    useState(false);
+  const resolveConfirmation = useRef<
+    ((confirmed: boolean) => void) | undefined
+  >(undefined);
+  const submitting = useRef(false);
+  const finishConfirmation = (confirmed: boolean) => {
+    resolveConfirmation.current?.(confirmed);
+    resolveConfirmation.current = undefined;
+    setRollout(undefined);
+  };
+
   return (
     <Sheet className="flex flex-col gap-4 text-sm">
       <h3>Default Environment Variables</h3>
+      {deploymentCountsUnavailable && (
+        <Callout variant="error">
+          Deployment counts are unavailable. Nothing was saved. Please try
+          again.
+        </Callout>
+      )}
+      {rollout && (
+        <DefaultEnvironmentVariablesRolloutDialog
+          rollout={rollout}
+          onClose={() => finishConfirmation(false)}
+          onConfirm={() => finishConfirmation(true)}
+        />
+      )}
       <div className="flex flex-col gap-2">
         <p className="max-w-prose text-sm text-content-primary">
-          These values will be used when creating new deployments. Changing
-          these values <span className="font-semibold">does not</span> affect
-          existing deployments.{" "}
+          These values will be used when creating new deployments.{" "}
+          {allowDefaultEnvRollout ? (
+            <>
+              You can also choose to apply all changes to existing cloud
+              deployments of the selected types, overwriting existing values and
+              removing deleted variables. Otherwise, changing these values does
+              not affect existing deployments.
+            </>
+          ) : (
+            <>
+              Changing these values{" "}
+              <span className="font-semibold">does not</span> affect existing
+              deployments.
+            </>
+          )}{" "}
           <Link
             passHref
             href="https://docs.convex.dev/production/hosting/environment-variables#project-environment-variable-defaults"
@@ -182,7 +240,7 @@ export function DefaultEnvironmentVariablesInner({
           managed from the deployment settings.
         </p>
       </div>
-      <EnvironmentVariables
+      <EnvironmentVariables<ProjectEnvVarConfig>
         hasAdminPermissions={hasAdminPermissions ?? false}
         disabledTip={disabledTip}
         canCreate={canCreate}
@@ -197,77 +255,160 @@ export function DefaultEnvironmentVariablesInner({
           modifications,
           deletions,
         ) => {
-          const forEachDtype = (
-            name: string,
-            deploymentTypes: readonly DeploymentTypeType[],
-            value: string | null,
-          ) =>
-            deploymentTypes.map((deploymentType) => ({
-              name,
-              deploymentType,
-              value,
-            }));
+          if (submitting.current) return false;
+          submitting.current = true;
+          const applyToExistingDeployments = rolloutRequested.current;
+          try {
+            setDeploymentCountsUnavailable(false);
+            const forEachDtype = (
+              name: string,
+              deploymentTypes: readonly DeploymentTypeType[],
+              value: string | null,
+            ) =>
+              deploymentTypes.map((deploymentType) => ({
+                name,
+                deploymentType,
+                value,
+                ...(allowDefaultEnvRollout && applyToExistingDeployments
+                  ? { applyToExistingDeployments: true }
+                  : {}),
+              }));
 
-          const changes: UpdateDefaultEnvironmentVariablesArgs["changes"] = [];
+            const changes: UpdateDefaultEnvironmentVariablesArgs["changes"] =
+              [];
 
-          for (const newEnvVar of creations) {
-            changes.push(
-              ...forEachDtype(
-                newEnvVar.name,
-                newEnvVar.deploymentTypes,
-                newEnvVar.value,
-              ),
-            );
-          }
-
-          for (const { oldEnvVar, newEnvVar } of modifications) {
-            if (oldEnvVar.name !== newEnvVar.name) {
-              // Name changed: delete old, create new
+            for (const newEnvVar of creations) {
               changes.push(
                 ...forEachDtype(
-                  oldEnvVar.name,
-                  oldEnvVar.deploymentTypes,
+                  newEnvVar.name,
+                  newEnvVar.deploymentTypes,
+                  newEnvVar.value,
+                ),
+              );
+            }
+
+            for (const { oldEnvVar, newEnvVar } of modifications) {
+              if (oldEnvVar.name !== newEnvVar.name) {
+                // Name changed: delete old, create new
+                changes.push(
+                  ...forEachDtype(
+                    oldEnvVar.name,
+                    oldEnvVar.deploymentTypes,
+                    null,
+                  ),
+                  ...forEachDtype(
+                    newEnvVar.name,
+                    newEnvVar.deploymentTypes,
+                    newEnvVar.value,
+                  ),
+                );
+              } else {
+                // Upsert current deployment types
+                changes.push(
+                  ...forEachDtype(
+                    newEnvVar.name,
+                    newEnvVar.deploymentTypes,
+                    newEnvVar.value,
+                  ),
+                );
+                // Delete removed deployment types
+                const removed = oldEnvVar.deploymentTypes.filter(
+                  (dt) => !newEnvVar.deploymentTypes.includes(dt),
+                );
+                changes.push(...forEachDtype(oldEnvVar.name, removed, null));
+              }
+            }
+
+            for (const oldVariable of deletions) {
+              changes.push(
+                ...forEachDtype(
+                  oldVariable.name,
+                  oldVariable.deploymentTypes,
                   null,
                 ),
-                ...forEachDtype(
-                  newEnvVar.name,
-                  newEnvVar.deploymentTypes,
-                  newEnvVar.value,
-                ),
               );
-            } else {
-              // Upsert current deployment types
-              changes.push(
-                ...forEachDtype(
-                  newEnvVar.name,
-                  newEnvVar.deploymentTypes,
-                  newEnvVar.value,
-                ),
-              );
-              // Delete removed deployment types
-              const removed = oldEnvVar.deploymentTypes.filter(
-                (dt) => !newEnvVar.deploymentTypes.includes(dt),
-              );
-              changes.push(...forEachDtype(oldEnvVar.name, removed, null));
             }
-          }
 
-          for (const oldVariable of deletions) {
-            changes.push(
-              ...forEachDtype(
-                oldVariable.name,
-                oldVariable.deploymentTypes,
-                null,
-              ),
+            const upsertKeys = new Set(
+              changes
+                .filter(({ value }) => value !== null)
+                .map(({ name, deploymentType }) => `${name}:${deploymentType}`),
             );
+            const finalChanges = changes.filter(
+              ({ name, deploymentType, value }) =>
+                value !== null || !upsertKeys.has(`${name}:${deploymentType}`),
+            );
+            if (allowDefaultEnvRollout && applyToExistingDeployments) {
+              if (!deployments) {
+                setDeploymentCountsUnavailable(true);
+                return false;
+              }
+              const countsByType = new Map<DeploymentTypeType, number>();
+              for (const deployment of deployments) {
+                if (deployment.kind !== "cloud") continue;
+                countsByType.set(
+                  deployment.deploymentType,
+                  (countsByType.get(deployment.deploymentType) ?? 0) + 1,
+                );
+              }
+              const breakdown = new Map<string, RolloutEntry>();
+              for (const { name, deploymentType, value } of finalChanges) {
+                const operation = value === null ? "delete" : "set";
+                const key = JSON.stringify([name, operation]);
+                const entry = breakdown.get(key) ?? {
+                  name,
+                  operation,
+                  categories: [],
+                };
+                if (
+                  !entry.categories.some(
+                    (category) => category.deploymentType === deploymentType,
+                  )
+                ) {
+                  entry.categories.push({
+                    deploymentType,
+                    total: countsByType.get(deploymentType) ?? 0,
+                  });
+                }
+                breakdown.set(key, entry);
+              }
+              const confirmed = await new Promise<boolean>((resolve) => {
+                resolveConfirmation.current = resolve;
+                setRollout([...breakdown.values()]);
+              });
+              if (!confirmed) return false;
+            }
+            await onUpdate({ changes: finalChanges });
+            setInitialValues(undefined);
+            return true;
+          } finally {
+            submitting.current = false;
           }
-
-          await onUpdate({ changes });
-          setInitialValues(undefined);
         }}
         initialFormValues={initialValues}
         renderDisplayExtra={DeploymentTypeLabels}
         renderEditExtra={DeploymentTypeCheckboxes}
+        renderSaveExtra={
+          allowDefaultEnvRollout
+            ? ({ isSubmitting, isValid, submitForm }) => (
+                <Button
+                  type="button"
+                  variant="neutral"
+                  disabled={isSubmitting || !isValid}
+                  onClick={async () => {
+                    rolloutRequested.current = true;
+                    try {
+                      await submitForm();
+                    } finally {
+                      rolloutRequested.current = false;
+                    }
+                  }}
+                >
+                  Plan rollout
+                </Button>
+              )
+            : undefined
+        }
         validateNameUniqueness={validateProjectEnvVarUniqueness}
         initEnvVar={(envVar) => ({
           ...envVar,
@@ -389,6 +530,7 @@ function DeploymentTypeCheckboxes({
                 className="flex cursor-pointer items-center gap-1.5 text-sm text-content-primary"
               >
                 <Checkbox
+                  aria-label={deploymentTypeLabel(type)}
                   checked={isChecked}
                   onChange={() => handleToggle(type)}
                   disabled={formState.isSubmitting}
