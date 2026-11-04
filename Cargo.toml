@@ -23,6 +23,7 @@ aws-config = { version = "1.6", default-features = false, features = [ "client-h
 aws-credential-types = "1"
 aws-lc-rs = { version = "1.18.1", default-features = false, features = [ "aws-lc-sys", "prebuilt-nasm" ] }
 aws-sdk-firehose = { version = "1.72", default-features = false, features = [ "default-https-client", "rt-tokio" ] }
+aws-sdk-rds = { version = "1.84", default-features = false, features = [ "default-https-client", "rt-tokio" ] }
 aws-sdk-s3 = { version = "1.83", default-features = false, features = [ "default-https-client", "rt-tokio", "sigv4a" ] }
 aws-smithy-http = "0.62.0"
 aws-smithy-runtime = "1.14"

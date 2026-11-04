@@ -749,10 +749,64 @@ impl MySqlTransaction<'_> {
     }
 }
 
+/// How long new connections reuse an RDS IAM auth token. RDS rejects a token
+/// for new logins 15 minutes after it was minted.
+const RDS_IAM_TOKEN_REUSE: Duration = Duration::from_mins(5);
+
+/// Logs new connections in to an RDS endpoint with IAM auth tokens.
+struct RdsIamAuth {
+    cached_opts: Mutex<Option<RdsIamCachedOpts>>,
+}
+
+struct RdsIamCachedOpts {
+    opts: Opts,
+    minted_at: Instant,
+}
+
+impl RdsIamAuth {
+    async fn authed_opts(&self, base_opts: &Opts) -> anyhow::Result<Opts> {
+        if let Some(cached) = self
+            .cached_opts
+            .lock()
+            .as_ref()
+            .filter(|cached| cached.minted_at.elapsed() < RDS_IAM_TOKEN_REUSE)
+        {
+            return Ok(cached.opts.clone());
+        }
+        let minted_at = Instant::now();
+        let token = aws_utils::rds::get_rds_auth_token(
+            base_opts.ip_or_hostname(),
+            base_opts.tcp_port(),
+            base_opts.user().context("user must be set")?,
+        )
+        .await?
+        .to_string();
+        let mut cached_opts = self.cached_opts.lock();
+        // Check again to avoid minting new `Opts` objects if there is a race
+        if let Some(cached) = cached_opts
+            .as_ref()
+            .filter(|cached| cached.minted_at.elapsed() < RDS_IAM_TOKEN_REUSE)
+        {
+            return Ok(cached.opts.clone());
+        }
+        Ok(cached_opts
+            .insert(RdsIamCachedOpts {
+                opts: OptsBuilder::from_opts(base_opts.clone())
+                    .pass(Some(token))
+                    .into(),
+                minted_at,
+            })
+            .opts
+            .clone())
+    }
+}
+
 /// A MySQL connection pool.
 pub struct ConvexMySqlPool<RT: Runtime> {
     pub(crate) v6_replica: OnceLock<crate::v6_replica::ReplicaTarget<RT>>,
     opts: Opts,
+    /// Set when `opts` is for an RDS endpoint and has no password.
+    rds_iam_auth: Option<RdsIamAuth>,
     use_prepared_statements: bool,
     /// Limits the total number of connections that can be handed out
     /// simultaneously.
@@ -802,7 +856,13 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
         let cluster_name = derive_cluster_name(url).to_owned();
         let opts = Opts::from_str(url.as_ref())?;
         let ssl_opts = opts.ssl_opts().cloned();
+        let use_rds_iam_auth = opts.pass().is_none()
+            && aws_utils::rds::region_from_rds_hostname(opts.ip_or_hostname()).is_some();
         let mut opts = OptsBuilder::from_opts(opts);
+        if use_rds_iam_auth {
+            // RDS only accepts IAM auth tokens through `mysql_clear_password`.
+            opts = opts.enable_cleartext_plugin(true);
+        }
         if require_leader {
             opts = opts.after_connect(|conn| {
                 async move {
@@ -844,6 +904,23 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
                 .with_root_certs(vec![ca_file_path.into()]);
             opts = opts.ssl_opts(ssl_opts);
         }
+        let opts = Opts::from(opts);
+        let rds_iam_auth = if use_rds_iam_auth {
+            let user = opts
+                .user()
+                .context("RDS IAM auth requires a username in the MySQL URL")?;
+            anyhow::ensure!(
+                opts.ssl_opts().is_some(),
+                "RDS IAM auth requires TLS: set require_ssl=true in the MySQL URL or set \
+                 MYSQL_CA_FILE"
+            );
+            tracing::info!("Connecting to {cluster_name} with RDS IAM auth as {user}");
+            Some(RdsIamAuth {
+                cached_opts: Mutex::new(None),
+            })
+        } else {
+            None
+        };
         let connections = Arc::new(Mutex::new(IdleConnections {
             conns: Vec::new(),
             // The idle worker's first cleanup runs as soon as it is spawned.
@@ -860,7 +937,8 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
         );
         Ok(Self {
             v6_replica: OnceLock::new(),
-            opts: opts.into(),
+            opts,
+            rds_iam_auth,
             use_prepared_statements,
             semaphore: Semaphore::new(*MYSQL_MAX_CONNECTIONS),
             established: Arc::new(AtomicUsize::new(0)),
@@ -912,7 +990,8 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
                 return Ok(conn);
             }
         }
-        self.create_connection().await
+        // box this since it is less common
+        Box::pin(self.create_connection()).await
     }
 
     #[fastrace::trace]
@@ -921,7 +1000,14 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
         // as `acquire`'s, which expires before this one after waiting for a
         // permit.
         let failed = scopeguard::guard((), |()| log_connection_create_failed(&self.cluster_name));
-        let conn = with_timeout(Conn::new(self.opts.clone())).await?;
+        let mut opts = self.opts.clone();
+        if let Some(rds_iam_auth) = &self.rds_iam_auth {
+            opts = rds_iam_auth
+                .authed_opts(&self.opts)
+                .await
+                .map_err(database_operational_error)?;
+        }
+        let conn = with_timeout(Conn::new(opts)).await?;
         ScopeGuard::into_inner(failed);
         Ok(PooledConnection::new(conn, &self.established))
     }

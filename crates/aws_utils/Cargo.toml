@@ -10,6 +10,7 @@ async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 aws-sdk-firehose = { workspace = true }
+aws-sdk-rds = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 aws-smithy-runtime = { workspace = true }
 aws-smithy-types-convert = { workspace = true }

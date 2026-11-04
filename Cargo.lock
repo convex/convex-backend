@@ -1069,6 +1069,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-rds"
+version = "1.148.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f60e1a55ca71b2bcdb0f123c78e28e589e79f882a1fd0f37fac60b362213f564"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-http 0.64.0",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-query",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "aws-sdk-s3"
 version = "1.146.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1517,6 +1546,7 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "aws-sdk-firehose",
+ "aws-sdk-rds",
  "aws-sdk-s3",
  "aws-smithy-runtime",
  "aws-smithy-types-convert",
@@ -7322,6 +7352,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws_utils",
  "bytes",
  "cmd_util",
  "common",

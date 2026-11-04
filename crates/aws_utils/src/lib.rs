@@ -19,6 +19,7 @@ use aws_types::region::Region;
 
 mod credentials;
 pub mod firehose;
+pub mod rds;
 pub mod s3;
 
 static S3_ENDPOINT_URL: LazyLock<Option<String>> =
