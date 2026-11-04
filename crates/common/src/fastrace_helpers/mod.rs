@@ -173,7 +173,7 @@ struct SamplingConfigJson {
 fn validate_fraction(value: f64, context: &str) -> anyhow::Result<f64> {
     if !(0.0..=1.0).contains(&value) {
         anyhow::bail!(
-            "Invalid fraction {} in {}: clamping to [0.0, 1.0]",
+            "Invalid fraction {} in {}: must be in [0.0, 1.0]",
             value,
             context
         );
@@ -195,7 +195,13 @@ impl TryFrom<SamplingConfigJson> for SamplingConfig {
                     by_regex.push((
                         Some(deployment_name.to_owned()),
                         Regex::new(&route_override.route_regexp).context("Invalid route regexp")?,
-                        validate_fraction(route_override.fraction, deployment_name)?,
+                        validate_fraction(
+                            route_override.fraction,
+                            &format!(
+                                "route {:?} for deployment {}",
+                                route_override.route_regexp, deployment_name
+                            ),
+                        )?,
                     ));
                 }
             }
@@ -205,7 +211,10 @@ impl TryFrom<SamplingConfigJson> for SamplingConfig {
                 by_regex.push((
                     None,
                     Regex::new(&route_override.route_regexp).context("Invalid route regexp")?,
-                    validate_fraction(route_override.fraction, &route_override.route_regexp)?,
+                    validate_fraction(
+                        route_override.fraction,
+                        &format!("route {:?}", route_override.route_regexp),
+                    )?,
                 ));
             }
         }
@@ -252,6 +261,7 @@ impl FromStr for SamplingConfig {
                 let rate: f64 = parts[0].parse().context("Failed to parse sampling rate")?;
                 (DOT_STAR.clone(), rate)
             };
+            let rate = validate_fraction(rate, &format!("{:?}", token.trim()))?;
             by_regex.push((deployment_name, name_regex, rate));
         }
         Ok(SamplingConfig { by_regex })
