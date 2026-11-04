@@ -23,6 +23,17 @@ export type UsagePricing =
     }
   | { status: "ready"; periods: UsagePricingPeriod[] };
 
+export function isCurrentBillingPeriodRange(
+  range: DateRange | null,
+  currentBillingPeriod: { start: string; end: string } | undefined,
+): boolean {
+  return (
+    range === null ||
+    (range.from === currentBillingPeriod?.start &&
+      range.to === currentBillingPeriod?.end)
+  );
+}
+
 export function getUsagePricing(
   {
     data,

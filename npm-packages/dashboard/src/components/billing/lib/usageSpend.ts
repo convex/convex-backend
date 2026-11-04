@@ -107,6 +107,39 @@ function priceAmounts(price: MetricPrice | undefined): PriceAmount[] {
           );
 }
 
+export function getIncludedUsage(
+  periods: PricesPeriod[],
+  sectionMetric: string,
+): number | undefined {
+  if (!Object.hasOwn(sections, sectionMetric)) return undefined;
+  const section = sections[sectionMetric];
+  const metrics = Array.isArray(section) ? section : [section];
+  let total = 0;
+  let hasConsumedUnits = false;
+  for (const period of periods) {
+    for (const metric of metrics) {
+      for (const rate of priceAmounts(period.metrics[metric.name])) {
+        const discount = rate.percentageDiscount ?? 0;
+        if (!Number.isFinite(discount) || discount < 0 || discount > 1) {
+          return undefined;
+        }
+        const consumed = rate.consumedUnits;
+        if (consumed === undefined || consumed === null) continue;
+        if (!Number.isFinite(consumed) || consumed < 0) return undefined;
+        hasConsumedUnits = true;
+        if (discount === 1) {
+          if (consumed > 0) return undefined;
+          continue;
+        }
+        // The consumed count is post-discount, so we need to un-apply the
+        // discount to get the actual included usage.
+        total += (consumed / (1 - discount)) * (metric.divisor ?? 1);
+      }
+    }
+  }
+  return hasConsumedUnits && Number.isFinite(total) ? total : undefined;
+}
+
 export function isStorageMetric(sectionMetric: string): boolean {
   return (
     sectionMetric === "databaseStorage" ||

@@ -15,7 +15,10 @@ import { NoPermissionMessage } from "elements/NoPermissionMessage";
 import { TEAM_RESOURCE } from "lib/permissions";
 import { useProjectById, useProjectBySlug } from "api/projects";
 import { useTeamOrbSubscription, useTeamPrices } from "api/billing";
-import { getUsagePricing } from "./lib/usagePrices";
+import {
+  getUsagePricing,
+  isCurrentBillingPeriodRange,
+} from "./lib/usagePrices";
 import groupBy from "lodash/groupBy";
 import sumBy from "lodash/sumBy";
 import { Period } from "elements/UsagePeriodSelector";
@@ -206,10 +209,11 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
   const billingPeriodRange = shownBillingPeriod
     ? { from: shownBillingPeriod.from, to: shownBillingPeriod.to }
     : null;
-  const dateRange =
-    shownBillingPeriod?.type !== "currentBillingPeriod"
-      ? billingPeriodRange
-      : null;
+  const isCurrentBillingPeriod = isCurrentBillingPeriodRange(
+    billingPeriodRange,
+    currentBillingPeriod,
+  );
+  const dateRange = isCurrentBillingPeriod ? null : billingPeriodRange;
 
   const { subscription } = useTeamOrbSubscription(team?.id);
 
@@ -255,17 +259,13 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
   const hasOrbSubscription = useHasSubscription(team?.id);
 
   const hasSubscription =
-    (!shownBillingPeriod ||
-      shownBillingPeriod.type === "currentBillingPeriod") &&
+    isCurrentBillingPeriod &&
     (hasOrbSubscription || hasOrbSubscription === undefined) &&
     projectId === null &&
     !isBusinessPlanType;
 
   const showEntitlements =
-    (!shownBillingPeriod ||
-      shownBillingPeriod.type === "currentBillingPeriod") &&
-    projectId === null &&
-    !isBusinessPlanType;
+    isCurrentBillingPeriod && projectId === null && !isBusinessPlanType;
 
   return (
     <div className="flex min-w-160 flex-col gap-2 [--team-usage-toolbar-height:--spacing(32)] md:[--team-usage-toolbar-height:--spacing(28)] lg:[--team-usage-toolbar-height:--spacing(20)]">
@@ -342,6 +342,7 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
                   entitlements={entitlements}
                   hasSubscription={hasSubscription}
                   showEntitlements={showEntitlements}
+                  isCurrentBillingPeriod={isCurrentBillingPeriod}
                 />
                 <FunctionBreakdownSection
                   team={team}
