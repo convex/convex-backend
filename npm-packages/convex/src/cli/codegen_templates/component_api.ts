@@ -123,6 +123,7 @@ export async function componentApiDTS(
       startPush,
       analysis,
       rootComponent,
+      componentDirectory,
       componentsMap,
       opts,
     )),
@@ -131,11 +132,39 @@ export async function componentApiDTS(
   return lines.join("\n");
 }
 
+export function childComponentImportPath({
+  childComponentDirectory,
+  childComponentDefinitionPath,
+  componentDirectory,
+}: {
+  componentDirectory: ComponentDirectory;
+  childComponentDirectory: ComponentDirectory;
+  childComponentDefinitionPath: string;
+}): string {
+  // If the user uses a different import specifier than the absolute path of the child component, use the import specifier.
+  const importSpecifier = childComponentDirectory.importSpecifier;
+  // Don't trust relative specifiers
+  if (
+    importSpecifier &&
+    !importSpecifier.startsWith(".") &&
+    importSpecifier !== childComponentDefinitionPath
+  ) {
+    return importSpecifier;
+  } else {
+    const relativePath = path
+      .relative(componentDirectory.path, childComponentDirectory.path)
+      .split(path.sep)
+      .join(path.posix.sep);
+    return `../${relativePath}`;
+  }
+}
+
 async function componentApiLines(
   ctx: Context,
   startPush: StartPushResponse,
   analysis: EvaluatedComponentDefinition,
   rootComponent: ComponentDirectory,
+  componentDirectory: ComponentDirectory,
   componentsMap: Map<string, ComponentDirectory>,
   opts: { useComponentApiImports: boolean },
 ): Promise<string[]> {
@@ -147,8 +176,8 @@ async function componentApiLines(
         childComponent.path as ComponentDefinitionPath,
       );
 
-      let childComponentWithRelativePath = componentsMap?.get(absolutePath);
-      if (!childComponentWithRelativePath) {
+      let childComponentDirectory = componentsMap?.get(absolutePath);
+      if (!childComponentDirectory) {
         return await ctx.crash({
           exitCode: 1,
           errorType: "fatal",
@@ -156,19 +185,11 @@ async function componentApiLines(
         });
       }
 
-      // If the user uses a different import specifier than the absolute path of the child component, use the import specifier.
-      const importSpecifier = childComponentWithRelativePath.importSpecifier;
-      let importPath;
-      // Don't trust relative specifiers
-      if (
-        importSpecifier &&
-        !importSpecifier.startsWith(".") &&
-        importSpecifier !== childComponent.path
-      ) {
-        importPath = importSpecifier;
-      } else {
-        importPath = `../${childComponent.path}`;
-      }
+      const importPath = childComponentImportPath({
+        componentDirectory,
+        childComponentDirectory,
+        childComponentDefinitionPath: childComponent.path,
+      });
       lines.push(
         `  "${childComponent.name}": import("${importPath}/_generated/component.js").ComponentApi<"${childComponent.name}">,`,
       );
@@ -286,6 +307,7 @@ export async function componentApiTSWithTypes(
       startPush,
       analysis,
       rootComponent,
+      componentDirectory,
       componentsMap,
       opts,
     )),
