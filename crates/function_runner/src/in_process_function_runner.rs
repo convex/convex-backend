@@ -29,6 +29,7 @@ use common::{
     },
     log_lines::LogLine,
     persistence::{
+        index_scan_attribution::IndexScanCaller,
         PersistenceReader,
         RepeatablePersistence,
     },
@@ -58,6 +59,7 @@ use futures::{
     FutureExt,
     StreamExt,
 };
+use indexing::index_reader::AttributedIndexReader;
 use isolate::{
     isolate_worker::FunctionRunnerIsolateWorker,
     ConcurrencyLimiter,
@@ -258,7 +260,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         let snapshot = self.database.snapshot(ts)?;
         let table_count_snapshot = Arc::new(snapshot.table_counts);
         let text_index_snapshot = Arc::new(TextIndexManagerSnapshot::new(
-            snapshot.index_registry,
+            snapshot.index_registry.clone(),
             snapshot.text_indexes,
             self.database.searcher.clone(),
             self.database.search_storage.clone(),
@@ -276,7 +278,11 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
             ts,
             self.database.retention_validator(),
         );
-        let index_reader = Arc::new(repeatable_persistence.read_snapshot(ts)?);
+        let index_reader = Arc::new(AttributedIndexReader::new(
+            repeatable_persistence.read_snapshot(ts)?,
+            IndexScanCaller::FunctionRunner,
+            Some(snapshot.index_registry),
+        ));
         let request_metadata = RunRequestArgs {
             key_broker: self.key_broker.clone(),
             index_reader,

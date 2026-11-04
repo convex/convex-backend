@@ -116,6 +116,11 @@ use common::{
     document::ResolvedDocument,
     index::IndexKey,
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
         new_static_repeatable_recent,
         DocumentLogEntry,
         DocumentPrevTsQuery,
@@ -549,12 +554,16 @@ impl<RT: Runtime> DataSyncIterator<RT> {
             index_key: current_id
                 .map(|id| CursorPosition::After(IndexKey::new(vec![], id).to_bytes())),
         };
-        let mut stream = snapshot.index_scan(
-            by_id,
-            current_table,
-            &scan_cursor.interval(),
-            Order::Asc,
-            self.page_size_limit,
+        let mut stream = attribute_index_scan(
+            snapshot.index_scan(
+                by_id,
+                current_table,
+                &scan_cursor.interval(),
+                Order::Asc,
+                self.page_size_limit,
+            ),
+            IndexScanCaller::DataSync,
+            IndexScanKind::ById,
         );
         let mut count_limited = false;
 

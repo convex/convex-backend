@@ -16,7 +16,14 @@ use common::{
         BinaryKey,
         Interval,
     },
-    persistence::PersistenceSnapshot,
+    persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
+        PersistenceSnapshot,
+    },
     query::Order,
     runtime::Runtime,
     types::{
@@ -154,12 +161,16 @@ pub async fn load_metadata_fast_forward_ts(
     let id_value_bytes = values_to_bytes(&[Some(id_value)]);
     let interval = Interval::prefix(BinaryKey::from(id_value_bytes));
 
-    let stream = snapshot.index_scan(
-        metadata_index,
-        metadata_table_id.tablet_id,
-        &interval,
-        Order::Asc,
-        100,
+    let stream = attribute_index_scan(
+        snapshot.index_scan(
+            metadata_index,
+            metadata_table_id.tablet_id,
+            &interval,
+            Order::Asc,
+            100,
+        ),
+        IndexScanCaller::IndexWorker,
+        IndexScanKind::Defined,
     );
     let mut results: Vec<_> = stream
         .try_collect::<Vec<_>>()

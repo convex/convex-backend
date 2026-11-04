@@ -23,6 +23,11 @@ use common::{
         TABLE_ITERATOR_MAX_RETRIES,
     },
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
         new_static_repeatable_recent,
         DocumentLogEntry,
         DocumentPrevTsQuery,
@@ -906,12 +911,16 @@ async fn fetch_page(
         let repeatable_persistence =
             RepeatablePersistence::new(persistence.clone(), ts, retention_validator.clone());
         let reader = repeatable_persistence.read_snapshot(ts)?;
-        let stream = reader.index_scan(
-            index_id,
-            tablet_id,
-            &cursor.interval(),
-            Order::Asc,
-            page_size,
+        let stream = attribute_index_scan(
+            reader.index_scan(
+                index_id,
+                tablet_id,
+                &cursor.interval(),
+                Order::Asc,
+                page_size,
+            ),
+            IndexScanCaller::TableIterator,
+            IndexScanKind::Unknown,
         );
         let scan_timer = page_timer("scan");
         let documents_in_page: Vec<_> = match stream.take(page_size).try_collect().await {

@@ -24,6 +24,11 @@ use common::{
         VECTOR_INDEX_WORKER_PAGE_SIZE,
     },
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
         DocumentLogEntry,
         PersistenceReader,
         PersistenceSnapshot,
@@ -769,7 +774,11 @@ async fn incremental_table_scan_stream<'a, T: SearchIndex>(
     };
 
     'outer: loop {
-        let stream = reader.index_scan(by_id, tablet_id, &cursor.interval(), Order::Asc, page_size);
+        let stream = attribute_index_scan(
+            reader.index_scan(by_id, tablet_id, &cursor.interval(), Order::Asc, page_size),
+            IndexScanCaller::SearchFlusher,
+            IndexScanKind::ById,
+        );
         let page: Vec<_> = stream.take(page_size).try_collect().await?;
         if page.len() < page_size {
             cursor.advance(CursorPosition::End)?;

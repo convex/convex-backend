@@ -64,6 +64,11 @@ use common::{
     },
     pause::Fault,
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
         new_idle_repeatable_ts,
         ConflictStrategy,
         DocumentLogEntry,
@@ -148,6 +153,7 @@ use indexing::{
         IndexCacheHandleBuilder,
     },
     index_reader::{
+        AttributedIndexReader,
         IndexEntry,
         IndexReader,
     },
@@ -430,16 +436,25 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
         index: IndexRef,
         tablet_id: TabletId,
     ) -> anyhow::Result<(Vec<(Timestamp, PackedDocument)>, Vec<ParsedDocument<D>>)> {
-        persistence_snapshot
-            .index_scan(index, tablet_id, &Interval::all(), Order::Asc, usize::MAX)
-            .map(|row| {
-                let rev = row?.1;
-                let doc = PackedDocument::pack(&rev.value);
-                let parsed = rev.value.parse()?;
-                Ok(((rev.ts, doc), parsed))
-            })
-            .try_collect()
-            .await
+        attribute_index_scan(
+            persistence_snapshot.index_scan(
+                index,
+                tablet_id,
+                &Interval::all(),
+                Order::Asc,
+                usize::MAX,
+            ),
+            IndexScanCaller::Bootstrap,
+            IndexScanKind::ById,
+        )
+        .map(|row| {
+            let rev = row?.1;
+            let doc = PackedDocument::pack(&rev.value);
+            let parsed = rev.value.parse()?;
+            Ok(((rev.ts, doc), parsed))
+        })
+        .try_collect()
+        .await
     }
 
     fn load_table_documents<T: SystemTable>(
@@ -990,7 +1005,11 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             self.snapshot.index_registry.clone(),
             Arc::new(NoInMemoryIndexes),
             self.snapshot.table_registry.table_mapping().clone(),
-            Arc::new(self.persistence_snapshot.clone()),
+            Arc::new(AttributedIndexReader::new(
+                self.persistence_snapshot.clone(),
+                IndexScanCaller::Transaction,
+                Some(self.snapshot.index_registry.clone()),
+            )),
             self.index_cache_handle.clone(),
             None,
         );
@@ -1759,7 +1778,13 @@ impl<RT: Runtime> Database<RT> {
             } else {
                 self.index_ref_at(snapshot.as_ref(), index.id())?
             };
-            let mut reader = Arc::new(persistence_snapshot) as Arc<dyn IndexReader>;
+            let mut reader = Arc::new(AttributedIndexReader::new(
+                persistence_snapshot,
+                IndexScanCaller::FunctionRunner,
+                snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.index_registry.clone()),
+            )) as Arc<dyn IndexReader>;
             if let Some(snapshot) = snapshot {
                 // TODO: it is probably OK to still use the index cache even if
                 // we don't have an index_registry at the same timestamp.
@@ -2023,14 +2048,16 @@ impl<RT: Runtime> Database<RT> {
                 snapshot.index_registry.clone(),
                 Arc::new(snapshot.in_memory_indexes),
                 snapshot.table_registry.table_mapping().clone(),
-                Arc::new(
+                Arc::new(AttributedIndexReader::new(
                     RepeatablePersistence::new(
                         self.reader.clone(),
                         repeatable_ts,
                         self.retention_manager.clone(),
                     )
                     .read_snapshot(repeatable_ts)?,
-                ),
+                    IndexScanCaller::Transaction,
+                    Some(snapshot.index_registry.clone()),
+                )),
                 Some(self.index_cache_handle.clone()),
                 index_cache,
             ),

@@ -55,6 +55,7 @@ use crate::{
     },
 };
 
+pub mod index_scan_attribution;
 pub mod row_index_retention;
 
 #[derive(Debug, Clone, PartialEq)]

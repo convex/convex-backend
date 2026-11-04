@@ -40,7 +40,14 @@ use common::{
         IndexKeyBytes,
     },
     interval::Interval,
-    persistence::PersistenceSnapshot,
+    persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
+        PersistenceSnapshot,
+    },
     query::Order,
     static_span,
     types::{
@@ -223,16 +230,19 @@ impl BackendInMemoryIndexes {
         }
 
         // Read the table using an arbitrary index from the list
-        let entries: Vec<_> = snapshot
-            .index_scan(
+        let entries: Vec<_> = attribute_index_scan(
+            snapshot.index_scan(
                 IndexRef::try_from(&indexes[0])?,
                 tablet_id,
                 &Interval::all(),
                 Order::Asc,
                 usize::MAX,
-            )
-            .try_collect()
-            .await?;
+            ),
+            IndexScanCaller::InMemoryIndexLoad,
+            IndexScanKind::Unknown,
+        )
+        .try_collect()
+        .await?;
         let mut num_keys: usize = 0;
         let mut total_size: usize = 0;
         let mut index_maps = vec![DatabaseIndexMap::new_at(*snapshot.timestamp()); indexes.len()];

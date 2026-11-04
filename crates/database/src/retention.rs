@@ -64,6 +64,11 @@ use common::{
         RETENTION_CHECKPOINT_PERIOD_SECS,
     },
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
         new_static_repeatable_recent,
         DocumentLogEntry,
         IndexRetentionProgress,
@@ -345,14 +350,18 @@ impl<RT: Runtime> LeaderRetentionWorkerSeed<RT> {
             // Scan _index.by_id before advancing retention so the deleter includes
             // every index that can still be queried.
             let mut all_indexes = {
-                let mut meta_index_scan = reader.index_scan(
-                    bootstrap_metadata.index_by_id,
-                    bootstrap_metadata.index_tablet_id,
-                    *min_index_snapshot_ts,
-                    &Interval::all(),
-                    Order::Asc,
-                    usize::MAX,
-                    self.retention_manager.clone(),
+                let mut meta_index_scan = attribute_index_scan(
+                    reader.index_scan(
+                        bootstrap_metadata.index_by_id,
+                        bootstrap_metadata.index_tablet_id,
+                        *min_index_snapshot_ts,
+                        &Interval::all(),
+                        Order::Asc,
+                        usize::MAX,
+                        self.retention_manager.clone(),
+                    ),
+                    IndexScanCaller::Retention,
+                    IndexScanKind::ById,
                 );
                 let mut indexes = BTreeMap::new();
                 while let Some((_, rev)) = meta_index_scan.try_next().await? {

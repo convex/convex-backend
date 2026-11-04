@@ -14,6 +14,52 @@ use metrics::{
 };
 use prometheus::VMHistogram;
 
+use crate::persistence::index_scan_attribution::{
+    IndexScanCaller,
+    IndexScanKind,
+};
+
+register_convex_counter!(
+    PERSISTENCE_INDEX_SCANS_TOTAL,
+    "Index scans that read from persistence, by what issued them and the kind of index. A scan \
+     can span several queries to the database; each page a transaction or function reads is one \
+     scan",
+    &["caller", "index_kind"]
+);
+register_convex_counter!(
+    PERSISTENCE_INDEX_SCAN_DOCUMENTS_TOTAL,
+    "Documents index scans read from persistence, by what issued the scan and the kind of index",
+    &["caller", "index_kind"]
+);
+register_convex_counter!(
+    PERSISTENCE_INDEX_SCAN_WAIT_MICROSECONDS_TOTAL,
+    "Time callers spent waiting on index scans of persistence, by what issued the scan and the \
+     kind of index",
+    &["caller", "index_kind"]
+);
+pub fn log_index_scan(
+    caller: IndexScanCaller,
+    kind: IndexScanKind,
+    documents: u64,
+    waited: Duration,
+) {
+    let labels = vec![
+        StaticMetricLabel::new("caller", <&'static str>::from(caller)),
+        StaticMetricLabel::new("index_kind", <&'static str>::from(kind)),
+    ];
+    log_counter_with_labels(&PERSISTENCE_INDEX_SCANS_TOTAL, 1, labels.clone());
+    log_counter_with_labels(
+        &PERSISTENCE_INDEX_SCAN_DOCUMENTS_TOTAL,
+        documents,
+        labels.clone(),
+    );
+    log_counter_with_labels(
+        &PERSISTENCE_INDEX_SCAN_WAIT_MICROSECONDS_TOTAL,
+        waited.as_micros() as u64,
+        labels,
+    );
+}
+
 register_convex_counter!(
     COMMON_UNDEFINED_FILTER_TOTAL,
     "Count of undefined JsonValues filtered"
