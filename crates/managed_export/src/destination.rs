@@ -91,21 +91,30 @@ impl ExportState {
         }
     }
 
+    /// The number of the page after `page`. Since `page` is customer-writable,
+    /// a malicious actor could cause an overflow. We check against the
+    /// overflow here.
+    pub fn next_page(&self) -> Result<u64> {
+        self.page
+            .checked_add(1)
+            .context("The export state's page counter overflowed")
+    }
+
     /// The state after one more committed page.
     pub fn next(
         &self,
         cursor: String,
         tables: BTreeMap<String, String>,
         retired: BTreeSet<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        Ok(Self {
             export_id: self.export_id.clone(),
             format: self.format,
-            page: self.page + 1,
+            page: self.next_page()?,
             cursor: Some(cursor),
             tables,
             retired,
-        }
+        })
     }
 
     /// Whether a Glue table with `parameters` was published by this export at
