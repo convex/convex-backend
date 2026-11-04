@@ -52,7 +52,7 @@ pub(super) struct Settings {
     /// memory. Reads sampled beyond it are dropped.
     pub(super) max_concurrent_comparisons: usize,
     /// V6 reads in flight for comparisons. A comparison waits for a slot until
-    /// its `apply_wait` deadline, which the replay barrier shares, then is
+    /// its `apply_wait` deadline, which the replay wait shares, then is
     /// dropped.
     pub(super) max_concurrent_replica_reads: usize,
 }

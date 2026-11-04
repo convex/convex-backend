@@ -5,6 +5,7 @@ use std::{
     sync::{
         atomic::{
             AtomicBool,
+            AtomicU64,
             Ordering,
         },
         Arc,
@@ -47,6 +48,7 @@ use tokio::{
     sync::{
         mpsc,
         oneshot,
+        watch,
         Semaphore,
     },
     time::Instant,
@@ -92,49 +94,51 @@ pub(crate) enum ReplayOperation {
 
 type Reply = oneshot::Sender<anyhow::Result<u64>>;
 
-enum ReplayQueueMessage<RT: Runtime> {
-    Replay {
-        // Queued operations keep the writer alive. The worker holds only the
-        // receiver, so the channel closes once these and the source are dropped.
-        replica: Arc<ReplicaWriter<RT>>,
-        operation: ReplayOperation,
-        reply: Reply,
-    },
-    NotifyAfterPriorReplay(oneshot::Sender<()>),
+/// A queued operation. Queued operations keep the writer alive: the worker
+/// holds only the receiver, so the channel closes once these and the source
+/// are dropped.
+struct ReplayJob<RT: Runtime> {
+    replica: Arc<ReplicaWriter<RT>>,
+    operation: ReplayOperation,
+    reply: Reply,
 }
 
-/// Applies messages in order, merging consecutive writes into one V6
-/// transaction, until the last sender is dropped.
-async fn replay_queue<RT: Runtime>(mut receiver: mpsc::Receiver<ReplayQueueMessage<RT>>) {
+/// Applies jobs in order, merging consecutive writes into one V6
+/// transaction, until the last sender is dropped. `applied` publishes the
+/// number of jobs settled so far, in queue order, for `wait_for_prior_replay`.
+async fn replay_queue<RT: Runtime>(
+    mut receiver: mpsc::Receiver<ReplayJob<RT>>,
+    applied: watch::Sender<u64>,
+) {
+    let mut applied_jobs = 0;
     let mut next = receiver.recv().await;
-    while let Some(message) = next.take() {
-        match message {
-            ReplayQueueMessage::NotifyAfterPriorReplay(reply) => {
-                let _ = reply.send(());
-            },
-            ReplayQueueMessage::Replay {
+    while let Some(job) = next.take() {
+        // Scoped so the worker holds no writer reference while it waits for
+        // the next job, letting the channel close once the source is dropped.
+        {
+            let ReplayJob {
                 replica,
                 operation,
                 reply,
-            } => {
-                let (operation, replies) = match operation {
-                    ReplayOperation::Write {
-                        documents,
-                        indexes,
-                        conflict_strategy,
-                    } => {
-                        let mut batch =
-                            WriteBatch::new(documents, indexes, conflict_strategy, reply);
-                        next = batch.fill(&mut receiver, replica.settings.max_merged_writes);
-                        batch.finish()
-                    },
-                    operation => (operation, vec![reply]),
-                };
-                let jobs = replies.len() as u64;
-                let outcome = replica.run(&operation, jobs).await;
-                metrics::add_queued(&replica.cluster_name, -(jobs as f64));
-                send_outcome(replies, outcome);
-            },
+            } = job;
+            let (operation, replies) = match operation {
+                ReplayOperation::Write {
+                    documents,
+                    indexes,
+                    conflict_strategy,
+                } => {
+                    let mut batch = WriteBatch::new(documents, indexes, conflict_strategy, reply);
+                    next = batch.fill(&mut receiver, replica.settings.max_merged_writes);
+                    batch.finish()
+                },
+                operation => (operation, vec![reply]),
+            };
+            let jobs = replies.len() as u64;
+            let outcome = replica.run(&operation, jobs).await;
+            metrics::add_queued(&replica.cluster_name, -(jobs as f64));
+            send_outcome(replies, outcome);
+            applied_jobs += jobs;
+            applied.send_replace(applied_jobs);
         }
         if next.is_none() {
             next = receiver.recv().await;
@@ -170,29 +174,27 @@ impl WriteBatch {
     }
 
     /// Takes queued jobs while they merge and `max_jobs` allows, returning the
-    /// first message that must wait for the next transaction.
+    /// first job that must wait for the next transaction.
     fn fill<RT: Runtime>(
         &mut self,
-        receiver: &mut mpsc::Receiver<ReplayQueueMessage<RT>>,
+        receiver: &mut mpsc::Receiver<ReplayJob<RT>>,
         max_jobs: usize,
-    ) -> Option<ReplayQueueMessage<RT>> {
+    ) -> Option<ReplayJob<RT>> {
         while self.replies.len() < max_jobs {
-            match receiver.try_recv().ok()? {
-                ReplayQueueMessage::Replay {
-                    replica,
-                    operation,
-                    reply,
-                } => match self.merge(operation) {
-                    Ok(()) => self.replies.push(reply),
-                    Err(operation) => {
-                        return Some(ReplayQueueMessage::Replay {
-                            replica,
-                            operation,
-                            reply,
-                        })
-                    },
+            let ReplayJob {
+                replica,
+                operation,
+                reply,
+            } = receiver.try_recv().ok()?;
+            match self.merge(operation) {
+                Ok(()) => self.replies.push(reply),
+                Err(operation) => {
+                    return Some(ReplayJob {
+                        replica,
+                        operation,
+                        reply,
+                    })
                 },
-                message => return Some(message),
             }
         }
         None
@@ -269,7 +271,15 @@ pub(crate) struct ReplicaWriter<RT: Runtime> {
     /// Stops replay and comparisons permanently on retirement, lease loss,
     /// or clean shutdown.
     stopped: AtomicBool,
-    queue: mpsc::Sender<ReplayQueueMessage<RT>>,
+    queue: mpsc::Sender<ReplayJob<RT>>,
+    /// Serializes `queue.try_send` with the `enqueued` increment, so the count
+    /// never exceeds the jobs the worker will receive and a count read after a
+    /// source call finished includes that call's job.
+    enqueue_order: parking_lot::Mutex<()>,
+    /// Jobs the queue has accepted.
+    enqueued: AtomicU64,
+    /// Jobs the worker has settled, in queue order.
+    applied: watch::Receiver<u64>,
     pub(super) settings: Settings,
     /// Held by sampled reads from sampling through outcome logging.
     pub(super) comparison_permits: Arc<Semaphore>,
@@ -287,6 +297,7 @@ impl<RT: Runtime> ReplicaWriter<RT> {
         writer_state_gauge: Arc<metrics::WriterStateGauge>,
     ) -> Arc<Self> {
         let (queue, receiver) = mpsc::channel(settings.max_queued_jobs);
+        let (applied_sender, applied) = watch::channel(0);
         let (activate, activated) = oneshot::channel();
         let replica = Arc::new(Self {
             v6: OnceLock::new(),
@@ -298,6 +309,9 @@ impl<RT: Runtime> ReplicaWriter<RT> {
             lease_ts: source.lease_ts,
             stopped: AtomicBool::new(false),
             queue,
+            enqueue_order: parking_lot::Mutex::new(()),
+            enqueued: AtomicU64::new(0),
+            applied,
             comparison_permits: Arc::new(Semaphore::new(settings.max_concurrent_comparisons)),
             replica_read_permits: Semaphore::new(settings.max_concurrent_replica_reads),
             settings,
@@ -313,7 +327,7 @@ impl<RT: Runtime> ReplicaWriter<RT> {
             // A pending writer holds its jobs until the handoff resolves. A
             // dropped sender means it stopped, and the loop skips them.
             let _ = activated.await;
-            replay_queue(receiver).await;
+            replay_queue(receiver, applied_sender).await;
         });
         replica
     }
@@ -353,11 +367,19 @@ impl<RT: Runtime> ReplicaWriter<RT> {
         }
         let (reply, result) = oneshot::channel();
         metrics::add_queued(&self.cluster_name, 1.0);
-        if let Err(error) = self.queue.try_send(ReplayQueueMessage::Replay {
-            replica: self.clone(),
-            operation,
-            reply,
-        }) {
+        let sent = {
+            let _order = self.enqueue_order.lock();
+            let sent = self.queue.try_send(ReplayJob {
+                replica: self.clone(),
+                operation,
+                reply,
+            });
+            if sent.is_ok() {
+                self.enqueued.fetch_add(1, Ordering::SeqCst);
+            }
+            sent
+        };
+        if let Err(error) = sent {
             metrics::add_queued(&self.cluster_name, -1.0);
             let reason = match error {
                 mpsc::error::TrySendError::Full(_) => metrics::RetireReason::QueueFull,
@@ -461,22 +483,19 @@ impl<RT: Runtime> ReplicaWriter<RT> {
         }
     }
 
-    /// Acknowledges earlier operations after success, failure, or skipping.
+    /// Resolves once every job queued before this call has been applied,
+    /// failed, or skipped, or returns false when the worker exited or
+    /// `deadline` passed first. Waiting reads the worker's progress counter,
+    /// so writes queued around a wait still merge into one transaction.
     pub(crate) async fn wait_for_prior_replay(&self, deadline: Option<Instant>) -> bool {
-        let notification = async {
-            let (reply, completed) = oneshot::channel();
-            self.queue
-                .send(ReplayQueueMessage::NotifyAfterPriorReplay(reply))
-                .await
-                .ok()?;
-            completed.await.ok()
-        };
+        let target = self.enqueued.load(Ordering::SeqCst);
+        let mut applied = self.applied.clone();
+        let settled = async move { applied.wait_for(|applied| *applied >= target).await.is_ok() };
         match deadline {
-            Some(deadline) => matches!(
-                tokio::time::timeout_at(deadline, notification).await,
-                Ok(Some(()))
-            ),
-            None => notification.await.is_some(),
+            Some(deadline) => tokio::time::timeout_at(deadline, settled)
+                .await
+                .unwrap_or(false),
+            None => settled.await,
         }
     }
 
