@@ -21,7 +21,7 @@ import {
 } from "@common/lib/deploymentContext";
 import { useGlobalLocalStorage } from "@common/lib/useGlobalLocalStorage";
 import { useCollapseSidebarState } from "@common/lib/useCollapseSidebarState";
-import { PulseIcon } from "@common/elements/icons";
+import { TachometerIcon } from "@common/elements/icons";
 import {
   Sidebar,
   SidebarGroup,
@@ -65,7 +65,7 @@ export function DeploymentDashboardLayout({
     {
       key: "health",
       label: "Health",
-      Icon: PulseIcon,
+      Icon: TachometerIcon,
       href: `${uriPrefix}/`,
     },
     {
