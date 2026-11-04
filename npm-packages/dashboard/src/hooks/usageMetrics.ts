@@ -580,7 +580,11 @@ export function useFunctionCallsPerDayByProjectAndClass(
     return { data: undefined, error: functionError || storageError };
   }
 
-  const metrics = functionData?.map(
+  if (!functionData || !storageData) {
+    return { data: undefined, error: undefined };
+  }
+
+  const metrics: DailyPerTagMetricsByProjectAndClass[] = functionData.map(
     ([
       _teamId,
       projectId,
@@ -605,22 +609,30 @@ export function useFunctionCallsPerDayByProjectAndClass(
     }),
   );
 
-  // Augment with storage calls data
-  const storageDataByKey = (storageData || []).reduce(
-    (acc, [_teamId, projectId, deploymentClass, ds, storageCalls]) => {
-      const key = `${ds}-${projectId}-${deploymentClass}`;
-      acc[key] = Number(storageCalls);
-      return acc;
-    },
-    {} as Record<string, number>,
+  const metricsByKey = new Map(
+    metrics.map((metric) => [
+      `${metric.ds}-${metric.projectId}-${metric.deploymentClass}`,
+      metric,
+    ]),
   );
-  for (const metric of metrics || []) {
-    const key = `${metric.ds}-${metric.projectId}-${metric.deploymentClass}`;
-    const storageCalls = storageDataByKey[key];
-    if (storageCalls) {
-      metric.metrics.push({ tag: "storage_api", value: storageCalls });
-      delete storageDataByKey[key];
+  // Augment with storage calls data. This can have its own top ranked projects
+  // which might be missing from functionData.
+  for (const [
+    _teamId,
+    projectId,
+    deploymentClass,
+    ds,
+    storageCalls,
+  ] of storageData) {
+    const parsedProjectId = parseProjectId(projectId);
+    const key = `${ds}-${parsedProjectId}-${deploymentClass}`;
+    let metric = metricsByKey.get(key);
+    if (!metric) {
+      metric = { ds, projectId: parsedProjectId, deploymentClass, metrics: [] };
+      metrics.push(metric);
+      metricsByKey.set(key, metric);
     }
+    metric.metrics.push({ tag: "storage_api", value: Number(storageCalls) });
   }
 
   return { data: metrics, error: undefined };
