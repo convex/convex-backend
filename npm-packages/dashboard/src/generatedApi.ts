@@ -2432,6 +2432,8 @@ export interface components {
             amount: string;
             /** Format: double */
             percentageDiscount?: number | null;
+            /** Format: double */
+            consumedUnits?: number | null;
         };
         MetricPriceRate: {
             rate: components["schemas"]["MetricPriceAmount"];
@@ -2443,6 +2445,8 @@ export interface components {
                             amount: string;
                             /** Format: double */
                             percentageDiscount?: number | null;
+                            /** Format: double */
+                            consumedUnits?: number | null;
                         };
                     };
                 };
@@ -2738,6 +2742,8 @@ export interface components {
                     amount: string;
                     /** Format: double */
                     percentageDiscount?: number | null;
+                    /** Format: double */
+                    consumedUnits?: number | null;
                 };
             };
         };

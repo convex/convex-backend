@@ -5454,6 +5454,13 @@
               "null"
             ],
             "format": "double"
+          },
+          "consumedUnits": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },
@@ -5499,6 +5506,13 @@
                             "type": "string"
                           },
                           "percentageDiscount": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "format": "double"
+                          },
+                          "consumedUnits": {
                             "type": [
                               "number",
                               "null"
@@ -6439,6 +6453,13 @@
                   "type": "string"
                 },
                 "percentageDiscount": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "format": "double"
+                },
+                "consumedUnits": {
                   "type": [
                     "number",
                     "null"
