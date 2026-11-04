@@ -29,6 +29,7 @@ use common::{
     },
     fastrace_helpers::FutureExt as _,
     knobs::{
+        DATABASE_USE_PREPARED_STATEMENTS,
         MYSQL_INACTIVE_CONNECTION_LIFETIME,
         MYSQL_MAX_CONNECTIONS,
         MYSQL_MAX_CONNECTION_LIFETIME,
@@ -871,6 +872,31 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
             idle_worker,
             _runtime: PhantomData,
         })
+    }
+
+    /// Connects to the cluster leader using a Big Brain database URL.
+    pub fn connect_cluster(cluster_url: &str, require_ssl: bool) -> anyhow::Result<(Self, String)> {
+        let mut url: Url = cluster_url.parse().context("invalid MySQL cluster URL")?;
+        anyhow::ensure!(
+            !url.username().is_empty(),
+            "MySQL cluster URL username must be set"
+        );
+        let db_name = url.path().trim_start_matches('/').to_string();
+        anyhow::ensure!(
+            !db_name.is_empty(),
+            "MySQL cluster URL must contain a database name"
+        );
+        if require_ssl {
+            url.query_pairs_mut().append_pair("require_ssl", "true");
+        }
+        url.query_pairs_mut()
+            .append_pair("enable_cleartext_plugin", "true");
+        let pool = Self::new(
+            &url,
+            *DATABASE_USE_PREPARED_STATEMENTS,
+            true, /* require_leader */
+        )?;
+        Ok((pool, db_name))
     }
 
     /// Assumes that we already have a semaphore permit

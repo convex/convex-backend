@@ -78,13 +78,14 @@ INSERT INTO @db_name.indexes_maintenance_state
 pub(crate) const INIT_SQL: &str = concatcp!(STATE_TABLE_DDL, SEED_STATE_ROW);
 
 const READ_STATE: &str = r#"
-SELECT oldest_kept_ts FROM @db_name.indexes_maintenance_state WHERE id = 1
+SELECT created_through_ts, oldest_kept_ts, lease_owner, lease_expires_ts, last_run_ts, last_run_status
+FROM @db_name.indexes_maintenance_state WHERE id = 1
 "#;
 
 const TAKE_LEASE: &str = r#"
 UPDATE @db_name.indexes_maintenance_state
 SET lease_owner = ?, lease_expires_ts = ?
-WHERE id = 1 AND (lease_expires_ts <= ? OR lease_owner = ?)
+WHERE id = 1 AND (? OR lease_expires_ts <= ? OR lease_owner = ?)
 "#;
 
 // Writers cache the published ceiling, so it must remain monotonic.
@@ -102,6 +103,39 @@ UPDATE @db_name.indexes_maintenance_state
 SET last_run_ts = ?, last_run_status = 'failed'
 WHERE id = 1 AND lease_owner = ?
 "#;
+
+#[derive(Debug)]
+pub struct MaintenanceState {
+    pub created_through_ts: Timestamp,
+    pub oldest_kept_ts: Timestamp,
+    pub lease_owner: String,
+    pub lease_expires_ts: Timestamp,
+    pub last_run_ts: Timestamp,
+    pub last_run_status: String,
+}
+
+/// A read-only snapshot; concurrent maintenance can change the tables and
+/// state.
+#[derive(Debug)]
+pub struct MaintenancePlan {
+    pub state: MaintenanceState,
+    pub existing: Vec<String>,
+    pub to_create: Vec<String>,
+    pub to_drop: Option<String>,
+}
+
+struct BucketPlan {
+    existing: BTreeSet<LogBucket>,
+    missing: Vec<LogBucket>,
+    oldest_kept_ts: Timestamp,
+    to_drop: Option<LogBucket>,
+}
+
+pub enum MaintenanceLease {
+    Acquire,
+    /// The previous owner's in-flight round will fail to publish.
+    Steal,
+}
 
 #[derive(Debug)]
 pub struct MaintenanceRound {
@@ -136,7 +170,16 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
     /// out, and publish the new ceiling and floor. Returns `None` when
     /// another conductor holds the lease.
     pub async fn run_once(&self, now: Timestamp) -> anyhow::Result<Option<MaintenanceRound>> {
-        let result = self.try_run_once(now).await;
+        self.run_once_with_lease(now, MaintenanceLease::Acquire)
+            .await
+    }
+
+    pub async fn run_once_with_lease(
+        &self,
+        now: Timestamp,
+        lease: MaintenanceLease,
+    ) -> anyhow::Result<Option<MaintenanceRound>> {
+        let result = self.try_run_once(now, lease).await;
         metrics::log_indexes_log_maintenance_round(
             self.pool.cluster_name(),
             match &result {
@@ -148,18 +191,36 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
         result
     }
 
-    async fn try_run_once(&self, now: Timestamp) -> anyhow::Result<Option<MaintenanceRound>> {
+    pub async fn plan(&self, now: Timestamp) -> anyhow::Result<MaintenancePlan> {
         let mut conn = self.pool.acquire(CONNECTION_NAME, &self.db_name).await?;
-        let row = conn
-            .query_optional(READ_STATE, vec![])
-            .await?
-            .context("indexes_maintenance_state has no row; call initialize() first")?;
+        let state = read_state(&mut conn).await?;
+        let BucketPlan {
+            existing,
+            missing,
+            oldest_kept_ts: _,
+            to_drop,
+        } = self
+            .plan_buckets(&mut conn, now, state.oldest_kept_ts)
+            .await?;
+        Ok(MaintenancePlan {
+            state,
+            existing: existing.into_iter().map(LogBucket::table_name).collect(),
+            to_create: missing.into_iter().map(LogBucket::table_name).collect(),
+            to_drop: to_drop.map(LogBucket::table_name),
+        })
+    }
 
+    async fn try_run_once(
+        &self,
+        now: Timestamp,
+        lease: MaintenanceLease,
+    ) -> anyhow::Result<Option<MaintenanceRound>> {
+        let mut conn = self.pool.acquire(CONNECTION_NAME, &self.db_name).await?;
         // The floor a previous round published. This round may advance it
         // but never walk it back.
-        let prev_oldest_kept_ts = ts_column(&row, 0)?;
+        let prev_oldest_kept_ts = read_state(&mut conn).await?.oldest_kept_ts;
 
-        if !self.take_lease(&mut conn, now).await? {
+        if !self.take_lease(&mut conn, now, lease).await? {
             return Ok(None);
         }
 
@@ -187,14 +248,20 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
         &self,
         conn: &mut MySqlConnection<'_, RT>,
         now: Timestamp,
+        lease: MaintenanceLease,
     ) -> anyhow::Result<bool> {
         let expires_ts = now.add(LEASE_TTL)?;
+        let steal = match lease {
+            MaintenanceLease::Acquire => false,
+            MaintenanceLease::Steal => true,
+        };
         let affected_rows = conn
             .exec_iter(
                 TAKE_LEASE,
                 vec![
                     (&self.owner).into(),
                     Value::Int(i64::from(expires_ts)),
+                    steal.into(),
                     Value::Int(i64::from(now)),
                     (&self.owner).into(),
                 ],
@@ -203,13 +270,13 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
         Ok(affected_rows == 1)
     }
 
-    async fn maintain(
+    async fn plan_buckets(
         &self,
         conn: &mut MySqlConnection<'_, RT>,
         now: Timestamp,
         prev_oldest_kept_ts: Timestamp,
-    ) -> anyhow::Result<MaintenanceRound> {
-        let mut existing: BTreeSet<LogBucket> = conn
+    ) -> anyhow::Result<BucketPlan> {
+        let existing: BTreeSet<LogBucket> = conn
             .query_collect(
                 LIST_LOG_TABLES,
                 vec![(&self.db_name).into()],
@@ -225,19 +292,27 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
             .into_iter()
             .collect();
 
-        let now_bucket = LogBucket::from_successor_ts(now);
-        let retention_start = now.sub(*INDEX_RETENTION_DELAY).unwrap_or(Timestamp::MIN);
-        let oldest_kept_ts = cmp::max(
+        compute_bucket_plan(
+            existing,
             prev_oldest_kept_ts,
-            LogBucket::from_successor_ts(retention_start).start_ts()?,
-        );
-        let floor_bucket = LogBucket::from_successor_ts(oldest_kept_ts);
-        let missing = buckets_to_create(
-            floor_bucket.min(now_bucket),
-            now_bucket,
+            now,
+            *INDEX_RETENTION_DELAY,
             *INDEXES_LOG_LOOKAHEAD_BUCKETS,
-            &existing,
-        )?;
+        )
+    }
+
+    async fn maintain(
+        &self,
+        conn: &mut MySqlConnection<'_, RT>,
+        now: Timestamp,
+        prev_oldest_kept_ts: Timestamp,
+    ) -> anyhow::Result<MaintenanceRound> {
+        let BucketPlan {
+            mut existing,
+            missing,
+            oldest_kept_ts,
+            to_drop,
+        } = self.plan_buckets(conn, now, prev_oldest_kept_ts).await?;
         // Counted here rather than off the returned round: the DDL is done and
         // committed even if this round later loses the publish fence.
         for bucket in missing {
@@ -249,8 +324,7 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
         // Dropping runs against the floor a previous round published, and
         // publishing this round's floor comes after. A reader still holding the
         // older floor can only be pointed at buckets that are still here.
-        let dropped = bucket_to_drop(&existing, prev_oldest_kept_ts, now_bucket)?;
-        if let Some(bucket) = dropped {
+        if let Some(bucket) = to_drop {
             cover!(super::coverage::BUCKET_DROPPED);
             conn.execute_many(&drop_log_ddl(bucket)).await?;
             metrics::log_indexes_log_bucket_dropped(self.pool.cluster_name());
@@ -278,12 +352,63 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
         );
 
         Ok(MaintenanceRound {
-            dropped: dropped.map(LogBucket::table_name),
+            dropped: to_drop.map(LogBucket::table_name),
             created_through_ts,
             oldest_kept_ts,
             bucket_count: existing.len(),
         })
     }
+}
+
+fn compute_bucket_plan(
+    existing: BTreeSet<LogBucket>,
+    prev_oldest_kept_ts: Timestamp,
+    now: Timestamp,
+    retention_delay: Duration,
+    lookahead: usize,
+) -> anyhow::Result<BucketPlan> {
+    let now_bucket = LogBucket::from_successor_ts(now);
+    let retention_start = now.sub(retention_delay).unwrap_or(Timestamp::MIN);
+    let oldest_kept_ts = cmp::max(
+        prev_oldest_kept_ts,
+        LogBucket::from_successor_ts(retention_start).start_ts()?,
+    );
+    let floor_bucket = LogBucket::from_successor_ts(oldest_kept_ts);
+    let missing = buckets_to_create(
+        floor_bucket.min(now_bucket),
+        now_bucket,
+        lookahead,
+        &existing,
+    )?;
+    let after_create = existing.iter().chain(&missing).copied().collect();
+    let to_drop = bucket_to_drop(&after_create, prev_oldest_kept_ts, now_bucket)?;
+    Ok(BucketPlan {
+        existing,
+        missing,
+        oldest_kept_ts,
+        to_drop,
+    })
+}
+
+async fn read_state<RT: Runtime>(
+    conn: &mut MySqlConnection<'_, RT>,
+) -> anyhow::Result<MaintenanceState> {
+    let row = conn
+        .query_optional(READ_STATE, vec![])
+        .await?
+        .context("indexes_maintenance_state has no row; call initialize() first")?;
+    let string_column = |index| -> anyhow::Result<String> {
+        row.get(index)
+            .with_context(|| format!("indexes_maintenance_state has no column {index}"))
+    };
+    Ok(MaintenanceState {
+        created_through_ts: ts_column(&row, 0)?,
+        oldest_kept_ts: ts_column(&row, 1)?,
+        lease_owner: string_column(2)?,
+        lease_expires_ts: ts_column(&row, 3)?,
+        last_run_ts: ts_column(&row, 4)?,
+        last_run_status: string_column(5)?,
+    })
 }
 
 fn ts_column(row: &Row, index: usize) -> anyhow::Result<Timestamp> {

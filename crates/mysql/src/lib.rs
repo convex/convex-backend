@@ -37,7 +37,10 @@ pub use mysql_async::{
 };
 pub use v6::maintenance::{
     IndexesLogMaintenance,
+    MaintenanceLease,
+    MaintenancePlan,
     MaintenanceRound,
+    MaintenanceState,
 };
 pub use v6_replica::{
     maintenance as v6_replica_maintenance,

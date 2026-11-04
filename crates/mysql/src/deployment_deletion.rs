@@ -9,10 +9,7 @@ use std::{
 
 use anyhow::Context;
 use common::{
-    knobs::{
-        DATABASE_USE_PREPARED_STATEMENTS,
-        DEPLOYMENT_DELETION_BATCH_SIZE,
-    },
+    knobs::DEPLOYMENT_DELETION_BATCH_SIZE,
     persistence::PersistenceGlobalKey,
     runtime::Runtime,
     types::{
@@ -28,7 +25,6 @@ use mysql_async::{
     Row,
     Value,
 };
-use url::Url;
 
 use crate::{
     connection::{
@@ -152,28 +148,9 @@ impl<RT: Runtime> DeploymentDeletionPool<RT> {
         require_ssl: bool,
         version: PersistenceVersion,
     ) -> anyhow::Result<Self> {
-        let mut url: Url = cluster_url.parse().context("invalid MySQL cluster URL")?;
-        anyhow::ensure!(
-            !url.username().is_empty(),
-            "MySQL cluster URL username must be set"
-        );
-        let db_name = url.path().trim_start_matches('/').to_string();
-        anyhow::ensure!(
-            !db_name.is_empty(),
-            "MySQL cluster URL must contain a database name"
-        );
-        if require_ssl {
-            url.query_pairs_mut().append_pair("require_ssl", "true");
-        }
-        url.query_pairs_mut()
-            .append_pair("enable_cleartext_plugin", "true");
-        let pool = Arc::new(ConvexMySqlPool::new(
-            &url,
-            *DATABASE_USE_PREPARED_STATEMENTS,
-            true, /* require_leader */
-        )?);
+        let (pool, db_name) = ConvexMySqlPool::connect_cluster(cluster_url, require_ssl)?;
         Ok(Self {
-            pool,
+            pool: Arc::new(pool),
             db_name,
             version,
         })
