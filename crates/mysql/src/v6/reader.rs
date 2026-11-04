@@ -216,8 +216,10 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                 let floor = bounds.floor.max(queried_bounds.floor);
                 if snapshot_bucket < floor {
                     stats.sql_statements += 1;
+                    // The check must use the page's session: a replacement
+                    // connection could read from a more lagging replica.
                     let displaced_since_snapshot = connection
-                        .query_optional(
+                        .query_optional_without_retries(
                             self.documents.has_commit_between_sql(),
                             vec![
                                 self.documents.tenant_value(self.deployment_id),

@@ -486,12 +486,40 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         statement: &str,
         params: Vec<MySqlValue>,
     ) -> anyhow::Result<Option<Row>> {
+        self.query_optional_with_retries(statement, params, *MYSQL_MAX_QUERY_RETRIES)
+            .await
+    }
+
+    /// Use when the result must come from the current database session.
+    #[fastrace::trace]
+    pub async fn query_optional_without_retries(
+        &mut self,
+        statement: &str,
+        params: Vec<MySqlValue>,
+    ) -> anyhow::Result<Option<Row>> {
+        // The retry helper reconnects closed sessions before its first attempt.
+        if !self
+            .conn
+            .as_ref()
+            .is_some_and(|conn| !conn.conn.is_disconnected())
+        {
+            return Err(classify_mysql_error(DriverError::ConnectionClosed.into()));
+        }
+        self.query_optional_with_retries(statement, params, 0).await
+    }
+
+    async fn query_optional_with_retries(
+        &mut self,
+        statement: &str,
+        params: Vec<MySqlValue>,
+        max_retries: u32,
+    ) -> anyhow::Result<Option<Row>> {
         log_query(self.labels.clone());
         let row = if self.pool.use_prepared_statements {
             let statement = format_mysql_binary_protocol(self.db_name, statement)?;
             self.handle_errors_with_retries(
                 async move |conn| with_timeout(conn.exec_first(&statement, params.clone())).await,
-                *MYSQL_MAX_QUERY_RETRIES,
+                max_retries,
             )
             .await?
         } else {
@@ -499,7 +527,7 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
                 format_mysql_text_protocol(self.db_name, statement, params, &self.labels)?;
             self.handle_errors_with_retries(
                 async move |conn| with_timeout(conn.query_first(&statement)).await,
-                *MYSQL_MAX_QUERY_RETRIES,
+                max_retries,
             )
             .await?
         };
