@@ -98,6 +98,12 @@ SET created_through_ts = GREATEST(created_through_ts, ?),
 WHERE id = 1 AND lease_owner = ?
 "#;
 
+const RELEASE_LEASE: &str = r#"
+UPDATE @db_name.indexes_maintenance_state
+SET lease_expires_ts = 0
+WHERE id = 1 AND lease_owner = ?
+"#;
+
 const MARK_FAILED: &str = r#"
 UPDATE @db_name.indexes_maintenance_state
 SET last_run_ts = ?, last_run_status = 'failed'
@@ -236,6 +242,16 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
             tracing::warn!("Could not record indexes_log maintenance failure: {e:#}");
         }
         round.map(Some)
+    }
+
+    /// Returns whether this owner's lease was expired by the update.
+    /// Consuming `self` ensures outstanding rounds finish before release.
+    pub async fn release_lease(self) -> anyhow::Result<bool> {
+        let mut conn = self.pool.acquire(CONNECTION_NAME, &self.db_name).await?;
+        let affected_rows = conn
+            .exec_iter(RELEASE_LEASE, vec![(&self.owner).into()])
+            .await?;
+        Ok(affected_rows == 1)
     }
 
     /// Reports this round's gauges. The created and dropped counters are logged
