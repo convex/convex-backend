@@ -91,16 +91,59 @@ function discountedRate(price: PriceAmount | undefined): number | undefined {
 
 export type UsageSpend = {
   amount: number;
+  includedAmount: number;
   missingDimensions: string[];
 };
+
+function priceAmounts(price: MetricPrice | undefined): PriceAmount[] {
+  return !price
+    ? []
+    : "rate" in price
+      ? [price.rate]
+      : "regionRate" in price
+        ? Object.values(price.regionRate)
+        : Object.values(price.deploymentClassRate).flatMap((regional) =>
+            Object.values(regional.regionRate),
+          );
+}
+
+export function isStorageMetric(sectionMetric: string): boolean {
+  return (
+    sectionMetric === "databaseStorage" ||
+    sectionMetric === "fileStorage" ||
+    sectionMetric === "searchStorage"
+  );
+}
 
 function metricSpend(
   summary: UsageSummaryRow[],
   metric: Metric,
   price: MetricPrice | undefined,
+  estimateStorage: boolean,
 ): UsageSpend | undefined {
   let gross = 0;
+  let estimatedGb = 0;
+  let coveredSpend = 0;
   const missingDimensions = new Set<string>();
+
+  const rates = estimateStorage ? [] : priceAmounts(price);
+  for (const amount of rates) {
+    if (amount.consumedUnits === undefined || amount.consumedUnits === null) {
+      continue;
+    }
+    const rate = discountedRate(amount);
+
+    if (
+      rate === undefined ||
+      !Number.isFinite(amount.consumedUnits) ||
+      amount.consumedUnits < 0
+    ) {
+      return undefined;
+    }
+    // consumedUnits is already post-discount application, so multiply by the
+    // undiscounted rate here.
+    coveredSpend += amount.consumedUnits * Number(amount.amount);
+  }
   for (const row of summary) {
     const fields = Array.isArray(metric.field) ? metric.field : [metric.field];
     const quantities = fields.map(
@@ -135,10 +178,24 @@ function metricSpend(
     }
     const rate = discountedRate(amount);
     if (rate === undefined) return undefined;
-    gross += Math.ceil(quantity) * rate;
+    const roundedQuantity = Math.ceil(quantity);
+    gross += roundedQuantity * rate;
+    estimatedGb += roundedQuantity;
   }
-  return Number.isFinite(gross)
-    ? { amount: gross, missingDimensions: [...missingDimensions].sort() }
+  if (estimateStorage) {
+    const includedGb = price ? parseNonNegativeNumber(price.includedUnits) : 0;
+    if (includedGb === undefined) return undefined;
+    // Monthly estimates value a shared allowance at the snapshot's weighted
+    // average rate across deployment classes and regions.
+    coveredSpend =
+      estimatedGb > 0 ? gross * Math.min(includedGb / estimatedGb, 1) : 0;
+  }
+  return Number.isFinite(gross) && Number.isFinite(coveredSpend)
+    ? {
+        amount: gross,
+        includedAmount: coveredSpend,
+        missingDimensions: [...missingDimensions].sort(),
+      }
     : undefined;
 }
 
@@ -161,21 +218,28 @@ export function getUsageSpend(
   }
 
   let total = 0;
+  let includedAmount = 0;
   const missingDimensions = new Set<string>();
   for (const metric of metrics) {
     const spend = metricSpend(
       summary,
       metric,
       pricesPeriod.metrics[metric.name],
+      isStorageMetric(sectionMetric),
     );
     if (spend === undefined) return undefined;
     total += spend.amount;
+    includedAmount += spend.includedAmount;
     for (const dimension of spend.missingDimensions) {
       missingDimensions.add(dimension);
     }
   }
   return Number.isFinite(total)
-    ? { amount: total, missingDimensions: [...missingDimensions].sort() }
+    ? {
+        amount: total,
+        includedAmount,
+        missingDimensions: [...missingDimensions].sort(),
+      }
     : undefined;
 }
 
@@ -191,17 +255,23 @@ export function getMultiPeriodUsageSpend(
   if (!pricedSummaries?.length) return undefined;
 
   let total = 0;
+  let includedAmount = 0;
   const missingDimensions = new Set<string>();
   for (const { period, summary } of pricedSummaries) {
     const spend = getUsageSpend(summary, sectionMetric, period);
     if (spend === undefined) return undefined;
     total += spend.amount;
+    includedAmount += spend.includedAmount;
     for (const dimension of spend.missingDimensions) {
       missingDimensions.add(dimension);
     }
   }
   return Number.isFinite(total)
-    ? { amount: total, missingDimensions: [...missingDimensions].sort() }
+    ? {
+        amount: total,
+        includedAmount,
+        missingDimensions: [...missingDimensions].sort(),
+      }
     : undefined;
 }
 

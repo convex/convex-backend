@@ -23,6 +23,7 @@ import type { UsagePricing } from "./lib/usagePrices";
 import {
   getMultiPeriodUsageSpend,
   getUsageSpend,
+  isStorageMetric,
   formatSpend,
 } from "./lib/usageSpend";
 import type { PricedUsageState, UsageSpend } from "./lib/usageSpend";
@@ -380,7 +381,7 @@ export function BusinessPlanSummary({
             <div className="flex items-center gap-1">
               Spend
               <Tooltip
-                tip="Storage metrics show estimated monthly prices based on the most recent usage in the selected period."
+                tip="Usage is rounded up to the nearest whole unit before calculating spend. Storage metrics show estimated monthly prices based on the most recent usage in the selected period."
                 side="right"
               >
                 <QuestionMarkCircledIcon />
@@ -437,16 +438,13 @@ export function BusinessPlanSummary({
                 ? includedAmount
                 : metric;
 
-            const estimatedMonthly =
-              section.metric === "databaseStorage" ||
-              section.metric === "fileStorage" ||
-              section.metric === "searchStorage";
+            const isStorage = isStorageMetric(section.metric);
             const pricedSummaryFailed =
-              !estimatedMonthly &&
+              !isStorage &&
               section.metric !== "aiGatewayCost" &&
               pricedUsage.status === "error";
             const pricedSummaryPending =
-              !estimatedMonthly &&
+              !isStorage &&
               section.metric !== "aiGatewayCost" &&
               pricedUsage.status === "loading";
 
@@ -455,8 +453,12 @@ export function BusinessPlanSummary({
                 ? section.metric === "aiGatewayCost"
                   ? aiCostFailed || aiGatewayCost === undefined
                     ? undefined
-                    : { amount: aiGatewayCost, missingDimensions: [] }
-                  : estimatedMonthly
+                    : {
+                        amount: aiGatewayCost,
+                        includedAmount: 0,
+                        missingDimensions: [],
+                      }
+                  : isStorage
                     ? getUsageSpend(
                         summary,
                         section.metric,
@@ -578,7 +580,7 @@ export function BusinessPlanSummary({
                       <SpendValue
                         spend={spend}
                         sectionTitle={section.title}
-                        estimatedMonthly={estimatedMonthly}
+                        estimatedMonthly={isStorage}
                         reportUnavailable={
                           pricing.status === "ready" &&
                           section.metric !== "aiGatewayCost"
@@ -637,17 +639,15 @@ function SpendValue({
     }
   }, [missingBillingInformation, sectionTitle, missingDimensions]);
 
+  if (spend === undefined || spend.missingDimensions.length > 0) {
+    return <span className="text-content-secondary">N/A</span>;
+  }
+
   return (
-    <span className="inline-flex items-center gap-1 whitespace-nowrap">
-      {spend === undefined || spend.missingDimensions.length > 0 ? (
-        <span className="text-content-secondary">N/A</span>
-      ) : estimatedMonthly ? (
-        <span>
-          {formatSpend(spend.amount)}
-          <span className="ml-1 text-content-secondary">/ month</span>
-        </span>
-      ) : (
-        formatSpend(spend.amount)
+    <span className="whitespace-nowrap">
+      {formatSpend(Math.max(0, spend.amount - spend.includedAmount))}
+      {estimatedMonthly && (
+        <span className="ml-1 text-content-secondary">/ month</span>
       )}
     </span>
   );
