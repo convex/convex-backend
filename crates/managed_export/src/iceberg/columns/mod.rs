@@ -2,8 +2,8 @@
 //! metadata columns every table has. A new table's columns come from its
 //! enforced validator ([`schema_seeds`]) or else its shape ([`seeds`]); later
 //! fields come from the pages that carry them ([`new_columns`]). A value that
-//! does not fit its column goes to `_rescued`, so the shape of the data never
-//! fails a page.
+//! does not fit its column goes to `_convex_rescued`, so the shape of the data
+//! never fails a page.
 
 use std::{
     collections::{
@@ -73,13 +73,17 @@ use value::{
 use super::Change;
 
 pub(crate) const ID_COLUMN: &str = "_id";
+/// The revision's commit timestamp, named as the data sync API and the
+/// Airbyte and Fivetran sources name it.
 pub(crate) const TS_COLUMN: &str = "_ts";
-// Iceberg reserves `_deleted`; see `RESERVED_COLUMNS`.
-pub(crate) const DELETED_COLUMN: &str = "_is_deleted";
+/// The columns only this export adds carry a `_convex_` prefix, like
+/// `_fivetran_*` and `_airbyte_*`, so readers can tell them from document
+/// fields.
+pub(crate) const DELETED_COLUMN: &str = "_convex_deleted";
 /// The document's `_creationTime`, as an Iceberg `timestamptz` so readers get
 /// a timestamp instead of epoch milliseconds in a `double`.
 pub(crate) const CREATION_TIME_COLUMN: &str = "_creationTime";
-pub(crate) const RESCUED_COLUMN: &str = "_rescued";
+pub(crate) const RESCUED_COLUMN: &str = "_convex_rescued";
 const METADATA_COLUMNS: [&str; 5] = [
     ID_COLUMN,
     TS_COLUMN,
@@ -452,7 +456,7 @@ fn choose(
     // The cap counts field columns, after the metadata columns. A document has
     // at most `MAX_OBJECT_FIELDS` top-level fields, so a table whose documents
     // share a schema never fills up. A table that uses fields as map keys
-    // does, and its further fields go to `_rescued`.
+    // does, and its further fields go to `_convex_rescued`.
     let mut room =
         MAX_OBJECT_FIELDS.saturating_sub(fields.len().saturating_sub(METADATA_COLUMNS.len()));
     let mut taken: BTreeSet<String> = fields.iter().map(|f| f.name.to_lowercase()).collect();
@@ -512,7 +516,7 @@ pub(crate) fn batch(schema: &Schema, changes: &[Change]) -> Result<RecordBatch> 
                 }
                 if Kind::of(value).is_none() {
                     // A null fits any column. A field with no column keeps
-                    // its null in `_rescued`, so `{"f": null}` and `{}` stay
+                    // its null in `_convex_rescued`, so `{"f": null}` and `{}` stay
                     // distinct.
                     if schema.field_by_name(name).is_none() {
                         misfits.insert(name.to_owned(), JsonValue::Null);
