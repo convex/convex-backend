@@ -1,10 +1,12 @@
 //! Decoding configuration files into Rust types
 use std::{
     collections::HashMap,
+    io::Read as _,
     marker::PhantomData,
     str::FromStr,
 };
 
+use flate2::read::GzDecoder;
 use prost_reflect::{
     prost::Message,
     DynamicMessage,
@@ -178,5 +180,33 @@ impl<T: ProstMessage> ConfigDecoder for Base64ProtoDecoder<T> {
     fn decode(&self, contents: Vec<u8>) -> anyhow::Result<T> {
         let bytes = base64::decode(contents.trim_ascii())?;
         Ok(T::decode(&bytes[..])?)
+    }
+}
+
+/// Decompresses gzipped contents before passing them to the inner decoder.
+/// Contents without the gzip magic bytes pass through unchanged.
+#[derive(Clone)]
+pub struct GzipDecoder<D> {
+    inner: D,
+}
+
+impl<D> GzipDecoder<D> {
+    pub const fn new(inner: D) -> Self {
+        Self { inner }
+    }
+}
+
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
+impl<D: ConfigDecoder> ConfigDecoder for GzipDecoder<D> {
+    type Output = D::Output;
+
+    fn decode(&self, contents: Vec<u8>) -> anyhow::Result<Self::Output> {
+        if !contents.starts_with(&GZIP_MAGIC) {
+            return self.inner.decode(contents);
+        }
+        let mut decompressed = Vec::new();
+        GzDecoder::new(&contents[..]).read_to_end(&mut decompressed)?;
+        self.inner.decode(decompressed)
     }
 }
