@@ -14,6 +14,7 @@ type TeamMemberInviteListItemProps = {
   // Both gates may be `undefined` while permissions are loading.
   canInvite: boolean | undefined;
   canCancelInvite: boolean | undefined;
+  hasSyncedDirectory: boolean | undefined;
   onCreateInvite: (body: CreateInvitationArgs) => void;
   onCancelInvite: (body: CancelInvitationArgs) => void;
 };
@@ -23,6 +24,7 @@ export function TeamMemberInviteListItem({
   teamSlug,
   canInvite,
   canCancelInvite,
+  hasSyncedDirectory,
   onCreateInvite,
   onCancelInvite,
 }: TeamMemberInviteListItemProps) {
@@ -37,14 +39,17 @@ export function TeamMemberInviteListItem({
       onCreateInvite({ email: invite.email, role: invite.role });
     }
   };
-  const resendDisabled = canInvite !== true;
+  const resendDisabled = hasSyncedDirectory !== false || canInvite !== true;
   const cancelDisabled = canCancelInvite !== true;
-  const resendTip = resendDisabled
-    ? permissionDeniedTip(
-        "You do not have permission to resend invitations.",
-        "member:invite",
-      )
-    : undefined;
+  const resendTip =
+    hasSyncedDirectory === true
+      ? "This team's members are managed by Directory Sync, so invitations can't be resent or accepted."
+      : resendDisabled
+        ? permissionDeniedTip(
+            "You do not have permission to resend invitations.",
+            "member:invite",
+          )
+        : undefined;
   const cancelTip = cancelDisabled
     ? permissionDeniedTip(
         "You do not have permission to revoke invitations.",

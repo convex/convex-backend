@@ -4322,6 +4322,12 @@
             "items": {
               "$ref": "#/components/schemas/TeamMember"
             }
+          },
+          "directorySynced": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         }
       },
@@ -4924,6 +4930,12 @@
               "$ref": "#/components/schemas/TeamMemberCustomRole"
             },
             "description": "The custom roles attached to this team member. Present iff\n`role` is `custom`."
+          },
+          "directoryManaged": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         }
       },

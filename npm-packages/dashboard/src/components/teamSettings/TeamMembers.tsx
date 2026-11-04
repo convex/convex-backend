@@ -2,7 +2,11 @@ import { EnvelopeClosedIcon } from "@radix-ui/react-icons";
 import { Callout } from "@ui/Callout";
 import { Loading } from "@ui/Loading";
 import { Sheet } from "@ui/Sheet";
-import { useTeamMembers, useTeamEntitlements } from "api/teams";
+import {
+  useTeamDirectorySynced,
+  useTeamMembers,
+  useTeamEntitlements,
+} from "api/teams";
 import { useTeamInvites } from "api/invitations";
 import {
   useHasCustomRolePermission,
@@ -62,6 +66,7 @@ function MembersContent({
   const members = useTeamMembers(team.id);
   const invites = useTeamInvites(team.id);
   const entitlements = useTeamEntitlements(team.id);
+  const hasSyncedDirectory = useTeamDirectorySynced(team.id);
 
   const isLoading = !(members && invites && entitlements !== undefined);
   const canAddMembers =
@@ -83,6 +88,13 @@ function MembersContent({
           </div>
           <OpenInVercel team={team} />
         </div>
+      </Sheet>
+    );
+  } else if (hasSyncedDirectory) {
+    inviteMembers = (
+      <Sheet>
+        This team's members are managed by Directory Sync. To add someone to the
+        team, add them to the directory in your identity provider.
       </Sheet>
     );
   } else if (canAddMembers) {
@@ -136,7 +148,12 @@ function MembersContent({
     <>
       <h2>Members</h2>
       {inviteMembers}
-      <TeamMemberList team={team} members={members} invites={invites} />
+      <TeamMemberList
+        team={team}
+        members={members}
+        invites={invites}
+        hasSyncedDirectory={hasSyncedDirectory}
+      />
     </>
   );
 }

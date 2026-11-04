@@ -1492,6 +1492,7 @@ export interface components {
         };
         PlatformListTeamMembersResponse: {
             items: components["schemas"]["TeamMember"][];
+            directorySynced?: boolean | null;
         };
         PlatformPaginatedProjectsResponse: {
             items: components["schemas"]["ProjectResponse"][];
@@ -1693,6 +1694,7 @@ export interface components {
             /** @description The custom roles attached to this team member. Present iff
              *     `role` is `custom`. */
             customRoles?: components["schemas"]["TeamMemberCustomRole"][] | null;
+            directoryManaged?: boolean | null;
         };
         /** @description A custom role attached to a team member, denormalized with the
          *     role's display name so API consumers can render members without a

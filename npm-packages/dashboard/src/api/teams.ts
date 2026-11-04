@@ -74,6 +74,16 @@ export function useTeamMembers(teamId: number | undefined) {
   return data?.items;
 }
 
+export function useTeamDirectorySynced(teamId: number | undefined) {
+  const { data } = useManagementApiQuery({
+    path: "/teams/{team_id}/list_members",
+    pathParams: {
+      team_id: teamId?.toString() ?? "",
+    },
+  });
+  return data && data.directorySynced === true;
+}
+
 export function useTeamEntitlements(teamId: number | undefined) {
   const { data: entitlements } = useBBQuery({
     path: "/teams/{team_id}/get_entitlements",

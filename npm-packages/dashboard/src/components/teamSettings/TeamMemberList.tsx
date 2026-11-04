@@ -29,12 +29,14 @@ type TeamMemberListProps = {
   team: TeamResponse;
   members?: TeamMember[];
   invites?: InvitationResponse[];
+  hasSyncedDirectory: boolean | undefined;
 };
 
 export function TeamMemberList({
   team,
   members,
   invites,
+  hasSyncedDirectory,
 }: TeamMemberListProps) {
   const [memberSearch, setMemberSearch] = useState("");
   const [inviteSearch, setInviteSearch] = useState("");
@@ -202,6 +204,7 @@ export function TeamMemberList({
                   teamSlug={team.slug}
                   canInvite={canInvite}
                   canCancelInvite={canCancelInvite}
+                  hasSyncedDirectory={hasSyncedDirectory}
                   onCreateInvite={onCreateInvite}
                   onCancelInvite={onCancelInvite}
                 />

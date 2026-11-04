@@ -81,12 +81,14 @@ export function useDisableDirectorySync(teamId: number) {
     toastOnError: false,
   });
   const mutate = useMutate();
+  const mutateTeamMembers = useMutateTeamMembers(teamId);
   return useCallback(async () => {
     const result = await disable();
     await mutate([GROUPS_PATH]);
     await mutate([STAGED_MEMBERS_PATH]);
+    await mutateTeamMembers();
     return result;
-  }, [disable, mutate]);
+  }, [disable, mutate, mutateTeamMembers]);
 }
 
 export function useEnableDirectorySync(teamId: number) {
