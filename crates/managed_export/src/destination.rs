@@ -32,6 +32,7 @@ use aws_sdk_s3::{
         ProvideErrorMetadata,
         SdkError,
     },
+    operation::get_object::GetObjectOutput,
     primitives::ByteStream,
 };
 use errors::ErrorMetadata;
@@ -53,6 +54,12 @@ use crate::iceberg::{
 
 const EXPORT_ID_PARAMETER: &str = "convex.export-id";
 const PAGE_PARAMETER: &str = "convex.page";
+
+/// Largest size for an object that Porter can read whole from the bucket.
+/// This is to prevent a malicious bucket owner from replacing the object with
+/// an object of any size and OOMing Porter, which every deployment shares.
+/// The state and a table's metadata are a few KB per table.
+const MAX_OBJECT_BYTES: i64 = 16 * (1 << 20); // 16 MiB
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExportState {
@@ -187,7 +194,7 @@ impl ExportStore {
             Err(error) => return Err(aws_error(error, "read the export state")),
         };
         let etag = output.e_tag.clone().context("Export state has no ETag")?;
-        let bytes = output.body.collect().await?.into_bytes();
+        let bytes = collect_bounded(output, "the export state").await?;
         let state = serde_json::from_slice(&bytes).context("Cannot parse the export state")?;
         Ok(Some((state, etag)))
     }
@@ -307,7 +314,7 @@ impl ExportStore {
             .send()
             .await
             .map_err(|e| aws_error(e, "read a table's metadata"))?;
-        let bytes = output.body.collect().await?.into_bytes();
+        let bytes = collect_bounded(output, "a table's metadata").await?;
         let metadata: TableMetadata =
             serde_json::from_slice(&bytes).context("Cannot parse a table's metadata")?;
         glue_columns(metadata.current_schema())
@@ -343,6 +350,22 @@ const DESTINATION_ERROR_CODES: &[&str] = &[
     "NoSuchBucket",
     "PermanentRedirect",
 ];
+
+/// The body of `output`, refused before any byte is read when S3 reports it
+/// larger than [`MAX_OBJECT_BYTES`].
+async fn collect_bounded(output: GetObjectOutput, what: &str) -> Result<Vec<u8>> {
+    let length = output.content_length().context("S3 object has no length")?;
+    if length > MAX_OBJECT_BYTES {
+        bail!(ErrorMetadata::bad_request(
+            "S3ExportObjectTooLarge",
+            format!(
+                "Convex cannot read {what}: it is {length} bytes, more than the \
+                 {MAX_OBJECT_BYTES} byte limit"
+            ),
+        ));
+    }
+    Ok(output.body.collect().await?.to_vec())
+}
 
 /// Wraps an S3 or Glue error. An error the customer must fix in AWS becomes a
 /// user error, so the export shows it instead of retrying silently.
