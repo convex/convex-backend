@@ -343,12 +343,13 @@ pub fn validate_component_env(
         })?;
         match binding {
             EnvBinding::Value(value) => {
-                child_validator.check_provided_value(value).map_err(|e| {
+                child_validator.check_provided_value(value).map_err(|_| {
                     ErrorMetadata::bad_request(
                         "TypecheckError",
                         format!(
                             "Component {component_path:?} has an invalid value for env var \
-                             {env_name:?}: {e}"
+                             {env_name:?}: expected {}",
+                            child_validator.validator
                         ),
                     )
                 })?;

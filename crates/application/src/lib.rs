@@ -588,12 +588,13 @@ pub(crate) fn validate_env_var_values(
         {
             env_var_validator
                 .check_provided_value(value.as_ref())
-                .map_err(|e| {
+                .map_err(|_| {
                     ErrorMetadata::bad_request(
                         "InvalidEnvironmentVariable",
                         format!(
                             "Environment variable {name_str} does not match its declared \
-                             validator: {e}"
+                             validator {}.",
+                            env_var_validator.validator
                         ),
                     )
                 })?;
