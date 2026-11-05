@@ -43,7 +43,7 @@ use crate::chunks::ApproxSize;
 
 pub(crate) const LATEST_TABLE: &str = "indexes_latest";
 pub(crate) const BACKFILL_DELETES_TABLE: &str = "indexes_backfill_deletes";
-pub(crate) const LOG_BUCKET_SIZE_NANOS: i64 = 10 * 60 * 1_000_000_000;
+pub const LOG_BUCKET_SIZE_NANOS: i64 = 10 * 60 * 1_000_000_000;
 pub(crate) const LIST_LOG_TABLES: &str = r#"
 SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = ? AND TABLE_NAME LIKE 'indexes\_log\_%'
@@ -89,10 +89,10 @@ impl IndexKey {
 
 /// A ten-minute successor-timestamp bucket used in a V6 log table name.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct LogBucket(i64);
+pub struct LogBucket(i64);
 
 impl LogBucket {
-    pub(crate) fn from_successor_ts(successor_ts: Timestamp) -> Self {
+    pub fn from_successor_ts(successor_ts: Timestamp) -> Self {
         Self(i64::from(successor_ts).div_euclid(LOG_BUCKET_SIZE_NANOS))
     }
 
@@ -116,7 +116,7 @@ impl LogBucket {
     /// The bucket `buckets` positions after this one. Fallible so that an
     /// absurd lookahead surfaces as an error rather than a wrapped bucket that
     /// names a table on the wrong side of the timeline.
-    pub(crate) fn offset(self, buckets: i64) -> anyhow::Result<Self> {
+    pub fn offset(self, buckets: i64) -> anyhow::Result<Self> {
         let bucket = self
             .0
             .checked_add(buckets)

@@ -7370,6 +7370,7 @@ dependencies = [
  "itertools 0.14.0",
  "lz4_flex 0.14.0",
  "metrics",
+ "mysql",
  "mysql_async",
  "parking_lot",
  "prometheus",

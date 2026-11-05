@@ -56,6 +56,7 @@ database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 indexing = { workspace = true }
 metrics = { workspace = true, features = ["testing"] }
+mysql = { workspace = true, features = ["testing"] }
 proptest = { workspace = true }
 runtime = { workspace = true }
 value = { workspace = true, features = ["testing"] }
