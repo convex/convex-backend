@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use common::knobs::S3_EXPORT_RETAINED_SNAPSHOTS;
 use iceberg::{
     spec::DataFileFormat,
     table::Table,
@@ -78,6 +79,14 @@ pub(crate) async fn append(
     let files = writer.close().await?;
     let bytes_written = files.iter().map(|file| file.file_size_in_bytes()).sum();
     let tx = Transaction::new(table);
+    // Expire before appending, so the expiry's ref check sees the table as
+    // loaded. The far-future cutoff leaves the count as the only limit. Expiry
+    // rewrites metadata only; old manifest lists stay for readers on them.
+    let tx = tx
+        .expire_snapshots()
+        .expire_older_than_ms(i64::MAX)
+        .retain_last(*S3_EXPORT_RETAINED_SNAPSHOTS - 1)
+        .apply(tx)?;
     // File names are UUID-prefixed, so the duplicate check, which reads every
     // manifest, can never fire.
     let tx = tx

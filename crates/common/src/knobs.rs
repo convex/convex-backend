@@ -2228,3 +2228,10 @@ pub static MAX_LOG_LINES_NODE_ACTIONS: LazyLock<usize> =
 /// Max number of log lines in a single query or mutation
 pub static MAX_LOG_LINES_DATABASE_UDFS: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_LOG_LINES_DATABASE_UDFS", 256).max(1));
+
+/// Snapshots an S3 export table keeps. Each page commits one snapshot per
+/// changed table, and each commit rewrites the whole snapshot list, so the
+/// list is bounded. Readers need only the current snapshot, which holds every
+/// data file; `_ts` serves incremental reads.
+pub static S3_EXPORT_RETAINED_SNAPSHOTS: LazyLock<usize> =
+    LazyLock::new(|| env_config("S3_EXPORT_RETAINED_SNAPSHOTS", 10).max(1));
