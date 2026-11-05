@@ -31,7 +31,7 @@ function useScrollbar(
   );
   const [initialScrollTop, setInitialScrollTop] = useState<number>(0);
   const [isDragging, setIsDragging] = useState(false);
-  const rafIdRef = useRef<number>(0);
+  const rafIdRef = useRef<number | null>(null);
   const lastMouseYRef = useRef<number | null>(null);
 
   const handleTrackClick = useCallback(
@@ -72,9 +72,9 @@ function useScrollbar(
       setIsDragging(false);
 
       // Cancel any pending animation frame
-      if (rafIdRef.current) {
+      if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = 0;
+        rafIdRef.current = null;
       }
     }
   }, [isDragging]);
@@ -130,7 +130,7 @@ function useScrollbar(
         lastMouseYRef.current = e.clientY;
 
         // Start animation frame if not already running
-        if (!rafIdRef.current) {
+        if (rafIdRef.current === null) {
           rafIdRef.current = requestAnimationFrame(updateScrollPosition);
         }
 
@@ -155,8 +155,9 @@ function useScrollbar(
       document.body.style.userSelect = "";
 
       // Clean up any ongoing animation frame
-      if (rafIdRef.current) {
+      if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
       }
     };
   }, [handleThumbMousemove, handleThumbMouseup]);
