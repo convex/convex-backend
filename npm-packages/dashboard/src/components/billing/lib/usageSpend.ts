@@ -13,7 +13,7 @@ export type PricedUsageState =
 type UsageField = keyof Omit<UsageSummaryRow, "deploymentClass" | "region">;
 type Metric = {
   name: string;
-  field: UsageField | UsageField[];
+  field: UsageField | UsageField[] | ((row: UsageSummaryRow) => number);
   divisor?: number;
 };
 type MetricSection = Metric | Metric[];
@@ -65,6 +65,17 @@ const sections: Record<string, MetricSection> = {
     name: "auditLogBandwidthGb",
     field: "auditLogBandwidth",
     divisor: BYTES_PER_GB,
+  },
+  // The deployment fee is waived for paused and idle deployments.
+  deploymentCount: {
+    name: "activeDeployments",
+    field: (row) =>
+      Math.max(
+        row.deploymentCount -
+          row.pausedDeploymentCount -
+          row.idleDeploymentCount,
+        0,
+      ),
   },
 };
 
@@ -140,11 +151,14 @@ export function getIncludedUsage(
   return hasConsumedUnits && Number.isFinite(total) ? total : undefined;
 }
 
-export function isStorageMetric(sectionMetric: string): boolean {
+// Gauge metrics bill monthly on a snapshot rather than on accumulated usage, so
+// their spend is a monthly estimate from the most recent snapshot.
+export function isGaugeMetric(sectionMetric: string): boolean {
   return (
     sectionMetric === "databaseStorage" ||
     sectionMetric === "fileStorage" ||
-    sectionMetric === "searchStorage"
+    sectionMetric === "searchStorage" ||
+    sectionMetric === "deploymentCount"
   );
 }
 
@@ -152,14 +166,14 @@ function metricSpend(
   summary: UsageSummaryRow[],
   metric: Metric,
   price: MetricPrice | undefined,
-  estimateStorage: boolean,
+  estimateMonthly: boolean,
 ): UsageSpend | undefined {
   let gross = 0;
-  let estimatedGb = 0;
+  let estimatedUnits = 0;
   let coveredSpend = 0;
   const missingDimensions = new Set<string>();
 
-  const rates = estimateStorage ? [] : priceAmounts(price);
+  const rates = estimateMonthly ? [] : priceAmounts(price);
   for (const amount of rates) {
     if (amount.consumedUnits === undefined || amount.consumedUnits === null) {
       continue;
@@ -182,10 +196,12 @@ function metricSpend(
     { quantity: number; amount: PriceAmount }
   >();
   for (const row of summary) {
-    const fields = Array.isArray(metric.field) ? metric.field : [metric.field];
-    const quantities = fields.map(
-      (field) => row[field] / (metric.divisor ?? 1),
-    );
+    const { field } = metric;
+    const quantities = (
+      typeof field === "function"
+        ? [field(row)]
+        : (Array.isArray(field) ? field : [field]).map((f) => row[f])
+    ).map((value) => value / (metric.divisor ?? 1));
     if (
       quantities.some((quantity) => !Number.isFinite(quantity) || quantity < 0)
     ) {
@@ -230,15 +246,19 @@ function metricSpend(
     if (rate === undefined) return undefined;
     const roundedQuantity = Math.ceil(quantity);
     gross += roundedQuantity * rate;
-    estimatedGb += roundedQuantity;
+    estimatedUnits += roundedQuantity;
   }
-  if (estimateStorage) {
-    const includedGb = price ? parseNonNegativeNumber(price.includedUnits) : 0;
-    if (includedGb === undefined) return undefined;
+  if (estimateMonthly) {
+    const includedUnits = price
+      ? parseNonNegativeNumber(price.includedUnits)
+      : 0;
+    if (includedUnits === undefined) return undefined;
     // Monthly estimates value a shared allowance at the snapshot's weighted
     // average rate across deployment classes and regions.
     coveredSpend =
-      estimatedGb > 0 ? gross * Math.min(includedGb / estimatedGb, 1) : 0;
+      estimatedUnits > 0
+        ? gross * Math.min(includedUnits / estimatedUnits, 1)
+        : 0;
   }
   return Number.isFinite(gross) && Number.isFinite(coveredSpend)
     ? {
@@ -275,7 +295,7 @@ export function getUsageSpend(
       summary,
       metric,
       pricesPeriod.metrics[metric.name],
-      isStorageMetric(sectionMetric),
+      isGaugeMetric(sectionMetric),
     );
     if (spend === undefined) return undefined;
     total += spend.amount;

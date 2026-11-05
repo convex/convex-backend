@@ -24,7 +24,7 @@ import {
   getMultiPeriodUsageSpend,
   getUsageSpend,
   getIncludedUsage,
-  isStorageMetric,
+  isGaugeMetric,
   formatSpend,
 } from "./lib/usageSpend";
 import type { PricedUsageState, UsageSpend } from "./lib/usageSpend";
@@ -75,6 +75,8 @@ type Section = {
   detail: string;
   title: string;
   suffix?: string;
+  // The plan caps usage at the included limit instead of billing beyond it, so
+  // the metric has no spend.
   noOnDemand?: boolean;
   // The plan includes none of this metric; the whole amount bills on demand.
   allOnDemand?: boolean;
@@ -284,10 +286,12 @@ export function BusinessPlanSummary({
       ? Object.fromEntries(
           visibleSections.map((section) => [
             section.metric,
-            getIncludedUsage(
-              pricing.periods.map(({ period }) => period),
-              section.metric,
-            ),
+            section.metric === "deploymentCount"
+              ? undefined
+              : getIncludedUsage(
+                  pricing.periods.map(({ period }) => period),
+                  section.metric,
+                ),
           ]),
         )
       : undefined;
@@ -404,7 +408,7 @@ export function BusinessPlanSummary({
             <div className="flex items-center gap-1">
               Spend
               <Tooltip
-                tip="Usage is rounded up to the nearest whole unit before calculating spend. Storage metrics show estimated monthly prices based on the most recent usage in the selected period."
+                tip="Usage is rounded up to the nearest whole unit before calculating spend. Storage and deployment metrics show estimated monthly prices based on the most recent usage in the selected period."
                 side="right"
               >
                 <QuestionMarkCircledIcon />
@@ -463,13 +467,13 @@ export function BusinessPlanSummary({
                 ? includedAmount
                 : metric;
 
-            const isStorage = isStorageMetric(section.metric);
+            const isGauge = isGaugeMetric(section.metric);
             const pricedSummaryFailed =
-              !isStorage &&
+              !isGauge &&
               section.metric !== "aiGatewayCost" &&
               pricedUsage.status === "error";
             const pricedSummaryPending =
-              !isStorage &&
+              !isGauge &&
               section.metric !== "aiGatewayCost" &&
               pricedUsage.status === "loading";
 
@@ -483,7 +487,7 @@ export function BusinessPlanSummary({
                         includedAmount: 0,
                         missingDimensions: [],
                       }
-                  : isStorage
+                  : isGauge
                     ? getUsageSpend(
                         summary,
                         section.metric,
@@ -601,8 +605,7 @@ export function BusinessPlanSummary({
                 )}
                 {showSpend && (
                   <div className="animate-fadeInFromLoading tabular-nums">
-                    {!spendApplicable ||
-                    section.metric === "deploymentCount" ? (
+                    {!spendApplicable || section.noOnDemand ? (
                       <EmptyValue />
                     ) : aiCostFailed || pricedSummaryFailed ? (
                       <span className="text-content-secondary">
@@ -616,7 +619,7 @@ export function BusinessPlanSummary({
                       <SpendValue
                         spend={spend}
                         sectionTitle={section.title}
-                        estimatedMonthly={isStorage}
+                        estimatedMonthly={isGauge}
                         reportUnavailable={
                           pricing.status === "ready" &&
                           section.metric !== "aiGatewayCost"
