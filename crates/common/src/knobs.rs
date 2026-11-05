@@ -1895,8 +1895,8 @@ pub static MAX_USER_MODULES: LazyLock<usize> =
 pub static REQUEST_TRACE_SAMPLE_CONFIG: LazyLock<SamplingConfig> =
     LazyLock::new(|| env_config("REQUEST_TRACE_SAMPLE_CONFIG", "{}".parse().unwrap()));
 
-/// Size of the cache for access token authentication
-pub static AUTH_CACHE_SIZE: LazyLock<u64> = LazyLock::new(|| env_config("AUTH_CACHE_SIZE", 1000));
+/// Maximum auth cache entries shared across a conductor's deployments.
+pub static AUTH_CACHE_SIZE: LazyLock<u64> = LazyLock::new(|| env_config("AUTH_CACHE_SIZE", 10_000));
 
 /// Length of time an entry to the access authentication cache is valid
 pub static AUTH_CACHE_TTL_SECONDS: LazyLock<u64> =

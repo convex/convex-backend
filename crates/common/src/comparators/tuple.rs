@@ -8,6 +8,7 @@ macro_rules! tuple_impls {
             pub mod $name {
                 use std::borrow::Borrow;
                 use std::cmp::Ordering;
+                use std::hash::{Hash, Hasher};
                 use crate::comparators::AsComparator;
 
                 pub trait TupleKey<$($T: ?Sized),+> {
@@ -41,6 +42,12 @@ macro_rules! tuple_impls {
                 }
 
                 impl<'a, $($T: Eq + ?Sized),+> Eq for dyn TupleKey<$($T),+> + 'a {
+                }
+
+                impl<'a, $($T: Hash + ?Sized),+> Hash for dyn TupleKey<$($T),+> + 'a {
+                    fn hash<H: Hasher>(&self, state: &mut H) {
+                        self.key().hash(state);
+                    }
                 }
 
                 impl<'a, $($T: PartialEq + ?Sized),+> PartialEq for dyn TupleKey<$($T),+> + 'a {
