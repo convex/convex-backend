@@ -767,7 +767,7 @@
           "Log Streams"
         ],
         "summary": "List log streams",
-        "description": "List configs for all existing log streams in a deployment.",
+        "description": "List configs for all existing log streams in a deployment.\n\nDeprecated: use `GET /integrations` instead.",
         "operationId": "list_log_streams",
         "responses": {
           "200": {
@@ -784,6 +784,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "Deploy Key": []
@@ -806,7 +807,7 @@
           "Log Streams"
         ],
         "summary": "Get log stream",
-        "description": "Get the config for a specific log stream by id.",
+        "description": "Get the config for a specific log stream by id.\n\nDeprecated: use `GET /integrations/{id}` instead.",
         "operationId": "get_log_stream",
         "parameters": [
           {
@@ -831,6 +832,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "Deploy Key": []
@@ -853,7 +855,7 @@
           "Log Streams"
         ],
         "summary": "Delete log stream",
-        "description": "Delete the deployment's log stream with the given id.",
+        "description": "Delete the deployment's log stream with the given id.\n\nDeprecated: use `DELETE /integrations/{id}` instead.",
         "operationId": "delete_log_stream",
         "parameters": [
           {
@@ -871,6 +873,7 @@
             "description": ""
           }
         },
+        "deprecated": true,
         "security": [
           {
             "Deploy Key": []
@@ -893,7 +896,7 @@
           "Log Streams"
         ],
         "summary": "Create log stream",
-        "description": "Create a new log stream for the deployment. Errors if a log stream of the\ngiven type already exists.",
+        "description": "Create a new log stream for the deployment. Errors if a log stream of the\ngiven type already exists.\n\nDeprecated: use `POST /integrations` instead.",
         "operationId": "create_log_stream",
         "requestBody": {
           "content": {
@@ -917,6 +920,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "Deploy Key": []
@@ -939,7 +943,7 @@
           "Log Streams"
         ],
         "summary": "Update log stream",
-        "description": "Update an existing log stream for the deployment. Omit a field to keep the\nexisting value, and use `null` to unset a field.",
+        "description": "Update an existing log stream for the deployment. Omit a field to keep the\nexisting value, and use `null` to unset a field.\n\nDeprecated: use `PATCH /integrations/{id}` instead.",
         "operationId": "update_log_stream",
         "parameters": [
           {
@@ -967,6 +971,7 @@
             "description": ""
           }
         },
+        "deprecated": true,
         "security": [
           {
             "Deploy Key": []
@@ -989,7 +994,7 @@
           "Log Streams"
         ],
         "summary": "Rotate webhook log stream secret",
-        "description": "Rotate the secret for the webhook log stream.",
+        "description": "Rotate the secret for the webhook log stream.\n\nDeprecated: use `POST /integrations/{id}/rotate_webhook_secret` instead.",
         "operationId": "rotate_webhook_secret",
         "parameters": [
           {
@@ -1014,6 +1019,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "Deploy Key": []

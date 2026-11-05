@@ -321,7 +321,10 @@ export interface paths {
         };
         /**
          * List log streams
+         * @deprecated
          * @description List configs for all existing log streams in a deployment.
+         *
+         *     Deprecated: use `GET /integrations` instead.
          */
         get: operations["list_log_streams"];
         put?: never;
@@ -341,7 +344,10 @@ export interface paths {
         };
         /**
          * Get log stream
+         * @deprecated
          * @description Get the config for a specific log stream by id.
+         *
+         *     Deprecated: use `GET /integrations/{id}` instead.
          */
         get: operations["get_log_stream"];
         put?: never;
@@ -363,7 +369,10 @@ export interface paths {
         put?: never;
         /**
          * Delete log stream
+         * @deprecated
          * @description Delete the deployment's log stream with the given id.
+         *
+         *     Deprecated: use `DELETE /integrations/{id}` instead.
          */
         post: operations["delete_log_stream"];
         delete?: never;
@@ -383,8 +392,11 @@ export interface paths {
         put?: never;
         /**
          * Create log stream
+         * @deprecated
          * @description Create a new log stream for the deployment. Errors if a log stream of the
          *     given type already exists.
+         *
+         *     Deprecated: use `POST /integrations` instead.
          */
         post: operations["create_log_stream"];
         delete?: never;
@@ -404,8 +416,11 @@ export interface paths {
         put?: never;
         /**
          * Update log stream
+         * @deprecated
          * @description Update an existing log stream for the deployment. Omit a field to keep the
          *     existing value, and use `null` to unset a field.
+         *
+         *     Deprecated: use `PATCH /integrations/{id}` instead.
          */
         post: operations["update_log_stream"];
         delete?: never;
@@ -425,7 +440,10 @@ export interface paths {
         put?: never;
         /**
          * Rotate webhook log stream secret
+         * @deprecated
          * @description Rotate the secret for the webhook log stream.
+         *
+         *     Deprecated: use `POST /integrations/{id}/rotate_webhook_secret` instead.
          */
         post: operations["rotate_webhook_secret"];
         delete?: never;

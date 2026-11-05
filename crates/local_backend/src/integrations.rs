@@ -1801,6 +1801,8 @@ pub async fn update_integration(
 /// List log streams
 ///
 /// List configs for all existing log streams in a deployment.
+///
+/// Deprecated: use `GET /integrations` instead.
 #[utoipa::path(
     get,
     path = "/list_log_streams",
@@ -1813,6 +1815,7 @@ pub async fn update_integration(
         ("OAuth Project Token" = []),
     ),
 )]
+#[deprecated = "Use `list_integrations`"]
 pub async fn list_log_streams(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
@@ -1823,6 +1826,8 @@ pub async fn list_log_streams(
 /// Get log stream
 ///
 /// Get the config for a specific log stream by id.
+///
+/// Deprecated: use `GET /integrations/{id}` instead.
 #[utoipa::path(
     get,
     path = "/get_log_stream/{id}",
@@ -1838,6 +1843,7 @@ pub async fn list_log_streams(
         ("OAuth Project Token" = []),
     ),
 )]
+#[deprecated = "Use `get_integration`"]
 pub async fn get_log_stream(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
@@ -1850,6 +1856,8 @@ pub async fn get_log_stream(
 ///
 /// Create a new log stream for the deployment. Errors if a log stream of the
 /// given type already exists.
+///
+/// Deprecated: use `POST /integrations` instead.
 #[utoipa::path(
     post,
     path = "/create_log_stream",
@@ -1862,6 +1870,7 @@ pub async fn get_log_stream(
         ("OAuth Project Token" = []),
     ),
 )]
+#[deprecated = "Use `create_integration`"]
 pub async fn create_log_stream(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
@@ -1881,6 +1890,8 @@ pub async fn create_log_stream(
 ///
 /// Update an existing log stream for the deployment. Omit a field to keep the
 /// existing value, and use `null` to unset a field.
+///
+/// Deprecated: use `PATCH /integrations/{id}` instead.
 #[utoipa::path(
     post,
     path = "/update_log_stream/{id}",
@@ -1896,6 +1907,7 @@ pub async fn create_log_stream(
         ("OAuth Project Token" = []),
     ),
 )]
+#[deprecated = "Use `update_integration`"]
 pub async fn update_log_stream(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
@@ -1916,6 +1928,8 @@ pub async fn update_log_stream(
 /// Delete log stream
 ///
 /// Delete the deployment's log stream with the given id.
+///
+/// Deprecated: use `DELETE /integrations/{id}` instead.
 #[utoipa::path(
     post,
     path = "/delete_log_stream/{id}",
@@ -1931,6 +1945,7 @@ pub async fn update_log_stream(
         ("OAuth Project Token" = []),
     ),
 )]
+#[deprecated = "Use `delete_integration`"]
 pub async fn delete_log_stream(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
@@ -1949,6 +1964,8 @@ pub async fn delete_log_stream(
 /// Rotate webhook log stream secret
 ///
 /// Rotate the secret for the webhook log stream.
+///
+/// Deprecated: use `POST /integrations/{id}/rotate_webhook_secret` instead.
 #[utoipa::path(
     post,
     path = "/rotate_webhook_secret/{id}",
@@ -1964,6 +1981,7 @@ pub async fn delete_log_stream(
         ("OAuth Project Token" = []),
     ),
 )]
+#[deprecated = "Use `rotate_integration_webhook_secret`"]
 pub async fn rotate_webhook_secret(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
@@ -1979,6 +1997,9 @@ pub async fn rotate_webhook_secret(
     .await
 }
 
+// Serves the deprecated log stream routes until callers move to
+// `/integrations`.
+#[allow(deprecated)]
 pub fn platform_router<S>() -> OpenApiRouter<S>
 where
     LocalAppState: FromRef<S>,
