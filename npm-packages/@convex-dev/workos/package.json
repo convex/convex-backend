@@ -19,7 +19,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@workos-inc/authkit-react": "^0.16.0"
+    "@workos-inc/authkit-react": "^0.16.2"
   },
   "devDependencies": {
     "@types/react": "^18.0.0",
