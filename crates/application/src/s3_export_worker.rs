@@ -17,7 +17,10 @@ use database::Database;
 use errors::ErrorMetadataAnyhowExt;
 use exports::interface::ExportProvider;
 use fastrace::future::FutureExt as _;
-use keybroker::Identity;
+use keybroker::{
+    Identity,
+    KeyBroker,
+};
 use model::{
     integrations::{
         types::{
@@ -66,6 +69,7 @@ pub struct S3ExportWorker<RT: Runtime> {
     instance_name: String,
     export_provider: Arc<dyn ExportProvider<RT>>,
     usage_counter: UsageCounter,
+    key_broker: KeyBroker,
 }
 
 impl<RT: Runtime> S3ExportWorker<RT> {
@@ -75,6 +79,7 @@ impl<RT: Runtime> S3ExportWorker<RT> {
         instance_name: String,
         export_provider: Arc<dyn ExportProvider<RT>>,
         usage_counter: UsageCounter,
+        key_broker: KeyBroker,
     ) -> Self {
         Self {
             runtime,
@@ -82,6 +87,7 @@ impl<RT: Runtime> S3ExportWorker<RT> {
             instance_name,
             export_provider,
             usage_counter,
+            key_broker,
         }
     }
 
@@ -169,6 +175,7 @@ impl<RT: Runtime> S3ExportWorker<RT> {
                     SyncFormat::Iceberg,
                     &config.selection,
                     &export.developer_id().to_string(),
+                    self.key_broker.s3_export_state_encryptor().derived_key(),
                 )
                 .in_span(span)
                 .await;

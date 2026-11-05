@@ -920,6 +920,7 @@ impl<RT: Runtime> Application<RT> {
             deployment_name.clone(),
             export_provider.clone(),
             usage_counter.clone(),
+            key_broker.clone(),
         );
         let s3_export_worker = Arc::new(Mutex::new(Some(
             runtime.spawn("s3_export_worker", s3_export_worker.run()),

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package managed_export;
+
+// One managed S3 export's progress, sealed at
+// `<root>/_convex/exports/<export id>/state` in the customer's bucket.
+// Only Porter reads or writes it.
+message ExportState {
+  // The format of the export's Iceberg tables, for life.
+  string format = 1;
+  // Number of pages committed by this export.
+  uint64 page = 2;
+  // Base64 `SyncCursor` after `page`; absent before the first page.
+  optional string cursor = 3;
+  // Current metadata location of each Iceberg table, by Glue table name.
+  map<string, string> tables = 4;
+  // Tables in `tables` marked retired.
+  repeated string retired = 5;
+}

@@ -139,6 +139,7 @@ pub struct KeyBroker {
     export_download_encryptor: RandomEncryptor,
     journal_encryptor: RandomEncryptor,
     store_file_encryptor: RandomEncryptor,
+    s3_export_state_encryptor: RandomEncryptor,
     deployment_jwt_keys: DeploymentJwtKeys,
 }
 
@@ -948,6 +949,10 @@ impl KeyBroker {
                 &deployment_secret,
                 Purpose::STORE_FILE_AUTHORIZATION,
             )?,
+            s3_export_state_encryptor: RandomEncryptor::derive_from_secret(
+                &deployment_secret,
+                Purpose::S3_EXPORT_STATE,
+            )?,
             deployment_jwt_keys: DeploymentJwtKeys::derive_from_secret(&deployment_secret)?,
         })
     }
@@ -971,6 +976,10 @@ impl KeyBroker {
     /// Encryptor for data sync (streaming export) cursors.
     pub fn data_sync_encryptor(&self) -> &RandomEncryptor {
         &self.data_sync_encryptor
+    }
+
+    pub fn s3_export_state_encryptor(&self) -> &RandomEncryptor {
+        &self.s3_export_state_encryptor
     }
 
     pub fn deployment_jwt_keys(&self) -> &DeploymentJwtKeys {

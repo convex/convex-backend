@@ -39,6 +39,8 @@ pub trait ExportProvider<RT: Runtime>: Send + Sync {
         // The export's `_log_sinks` document ID. The destination owns the
         // cursor; a different ID there means the export was recreated.
         export_id: &str,
+        // Seals the state in the destination; from `KeyBroker`.
+        export_state_key: [u8; 16],
     ) -> anyhow::Result<SyncPage>;
 
     async fn export(
@@ -76,6 +78,7 @@ impl<RT: Runtime> ExportProvider<RT> for InProcessExportProvider {
         _format: SyncFormat,
         _selection: &Selection,
         _export_id: &str,
+        _export_state_key: [u8; 16],
     ) -> anyhow::Result<SyncPage> {
         anyhow::bail!("In-process managed streaming exports are not implemented yet");
     }

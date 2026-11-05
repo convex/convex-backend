@@ -13,6 +13,7 @@ testing = [
     "dep:futures",
     "errors/testing",
     "iceberg-storage-opendal/opendal-memory",
+    "keybroker/testing",
     "value/testing",
 ]
 
@@ -31,7 +32,10 @@ fastrace = { workspace = true }
 futures = { workspace = true, optional = true }
 iceberg = "=0.10.1"
 iceberg-storage-opendal = { version = "=0.10.1", default-features = false, features = ["opendal-s3"] }
+keybroker = { workspace = true }
 parquet_iceberg = { package = "parquet", version = "58", default-features = false }
+pb = { workspace = true }
+prost = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 strum = { workspace = true }
@@ -43,6 +47,7 @@ common = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 futures = { workspace = true }
 iceberg-storage-opendal = { version = "=0.10.1", default-features = false, features = ["opendal-memory"] }
+keybroker = { workspace = true, features = ["testing"] }
 tokio = { workspace = true }
 value = { workspace = true, features = ["testing"] }
 

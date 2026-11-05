@@ -41,6 +41,7 @@ impl Purpose {
     pub const DATA_SYNC_CURSOR: Purpose = Purpose("data sync cursor");
     pub const EXPORT_DOWNLOAD_TOKEN: Purpose = Purpose("export download token");
     pub const QUERY_JOURNAL: Purpose = Purpose("query journal");
+    pub const S3_EXPORT_STATE: Purpose = Purpose("s3 export state");
     pub const STORE_FILE_AUTHORIZATION: Purpose = Purpose("store file authorization");
 }
 
@@ -85,6 +86,19 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
     }
 
     pub fn encrypt_proto<T: Message>(&self, version: u8, message: &T) -> String {
+        const_hex::encode(self.seal(version, &[], message.encode_to_vec()))
+    }
+
+    /// Seals bytes stored where others can write. Only this key opens them,
+    /// and only with the same `context`, so a copy elsewhere does not open.
+    pub fn encrypt_bytes(&self, context: &[u8], plaintext: Vec<u8>) -> Vec<u8> {
+        self.seal(0, context, plaintext)
+    }
+
+    /// `version || nonce || ciphertext || tag`; `version` and `context` are
+    /// the AAD.
+    fn seal(&self, version: u8, context: &[u8], mut plaintext: Vec<u8>) -> Vec<u8> {
+        let aad = [&[version], context].concat();
         let mut nonce = [0; aead::NONCE_LEN];
         // N.B.: AES-GCM-SIV is "nonce-misuse-resistant". When
         // DETERMINISTIC=true we intentionally "misuse" it by using a constant
@@ -98,28 +112,27 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
                 .fill(&mut nonce)
                 .expect("SystemRandom failed");
         }
-        let mut encoded_message = message.encode_to_vec();
         let tag = self
             .key()
             .seal_in_place_separate_tag(
                 aead::Nonce::assume_unique_for_key(nonce),
-                aead::Aad::from(&[version]),
-                &mut encoded_message,
+                aead::Aad::from(&aad),
+                &mut plaintext,
             )
             .expect("encryption failed");
 
         let mut buffer = Vec::with_capacity(
             1 + if DETERMINISTIC { 0 } else { nonce.len() }
-                + encoded_message.len()
+                + plaintext.len()
                 + AEAD_ALGORITHM.tag_len(),
         );
         buffer.push(version);
         if !DETERMINISTIC {
             buffer.extend_from_slice(&nonce);
         }
-        buffer.extend_from_slice(&encoded_message);
+        buffer.extend_from_slice(&plaintext);
         buffer.extend_from_slice(tag.as_ref());
-        const_hex::encode(buffer)
+        buffer
     }
 
     pub fn decrypt_proto<M: Default + Message>(
@@ -127,7 +140,17 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
         version: u8,
         encoded: &str,
     ) -> anyhow::Result<M> {
-        let mut bytes = const_hex::decode(encoded)?;
+        let plaintext = self.open(version, &[], const_hex::decode(encoded)?)?;
+        Ok(M::decode(&*plaintext)?)
+    }
+
+    /// Opens bytes from [`Self::encrypt_bytes`]; fails on anything else.
+    pub fn decrypt_bytes(&self, context: &[u8], bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        self.open(0, context, bytes)
+    }
+
+    fn open(&self, version: u8, context: &[u8], mut bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        let aad = [&[version], context].concat();
         let mut reader = Cursor::new(&bytes[..]);
         let message_version = reader.read_u8()?;
         if message_version != version {
@@ -143,10 +166,10 @@ impl<const DETERMINISTIC: bool> Encryptor<DETERMINISTIC> {
             .key()
             .open_in_place(
                 aead::Nonce::assume_unique_for_key(nonce),
-                aead::Aad::from(&[version]),
+                aead::Aad::from(&aad),
                 ciphertext_and_tag,
             )
             .map_err(|_| anyhow::anyhow!("Failed to decrypt ciphertext"))?;
-        Ok(M::decode(&*plaintext)?)
+        Ok(plaintext.to_vec())
     }
 }
