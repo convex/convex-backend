@@ -269,7 +269,9 @@ export function BusinessPlanSummary({
 }) {
   const router = useRouter();
   const { dashboardShowCashUsage } = useLaunchDarkly();
-  const showSpend = dashboardShowCashUsage && pricing.status !== "unavailable";
+  const showSpend =
+    dashboardShowCashUsage &&
+    (pricing.status === "ready" || pricing.status === "loading");
   const activeSections = isBusinessPlan ? businessSections : selfServeSections;
   // Only show the audit log egress section for teams that can configure custom audit logs.
   const visibleSections = activeSections.filter(
@@ -600,9 +602,7 @@ export function BusinessPlanSummary({
                     {!spendApplicable ||
                     section.metric === "deploymentCount" ? (
                       <span className="text-content-secondary">N/A</span>
-                    ) : pricing.status === "error" ||
-                      aiCostFailed ||
-                      pricedSummaryFailed ? (
+                    ) : aiCostFailed || pricedSummaryFailed ? (
                       <span className="text-content-secondary">
                         Unavailable
                       </span>
