@@ -26,6 +26,7 @@ import { useLastViewedDeploymentForProject } from "hooks/useLastViewed";
 import type { PlatformDeploymentResponse, ProjectDetails } from "generatedApi";
 import type { NavigationDestination, NavigationTarget } from "./navigation";
 import { REMOTE_VALUE_PREFIX } from "./navigation";
+import { matchedIndices } from "./matchRank";
 import { useCopyAction } from "./copy";
 import { useLinkRegistration } from "./newTab";
 import type { DeploymentPicker } from "./picker";
@@ -45,27 +46,6 @@ export function useConsumeDrillModifier() {
     flag.current = false;
     return active;
   };
-}
-
-// Indices of `text` covered by an occurrence of any whitespace-separated
-// token of `query`, case-insensitively. Mirrors the palette filter's
-// substring-token matching.
-function matchedIndices(query: string, text: string): Set<number> {
-  const indices = new Set<number>();
-  const lowerText = text.toLowerCase();
-  for (const token of query.trim().toLowerCase().split(/\s+/)) {
-    if (!token) {
-      continue;
-    }
-    let idx = lowerText.indexOf(token);
-    while (idx !== -1) {
-      for (let i = idx; i < idx + token.length; i++) {
-        indices.add(i);
-      }
-      idx = lowerText.indexOf(token, idx + 1);
-    }
-  }
-  return indices;
 }
 
 // Renders text with the characters matching the current palette search
