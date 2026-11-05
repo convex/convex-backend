@@ -235,9 +235,7 @@ impl<RT: Runtime> Application<RT> {
                     // A throttled update leaves the transaction empty; skip
                     // the commit to avoid loading the DB with a no-op write.
                     if !tx.is_readonly() {
-                        self.database
-                            .commit_with_write_source(tx, "data_sync_progress")
-                            .await?;
+                        self.database.commit(tx, "data_sync_progress").await?;
                     }
                 },
             }

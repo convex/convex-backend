@@ -571,7 +571,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
             .replace(job_id, job)
             .await?;
         self.database
-            .commit_with_write_source(tx, "scheduled_job_system_error")
+            .commit(tx, "scheduled_job_system_error")
             .await?;
         Ok(())
     }
@@ -623,7 +623,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     )
                     .await?;
                 self.database
-                    .commit_with_write_source(tx, "scheduled_job_analyze_failure")
+                    .commit(tx, "scheduled_job_analyze_failure")
                     .await?;
                 // NOTE: We didn't actually run anything, so we are creating a request context
                 // just report the error.
@@ -672,9 +672,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 SchedulerModel::new(&mut tx, namespace)
                     .complete(job_id, ScheduledJobState::Failed(message.clone()))
                     .await?;
-                self.database
-                    .commit_with_write_source(tx, "scheduled_job_bad_udf")
-                    .await?;
+                self.database.commit(tx, "scheduled_job_bad_udf").await?;
                 // NOTE: We didn't actually run anything, so we are creating a request context
                 // just report the error.
                 let request_id = RequestId::new();
@@ -807,7 +805,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                             Err(e)
                         } else {
                             self.database
-                                .commit_with_write_source(tx, WriteSource::mutation(path.clone()))
+                                .commit(tx, WriteSource::mutation(path.clone()))
                                 .await
                         };
                         if let Err(err) = commit_result {
@@ -922,7 +920,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     .await?;
                 // NOTE: We should not be getting developer errors here.
                 self.database
-                    .commit_with_write_source(tx, WriteSource::mutation(job.path.clone()))
+                    .commit(tx, WriteSource::mutation(job.path.clone()))
                     .await?;
             }
             self.function_log
@@ -977,9 +975,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 SchedulerModel::new(&mut tx, namespace)
                     .replace(job_id, updated_job.clone())
                     .await?;
-                self.database
-                    .commit_with_write_source(tx, "scheduled_job_progress")
-                    .await?;
+                self.database.commit(tx, "scheduled_job_progress").await?;
 
                 // Execute the action
                 let path = job.path.clone();
@@ -1031,7 +1027,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     .complete(job_id, ScheduledJobState::Failed(message.clone()))
                     .await?;
                 self.database
-                    .commit_with_write_source(tx, "scheduled_job_action_error")
+                    .commit(tx, "scheduled_job_action_error")
                     .await?;
                 // Restore the request & execution ID of the failed execution.
                 let context = ExecutionContext::new_from_parts(
@@ -1119,7 +1115,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
             .complete(job_id, job_state)
             .await?;
         self.database
-            .commit_with_write_source(tx, "scheduled_job_complete_action")
+            .commit(tx, "scheduled_job_complete_action")
             .await?;
         Ok(())
     }
@@ -1211,9 +1207,7 @@ impl<RT: Runtime> ScheduledJobGarbageCollector<RT> {
         }
         if deleted_jobs > 0 {
             tracing::debug!("Garbage collecting {deleted_jobs} finished scheduled jobs");
-            self.database
-                .commit_with_write_source(tx, "scheduled_job_gc")
-                .await?;
+            self.database.commit(tx, "scheduled_job_gc").await?;
             self.rt.wait(*SCHEDULED_JOB_GARBAGE_COLLECTION_DELAY).await;
         } else {
             let next_job_future = if let Some(next_job_wait) = next_job_wait {

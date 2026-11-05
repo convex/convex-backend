@@ -1856,9 +1856,7 @@ impl<RT: Runtime> Database<RT> {
             let result = async {
                 let t = f(&mut tx).0.await?;
                 let func_end_time = Instant::now();
-                let ts = self
-                    .commit_with_write_source(tx, write_source.clone())
-                    .await?;
+                let ts = self.commit(tx, write_source.clone()).await?;
                 let commit_end_time = Instant::now();
                 Ok((ts, t, func_end_time, commit_end_time))
             }
@@ -2137,7 +2135,7 @@ impl<RT: Runtime> Database<RT> {
     }
 
     #[fastrace::trace]
-    pub async fn commit_with_write_source(
+    pub async fn commit(
         &self,
         transaction: Transaction<RT>,
         write_source: impl Into<WriteSource>,

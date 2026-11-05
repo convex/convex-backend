@@ -688,9 +688,7 @@ impl<RT: Runtime> Application<RT> {
             let storage_type = DatabaseGlobalsModel::new(&mut tx)
                 .initialize_storage_tag(storage_tag_initializer, deployment_name)
                 .await?;
-            database
-                .commit_with_write_source(tx, "init_storage")
-                .await?;
+            database.commit(tx, "init_storage").await?;
             storage_type
         };
 
@@ -1143,9 +1141,7 @@ impl<RT: Runtime> Application<RT> {
         transaction: Transaction<RT>,
         write_source: impl Into<WriteSource>,
     ) -> anyhow::Result<Timestamp> {
-        self.database
-            .commit_with_write_source(transaction, write_source)
-            .await
+        self.database.commit(transaction, write_source).await
     }
 
     #[fastrace::trace]

@@ -678,9 +678,7 @@ impl<RT: Runtime> LogManager<RT> {
         }
 
         // Commit
-        database
-            .commit_with_write_source(tx, "integration_worker")
-            .await?;
+        database.commit(tx, "integration_worker").await?;
 
         Ok(())
     }

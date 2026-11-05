@@ -635,9 +635,7 @@ impl<RT: Runtime> FileStorage<RT> {
             .store_file_entry(&mut tx, namespace, entry)
             .await?;
         let component_path = tx.must_component_path(ComponentId::from(namespace))?;
-        self.database
-            .commit_with_write_source(tx, "file_storage_store_file")
-            .await?;
+        self.database.commit(tx, "file_storage_store_file").await?;
 
         usage_tracker
             .track_storage_call(component_path.clone(), "store", content_type)

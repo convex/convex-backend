@@ -245,7 +245,7 @@ impl<RT: Runtime> S3ExportWorker<RT> {
         }
         if previous_checkpoint.as_ref() != Some(&checkpoint) {
             self.database
-                .commit_with_write_source(tx, "s3_export_worker_record_progress")
+                .commit(tx, "s3_export_worker_record_progress")
                 .await?;
         } else {
             drop(tx);
@@ -298,7 +298,7 @@ impl<RT: Runtime> S3ExportWorker<RT> {
         }
         model.patch_status(export.developer_id(), status).await?;
         self.database
-            .commit_with_write_source(tx, "s3_export_worker_set_status")
+            .commit(tx, "s3_export_worker_set_status")
             .await?;
         Ok(())
     }

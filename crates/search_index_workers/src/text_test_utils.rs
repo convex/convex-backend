@@ -206,7 +206,7 @@ impl TextFixtures {
         IndexModel::new(&mut tx)
             .enable_index_for_testing(index_data.namespace, &index_data.index_name)
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(index_data)
     }
 
@@ -217,7 +217,7 @@ impl TextFixtures {
         IndexModel::new(&mut tx)
             .disable_index_for_test(index_data.index_id)
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(index_data)
     }
 
@@ -270,7 +270,7 @@ impl TextFixtures {
             .namespace(self.namespace)
             .id(index_name.table())?
             .tablet_id;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
 
         let resolved_index_name = TabletIndexName::new(table_id, index_name.descriptor().clone())?;
         let IndexConfig::Text { ref spec, .. } = index_metadata.config else {
@@ -292,7 +292,7 @@ impl TextFixtures {
         let index_data = self.insert_backfilling_text_index().await?;
         let mut tx = self.db.begin_system().await?;
         add_document(&mut tx, index_data.index_name.table(), "A long text field").await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(index_data)
     }
 
@@ -339,7 +339,7 @@ impl TextFixtures {
         TestFacingModel::new(&mut tx)
             .replace_inner(doc_id, document)
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(())
     }
 
@@ -347,7 +347,7 @@ impl TextFixtures {
         let table_name = TABLE_NAME.parse::<TableName>()?;
         let mut tx = self.db.begin_system().await?;
         let doc_id = add_document(&mut tx, &table_name, text).await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(doc_id)
     }
 
@@ -359,7 +359,7 @@ impl TextFixtures {
         IndexModel::new(&mut tx)
             .enable_index_for_testing(self.namespace, index_name)
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(())
     }
 

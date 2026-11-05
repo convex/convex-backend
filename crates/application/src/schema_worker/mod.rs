@@ -432,7 +432,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
             });
         }
         self.database
-            .commit_with_write_source(tx, "schema_validation_tracker_initialized")
+            .commit(tx, "schema_validation_tracker_initialized")
             .await?;
         walks.sort_by_key(|walk| std::cmp::Reverse(walk.total_docs.unwrap_or(u64::MAX)));
         let check_document: DocumentChecker = Arc::new(move |doc, name, mapping| {
@@ -489,9 +489,7 @@ impl<RT: Runtime> SchemaWorker<RT> {
             tracing::info!("Schema not marked valid");
             return Err(error);
         }
-        self.database
-            .commit_with_write_source(tx, "schema_worker_mark_valid")
-            .await?;
+        self.database.commit(tx, "schema_worker_mark_valid").await?;
         tracing::info!("Schema is valid");
         timer.finish();
         Ok(())

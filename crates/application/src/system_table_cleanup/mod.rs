@@ -191,9 +191,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
                     TableModel::new(&mut tx)
                         .hard_delete_tablet_document(tablet_id)
                         .await?;
-                    database
-                        .commit_with_write_source(tx, "cleanup_deleted_tablets")
-                        .await?;
+                    database.commit(tx, "cleanup_deleted_tablets").await?;
                     log_tablet_hard_deleted();
                     error_backoff.reset();
                 }
@@ -248,9 +246,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
         }
 
         if num_deleted > 0 {
-            self.database
-                .commit_with_write_source(tx, "system_table_cleanup")
-                .await?;
+            self.database.commit(tx, "system_table_cleanup").await?;
             tracing::info!("Deleted {num_deleted} hidden tables");
         }
 
@@ -282,9 +278,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
         }
 
         if num_deleted > 0 {
-            self.database
-                .commit_with_write_source(tx, "system_table_cleanup")
-                .await?;
+            self.database.commit(tx, "system_table_cleanup").await?;
             tracing::info!("Deleted {num_deleted} finished index backfills");
         }
         Ok(())
@@ -346,9 +340,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
                 break 'cleanup;
             }
         }
-        self.database
-            .commit_with_write_source(tx, "system_table_cleanup")
-            .await?;
+        self.database.commit(tx, "system_table_cleanup").await?;
         Ok(())
     }
 
@@ -481,9 +473,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
         if deleted_count == 0 {
             return Ok(0);
         }
-        self.database
-            .commit_with_write_source(tx, "system_table_cleanup")
-            .await?;
+        self.database.commit(tx, "system_table_cleanup").await?;
         tracing::info!("deleted {deleted_count} documents from {table}");
         log_system_table_cleanup_rows(table, deleted_count);
         Ok(deleted_count)
@@ -499,9 +489,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
             self.exports_storage.delete_object(&object_key).await?;
             log_exports_s3_cleanup();
         }
-        self.database
-            .commit_with_write_source(tx, "system_table_cleanup")
-            .await?;
+        self.database.commit(tx, "system_table_cleanup").await?;
         if num_deleted > 0 {
             tracing::info!("Deleted {num_deleted} expired snapshots");
         }
@@ -541,7 +529,7 @@ impl<RT: Runtime> SystemTableCleanupWorker<RT> {
         }
         if num_deleted > 0 {
             self.database
-                .commit_with_write_source(tx, "cleanup_unused_source_packages")
+                .commit(tx, "cleanup_unused_source_packages")
                 .await?;
             tracing::info!("Deleted {num_deleted} unreferenced SourcePackages");
         }

@@ -107,9 +107,7 @@ impl<RT: Runtime> MigrationWorker<RT> {
                     globals_model
                         .replace_database_globals(database_globals)
                         .await?;
-                    self.db
-                        .commit_with_write_source(tx, "migrate_persisted_version")
-                        .await?;
+                    self.db.commit(tx, "migrate_persisted_version").await?;
                     tracing::info!("Migrated {}", new_version);
                 },
                 DATABASE_VERSION => {

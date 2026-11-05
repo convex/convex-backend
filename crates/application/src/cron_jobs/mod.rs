@@ -503,7 +503,7 @@ impl<RT: Runtime> CronJobContext<RT> {
                         Err(e)
                     } else {
                         self.database
-                            .commit_with_write_source(tx, WriteSource::mutation(path.clone()))
+                            .commit(tx, WriteSource::mutation(path.clone()))
                             .await
                     };
                     if let Err(err) = commit_result {
@@ -613,9 +613,7 @@ impl<RT: Runtime> CronJobContext<RT> {
             )
             .await?;
             // NOTE: We should not be getting developer errors here.
-            self.database
-                .commit_with_write_source(tx, "cron_save_mutation_error")
-                .await?;
+            self.database.commit(tx, "cron_save_mutation_error").await?;
         }
 
         self.function_log
@@ -666,9 +664,7 @@ impl<RT: Runtime> CronJobContext<RT> {
                 CronModel::new(&mut tx, component)
                     .update_job_state(updated_job.cron_next_run())
                     .await?;
-                self.database
-                    .commit_with_write_source(tx, "cron_in_progress")
-                    .await?;
+                self.database.commit(tx, "cron_in_progress").await?;
 
                 // Execute the action
                 let path = CanonicalizedComponentFunctionPath {
@@ -763,9 +759,7 @@ impl<RT: Runtime> CronJobContext<RT> {
                     None,
                 )
                 .await?;
-                self.database
-                    .commit_with_write_source(tx, "cron_finish_action")
-                    .await?;
+                self.database.commit(tx, "cron_finish_action").await?;
 
                 let path = CanonicalizedComponentFunctionPath {
                     component: component_path,
@@ -843,9 +837,7 @@ impl<RT: Runtime> CronJobContext<RT> {
             None,
         )
         .await?;
-        self.database
-            .commit_with_write_source(tx, "cron_complete_action")
-            .await?;
+        self.database.commit(tx, "cron_complete_action").await?;
         Ok(())
     }
 

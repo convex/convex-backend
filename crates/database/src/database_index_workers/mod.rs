@@ -342,7 +342,7 @@ impl<RT: Runtime> IndexWorker<RT> {
                         )
                         .await?;
                 }
-                self.database.commit_with_write_source(tx, "index_worker_backfill_progress")
+                self.database.commit(tx, "index_worker_backfill_progress")
                     .await?;
                 if backfill_bytes_written > 0 || backfill_bytes_read > 0 {
                     let usage = FunctionUsageTracker::new();
@@ -491,7 +491,7 @@ impl<RT: Runtime> IndexWorker<RT> {
                 }
             }
             database
-                .commit_with_write_source(tx, "index_worker_backfill_initialization")
+                .commit(tx, "index_worker_backfill_initialization")
                 .await?;
             let index_registry = snapshot.index_registry;
             let index_selector = IndexSelector::ManyIndexes {
@@ -527,9 +527,7 @@ impl<RT: Runtime> IndexWorker<RT> {
         for index_id in existing_index_ids {
             Self::finish_backfill(&mut tx, index_id).await?;
         }
-        database
-            .commit_with_write_source(tx, "index_worker_finish_backfill")
-            .await?;
+        database.commit(tx, "index_worker_finish_backfill").await?;
         drop(indexes_lock);
 
         Ok(docs_indexed)
@@ -564,9 +562,7 @@ impl<RT: Runtime> IndexWorker<RT> {
 
             retention.insert(*index_id, (index_name, indexed_fields));
         }
-        database
-            .commit_with_write_source(tx, "index_worker_start_retention")
-            .await?;
+        database.commit(tx, "index_worker_start_retention").await?;
         drop(indexes_lock);
         Ok(min_begin_ts.map(|begin_ts| BackfillRetention {
             begin_ts,

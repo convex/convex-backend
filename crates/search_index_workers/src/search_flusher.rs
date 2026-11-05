@@ -520,7 +520,7 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
             },
         };
         self.database
-            .commit_with_write_source(tx, "search_flusher_initialize_backfill")
+            .commit(tx, "search_flusher_initialize_backfill")
             .await?;
 
         let MultiSegmentBuildResult {

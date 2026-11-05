@@ -221,9 +221,7 @@ impl FastForwardIndexWorker {
         if !indexes_fast_forwarded.is_empty() {
             tracing::debug!("Fast-forwarding {indexes_fast_forwarded:?} to {fast_forward_ts}");
         }
-        database
-            .commit_with_write_source(tx, "index_worker_commit_ff")
-            .await?;
+        database.commit(tx, "index_worker_commit_ff").await?;
 
         *last_fast_forward_info = Some(LastFastForwardInfo {
             ts: now,

@@ -475,9 +475,7 @@ pub async fn initialize_application_system_tables<RT: Runtime>(
         }
     }
 
-    database
-        .commit_with_write_source(tx, "init_app_system_tables")
-        .await?;
+    database.commit(tx, "init_app_system_tables").await?;
 
     // We could load indexes in memory asynchronously in order to speed up backend
     // start up time at the expense of going to the database while indexes load.

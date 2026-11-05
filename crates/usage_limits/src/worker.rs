@@ -281,10 +281,7 @@ impl<RT: Runtime> UsageLimitWorker<RT> {
         // `commit_with_audit_log_events` isn't used here because the limits
         // are marked reported between this commit and streaming the logs
         // below.
-        let ts = self
-            .database
-            .commit_with_write_source(tx, "usage_limit_enforcement")
-            .await?;
+        let ts = self.database.commit(tx, "usage_limit_enforcement").await?;
         // Mark reported once the audit events are durable, before the
         // best-effort log streaming below, so a later failure doesn't
         // re-commit the same events on the next evaluation.

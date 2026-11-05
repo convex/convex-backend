@@ -1114,11 +1114,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             // Attempt to commit the transaction and log an error if commit failed,
             // even if it was an OCC error. We may decide later to suppress OCC
             // errors from the log.
-            let result = match self
-                .database
-                .commit_with_write_source(tx, write_source.clone())
-                .await
-            {
+            let result = match self.database.commit(tx, write_source.clone()).await {
                 Ok(ts) => Ok(MutationReturn {
                     // The commit timestamp is known now, so unresolved commit
                     // timestamps in the return value resolve to it, matching
