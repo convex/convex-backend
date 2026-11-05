@@ -208,20 +208,24 @@ where
             // in the response.
 
             let issuer_url = IssuerUrl::new(token_issuer.clone())?;
-            // Discovery performs two requests; capture the JWKS response for metrics
+            // Discovery performs two requests; record each response's size for metrics
             let discovery_url = issuer_url.join(".well-known/openid-configuration").ok();
             let oidc_client = |request: HttpRequest| {
-                let is_jwks = discovery_url
+                let is_discovery = discovery_url
                     .as_ref()
-                    .is_some_and(|url| request.uri() != url.as_str());
+                    .map(|url| request.uri() == url.as_str());
                 let response = http_client(request);
                 async move {
                     let response = response.await?;
-                    if is_jwks {
-                        metrics::log_jwks_response_size(
+                    match is_discovery {
+                        Some(true) => {
+                            metrics::log_openid_configuration_response_size(response.body().len())
+                        },
+                        Some(false) => metrics::log_jwks_response_size(
                             metrics::OPENIDCONNECT,
                             response.body().len(),
-                        );
+                        ),
+                        None => {},
                     }
                     Ok::<_, E>(response)
                 }

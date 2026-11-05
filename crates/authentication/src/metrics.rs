@@ -1,5 +1,6 @@
 use metrics::{
     log_counter_with_labels,
+    log_distribution,
     log_distribution_with_labels,
     register_convex_counter,
     register_convex_histogram,
@@ -13,6 +14,10 @@ register_convex_histogram!(
     pub(crate) JWKS_RESPONSE_SIZE_BYTES,
     "Size in bytes of JWKS response bodies, including decoded data URLs",
     &["provider"]
+);
+register_convex_histogram!(
+    pub(crate) OPENID_CONFIGURATION_RESPONSE_SIZE_BYTES,
+    "Size in bytes of OpenID Connect discovery (.well-known/openid-configuration) response bodies"
 );
 register_convex_histogram!(
     pub(crate) JWKS_KEYS_TOTAL,
@@ -42,6 +47,10 @@ pub(crate) fn log_jwks_response_size(provider: &'static str, size: usize) {
         size as f64,
         vec![StaticMetricLabel::new("provider", provider)],
     );
+}
+
+pub(crate) fn log_openid_configuration_response_size(size: usize) {
+    log_distribution(&OPENID_CONFIGURATION_RESPONSE_SIZE_BYTES, size as f64);
 }
 
 pub(crate) fn log_jwks_keys(provider: &'static str, keys: usize) {
