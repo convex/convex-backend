@@ -13662,11 +13662,12 @@ dependencies = [
  "common",
  "errors",
  "http 1.5.0",
- "oauth2",
  "parking_lot",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
  "url",
 ]

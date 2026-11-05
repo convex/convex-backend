@@ -6,7 +6,6 @@ use std::{
         HashSet,
     },
     fmt,
-    future::Future,
     sync::Arc,
     time::Duration,
 };
@@ -19,16 +18,16 @@ use chrono::{
 };
 use common::types::MemberId;
 use errors::ErrorMetadata;
-use oauth2::{
-    HttpRequest,
-    HttpResponse,
-};
 use parking_lot::RwLock;
 use serde::{
     Deserialize,
     Serialize,
 };
 use tokio::time::timeout;
+use tower::{
+    Service,
+    ServiceExt,
+};
 
 /// Maps WorkOS identity providers to Auth0-compatible subject formats
 pub fn map_workos_identities_to_subjects(
@@ -599,63 +598,87 @@ pub trait WorkOSPlatformClient: Send + Sync {
     ) -> anyhow::Result<()>;
 }
 
-pub struct RealWorkOSClient<F, E>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
+/// Sends WorkOS API requests: a `reqwest::Client` in production, or a
+/// `tower::service_fn` fake in tests.
+pub trait HttpService:
+    Service<
+        reqwest::Request,
+        Response = reqwest::Response,
+        Error: std::error::Error + Send + Sync + 'static,
+        Future: Send,
+    > + Clone
+    + Send
+    + Sync
 {
-    api_key: String,
-    http_client: Box<dyn Fn(HttpRequest) -> F + Send + Sync + 'static>,
 }
 
-impl<F, E> RealWorkOSClient<F, E>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
+impl<S> HttpService for S where
+    S: Service<
+            reqwest::Request,
+            Response = reqwest::Response,
+            Error: std::error::Error + Send + Sync + 'static,
+            Future: Send,
+        > + Clone
+        + Send
+        + Sync
 {
-    pub fn new(
-        api_key: String,
-        http_client: impl Fn(HttpRequest) -> F + Send + Sync + 'static,
-    ) -> Self {
+}
+
+/// Sends `request`, buffering the whole response body.
+async fn send(
+    http_client: &impl HttpService,
+    request: http::Request<Vec<u8>>,
+) -> anyhow::Result<http::Response<Vec<u8>>> {
+    let response = http_client.clone().oneshot(request.try_into()?).await?;
+    let status = response.status();
+    let body = response.bytes().await?;
+    Ok(http::Response::builder()
+        .status(status)
+        .body(body.to_vec())?)
+}
+
+pub struct RealWorkOSClient<S = reqwest::Client> {
+    api_key: String,
+    http_client: S,
+}
+
+impl<S: HttpService> RealWorkOSClient<S> {
+    pub fn new(api_key: String, http_client: S) -> Self {
         Self {
             api_key,
-            http_client: Box::new(http_client),
+            http_client,
         }
     }
 }
 
 #[async_trait]
-impl<F, E> WorkOSClient for RealWorkOSClient<F, E>
-where
-    F: Future<Output = Result<HttpResponse, E>> + Send + 'static,
-    E: std::error::Error + 'static + Send + Sync,
-{
+impl<S: HttpService> WorkOSClient for RealWorkOSClient<S> {
     async fn fetch_identities(&self, user_id: &str) -> anyhow::Result<Vec<WorkOSIdentity>> {
-        fetch_workos_identities(&self.api_key, user_id, &*self.http_client).await
+        fetch_workos_identities(&self.api_key, user_id, &self.http_client).await
     }
 
     async fn fetch_user(&self, user_id: &str) -> anyhow::Result<WorkOSUser> {
-        fetch_workos_user(&self.api_key, user_id, &*self.http_client).await
+        fetch_workos_user(&self.api_key, user_id, &self.http_client).await
     }
 
     async fn email_has_enrolled_mfa(&self, email: &str) -> anyhow::Result<bool> {
-        email_has_enrolled_mfa(&self.api_key, email, &*self.http_client).await
+        email_has_enrolled_mfa(&self.api_key, email, &self.http_client).await
     }
 
     async fn find_user_id_by_email(&self, email: &str) -> anyhow::Result<Option<String>> {
-        find_workos_user_id_by_email(&self.api_key, email, &*self.http_client).await
+        find_workos_user_id_by_email(&self.api_key, email, &self.http_client).await
     }
 
     async fn delete_user(&self, user_id: &str) -> anyhow::Result<()> {
-        delete_workos_user(&self.api_key, user_id, &*self.http_client).await
+        delete_workos_user(&self.api_key, user_id, &self.http_client).await
     }
 
     async fn update_user_metadata(&self, user_id: &str, member_id: MemberId) -> anyhow::Result<()> {
-        update_workos_user_metadata(&self.api_key, user_id, member_id, &*self.http_client).await
+        update_workos_user_metadata(&self.api_key, user_id, member_id, &self.http_client).await
     }
 
     async fn update_user_email(&self, user_id: &str, email: &str) -> anyhow::Result<()> {
-        update_workos_user_email(&self.api_key, user_id, email, &*self.http_client).await
+        update_workos_user_email(&self.api_key, user_id, email, &self.http_client).await
     }
 
     async fn create_organization(
@@ -663,21 +686,21 @@ where
         name: &str,
         external_id: &str,
     ) -> anyhow::Result<WorkOSOrganizationResponse> {
-        create_workos_organization(&self.api_key, name, external_id, &*self.http_client).await
+        create_workos_organization(&self.api_key, name, external_id, &self.http_client).await
     }
 
     async fn get_organization(
         &self,
         external_id: &str,
     ) -> anyhow::Result<Option<WorkOSOrganizationResponse>> {
-        get_workos_organization_by_external_id(&self.api_key, external_id, &*self.http_client).await
+        get_workos_organization_by_external_id(&self.api_key, external_id, &self.http_client).await
     }
 
     async fn get_organization_by_id(
         &self,
         organization_id: &str,
     ) -> anyhow::Result<Option<WorkOSOrganizationResponse>> {
-        get_workos_organization_by_id(&self.api_key, organization_id, &*self.http_client).await
+        get_workos_organization_by_id(&self.api_key, organization_id, &self.http_client).await
     }
 
     async fn update_organization(
@@ -691,13 +714,13 @@ where
             organization_id,
             name,
             domain,
-            &*self.http_client,
+            &self.http_client,
         )
         .await
     }
 
     async fn delete_organization(&self, organization_id: &str) -> anyhow::Result<()> {
-        delete_workos_organization(&self.api_key, organization_id, &*self.http_client).await
+        delete_workos_organization(&self.api_key, organization_id, &self.http_client).await
     }
 
     async fn delete_organization_domain(&self, domain_id: &str) -> anyhow::Result<()> {
@@ -705,7 +728,7 @@ where
             &self.api_key,
             &format!("https://api.workos.com/organization_domains/{domain_id}"),
             "delete organization domain",
-            &*self.http_client,
+            &self.http_client,
         )
         .await
     }
@@ -714,7 +737,7 @@ where
         &self,
         user_id: &str,
     ) -> anyhow::Result<Vec<WorkOSOrganizationMembershipResponse>> {
-        list_workos_organization_memberships(&self.api_key, user_id, &*self.http_client).await
+        list_workos_organization_memberships(&self.api_key, user_id, &self.http_client).await
     }
 
     async fn create_membership(
@@ -728,7 +751,7 @@ where
             user_id,
             organization_id,
             role_slug,
-            &*self.http_client,
+            &self.http_client,
         )
         .await
     }
@@ -738,15 +761,14 @@ where
         organization_id: &str,
         intent: WorkOSPortalIntent,
     ) -> anyhow::Result<WorkOSPortalLinkResponse> {
-        generate_workos_portal_link(&self.api_key, organization_id, intent, &*self.http_client)
-            .await
+        generate_workos_portal_link(&self.api_key, organization_id, intent, &self.http_client).await
     }
 
     async fn list_sso_connections(
         &self,
         organization_id: &str,
     ) -> anyhow::Result<Vec<SSOConnection>> {
-        list_workos_sso_connections(&self.api_key, organization_id, &*self.http_client).await
+        list_workos_sso_connections(&self.api_key, organization_id, &self.http_client).await
     }
 
     async fn delete_sso_connection(&self, connection_id: &str) -> anyhow::Result<()> {
@@ -754,13 +776,13 @@ where
             &self.api_key,
             &format!("https://api.workos.com/connections/{connection_id}"),
             "delete SSO connection",
-            &*self.http_client,
+            &self.http_client,
         )
         .await
     }
 
     async fn list_directories(&self, organization_id: &str) -> anyhow::Result<Vec<Directory>> {
-        list_workos_directories(&self.api_key, organization_id, &*self.http_client).await
+        list_workos_directories(&self.api_key, organization_id, &self.http_client).await
     }
 
     async fn delete_directory(&self, directory_id: &str) -> anyhow::Result<()> {
@@ -768,7 +790,7 @@ where
             &self.api_key,
             &format!("https://api.workos.com/directories/{directory_id}"),
             "delete directory",
-            &*self.http_client,
+            &self.http_client,
         )
         .await
     }
@@ -777,32 +799,32 @@ where
         &self,
         directory_id: &str,
     ) -> anyhow::Result<Vec<DirectoryGroup>> {
-        list_workos_directory_groups(&self.api_key, directory_id, &*self.http_client).await
+        list_workos_directory_groups(&self.api_key, directory_id, &self.http_client).await
     }
 
     async fn list_directory_users(&self, directory_id: &str) -> anyhow::Result<Vec<DirectoryUser>> {
-        list_workos_directory_users(&self.api_key, directory_id, &*self.http_client).await
+        list_workos_directory_users(&self.api_key, directory_id, &self.http_client).await
     }
 
     async fn get_directory_user(
         &self,
         directory_user_id: &str,
     ) -> anyhow::Result<Option<DirectoryUser>> {
-        get_workos_directory_user(&self.api_key, directory_user_id, &*self.http_client).await
+        get_workos_directory_user(&self.api_key, directory_user_id, &self.http_client).await
     }
 
     async fn get_directory_group(
         &self,
         directory_group_id: &str,
     ) -> anyhow::Result<Option<DirectoryGroup>> {
-        get_workos_directory_group(&self.api_key, directory_group_id, &*self.http_client).await
+        get_workos_directory_group(&self.api_key, directory_group_id, &self.http_client).await
     }
 
     async fn list_directory_groups_for_user(
         &self,
         directory_user_id: &str,
     ) -> anyhow::Result<Vec<DirectoryGroup>> {
-        list_workos_directory_groups_for_user(&self.api_key, directory_user_id, &*self.http_client)
+        list_workos_directory_groups_for_user(&self.api_key, directory_user_id, &self.http_client)
             .await
     }
 
@@ -812,7 +834,7 @@ where
         after: Option<&str>,
         limit: u32,
     ) -> anyhow::Result<Vec<WorkOSEvent>> {
-        list_workos_events(&self.api_key, event_types, after, limit, &*self.http_client).await
+        list_workos_events(&self.api_key, event_types, after, limit, &self.http_client).await
     }
 }
 
@@ -1406,32 +1428,20 @@ impl WorkOSClient for MockWorkOSClient {
 }
 
 // Separate implementation for WorkOS Platform API
-pub struct RealWorkOSPlatformClient<F, E>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+pub struct RealWorkOSPlatformClient<S = reqwest::Client> {
     client_id: String,
     client_secret: String,
     access_token: Arc<RwLock<Option<String>>>,
-    http_client: Box<dyn Fn(HttpRequest) -> F + Send + Sync + 'static>,
+    http_client: S,
 }
 
-impl<F, E> RealWorkOSPlatformClient<F, E>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
-    pub fn new(
-        client_id: String,
-        client_secret: String,
-        http_client: impl Fn(HttpRequest) -> F + Send + Sync + 'static,
-    ) -> Self {
+impl<S: HttpService> RealWorkOSPlatformClient<S> {
+    pub fn new(client_id: String, client_secret: String, http_client: S) -> Self {
         Self {
             client_id,
             client_secret,
             access_token: Arc::new(RwLock::new(None)),
-            http_client: Box::new(http_client),
+            http_client,
         }
     }
 
@@ -1465,7 +1475,7 @@ where
             .header(http::header::ACCEPT, APPLICATION_JSON)
             .body(serde_json::to_vec(&request_body)?)?;
 
-        let response = timeout(WORKOS_API_TIMEOUT, (self.http_client)(request))
+        let response = timeout(WORKOS_API_TIMEOUT, send(&self.http_client, request))
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
@@ -1509,24 +1519,20 @@ where
 }
 
 #[async_trait]
-impl<F, E> WorkOSPlatformClient for RealWorkOSPlatformClient<F, E>
-where
-    F: Future<Output = Result<HttpResponse, E>> + Send + 'static,
-    E: std::error::Error + 'static + Send + Sync,
-{
+impl<S: HttpService> WorkOSPlatformClient for RealWorkOSPlatformClient<S> {
     async fn create_team(
         &self,
         admin_email: &str,
         team_name: &str,
     ) -> anyhow::Result<WorkOSTeamResponse> {
         let token = self.get_or_refresh_token().await?;
-        let result = create_workos_team(&token, admin_email, team_name, &*self.http_client).await;
+        let result = create_workos_team(&token, admin_email, team_name, &self.http_client).await;
 
         match result {
             Err(e) if is_auth_error(&e) => {
                 // Token expired, refresh and try once more
                 let new_token = self.update_oauth_token().await?;
-                create_workos_team(&new_token, admin_email, team_name, &*self.http_client).await
+                create_workos_team(&new_token, admin_email, team_name, &self.http_client).await
             },
             _ => result,
         }
@@ -1534,13 +1540,13 @@ where
 
     async fn get_team(&self, workos_team_id: &str) -> anyhow::Result<WorkOSTeamResponse> {
         let token = self.get_or_refresh_token().await?;
-        let result = get_workos_team(&token, workos_team_id, &*self.http_client).await;
+        let result = get_workos_team(&token, workos_team_id, &self.http_client).await;
 
         match result {
             Err(e) if is_auth_error(&e) => {
                 // Token expired, refresh and try once more
                 let new_token = self.update_oauth_token().await?;
-                get_workos_team(&new_token, workos_team_id, &*self.http_client).await
+                get_workos_team(&new_token, workos_team_id, &self.http_client).await
             },
             _ => result,
         }
@@ -1558,7 +1564,7 @@ where
             workos_team_id,
             environment_name,
             is_production,
-            &*self.http_client,
+            &self.http_client,
         )
         .await;
 
@@ -1571,7 +1577,7 @@ where
                     workos_team_id,
                     environment_name,
                     is_production,
-                    &*self.http_client,
+                    &self.http_client,
                 )
                 .await
             },
@@ -1586,8 +1592,7 @@ where
     ) -> anyhow::Result<WorkOSEnvironmentResponse> {
         let token = self.get_or_refresh_token().await?;
         let result =
-            get_workos_environment(&token, workos_team_id, environment_id, &*self.http_client)
-                .await;
+            get_workos_environment(&token, workos_team_id, environment_id, &self.http_client).await;
 
         match result {
             Err(e) if is_auth_error(&e) => {
@@ -1597,7 +1602,7 @@ where
                     &new_token,
                     workos_team_id,
                     environment_id,
-                    &*self.http_client,
+                    &self.http_client,
                 )
                 .await
             },
@@ -1617,7 +1622,7 @@ where
             workos_team_id,
             environment_id,
             key_name,
-            &*self.http_client,
+            &self.http_client,
         )
         .await;
 
@@ -1630,7 +1635,7 @@ where
                     workos_team_id,
                     environment_id,
                     key_name,
-                    &*self.http_client,
+                    &self.http_client,
                 )
                 .await
             },
@@ -1646,7 +1651,7 @@ where
     ) -> anyhow::Result<WorkOSTeamInvitationResponse> {
         let token = self.get_or_refresh_token().await?;
         let result =
-            invite_workos_team_member(&token, workos_team_id, email, role_slug, &*self.http_client)
+            invite_workos_team_member(&token, workos_team_id, email, role_slug, &self.http_client)
                 .await;
 
         match result {
@@ -1658,7 +1663,7 @@ where
                     workos_team_id,
                     email,
                     role_slug,
-                    &*self.http_client,
+                    &self.http_client,
                 )
                 .await
             },
@@ -1673,7 +1678,7 @@ where
     ) -> anyhow::Result<()> {
         let token = self.get_or_refresh_token().await?;
         let result =
-            delete_workos_environment(&token, workos_team_id, environment_id, &*self.http_client)
+            delete_workos_environment(&token, workos_team_id, environment_id, &self.http_client)
                 .await;
 
         match result {
@@ -1684,7 +1689,7 @@ where
                     &new_token,
                     workos_team_id,
                     environment_id,
-                    &*self.http_client,
+                    &self.http_client,
                 )
                 .await
             },
@@ -1801,15 +1806,11 @@ impl WorkOSPlatformClient for MockWorkOSPlatformClient {
     }
 }
 
-pub async fn fetch_workos_identities<F, E>(
+pub async fn fetch_workos_identities(
     api_key: &str,
     user_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<WorkOSIdentity>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<WorkOSIdentity>> {
     let url = format!("https://api.workos.com/user_management/users/{user_id}/identities");
 
     let request = http::Request::builder()
@@ -1820,7 +1821,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .map_err(|e| anyhow::anyhow!("Could not fetch WorkOS identities: {}", e))?;
 
@@ -1846,15 +1847,11 @@ where
     Ok(identities)
 }
 
-pub async fn fetch_workos_user<F, E>(
+pub async fn fetch_workos_user(
     api_key: &str,
     user_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSUser>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSUser> {
     let url = format!("https://api.workos.com/user_management/users/{user_id}");
 
     let request = http::Request::builder()
@@ -1865,7 +1862,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .map_err(|e| anyhow::anyhow!("Could not fetch WorkOS user: {}", e))?;
 
@@ -1889,15 +1886,11 @@ where
 /// Looks up the WorkOS user id for an email address, if a user with that email
 /// exists in the environment. Emails are unique per environment, so at most one
 /// user is returned.
-async fn find_workos_user_id_by_email<F, E>(
+async fn find_workos_user_id_by_email(
     api_key: &str,
     email: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Option<String>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Option<String>> {
     let mut url = url::Url::parse("https://api.workos.com/user_management/users")
         .context("Invalid WorkOS users URL")?;
     url.query_pairs_mut().append_pair("email", email);
@@ -1910,7 +1903,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .map_err(|e| anyhow::anyhow!("Could not list WorkOS users: {}", e))?;
 
@@ -1933,15 +1926,11 @@ where
 }
 
 /// Lists the MFA authentication factors enrolled for a WorkOS user.
-async fn list_workos_auth_factors<F, E>(
+async fn list_workos_auth_factors(
     api_key: &str,
     user_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<WorkOSAuthFactor>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<WorkOSAuthFactor>> {
     let url = format!("https://api.workos.com/user_management/users/{user_id}/auth_factors");
 
     let request = http::Request::builder()
@@ -1952,7 +1941,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .map_err(|e| anyhow::anyhow!("Could not list WorkOS auth factors: {}", e))?;
 
@@ -1981,15 +1970,11 @@ where
 /// Whether the WorkOS user with this email has any enrolled MFA factors.
 /// Returns `false` when no WorkOS user exists for the email (no user ⟹ no
 /// factors could have been enrolled).
-async fn email_has_enrolled_mfa<F, E>(
+async fn email_has_enrolled_mfa(
     api_key: &str,
     email: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<bool>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<bool> {
     let Some(user_id) = find_workos_user_id_by_email(api_key, email, http_client).await? else {
         return Ok(false);
     };
@@ -1997,15 +1982,11 @@ where
     Ok(!factors.is_empty())
 }
 
-pub async fn delete_workos_user<F, E>(
+pub async fn delete_workos_user(
     api_key: &str,
     user_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<()>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<()> {
     let url = format!("https://api.workos.com/user_management/users/{user_id}");
 
     let request = http::Request::builder()
@@ -2015,7 +1996,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .map_err(|e| anyhow::anyhow!("Could not delete WorkOS user: {}", e))?;
 
@@ -2036,16 +2017,12 @@ struct WorkOSUserMetadata {
     convex_member_id: String,
 }
 
-pub async fn update_workos_user_metadata<F, E>(
+pub async fn update_workos_user_metadata(
     api_key: &str,
     user_id: &str,
     member_id: MemberId,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<()>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<()> {
     let url = format!("https://api.workos.com/user_management/users/{user_id}");
 
     let metadata = WorkOSUserMetadata {
@@ -2066,7 +2043,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(request_body)?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .map_err(|e| anyhow::anyhow!("Could not update WorkOS user metadata: {}", e))?;
 
@@ -2088,16 +2065,12 @@ struct WorkOSUserEmailUpdate<'a> {
     email_verified: bool,
 }
 
-pub async fn update_workos_user_email<F, E>(
+pub async fn update_workos_user_email(
     api_key: &str,
     user_id: &str,
     email: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<()>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<()> {
     let url = format!("https://api.workos.com/user_management/users/{user_id}");
 
     let request_body = serde_json::to_vec(&WorkOSUserEmailUpdate {
@@ -2114,7 +2087,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(request_body)?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .context("Could not update WorkOS user email")?;
 
@@ -2131,16 +2104,12 @@ where
     Ok(())
 }
 
-pub async fn create_workos_team<F, E>(
+pub async fn create_workos_team(
     api_key: &str,
     admin_email: &str,
     team_name: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSTeamResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSTeamResponse> {
     #[derive(Serialize)]
     struct CreateTeamRequest {
         admin_email: String,
@@ -2160,7 +2129,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(serde_json::to_vec(&request_body)?)?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2208,15 +2177,11 @@ where
     Ok(team)
 }
 
-pub async fn get_workos_team<F, E>(
+pub async fn get_workos_team(
     api_key: &str,
     workos_team_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSTeamResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSTeamResponse> {
     let url = format!("https://api.workos.com/platform/teams/{workos_team_id}");
 
     let request = http::Request::builder()
@@ -2226,7 +2191,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2253,17 +2218,13 @@ where
     Ok(team)
 }
 
-pub async fn invite_workos_team_member<F, E>(
+pub async fn invite_workos_team_member(
     api_key: &str,
     workos_team_id: &str,
     email: &str,
     role_slug: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSTeamInvitationResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSTeamInvitationResponse> {
     #[derive(Serialize)]
     struct InviteTeamMemberRequest {
         email: String,
@@ -2292,7 +2253,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(serde_json::to_vec(&request_body)?)?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2368,16 +2329,12 @@ where
     Ok(invitation)
 }
 
-pub async fn delete_workos_environment<F, E>(
+pub async fn delete_workos_environment(
     api_key: &str,
     workos_team_id: &str,
     environment_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<()>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<()> {
     let url = format!(
         "https://api.workos.com/platform/teams/{workos_team_id}/environments/{environment_id}"
     );
@@ -2390,7 +2347,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2418,17 +2375,13 @@ where
     Ok(())
 }
 
-pub async fn create_workos_environment<F, E>(
+pub async fn create_workos_environment(
     api_key: &str,
     workos_team_id: &str,
     environment_name: &str,
     is_production: Option<bool>,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSEnvironmentResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSEnvironmentResponse> {
     #[derive(Serialize)]
     struct CreateEnvironmentRequest {
         name: String,
@@ -2451,7 +2404,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(serde_json::to_vec(&request_body)?)?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2502,16 +2455,12 @@ where
     Ok(environment)
 }
 
-pub async fn get_workos_environment<F, E>(
+pub async fn get_workos_environment(
     api_key: &str,
     workos_team_id: &str,
     environment_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSEnvironmentResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSEnvironmentResponse> {
     let url = format!(
         "https://api.workos.com/platform/teams/{workos_team_id}/environments/{environment_id}"
     );
@@ -2523,7 +2472,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2555,17 +2504,13 @@ where
     Ok(environment)
 }
 
-pub async fn create_workos_api_key<F, E>(
+pub async fn create_workos_api_key(
     api_key: &str,
     workos_team_id: &str,
     environment_id: &str,
     key_name: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSAPIKeyResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSAPIKeyResponse> {
     #[derive(Serialize)]
     struct CreateAPIKeyRequest {
         name: String,
@@ -2589,7 +2534,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(serde_json::to_vec(&request_body)?)?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2621,16 +2566,12 @@ where
     Ok(api_key_response)
 }
 
-pub async fn create_workos_organization<F, E>(
+pub async fn create_workos_organization(
     api_key: &str,
     name: &str,
     external_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSOrganizationResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSOrganizationResponse> {
     #[derive(Serialize)]
     struct DomainData {
         domain: String,
@@ -2662,7 +2603,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(serde_json::to_vec(&request_body)?)?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2694,15 +2635,11 @@ where
     Ok(organization)
 }
 
-pub async fn get_workos_organization_by_external_id<F, E>(
+pub async fn get_workos_organization_by_external_id(
     api_key: &str,
     external_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Option<WorkOSOrganizationResponse>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Option<WorkOSOrganizationResponse>> {
     let url = format!("https://api.workos.com/organizations/external_id/{external_id}");
 
     let request = http::Request::builder()
@@ -2712,7 +2649,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .map_err(|e| anyhow::anyhow!("Could not fetch WorkOS organization: {}", e))?;
 
@@ -2742,15 +2679,11 @@ where
     Ok(Some(organization))
 }
 
-pub async fn get_workos_organization_by_id<F, E>(
+pub async fn get_workos_organization_by_id(
     api_key: &str,
     organization_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Option<WorkOSOrganizationResponse>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Option<WorkOSOrganizationResponse>> {
     let url = format!("https://api.workos.com/organizations/{organization_id}");
 
     let request = http::Request::builder()
@@ -2760,7 +2693,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = http_client(request)
+    let response = send(http_client, request)
         .await
         .map_err(|e| anyhow::anyhow!("Could not fetch WorkOS organization: {}", e))?;
 
@@ -2790,17 +2723,13 @@ where
     Ok(Some(organization))
 }
 
-pub async fn update_workos_organization<F, E>(
+pub async fn update_workos_organization(
     api_key: &str,
     organization_id: &str,
     name: Option<&str>,
     domain: Option<&str>,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSOrganizationResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSOrganizationResponse> {
     #[derive(Serialize)]
     struct DomainData {
         domain: String,
@@ -2835,7 +2764,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(serde_json::to_vec(&request_body)?)?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2867,15 +2796,11 @@ where
     Ok(organization)
 }
 
-pub async fn delete_workos_organization<F, E>(
+pub async fn delete_workos_organization(
     api_key: &str,
     organization_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<()>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<()> {
     delete_workos_resource(
         api_key,
         &format!("https://api.workos.com/organizations/{organization_id}"),
@@ -2887,16 +2812,12 @@ where
 
 /// `DELETE`s a WorkOS resource, treating a 404 as success so callers are
 /// idempotent. `operation` names the call in error messages.
-async fn delete_workos_resource<F, E>(
+async fn delete_workos_resource(
     api_key: &str,
     url: &str,
     operation: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<()>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<()> {
     let request = http::Request::builder()
         .uri(url)
         .method(http::Method::DELETE)
@@ -2904,7 +2825,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2923,17 +2844,13 @@ where
     anyhow::bail!(WorkOSApiError::new(operation, status, &response_body));
 }
 
-pub async fn create_workos_membership<F, E>(
+pub async fn create_workos_membership(
     api_key: &str,
     user_id: &str,
     organization_id: &str,
     role_slug: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSOrganizationMembershipResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSOrganizationMembershipResponse> {
     #[derive(Serialize)]
     struct CreateMembershipRequest {
         user_id: String,
@@ -2957,7 +2874,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(serde_json::to_vec(&request_body)?)?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -2989,16 +2906,12 @@ where
     Ok(membership)
 }
 
-pub async fn generate_workos_portal_link<F, E>(
+pub async fn generate_workos_portal_link(
     api_key: &str,
     organization_id: &str,
     intent: WorkOSPortalIntent,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<WorkOSPortalLinkResponse>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<WorkOSPortalLinkResponse> {
     #[derive(Serialize)]
     struct GeneratePortalLinkRequest {
         intent: WorkOSPortalIntent,
@@ -3020,7 +2933,7 @@ where
         .header(http::header::ACCEPT, APPLICATION_JSON)
         .body(serde_json::to_vec(&request_body)?)?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -3067,17 +2980,15 @@ where
 /// Fetches every page of a WorkOS list endpoint, following the
 /// `list_metadata.after` cursor until it is exhausted. `query` holds the fixed
 /// query parameters; `after` and `limit` are appended per request.
-async fn list_workos_paginated<T, F, E>(
+async fn list_workos_paginated<T>(
     api_key: &str,
     base_url: &str,
     query: &[(&str, &str)],
     operation: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
+    http_client: &impl HttpService,
 ) -> anyhow::Result<Vec<T>>
 where
     T: serde::de::DeserializeOwned,
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
 {
     // WorkOS caps `limit` at 100 for Directory Sync list endpoints.
     const PAGE_LIMIT: &str = "100";
@@ -3107,7 +3018,7 @@ where
             .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
             .body(vec![])?;
 
-        let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+        let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
@@ -3143,15 +3054,11 @@ where
 }
 
 /// Lists all SSO connections for an organization, following pagination.
-pub async fn list_workos_sso_connections<F, E>(
+pub async fn list_workos_sso_connections(
     api_key: &str,
     organization_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<SSOConnection>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<SSOConnection>> {
     list_workos_paginated(
         api_key,
         "https://api.workos.com/connections",
@@ -3164,15 +3071,11 @@ where
 
 /// Lists all Directory Sync directories for an organization, following
 /// pagination.
-pub async fn list_workos_directories<F, E>(
+pub async fn list_workos_directories(
     api_key: &str,
     organization_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<Directory>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<Directory>> {
     list_workos_paginated(
         api_key,
         "https://api.workos.com/directories",
@@ -3184,15 +3087,11 @@ where
 }
 
 /// Lists all groups within a Directory Sync directory, following pagination.
-pub async fn list_workos_directory_groups<F, E>(
+pub async fn list_workos_directory_groups(
     api_key: &str,
     directory_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<DirectoryGroup>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<DirectoryGroup>> {
     list_workos_paginated(
         api_key,
         "https://api.workos.com/directory_groups",
@@ -3205,15 +3104,11 @@ where
 
 /// Lists the groups a directory user currently belongs to, following
 /// pagination.
-pub async fn list_workos_directory_groups_for_user<F, E>(
+pub async fn list_workos_directory_groups_for_user(
     api_key: &str,
     directory_user_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<DirectoryGroup>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<DirectoryGroup>> {
     list_workos_paginated(
         api_key,
         "https://api.workos.com/directory_groups",
@@ -3224,15 +3119,11 @@ where
     .await
 }
 
-pub async fn list_workos_organization_memberships<F, E>(
+pub async fn list_workos_organization_memberships(
     api_key: &str,
     user_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<WorkOSOrganizationMembershipResponse>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<WorkOSOrganizationMembershipResponse>> {
     list_workos_paginated(
         api_key,
         "https://api.workos.com/user_management/organization_memberships",
@@ -3244,15 +3135,11 @@ where
 }
 
 /// Lists all users within a Directory Sync directory, following pagination.
-pub async fn list_workos_directory_users<F, E>(
+pub async fn list_workos_directory_users(
     api_key: &str,
     directory_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<DirectoryUser>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<DirectoryUser>> {
     list_workos_paginated(
         api_key,
         "https://api.workos.com/directory_users",
@@ -3265,15 +3152,11 @@ where
 
 /// Returns `Ok(None)` when the user no longer exists — deletion between an
 /// event and this fetch is normal, not exceptional.
-pub async fn get_workos_directory_user<F, E>(
+pub async fn get_workos_directory_user(
     api_key: &str,
     directory_user_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Option<DirectoryUser>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Option<DirectoryUser>> {
     let url = format!("https://api.workos.com/directory_users/{directory_user_id}");
 
     let request = http::Request::builder()
@@ -3284,7 +3167,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -3322,15 +3205,11 @@ where
 /// Fetches a single directory group by id. Returns `Ok(None)` when the group
 /// no longer exists — deletion between an event and this fetch is normal, not
 /// exceptional.
-pub async fn get_workos_directory_group<F, E>(
+pub async fn get_workos_directory_group(
     api_key: &str,
     directory_group_id: &str,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Option<DirectoryGroup>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Option<DirectoryGroup>> {
     let url = format!("https://api.workos.com/directory_groups/{directory_group_id}");
 
     let request = http::Request::builder()
@@ -3341,7 +3220,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(
@@ -3378,17 +3257,13 @@ where
 
 /// Fetches one page of the WorkOS Events API, restricted to `event_types` and
 /// resuming after the event id `after`. Errors if `event_types` is empty.
-pub async fn list_workos_events<F, E>(
+pub async fn list_workos_events(
     api_key: &str,
     event_types: &[&str],
     after: Option<&str>,
     limit: u32,
-    http_client: &(impl Fn(HttpRequest) -> F + 'static + ?Sized),
-) -> anyhow::Result<Vec<WorkOSEvent>>
-where
-    F: Future<Output = Result<HttpResponse, E>>,
-    E: std::error::Error + 'static + Send + Sync,
-{
+    http_client: &impl HttpService,
+) -> anyhow::Result<Vec<WorkOSEvent>> {
     const EVENTS_URL: &str = "https://api.workos.com/events";
 
     if event_types.is_empty() {
@@ -3421,7 +3296,7 @@ where
         .header(http::header::CONTENT_TYPE, APPLICATION_JSON)
         .body(vec![])?;
 
-    let response = timeout(WORKOS_API_TIMEOUT, http_client(request))
+    let response = timeout(WORKOS_API_TIMEOUT, send(http_client, request))
         .await
         .map_err(|_| {
             anyhow::anyhow!(

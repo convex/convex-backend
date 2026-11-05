@@ -56,8 +56,6 @@ static CACHE: LazyLock<MokaManager> = LazyLock::new(|| {
 pub enum ClientPurpose {
     ProviderMetadata,
     Jwks,
-    UserInfo,
-    WorkOSProvisioning,
 }
 
 /// A cached HTTP client that routes requests through a proxy for SSRF
