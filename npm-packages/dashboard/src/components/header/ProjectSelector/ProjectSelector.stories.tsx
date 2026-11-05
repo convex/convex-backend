@@ -167,6 +167,7 @@ const meta = {
         );
         return {
           projects,
+          pages: [projects],
           isLoading: false,
           isLoadingMore: false,
           hasMore: false,
@@ -188,6 +189,7 @@ const meta = {
         );
         return {
           deployments,
+          pages: [deployments],
           isLoading: false,
           isLoadingMore: false,
           hasMore: false,

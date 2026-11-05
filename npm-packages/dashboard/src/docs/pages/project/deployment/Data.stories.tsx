@@ -971,10 +971,12 @@ export const ProjectSwitcher: Story = {
       mocked(useInfiniteProjects).mockImplementation(
         (_teamId, searchQuery = "") => {
           const q = searchQuery.trim().toLowerCase();
+          const projects = otherProjects.filter(
+            (p) => !q || `${p.name} ${p.slug}`.toLowerCase().includes(q),
+          );
           return {
-            projects: otherProjects.filter(
-              (p) => !q || `${p.name} ${p.slug}`.toLowerCase().includes(q),
-            ),
+            projects,
+            pages: [projects],
             isLoading: false,
             isLoadingMore: false,
             hasMore: false,

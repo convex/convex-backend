@@ -1,4 +1,4 @@
-import { Command } from "cmdk";
+import { Command, useCommandState } from "cmdk";
 import { GearIcon, PlusIcon } from "@radix-ui/react-icons";
 import type { DirectorySyncOffer, TeamResponse } from "generatedApi";
 import { useTeams } from "api/teams";
@@ -10,6 +10,7 @@ import { useJoinDirectorySyncedTeamPrompt } from "hooks/useJoinDirectorySyncedTe
 import { useRouter } from "next/router";
 import { useCopyAction } from "./copy";
 import { teamSwitchDestination } from "./navigation";
+import { sortByMatch } from "./matchRank";
 import {
   ActionItem,
   CurrentBadge,
@@ -40,10 +41,17 @@ export function TeamsCommands({
   const [, setJoinPrompt] = useJoinDirectorySyncedTeamPrompt();
   const { ignoredTeamIds } = useIgnoredDirectorySyncTeams();
   const { pathname } = useRouter();
+  const search = useCommandState((state) => state.search);
 
   const currentTeam = teams?.find((t) => t.slug === selectedTeamSlug);
-  const availableTeams = offers?.filter(
-    (offer) => !ignoredTeamIds.includes(offer.teamId),
+  const rankedTeams = sortByMatch(teams ?? [], search, (team) => [
+    team.name,
+    team.slug,
+  ]);
+  const availableTeams = sortByMatch(
+    offers?.filter((offer) => !ignoredTeamIds.includes(offer.teamId)) ?? [],
+    search,
+    (offer) => [offer.teamName],
   );
 
   return (
@@ -64,7 +72,7 @@ export function TeamsCommands({
               />
             </Command.Group>
           )}
-          {availableTeams && availableTeams.length > 0 && (
+          {availableTeams.length > 0 && (
             <Command.Group heading="Available Teams">
               {availableTeams.map((offer) => (
                 <JoinTeamItem
@@ -80,7 +88,7 @@ export function TeamsCommands({
             </Command.Group>
           )}
           <Command.Group heading="Switch Team">
-            {teams.map((team) => {
+            {rankedTeams.map((team) => {
               const href = teamSwitchDestination(team.slug, pathname);
               return (
                 <TeamItem

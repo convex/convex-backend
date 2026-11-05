@@ -192,6 +192,7 @@ const meta = {
       });
       mocked(useInfiniteProjects).mockReturnValue({
         projects: [mockProject],
+        pages: [[mockProject]],
         isLoading: false,
         isLoadingMore: false,
         hasMore: false,

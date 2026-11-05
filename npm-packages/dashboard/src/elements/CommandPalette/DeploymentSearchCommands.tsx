@@ -31,6 +31,7 @@ import {
   type DocumentRef,
 } from "./DocumentCommands";
 import { useCopyAction } from "./copy";
+import { sortByMatch } from "./matchRank";
 
 const MAX_RESULTS = 20;
 
@@ -134,14 +135,21 @@ function DeploymentSearchInner({
     return null;
   }
 
-  const matchingTables = Object.values(tableMapping ?? {})
-    .filter((name) => !name.startsWith("_"))
-    .filter((name) => matchesSearch(trimmed, name))
-    .slice(0, MAX_RESULTS);
+  // Ranked before truncating, so an exact match is never cut off by
+  // MAX_RESULTS looser ones.
+  const matchingTables = sortByMatch(
+    Object.values(tableMapping ?? {})
+      .filter((name) => !name.startsWith("_"))
+      .filter((name) => matchesSearch(trimmed, name)),
+    trimmed,
+    (name) => [name],
+  ).slice(0, MAX_RESULTS);
 
-  const matchingFunctions = functions
-    .filter((fn) => matchesSearch(trimmed, fn.displayName))
-    .slice(0, MAX_RESULTS);
+  const matchingFunctions = sortByMatch(
+    functions.filter((fn) => matchesSearch(trimmed, fn.displayName)),
+    trimmed,
+    (fn) => [fn.displayName],
+  ).slice(0, MAX_RESULTS);
 
   return (
     <>

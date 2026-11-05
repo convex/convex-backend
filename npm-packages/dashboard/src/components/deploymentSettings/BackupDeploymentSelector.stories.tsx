@@ -202,6 +202,7 @@ const meta = {
     mocked(useCurrentProject).mockReturnValue(mockProjects[0]);
     mocked(useInfiniteProjects).mockReturnValue({
       projects: mockProjects,
+      pages: [mockProjects],
       isLoading: false,
       isLoadingMore: false,
       hasMore: false,
@@ -350,6 +351,7 @@ export const ManyProjects: Story = {
       useEffect(() => {
         mocked(useInfiniteProjects).mockReturnValue({
           projects: loadedProjects,
+          pages: data,
           isLoading: false,
           isLoadingMore: isLoadingMore.current,
           hasMore,

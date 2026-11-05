@@ -1,4 +1,4 @@
-import { Command } from "cmdk";
+import { Command, useCommandState } from "cmdk";
 import React, { useContext } from "react";
 import type { UrlObject } from "url";
 import { ConvexProvider, useQuery } from "convex/react";
@@ -24,6 +24,7 @@ import {
   matchesSearch,
   REMOTE_VALUE_PREFIX,
 } from "./navigation";
+import { sortByMatch } from "./matchRank";
 import { usePaletteAnalytics } from "./analytics";
 
 // The deployment pages that render a NentSwitcher, i.e. where the `component`
@@ -137,13 +138,23 @@ function ComponentSwitchInner({
   const targets: {
     id: string | null;
     path: string;
+    // What results are ranked on: the target's own names, not the generic
+    // "component" keyword that every component shares.
+    names: string[];
     keywords: string[];
     isUnmounted: boolean;
   }[] = [
-    { id: null, path: "app", keywords: ["app", "root"], isUnmounted: false },
+    {
+      id: null,
+      path: "app",
+      names: ["app", "root"],
+      keywords: ["app", "root"],
+      isUnmounted: false,
+    },
     ...components.map((component) => ({
       id: component.id,
       path: component.path,
+      names: [component.path, component.name ?? ""],
       // "Switch to" is deliberately excluded so it doesn't match the search;
       // only the component's own name/path does.
       keywords: [component.path, component.name ?? "", "component"],
@@ -155,8 +166,12 @@ function ComponentSwitchInner({
   // these on every keystroke. The per-component shortcuts only make sense while
   // searching; browsing shows just the drill command to keep the list clean.
   const matches = trimmed
-    ? targets.filter((target) =>
-        target.keywords.some((keyword) => matchesSearch(trimmed, keyword)),
+    ? sortByMatch(
+        targets.filter((target) =>
+          target.keywords.some((keyword) => matchesSearch(trimmed, keyword)),
+        ),
+        trimmed,
+        (target) => target.names,
       )
     : [];
   return (
@@ -268,6 +283,7 @@ function ComponentsList({ onClose }: { onClose: () => void }) {
   const selected =
     typeof router.query.component === "string" ? router.query.component : null;
   const selectComponent = useSelectComponent(onClose);
+  const search = useCommandState((state) => state.search);
 
   if (!components) {
     return <LoadingSignal />;
@@ -283,7 +299,10 @@ function ComponentsList({ onClose }: { onClose: () => void }) {
         isCurrent={selected === null}
         onSelect={() => selectComponent(null)}
       />
-      {components.map((component) => (
+      {sortByMatch(components, search, (component) => [
+        component.path,
+        component.name,
+      ]).map((component) => (
         <ComponentItem
           key={component.id}
           value={`component:${component.id}`}

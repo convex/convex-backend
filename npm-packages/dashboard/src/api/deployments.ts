@@ -304,10 +304,8 @@ export function useInfiniteDeployments(
     }
   }, [debouncedQuery, projectId, setSize]);
 
-  const deployments = useMemo(
-    () => flatMap(data?.map((page) => page.items)),
-    [data],
-  );
+  const pages = useMemo(() => data?.map((page) => page.items) ?? [], [data]);
+  const deployments = useMemo(() => flatMap(pages), [pages]);
 
   const hasMore = data?.[data.length - 1]?.pagination.hasMore ?? false;
 
@@ -324,6 +322,8 @@ export function useInfiniteDeployments(
 
   return {
     deployments,
+    // The raw pages, for callers that transform each page separately.
+    pages,
     isLoading,
     isLoadingMore,
     hasMore,

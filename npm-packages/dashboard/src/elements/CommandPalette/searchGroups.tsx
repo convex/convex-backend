@@ -17,6 +17,7 @@ import {
   ProjectItem,
 } from "./items";
 import { InfiniteScrollSentinel } from "./InfiniteScrollSentinel";
+import { sortPagesByMatch } from "./matchRank";
 import { PalettePage } from "./pages";
 import { usePaletteAnalytics } from "./analytics";
 
@@ -115,6 +116,7 @@ export function ProjectSearchGroup({
 }) {
   const {
     projects,
+    pages,
     isLoading,
     isLoadingMore,
     hasMore,
@@ -125,13 +127,18 @@ export function ProjectSearchGroup({
   const stale = isLoading || debouncedQuery.trim() !== trimmed;
 
   // With no search, show a short list so the root page stays scannable;
-  // server-side search takes over as soon as the user types.
-  const page = full || trimmed ? projects : projects?.slice(0, 5);
+  // server-side search takes over as soon as the user types. The server returns
+  // matches newest first; rank them so an exact name match leads its page.
+  const page = trimmed
+    ? sortPagesByMatch(pages, trimmed, (p) => [p.name, p.slug])
+    : full
+      ? projects
+      : projects.slice(0, 5);
   const pinned = trimmed ? undefined : pinnedProject;
   // cmdk keys rows by value, so the pinned project has to leave the list it's
   // hoisted out of.
   const shown = pinned
-    ? [pinned, ...(page ?? []).filter((p) => p.id !== pinned.id)]
+    ? [pinned, ...page.filter((p) => p.id !== pinned.id)]
     : page;
 
   if (stale) {
@@ -144,7 +151,7 @@ export function ProjectSearchGroup({
 
   return (
     <Command.Group heading={`${team.name || team.slug} · Projects`}>
-      {shown?.map(renderItem)}
+      {shown.map(renderItem)}
       {(full || trimmed) && (
         <InfiniteScrollSentinel
           hasMore={hasMore}
@@ -199,21 +206,21 @@ export function DeploymentSearchGroup({
   pushPage: (page: PalettePage) => void;
 }) {
   const q = search.trim();
-  const {
-    deployments,
-    isLoading,
-    isLoadingMore,
-    hasMore,
-    loadMore,
-    debouncedQuery,
-  } = useInfiniteDeployments(team.id, q, {
-    projectId: project?.id,
-    // These rows bypass cmdk's filter (paletteFilter always keeps remote
-    // items), so clear to a loading row rather than keeping the prior query's
-    // deployments visible while a new query loads.
-    keepPreviousData: false,
-  });
-  const cloudDeployments = deployments.filter((d) => d.kind === "cloud");
+  const { pages, isLoading, isLoadingMore, hasMore, loadMore, debouncedQuery } =
+    useInfiniteDeployments(team.id, q, {
+      projectId: project?.id,
+      // These rows bypass cmdk's filter (paletteFilter always keeps remote
+      // items), so clear to a loading row rather than keeping the prior query's
+      // deployments visible while a new query loads.
+      keepPreviousData: false,
+    });
+  // The server returns matches in its list order; rank them so an exact
+  // reference or name match leads its page.
+  const cloudDeployments = sortPagesByMatch(
+    pages.map((page) => page.filter((d) => d.kind === "cloud")),
+    q,
+    (d) => (d.kind === "cloud" ? [d.reference, d.name] : []),
+  );
   const stale = isLoading || debouncedQuery.trim() !== q;
 
   // This group loads alongside the project one, which already shows placeholder

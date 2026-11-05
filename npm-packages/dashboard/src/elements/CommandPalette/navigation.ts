@@ -28,6 +28,7 @@ import {
   PROJECT_SETTINGS_SECTIONS,
   TEAM_SETTINGS_SECTIONS,
 } from "lib/sectionAnchors";
+import { normalizeForSearch } from "./matchRank";
 
 // Where a command can navigate: a plain href, or the URL object form that
 // next/router.push and next/link both take, for destinations with encoded
@@ -378,14 +379,20 @@ export function findCurrentPage(
 export const REMOTE_VALUE_PREFIX = "remote:";
 
 // Every whitespace-separated token of the search must appear somewhere in the
-// haystack, case-insensitively.
+// haystack, ignoring case, accents, and `-`/`_` separators (see
+// normalizeForSearch). A search made only of separators has no tokens, so it
+// matches as typed instead: "-" keeps the results that contain a hyphen.
 export function matchesSearch(search: string, haystack: string): boolean {
-  const needle = search.trim().toLowerCase();
-  if (!needle) {
+  const typed = search.trim().toLowerCase();
+  if (!typed) {
     return true;
   }
-  const target = haystack.toLowerCase();
-  return needle.split(/\s+/).every((token) => target.includes(token));
+  const needle = normalizeForSearch(search);
+  if (!needle) {
+    return haystack.toLowerCase().includes(typed);
+  }
+  const target = normalizeForSearch(haystack);
+  return needle.split(" ").every((token) => target.includes(token));
 }
 
 // Substring-based filter for cmdk: every whitespace-separated token of the

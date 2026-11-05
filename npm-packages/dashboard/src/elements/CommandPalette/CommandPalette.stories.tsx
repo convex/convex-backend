@@ -176,6 +176,7 @@ const meta = {
         );
         return {
           projects,
+          pages: [projects],
           isLoading: false,
           isLoadingMore: false,
           hasMore: false,
@@ -197,6 +198,7 @@ const meta = {
         );
         return {
           deployments,
+          pages: [deployments],
           isLoading: false,
           isLoadingMore: false,
           hasMore: false,
@@ -411,11 +413,13 @@ export const SearchLoading: Story = {
     mocked(useInfiniteProjects).mockReturnValue({
       ...pending,
       projects: [],
+      pages: [],
       pageSize: 20,
     });
     mocked(useInfiniteDeployments).mockReturnValue({
       ...pending,
       deployments: [],
+      pages: [],
       pageSize: 25,
     });
   },
@@ -449,6 +453,54 @@ export const SwitchTeamWithJoinOffer: Story = {
     mocked(useCurrentProject).mockReturnValue(undefined);
     mocked(useCurrentDeployment).mockReturnValue(undefined);
     mocked(useDirectorySyncOffers).mockReturnValue([directorySyncOffer]);
+  },
+};
+
+// Results are ranked by how well they match: the team named exactly "Convex"
+// comes first, then teams whose name starts with it (shortest first), then
+// teams with "Convex" as a later word.
+export const SwitchTeamRanking: Story = {
+  parameters: TeamLevel.parameters,
+  render: () => <SwitchTeamPalette />,
+  beforeEach: () => {
+    mocked(useCurrentProject).mockReturnValue(undefined);
+    mocked(useCurrentDeployment).mockReturnValue(undefined);
+    mocked(useTeams).mockReturnValue({
+      selectedTeamSlug: mockTeam.slug,
+      teams: [
+        mockTeam,
+        ...[
+          ["Nicolas Convex", "nicolascvx"],
+          ["Convex DevX", "cvx-devx"],
+          ["Convex Playground", "convex-playground"],
+          ["Convex Marketing", "cvx-marketing"],
+          ["Convex", "convex"],
+          ["Convex Graveyard", "convex-graveyard"],
+        ].map(([name, slug], index) => ({
+          ...mockTeam,
+          id: 100 + index,
+          name,
+          slug,
+        })),
+      ],
+    });
+  },
+  play: async () => {
+    const user = userEvent.setup();
+    await user.type(await screen.findByRole("combobox"), "convex");
+    const group = await screen.findByRole("group", { name: "Switch Team" });
+    await expect(
+      within(group)
+        .getAllByRole("option")
+        .map((option) => option.getAttribute("data-value")),
+    ).toEqual([
+      "team:convex",
+      "team:cvx-devx",
+      "team:cvx-marketing",
+      "team:convex-graveyard",
+      "team:convex-playground",
+      "team:nicolascvx",
+    ]);
   },
 };
 

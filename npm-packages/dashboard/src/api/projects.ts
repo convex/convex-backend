@@ -192,10 +192,8 @@ export function useInfiniteProjects(
     }
   }, [debouncedQuery, setSize]);
 
-  const projects = useMemo(
-    () => flatMap(data?.map((page) => page.items)),
-    [data],
-  );
+  const pages = useMemo(() => data?.map((page) => page.items) ?? [], [data]);
+  const projects = useMemo(() => flatMap(pages), [pages]);
 
   const hasMore = data?.[data.length - 1]?.pagination.hasMore ?? false;
 
@@ -212,6 +210,8 @@ export function useInfiniteProjects(
 
   return {
     projects,
+    // The raw pages, for callers that transform each page separately.
+    pages,
     isLoading,
     isLoadingMore,
     hasMore,
