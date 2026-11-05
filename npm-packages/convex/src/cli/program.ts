@@ -18,6 +18,7 @@ import { insights } from "./insights.js";
 import { integration } from "./integration.js";
 import { login } from "./login.js";
 import { logout } from "./logout.js";
+import { account } from "./account.js";
 import { logs } from "./logs.js";
 import { mcp } from "./mcp.js";
 import { networkTest } from "./network_test.js";
@@ -57,6 +58,7 @@ export function buildProgram() {
       .addCommand(codegen)
       .addCommand(update)
       .addCommand(logout)
+      .addCommand(account)
       .addCommand(networkTest, { hidden: true })
       .addCommand(integration, { hidden: true })
       .addCommand(functionSpec)
