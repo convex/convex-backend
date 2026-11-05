@@ -4,6 +4,7 @@ import { looseObject } from "./utils.js";
 export const moduleEnvironment = z.union([
   z.literal("isolate"),
   z.literal("node"),
+  z.literal("rust"),
 ]);
 export type ModuleEnvironment = z.infer<typeof moduleEnvironment>;
 

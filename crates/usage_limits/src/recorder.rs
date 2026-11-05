@@ -40,7 +40,7 @@ pub fn usage_deltas(events: &[UsageEvent]) -> Vec<(UsageLimitMetric, f64)> {
                         // Match the runtime exhaustively so a new one is a
                         // compile error.
                         match fields.environment.parse::<ModuleEnvironment>() {
-                            Ok(ModuleEnvironment::Node) => {
+                            Ok(ModuleEnvironment::Node | ModuleEnvironment::Rust) => {
                                 deltas
                                     .push((UsageLimitMetric::ActionComputeNodeJsGBHours, compute));
                             },

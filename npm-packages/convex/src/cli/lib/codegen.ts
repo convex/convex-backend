@@ -46,6 +46,12 @@ import {
   rootComponentApiCJS,
 } from "../codegen_templates/component_api.js";
 import { functionsDir } from "./utils/utils.js";
+import {
+  rustComponentCodegen,
+  rustApiFor,
+  withRustApi,
+  doRustHttpCodegen,
+} from "../codegen_templates/rust_api.js";
 
 const PRESERVED_GENERATED_ENTRIES = new Set(["ai"]);
 
@@ -199,6 +205,18 @@ export async function doCodegen(
     );
     writtenFiles.push(...apiFiles);
 
+    // `"use rust"` projects: the V8 side of `#[http_action]` routes.
+    writtenFiles.push(
+      ...(await doRustHttpCodegen(
+        ctx,
+        tmpDir,
+        functionsDir,
+        codegenDir,
+        useTypeScript,
+        opts,
+      )),
+    );
+
     // Cleanup any files that weren't written in this run.
     cleanupStaleGeneratedEntries(ctx, codegenDir, writtenFiles, opts);
 
@@ -288,6 +306,20 @@ export async function doInitialComponentCodegen(
     opts,
   );
   writtenFiles.push(...apiFiles);
+
+  await rustComponentCodegen(ctx, tmpDir, componentDirectory, null, opts);
+  if (componentDirectory.isRoot) {
+    writtenFiles.push(
+      ...(await doRustHttpCodegen(
+        ctx,
+        tmpDir,
+        componentDirectory.path,
+        codegenDir,
+        useTypeScript,
+        opts,
+      )),
+    );
+  }
 
   // component.ts is generated in doFinalComponentCodegen, but don't delete
   // if it already exists from a previous full codegen run.
@@ -434,9 +466,12 @@ export async function doFinalComponentCodegen(
   );
 
   // api
+  const componentRustApi = componentDirectory.isRoot
+    ? await rustApiFor(ctx, componentDirectory.path)
+    : null;
   if (!useTypeScript) {
     const apiDTSPath = path.join(codegenDir, "api.d.ts");
-    const apiContents = await componentApiDTS(
+    const rawApi = await componentApiDTS(
       ctx,
       startPushResponse,
       rootComponent,
@@ -447,6 +482,7 @@ export async function doFinalComponentCodegen(
         useComponentApiImports: usesComponentApiImports(projectConfig),
       },
     );
+    const apiContents = withRustApi(rawApi, componentRustApi);
     await writeFormattedFile(
       ctx,
       tmpDir,
@@ -469,7 +505,7 @@ export async function doFinalComponentCodegen(
     }
   } else {
     const apiTSPath = path.join(codegenDir, "api.ts");
-    const apiContents = await componentApiTSWithTypes(
+    const rawApi = await componentApiTSWithTypes(
       ctx,
       startPushResponse,
       rootComponent,
@@ -480,6 +516,7 @@ export async function doFinalComponentCodegen(
         useComponentApiImports: usesComponentApiImports(projectConfig),
       },
     );
+    const apiContents = withRustApi(rawApi, componentRustApi);
     await writeFormattedFile(
       ctx,
       tmpDir,
@@ -489,6 +526,14 @@ export async function doFinalComponentCodegen(
       opts,
     );
   }
+
+  await rustComponentCodegen(
+    ctx,
+    tmpDir,
+    componentDirectory,
+    analysis.functions,
+    opts,
+  );
 }
 
 async function doReadmeCodegen(
@@ -848,9 +893,13 @@ async function doApiCodegen(
     .sort(compareModulePaths);
 
   const writtenFiles: string[] = [];
+  const rustApi = await rustApiFor(ctx, functionsDir);
 
   if (!useTypeScript) {
-    const apiContent = apiCodegen(modulePaths, { useTypeScript: false });
+    const apiContent = withRustApi(
+      apiCodegen(modulePaths, { useTypeScript: false }),
+      rustApi,
+    );
     await writeFormattedFile(
       ctx,
       tmpDir,
@@ -890,7 +939,10 @@ async function doApiCodegen(
       writtenFiles.push("api_cjs.cjs", "api_cjs.d.cts");
     }
   } else {
-    const apiContent = apiCodegen(modulePaths, { useTypeScript: true });
+    const apiContent = withRustApi(
+      apiCodegen(modulePaths, { useTypeScript: true }),
+      rustApi,
+    );
     await writeFormattedFile(
       ctx,
       tmpDir,

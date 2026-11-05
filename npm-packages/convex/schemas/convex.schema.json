@@ -182,6 +182,19 @@
       "description": "Deprecated. Set to `tsgo` to use the TypeScript Native Preview compiler (`@typescript/native-preview`). TypeScript 7 uses the native compiler without needing this setting to be set.",
       "deprecated": true
     },
+    "rust": {
+      "type": "object",
+      "description": "Settings for \"use rust\" actions.",
+      "properties": {
+        "runtime": {
+          "type": "string",
+          "enum": ["wasm", "native", "auto"],
+          "default": "wasm",
+          "description": "Runtime to build Rust functions for. `auto` uses native when the backend supports it, otherwise wasm. Overridden by `--rust-runtime`."
+        }
+      },
+      "additionalProperties": false
+    },
     "authKit": {
       "$ref": "#/definitions/authKitConfig"
     },

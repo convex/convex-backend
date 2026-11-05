@@ -55,6 +55,9 @@ use tokio::{
 };
 
 fn main() -> Result<(), MainError> {
+    if std::env::args().nth(1).as_deref() == Some(isolate::environment::rust::native::WORKER_ARG) {
+        isolate::environment::rust::native::target::worker_entry();
+    }
     let config = LocalConfig::parse();
     if let Some(subcommand) = &config.subcommand {
         // Subcommands produce machine-parseable output on stdout, so configure
