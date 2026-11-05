@@ -183,8 +183,11 @@ impl VectorFixtures {
         )
         .await?;
         let mut tx = self.db.begin_system().await?;
+        let pending = IndexModel::new(&mut tx)
+            .pending_index_metadata(index_data.namespace, &index_data.index_name)?
+            .context("index should be pending")?;
         IndexModel::new(&mut tx)
-            .enable_index_for_testing(index_data.namespace, &index_data.index_name)
+            .enable_backfilled_indexes(vec![pending])
             .await?;
         self.db.commit(tx, "test").await?;
         Ok(index_data)

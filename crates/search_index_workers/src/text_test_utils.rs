@@ -203,8 +203,11 @@ impl TextFixtures {
     pub async fn enabled_text_index(&self) -> anyhow::Result<TextIndexData> {
         let index_data = self.backfilled_text_index().await?;
         let mut tx = self.db.begin_system().await?;
+        let pending = IndexModel::new(&mut tx)
+            .pending_index_metadata(index_data.namespace, &index_data.index_name)?
+            .context("index should be pending")?;
         IndexModel::new(&mut tx)
-            .enable_index_for_testing(index_data.namespace, &index_data.index_name)
+            .enable_backfilled_indexes(vec![pending])
             .await?;
         self.db.commit(tx, "test").await?;
         Ok(index_data)
@@ -356,8 +359,11 @@ impl TextFixtures {
         index_name: &GenericIndexName<TableName>,
     ) -> anyhow::Result<()> {
         let mut tx = self.db.begin_system().await?;
+        let pending = IndexModel::new(&mut tx)
+            .pending_index_metadata(self.namespace, index_name)?
+            .context("index should be pending")?;
         IndexModel::new(&mut tx)
-            .enable_index_for_testing(self.namespace, index_name)
+            .enable_backfilled_indexes(vec![pending])
             .await?;
         self.db.commit(tx, "test").await?;
         Ok(())
