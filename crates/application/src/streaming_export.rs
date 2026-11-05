@@ -29,6 +29,7 @@ use model::{
     deployment_audit_log::types::DeploymentAuditLogEvent,
 };
 use streaming_export::{
+    DataSync,
     DataSyncClient,
     SyncCursor,
     SyncResult,
@@ -77,13 +78,16 @@ impl<RT: Runtime> Application<RT> {
         sync_client: DataSyncClient,
         request_metadata: RequestMetadata,
     ) -> anyhow::Result<SyncResult> {
-        let result = streaming_export::data_sync(
-            &self.database.latest_database_snapshot()?,
+        let snapshot = self.database.latest_database_snapshot()?;
+        let iterator = snapshot.data_sync_iterator()?;
+        let result = DataSync::new(
+            &snapshot,
+            &iterator,
             identity.clone(),
-            cursor,
             selection,
             sync_client,
-        )
+        )?
+        .next(cursor)
         .await?;
         self.record_data_sync_progress(&result, identity, &request_metadata)
             .await?;
