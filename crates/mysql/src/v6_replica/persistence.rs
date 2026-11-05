@@ -58,6 +58,9 @@ pub(crate) struct ReplicatedV5Persistence<RT: Runtime> {
     pub(super) replica: Option<Arc<ReplicaWriter<RT>>>,
     _writer_state_gauge: Arc<metrics::WriterStateGauge>,
     pub(super) closing: AtomicBool,
+    /// Set by the first source write that finds the lease gone, so only one
+    /// task closes the replica for that reason.
+    closing_after_lease_loss: AtomicBool,
     calls: Arc<RwLock<()>>,
     in_flight: Arc<InFlightCalls>,
 }
@@ -88,6 +91,7 @@ impl<RT: Runtime> ReplicatedV5Persistence<RT> {
             replica,
             _writer_state_gauge: writer_state_gauge,
             closing: AtomicBool::new(false),
+            closing_after_lease_loss: AtomicBool::new(false),
             calls: Arc::new(RwLock::new(())),
             in_flight: Default::default(),
         }
@@ -135,6 +139,7 @@ impl<RT: Runtime> ReplicatedV5Persistence<RT> {
             Err(error) => {
                 if error.is::<LeaseLostError>() {
                     replay_guard.0 = None;
+                    self.close_replica_after_lease_loss(replica);
                 }
                 return Err(error);
             },
@@ -142,6 +147,29 @@ impl<RT: Runtime> ReplicatedV5Persistence<RT> {
         let replay = replica.enqueue(operation());
         replay_guard.0 = None;
         Ok((value, replay))
+    }
+
+    /// A lost lease ends this writer's source commits, so the replica can
+    /// certify as soon as the calls already admitted have finished, without
+    /// waiting for the process to shut the deployment down.
+    fn close_replica_after_lease_loss(&self, replica: &Arc<ReplicaWriter<RT>>) {
+        if self.closing_after_lease_loss.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let replica = replica.clone();
+        let calls = self.calls.clone();
+        common::runtime::tokio_spawn("v6_replica_lease_lost_close", async move {
+            match tokio::time::timeout(replica.settings.apply_wait, calls.write()).await {
+                Ok(calls) => {
+                    // Later source calls fail their lease check, so none can
+                    // queue replay after this point.
+                    drop(calls);
+                    replica.close().await;
+                },
+                // Shutdown still closes a writer whose calls outlast the wait.
+                Err(_) => {},
+            }
+        });
     }
 
     /// Pace index backfill against replay, with a timeout to keep V5
@@ -257,6 +285,9 @@ impl<RT: Runtime> PersistenceTrait for ReplicatedV5Persistence<RT> {
         key: PersistenceGlobalKey,
         value: JsonValue,
     ) -> anyhow::Result<()> {
+        if let Some(replica) = &self.replica {
+            replica.note_global_write(key);
+        }
         self.write_source_and_enqueue_replay(
             self.v5.write_persistence_global(key, value.clone()),
             || ReplayOperation::WritePersistenceGlobal {

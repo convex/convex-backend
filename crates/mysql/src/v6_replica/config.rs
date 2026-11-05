@@ -39,7 +39,8 @@ pub(super) struct Settings {
     /// Deployment loading waits for replica initialization.
     pub(super) init_timeout: Duration,
     /// How long a new writer queues its writes while waiting for the previous
-    /// writer's clean-shutdown certificate. A rolling update stops the old
+    /// writer's clean-shutdown certificate before comparing the replica with
+    /// the source instead. A rolling update stops the old
     /// conductor within seconds of the new one taking the lease; a deployment
     /// move waits for the source conductor's next reconcile, up to a minute.
     pub(super) handoff_grace: Duration,

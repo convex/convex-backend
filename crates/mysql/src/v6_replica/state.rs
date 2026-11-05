@@ -2,7 +2,8 @@
 //!
 //! A writer sets `clean_shutdown` after closing source writes and completing
 //! their replay. The next writer clears the flag when registering. A crash
-//! before setting the flag causes the next writer to retire the replica.
+//! before setting the flag leaves the next writer to compare the replica with
+//! the source, retiring it on any difference.
 //!
 //! The `v5_replica_handoffs` row survives data deletion so retirement remains
 //! permanent across restarts. Updates check the source lease timestamp to
@@ -93,12 +94,24 @@ pub(super) async fn read<RT: Runtime>(
         .transpose()
 }
 
+/// Grounds on which a registering writer may replay.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Resume {
+    /// Only the previous writer's clean-shutdown certificate allows replay.
+    IfCertified,
+    /// A first registration for a source without history starts replay.
+    FreshSource,
+    /// The writer compared the replica with the source as of the lease change
+    /// and found them equal.
+    Verified,
+}
+
 /// Returns whether replay is safe; false means retirement has been persisted.
 pub(super) async fn register<RT: Runtime>(
     pool: &ConvexMySqlPool<RT>,
     db_name: &str,
     state: &ReplicaHandoffState,
-    source_is_fresh: bool,
+    resume: Resume,
 ) -> anyhow::Result<bool> {
     let mut connection = pool.acquire("v6_replica_state_register", db_name).await?;
     let mut tx = connection
@@ -124,9 +137,11 @@ pub(super) async fn register<RT: Runtime>(
                 state.lease_ts > current.lease_ts,
                 "replica already registered this writer or a newer writer"
             );
-            !current.retired && current.clean_shutdown && current.same_source(state)
+            !current.retired
+                && current.same_source(state)
+                && (current.clean_shutdown || resume == Resume::Verified)
         },
-        None => source_is_fresh,
+        None => resume == Resume::FreshSource,
     };
     if current.is_some() {
         tx.exec_drop(

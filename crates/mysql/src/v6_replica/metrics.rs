@@ -61,6 +61,32 @@ pub(crate) fn log_retirement(cluster_name: &str, reason: RetireReason) {
 }
 
 register_convex_counter!(
+    MYSQL_V6_REPLICA_HANDOFFS_TOTAL,
+    "Pending writer handoffs by how they resolved",
+    &["cluster_name", "outcome"]
+);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::IntoStaticStr, strum::EnumIter)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum HandoffOutcome {
+    /// The previous writer certified a clean shutdown.
+    Certified,
+    /// No certificate arrived, but the replica matched the source as of the
+    /// lease change.
+    Verified,
+    /// No certificate arrived and the replica could not be shown complete.
+    Expired,
+    /// A newer writer registered first.
+    Superseded,
+    /// Another process retired the replica.
+    Retired,
+}
+pub(crate) fn log_handoff(cluster_name: &str, outcome: HandoffOutcome) {
+    MYSQL_V6_REPLICA_HANDOFFS_TOTAL
+        .with_label_values(&[cluster_name, outcome.into()])
+        .inc();
+}
+
+register_convex_counter!(
     MYSQL_V6_REPLICA_MARKER_READ_FAILURES_TOTAL,
     "Failed reads of a V6 replica's index backfill markers. Retention retries the read, so a \
      failure does not retire the replica",
@@ -191,6 +217,11 @@ pub(crate) fn initialize(cluster_name: &str) {
     for reason in RetireReason::iter() {
         MYSQL_V6_REPLICA_RETIREMENTS_TOTAL
             .with_label_values(&[cluster_name, reason.into()])
+            .inc_by(0);
+    }
+    for outcome in HandoffOutcome::iter() {
+        MYSQL_V6_REPLICA_HANDOFFS_TOTAL
+            .with_label_values(&[cluster_name, outcome.into()])
             .inc_by(0);
     }
     for read in ComparedRead::iter() {

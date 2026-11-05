@@ -27,6 +27,7 @@ common = { workspace = true }
 const-hex = { workspace = true }
 const_format = { workspace = true }
 dynfmt = { workspace = true }
+enum-iterator = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
 futures = { workspace = true }

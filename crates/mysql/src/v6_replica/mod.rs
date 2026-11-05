@@ -41,7 +41,10 @@ use self::{
         WriterState,
     },
     persistence::ReplicatedV5Persistence,
-    replica::ReplicaWriter,
+    replica::{
+        HandoffVerification,
+        ReplicaWriter,
+    },
     state::ReplicaHandoffState,
 };
 use crate::{
@@ -150,7 +153,7 @@ impl<RT: Runtime> ReplicatedV5PersistenceFactory<RT> {
     /// starts pending and lets `ReplicaWriter::resolve_handoff` decide.
     async fn initialize(
         &self,
-        v5: &v5::Persistence<RT>,
+        v5: &Arc<v5::Persistence<RT>>,
         deployment_id: DeploymentId,
         writer_state_gauge: &Arc<metrics::WriterStateGauge>,
     ) -> anyhow::Result<Option<Arc<ReplicaWriter<RT>>>> {
@@ -173,6 +176,9 @@ impl<RT: Runtime> ReplicatedV5PersistenceFactory<RT> {
             && !current.retired
             && !current.clean_shutdown
         {
+            // This writer has not committed yet, so the source's latest
+            // timestamp ends the previous writer's history.
+            let boundary_ts = v5.reader().max_ts().await?;
             let replica = ReplicaWriter::new(
                 None,
                 target,
@@ -180,7 +186,14 @@ impl<RT: Runtime> ReplicatedV5PersistenceFactory<RT> {
                 self.settings.clone(),
                 writer_state_gauge.clone(),
             );
-            replica.resolve_handoff(source, current.lease_ts);
+            replica.resolve_handoff(
+                source,
+                current.lease_ts,
+                HandoffVerification {
+                    v5: v5.clone(),
+                    boundary_ts,
+                },
+            );
             return Ok(Some(replica));
         }
         // An empty document log can still have globals or backfilled indexes
@@ -198,7 +211,12 @@ impl<RT: Runtime> ReplicatedV5PersistenceFactory<RT> {
                 )
                 .await?
                 .is_none();
-        if !state::register(&target.pool, &target.db_name, &source, source_is_fresh).await? {
+        let resume = if source_is_fresh {
+            state::Resume::FreshSource
+        } else {
+            state::Resume::IfCertified
+        };
+        if !state::register(&target.pool, &target.db_name, &source, resume).await? {
             if let Some(current) = previous {
                 if !current.retired {
                     metrics::log_retirement(&source.cluster_name, RetireReason::UncleanHandoff);
@@ -225,8 +243,18 @@ async fn open_v6<RT: Runtime>(
     target: &ReplicaTarget<RT>,
     source: &ReplicaHandoffState,
 ) -> anyhow::Result<Arc<dyn Persistence>> {
+    let v6 = connect_v6(target, source).await?;
+    confirm_ownership(target, source).await?;
+    Ok(v6)
+}
+
+/// Taking the V6 lease displaces any replay the previous writer still runs.
+async fn connect_v6<RT: Runtime>(
+    target: &ReplicaTarget<RT>,
+    source: &ReplicaHandoffState,
+) -> anyhow::Result<Arc<dyn Persistence>> {
     let (lease_lost, _) = tokio::sync::oneshot::channel();
-    let v6: Arc<dyn Persistence> = Arc::new(
+    Ok(Arc::new(
         v6::Persistence::new(
             target.pool.clone(),
             target.db_name.clone(),
@@ -240,7 +268,13 @@ async fn open_v6<RT: Runtime>(
             ShutdownSignal::new(lease_lost),
         )
         .await?,
-    );
+    ))
+}
+
+async fn confirm_ownership<RT: Runtime>(
+    target: &ReplicaTarget<RT>,
+    source: &ReplicaHandoffState,
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         state::read(&target.pool, &target.db_name, source.deployment_id)
             .await?
@@ -249,7 +283,7 @@ async fn open_v6<RT: Runtime>(
                 && !current.clean_shutdown),
         "replica ownership changed during initialization"
     );
-    Ok(v6)
+    Ok(())
 }
 
 pub fn maintenance<RT: Runtime>(
