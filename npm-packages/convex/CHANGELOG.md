@@ -17,6 +17,10 @@
   `FunctionReference_future`. When incorporating `v.function()` into your
   codebase, existing code that uses the `FunctionHandle` type may need to be
   updated to use `FunctionHandle_future`.
+- Security fixes for
+  [GHSA-qw8j-4xj7-6f28](https://github.com/convex/convex-backend/security/advisories/GHSA-qw8j-4xj7-6f28)
+  and
+  [GHSA-9mw5-7p28-rvv4](https://github.com/convex/convex-backend/security/advisories/GHSA-9mw5-7p28-rvv4).
 
 ## 1.48.0
 
