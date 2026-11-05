@@ -38,6 +38,8 @@ export function PostHogProvider({
       // Capture pageviews for initial load and client-side route changes.
       // See https://posthog.com/tutorials/single-page-app-pageviews
       capture_pageview: "history_change",
+      mask_all_text: true,
+      mask_all_element_attributes: true,
       session_recording: {
         recordHeaders: false,
         maskTextSelector: "*", // Masks all text elements (not including inputs)
