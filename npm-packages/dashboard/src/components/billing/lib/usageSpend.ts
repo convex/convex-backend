@@ -177,6 +177,10 @@ function metricSpend(
     // undiscounted rate here.
     coveredSpend += amount.consumedUnits * Number(amount.amount);
   }
+  const usageByDimension = new Map<
+    string,
+    { quantity: number; amount: PriceAmount }
+  >();
   for (const row of summary) {
     const fields = Array.isArray(metric.field) ? metric.field : [metric.field];
     const quantities = fields.map(
@@ -209,6 +213,19 @@ function metricSpend(
       );
       continue;
     }
+    const dimension =
+      "rate" in price
+        ? "global"
+        : "regionRate" in price
+          ? row.region
+          : JSON.stringify([row.deploymentClass, row.region]);
+    const existing = usageByDimension.get(dimension);
+    usageByDimension.set(dimension, {
+      quantity: (existing?.quantity ?? 0) + quantity,
+      amount,
+    });
+  }
+  for (const { quantity, amount } of usageByDimension.values()) {
     const rate = discountedRate(amount);
     if (rate === undefined) return undefined;
     const roundedQuantity = Math.ceil(quantity);
