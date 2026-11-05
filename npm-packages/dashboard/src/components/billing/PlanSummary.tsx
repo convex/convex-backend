@@ -529,11 +529,17 @@ export function BusinessPlanSummary({
                     (showHistoricalIncluded &&
                       includedAmount === undefined &&
                       section.metric !== "deploymentCount")) ? (
-                    <span className="text-content-secondary">N/A</span>
+                    <EmptyValue />
                   ) : aiCostFailed ? (
                     <span className="text-content-secondary">Unavailable</span>
                   ) : aiCostPending ? (
                     <Loading fullHeight={false} className="h-4 w-16" />
+                  ) : showIncluded &&
+                    displayedUsage === 0 &&
+                    !(showIncludedLimits && entitlement !== undefined) ? (
+                    // "0 / limit" reads fine next to a cap, but a bare zero
+                    // looks like missing data.
+                    <EmptyValue />
                   ) : (
                     <span>
                       {section.format(displayedUsage)}
@@ -571,12 +577,7 @@ export function BusinessPlanSummary({
                 {showIncluded && (
                   <div className="animate-fadeInFromLoading">
                     {section.metric === "deploymentCount" ? (
-                      <span
-                        className="text-content-secondary"
-                        aria-label="Not applicable"
-                      >
-                        N/A
-                      </span>
+                      <EmptyValue />
                     ) : section.allOnDemand ? (
                       aiCostFailed ? (
                         <span className="text-content-secondary">
@@ -589,10 +590,11 @@ export function BusinessPlanSummary({
                         // increment over an included amount.
                         `${section.format(metric)}${section.suffix ? ` ${section.suffix}` : ""}`
                       )
+                    ) : section.noOnDemand ||
+                      onDemandAmount === undefined ? null : onDemandAmount ===
+                      0 ? (
+                      <EmptyValue />
                     ) : (
-                      !section.noOnDemand &&
-                      onDemandAmount !== undefined &&
-                      onDemandAmount > 0 &&
                       `+${section.format(onDemandAmount)}${section.suffix ? ` ${section.suffix}` : ""}`
                     )}
                   </div>
@@ -601,7 +603,7 @@ export function BusinessPlanSummary({
                   <div className="animate-fadeInFromLoading tabular-nums">
                     {!spendApplicable ||
                     section.metric === "deploymentCount" ? (
-                      <span className="text-content-secondary">N/A</span>
+                      <EmptyValue />
                     ) : aiCostFailed || pricedSummaryFailed ? (
                       <span className="text-content-secondary">
                         Unavailable
@@ -645,6 +647,12 @@ export function BusinessPlanSummary({
   );
 }
 
+// Fills cells with no value to show (zero, not applicable, or missing
+// billing information) so the table doesn't read as missing data.
+function EmptyValue() {
+  return <span className="text-content-secondary">—</span>;
+}
+
 function SpendValue({
   spend,
   sectionTitle,
@@ -674,7 +682,7 @@ function SpendValue({
   }, [missingBillingInformation, sectionTitle, missingDimensions]);
 
   if (spend === undefined || spend.missingDimensions.length > 0) {
-    return <span className="text-content-secondary">N/A</span>;
+    return <EmptyValue />;
   }
 
   return (
