@@ -107,7 +107,7 @@ http-cache = { version = "=1.0.0-alpha.8", default-features = false }
 http-cache-reqwest = { version = "=1.0.0-alpha.9", default-features = false, features = [ "manager-moka", "reqwest-middleware", "url-standard" ] }
 http_client = { path = "crates/http_client" }
 humansize = { version = "2.1.3", features = [ "impl_style" ] }
-hyper = "1.3.1"
+hyper = "1.10"
 hyper-util = { version = "0.1.5", features = [ "server-graceful", "tokio" ] }
 imbl = "7.0.0"
 imbl_slab = { path = "crates/imbl_slab" }
@@ -237,7 +237,7 @@ tokio-postgres-rustls = "0.14"
 tokio-stream = { version = "0.1", features = [ "io-util", "sync", "signal" ] }
 tokio-tungstenite = "0.28.0"
 tokio-util = { version = "0.7.13", features = [ "io", "rt", "io-util", "join-map" ] }
-tonic = { package = "tonic", version = "0.14", features = [ "gzip", "tls-aws-lc", "tls-native-roots" ] }
+tonic = { package = "tonic", version = "0.14.9", features = [ "gzip", "tls-aws-lc", "tls-native-roots" ] }
 tonic-build = "0.14"
 tonic-health = "0.14"
 tonic-middleware = "0.4"
