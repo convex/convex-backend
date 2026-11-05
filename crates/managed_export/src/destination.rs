@@ -100,6 +100,14 @@ impl ExportState {
         })
     }
 
+    /// Whether `publish` should drop a Glue table with `parameters` that the
+    /// state does not list: one a Convex export wrote, and not this export at
+    /// this page or later.
+    fn is_stale(&self, export_id: &str, parameters: Option<&HashMap<String, String>>) -> bool {
+        parameters
+            .is_some_and(|p| p.contains_key(EXPORT_ID_PARAMETER) && !self.published(export_id, p))
+    }
+
     /// Whether `export_id` published this Glue table at `page` or later.
     fn published(&self, export_id: &str, parameters: &HashMap<String, String>) -> bool {
         parameters.get(EXPORT_ID_PARAMETER).map(String::as_str) == Some(export_id)
@@ -277,8 +285,9 @@ impl ExportStore {
         }
     }
 
-    /// Makes Glue match `state`. The database belongs to the deployment, so
-    /// tables the state does not list are dropped. Requires one writer per
+    /// Makes Glue match `state`. Tables a Convex export wrote that the state
+    /// does not list are dropped; anything else the customer keeps in this
+    /// database is left alone. Requires one writer per
     /// database: a table already at this export's page or later is left
     /// alone, so a slow mirror cannot move Glue backward.
     pub async fn publish(&self, state: &ExportState) -> Result<()> {
@@ -317,6 +326,18 @@ impl ExportStore {
                 continue;
             };
             let parameters = current.parameters.unwrap_or_default();
+            // A table no Convex export wrote is the customer's, even when its
+            // name matches ours.
+            anyhow::ensure!(
+                parameters.contains_key(EXPORT_ID_PARAMETER),
+                ErrorMetadata::bad_request(
+                    "S3ExportForeignTable",
+                    format!(
+                        "Glue table {name} was not written by a Convex export. Remove it from the \
+                         export's Glue database or recreate the export."
+                    ),
+                )
+            );
             let previous = parameters.get("metadata_location").map(String::as_str);
             // Most pages change few tables.
             if previous == Some(location) || state.published(&self.export_id, &parameters) {
@@ -345,10 +366,7 @@ impl ExportStore {
                 .map_err(|e| aws_error(e, "update a Glue table"))?;
         }
         for (name, table) in published {
-            if table
-                .parameters()
-                .is_some_and(|p| state.published(&self.export_id, p))
-            {
+            if !state.is_stale(&self.export_id, table.parameters()) {
                 continue;
             }
             self.glue
