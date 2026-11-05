@@ -24,19 +24,9 @@ use iceberg::{
     Catalog,
 };
 use parquet_iceberg::file::properties::WriterProperties;
-use serde::{
-    Deserialize,
-    Serialize,
-};
-use strum::{
-    Display,
-    EnumString,
-    IntoStaticStr,
-};
 use value::ConvexObject;
 
 pub mod columns;
-mod json;
 mod names;
 mod writer;
 pub use writer::{
@@ -45,31 +35,6 @@ pub use writer::{
     SourceTable,
     TableState,
 };
-
-/// How a table lays out a document. An export keeps the format it started
-/// with, so its stream never pauses for a format change. New exports start in
-/// `Typed`. The string form is the `convex.porter.encoding` table property and
-/// the `format` field of the export's state.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Display, EnumString, IntoStaticStr, Serialize, Deserialize,
-)]
-#[serde(into = "&'static str", try_from = "String")]
-pub enum Format {
-    /// `_id`, `ts`, `deleted`, and the whole document in a JSON `payload`.
-    #[strum(serialize = "convex-change-log-json-v1")]
-    Json,
-    /// Metadata columns, then one typed column per top-level document field.
-    #[strum(serialize = "convex-change-log-typed-v1")]
-    Typed,
-}
-
-impl TryFrom<String> for Format {
-    type Error = strum::ParseError;
-
-    fn try_from(encoding: String) -> Result<Self, Self::Error> {
-        encoding.parse()
-    }
-}
 
 /// One document revision in a table's change log. A `None` document records a
 /// deletion.
@@ -80,28 +45,19 @@ pub struct Change {
     pub document: Option<ConvexObject>,
 }
 
-/// Appends `changes` to `table` as one snapshot, after adding the columns they
-/// need in the typed format, and returns the table with the bytes of Parquet
-/// written. Every revision is a row; readers take the latest timestamp per
-/// `_id` and skip deleted rows. A retried page can repeat rows, so readers
-/// deduplicate on (`_id`, timestamp).
+/// Appends `changes` to `table` as one snapshot, adding columns as needed.
+/// Returns the table and the Parquet bytes written. One row per revision;
+/// readers take the latest `_ts` per `_id` and skip deletes. A retried page
+/// can repeat rows, so readers dedupe on (`_id`, `_ts`).
 #[fastrace::trace]
 pub(crate) async fn append(
     catalog: &dyn Catalog,
     table: &Table,
     changes: &[Change],
     snapshot_properties: &HashMap<String, String>,
-    format: Format,
 ) -> Result<(Table, u64)> {
-    let (table, batch) = match format {
-        Format::Json => (table.clone(), json::batch(changes)?),
-        Format::Typed => {
-            let table = columns::add_columns(catalog, table, changes).await?;
-            let batch = columns::batch(table.metadata().current_schema(), changes)?;
-            (table, batch)
-        },
-    };
-    let table = &table;
+    let table = &columns::add_columns(catalog, table, changes).await?;
+    let batch = columns::batch(table.metadata().current_schema(), changes)?;
     let schema = table.metadata().current_schema().clone();
     let mut writer =
         DataFileWriterBuilder::new(RollingFileWriterBuilder::new_with_default_file_size(

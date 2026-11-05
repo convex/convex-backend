@@ -6,8 +6,8 @@ package managed_export;
 // `<root>/_convex/exports/<export id>/state` in the customer's bucket.
 // Only Porter reads or writes it.
 message ExportState {
-  // The format of the export's Iceberg tables, for life.
-  string format = 1;
+  reserved 1;
+  reserved "format";
   // Number of pages committed by this export.
   uint64 page = 2;
   // Base64 `SyncCursor` after `page`; absent before the first page.

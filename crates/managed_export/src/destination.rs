@@ -46,7 +46,6 @@ use pb::managed_export as pb_state;
 use prost::Message;
 
 use crate::iceberg::{
-    Format,
     S3Destination,
     TableState,
 };
@@ -65,8 +64,6 @@ const MAX_OBJECT_BYTES: i64 = 16 * (1 << 20); // 16 MiB
 /// export starts empty instead of reading the old export's state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExportState {
-    /// The format of the export's Iceberg tables, for life.
-    pub format: Format,
     /// Number of pages committed by this export.
     pub page: u64,
     /// Base64 `SyncCursor` after page `page`. `None` before the first page.
@@ -76,10 +73,9 @@ pub struct ExportState {
 }
 
 impl ExportState {
-    /// A state with no pages, in the format new exports start in.
+    /// A state with no pages.
     pub fn fresh() -> Self {
         Self {
-            format: Format::Typed,
             page: 0,
             cursor: None,
             tables: BTreeMap::new(),
@@ -98,7 +94,6 @@ impl ExportState {
     /// The state after one more committed page.
     pub fn next(&self, cursor: String, tables: BTreeMap<String, TableState>) -> Result<Self> {
         Ok(Self {
-            format: self.format,
             page: self.next_page()?,
             cursor: Some(cursor),
             tables,
@@ -118,7 +113,6 @@ impl ExportState {
 impl From<ExportState> for pb_state::ExportState {
     fn from(state: ExportState) -> Self {
         Self {
-            format: state.format.to_string(),
             page: state.page,
             cursor: state.cursor,
             tables: state
@@ -135,7 +129,6 @@ impl TryFrom<pb_state::ExportState> for ExportState {
 
     fn try_from(state: pb_state::ExportState) -> Result<Self> {
         Ok(Self {
-            format: state.format.parse()?,
             page: state.page,
             cursor: state.cursor,
             tables: state
