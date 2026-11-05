@@ -693,6 +693,12 @@ pub static INDEX_RETENTION_DELETE_PARALLEL: LazyLock<usize> =
 pub static DOCUMENT_RETENTION_DELETE_PARALLEL: LazyLock<usize> =
     LazyLock::new(|| env_config("DOCUMENT_RETENTION_DELETE_PARALLEL", 1));
 
+/// Maximum interval in seconds between retention cutoff updates; jitter
+/// shortens each interval. Clamped to at least one second. Lower values expire
+/// history sooner at the cost of more frequent persistence writes.
+pub static ADVANCE_RETENTION_TS_FREQUENCY: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("ADVANCE_RETENTION_TS_FREQUENCY", 30).max(1)));
+
 /// INDEX_RETENTION_DELAY determines the size of the index retention window.
 ///
 /// Larger window means we keep around old snapshots for longer, which can cause

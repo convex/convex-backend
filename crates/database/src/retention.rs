@@ -50,6 +50,7 @@ use common::{
     fastrace_helpers::get_sampled_span,
     interval::Interval,
     knobs::{
+        ADVANCE_RETENTION_TS_FREQUENCY,
         DEFAULT_DOCUMENTS_PAGE_SIZE,
         DELETE_TABLET_CHUNK_SIZE,
         DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS,
@@ -775,7 +776,7 @@ impl LeaderRetentionWorkers {
             }
             // We jitter every loop to avoid synchronization of polling the database
             // across different instances
-            Self::wait_with_jitter(&rt, ADVANCE_RETENTION_TS_FREQUENCY).await;
+            Self::wait_with_jitter(&rt, *ADVANCE_RETENTION_TS_FREQUENCY).await;
         }
     }
 
@@ -1607,8 +1608,6 @@ impl LeaderRetentionWorkers {
         Ok(())
     }
 }
-
-const ADVANCE_RETENTION_TS_FREQUENCY: Duration = Duration::from_secs(30);
 
 #[async_trait]
 impl<RT: Runtime> RetentionValidator for LeaderRetentionManager<RT> {
