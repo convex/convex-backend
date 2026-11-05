@@ -70,6 +70,7 @@ export const RunOneoffQueryTool: ConvexTool<
       ctx,
       deploymentSelection,
     );
+    await ctx.checkResolvedDeploymentReadOnly(credentials);
     try {
       const outcome = await runTestFunctionQuery(ctx, {
         deploymentUrl: credentials.url,

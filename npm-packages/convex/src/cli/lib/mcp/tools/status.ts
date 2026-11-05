@@ -1,11 +1,13 @@
 import {
   encodeDeploymentSelector,
   getMcpDeploymentSelection,
+  isProductionDeployment,
   RequestContext,
 } from "../requestContext.js";
 import {
   DeploymentSelectionWithinProject,
   deploymentSelectionWithinProjectFromOptions,
+  DetailedDeploymentCredentials,
   loadSelectedDeploymentCredentials,
 } from "../../api.js";
 import { z } from "zod";
@@ -79,6 +81,15 @@ export const StatusTool: ConvexTool<typeof inputSchema, typeof outputSchema> = {
       ctx,
       deploymentSelection,
     );
+    // Check the resolved deployment rather than the selector's kind, since a
+    // selector like `--deployment-name` can also point at production.
+    const readOnlyIfProduction = (
+      deploymentCredentials: DetailedDeploymentCredentials,
+    ) =>
+      ctx.productionDeploymentsDisabled &&
+      isProductionDeployment(deploymentCredentials)
+        ? { readOnly: !ctx.productionPiiAllowed }
+        : {};
     let availableDeployments = [
       {
         kind: selectionWithinProject.kind,
@@ -93,6 +104,7 @@ export const StatusTool: ConvexTool<typeof inputSchema, typeof outputSchema> = {
             credentials.deploymentFields.deploymentName,
             "",
           ),
+        ...readOnlyIfProduction(credentials),
       },
     ];
     // Also get the prod cloud deployment if we're using a cloud-hosted dev-deployment
@@ -129,16 +141,9 @@ export const StatusTool: ConvexTool<typeof inputSchema, typeof outputSchema> = {
             prodCredentials.deploymentFields.deploymentName,
             "",
           ),
+          ...readOnlyIfProduction(prodCredentials),
         });
       }
-    }
-    if (ctx.productionDeploymentsDisabled) {
-      const readOnly = ctx.productionPiiAllowed ? false : true;
-      return {
-        availableDeployments: availableDeployments.map((d) =>
-          d.kind === "prod" ? { ...d, readOnly } : d,
-        ),
-      };
     }
     return { availableDeployments };
   },

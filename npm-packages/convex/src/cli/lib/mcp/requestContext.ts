@@ -5,6 +5,7 @@ import {
   DeploymentSelectionWithinProject,
   deploymentSelectionWithinProjectSchema,
   DeploymentSelectionOptions,
+  DetailedDeploymentCredentials,
 } from "../api.js";
 import { z } from "zod";
 import {
@@ -71,18 +72,14 @@ export class RequestContext implements Context {
     this._bigBrainAuth = auth;
   }
 
+  /**
+   * Decode a deployment selector for tools that can mutate the deployment or read its secrets (e.g. run, env). Requires --dangerously-enable-production-deployments.
+   * Call `checkResolvedDeployment` once the deployment is resolved.
+   */
   async decodeDeploymentSelector(encoded: string) {
     const { projectDir, deployment } = decodeDeploymentSelector(encoded);
-    if (
-      deployment.kind === "prod" &&
-      !this.options.dangerouslyEnableProductionDeployments
-    ) {
-      return await this.crash({
-        exitCode: 1,
-        errorType: "fatal",
-        printedMessage:
-          "This tool cannot be used with production deployments. Use a read-only tool like `insights` instead, or enable production access with --dangerously-enable-production-deployments.",
-      });
+    if (deployment.kind === "prod") {
+      await this.checkProductionAccess();
     }
     return { projectDir, deployment };
   }
@@ -92,22 +89,62 @@ export class RequestContext implements Context {
     return decodeDeploymentSelector(encoded);
   }
 
-  /** Decode a deployment selector for read-only tools that may expose PII (e.g. data, logs, queries). Requires --cautiously-allow-production-pii. */
+  /**
+   * Decode a deployment selector for read-only tools that may expose PII (e.g. data, logs, queries). Requires --cautiously-allow-production-pii.
+   * Call `checkResolvedDeploymentReadOnly` once the deployment is resolved.
+   */
   async decodeDeploymentSelectorReadOnly(encoded: string) {
     const { projectDir, deployment } = decodeDeploymentSelector(encoded);
-    if (
-      deployment.kind === "prod" &&
-      !this.options.dangerouslyEnableProductionDeployments &&
-      !this.options.cautiouslyAllowProductionPii
-    ) {
-      return await this.crash({
+    if (deployment.kind === "prod") {
+      await this.checkProductionPiiAccess();
+    }
+    return { projectDir, deployment };
+  }
+
+  /**
+   * Apply the production guard to the deployment a selector resolved to.
+   *
+   * A selector can name a production deployment without being of kind `prod`
+   * (e.g. `--deployment-name <name>`, `--deployment prod`, or a production
+   * deploy key), so `decodeDeploymentSelector` can't catch every case. It
+   * still rejects `prod` selectors early, because resolving one can provision
+   * a production deployment.
+   */
+  async checkResolvedDeployment(credentials: DetailedDeploymentCredentials) {
+    if (isProductionDeployment(credentials)) {
+      await this.checkProductionAccess();
+    }
+  }
+
+  /** Like `checkResolvedDeployment`, for tools using `decodeDeploymentSelectorReadOnly`. */
+  async checkResolvedDeploymentReadOnly(
+    credentials: DetailedDeploymentCredentials,
+  ) {
+    if (isProductionDeployment(credentials)) {
+      await this.checkProductionPiiAccess();
+    }
+  }
+
+  private async checkProductionAccess() {
+    if (!this.options.dangerouslyEnableProductionDeployments) {
+      await this.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage:
+          "This tool cannot be used with production deployments. Use a read-only tool like `insights` instead, or enable production access with --dangerously-enable-production-deployments.",
+      });
+    }
+  }
+
+  private async checkProductionPiiAccess() {
+    if (!this.productionPiiAllowed) {
+      await this.crash({
         exitCode: 1,
         errorType: "fatal",
         printedMessage:
           "This read-only tool may expose PII from production. Enable with --cautiously-allow-production-pii, or use --dangerously-enable-production-deployments for full access.",
       });
     }
-    return { projectDir, deployment };
   }
 
   get productionDeploymentsDisabled() {
@@ -160,6 +197,12 @@ const payloadSchema = z.object({
 function decodeDeploymentSelector(encoded: string) {
   const [_, serializedPayload] = encoded.split(":");
   return payloadSchema.parse(JSON.parse(atob(serializedPayload)));
+}
+
+export function isProductionDeployment(
+  credentials: DetailedDeploymentCredentials,
+) {
+  return credentials.deploymentFields?.deploymentType === "prod";
 }
 
 /**
