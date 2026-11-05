@@ -12,6 +12,7 @@ use anyhow::{
     Context,
     Result,
 };
+use errors::ErrorMetadata;
 use iceberg::{
     io::{
         S3_ACCESS_KEY_ID,
@@ -63,6 +64,11 @@ const TABLE_PROPERTY: &str = "convex.porter.table";
 const TABLET_PROPERTY: &str = "convex.porter.tablet";
 // S3 keys are at most 1024 bytes; leave room for Iceberg's file names.
 const MAX_LOCATION_BYTES: usize = 896;
+const REDIRECT_PROPERTIES: [&str; 3] = [
+    "write.data.path",
+    "write.metadata.path",
+    "write.object-storage.path",
+];
 /// Live plus retired. The state is rewritten every page, so this bounds it.
 /// Matches MAX_USER_TABLES.
 const MAX_TABLES: usize = 10_000;
@@ -329,7 +335,10 @@ impl IcebergChangeWriter {
         ensure!(
             name == self.name(source)
                 && metadata.location().trim_end_matches('/') == self.location(name),
-            "Iceberg table name or location does not match its source"
+            modified(
+                table,
+                "its name or location no longer matches its Convex table"
+            )
         );
         // Field columns follow the metadata columns and differ per table.
         ensure!(
@@ -339,8 +348,15 @@ impl IcebergChangeWriter {
                 .fields()
                 .starts_with(metadata_schema()?.as_struct().fields())
                 && metadata.default_partition_spec().is_unpartitioned(),
-            "Iceberg table schema or partitioning mismatch"
+            modified(table, "its metadata columns or partitioning were changed")
         );
+        // These would send writes outside the table's own directory.
+        for key in REDIRECT_PROPERTIES {
+            ensure!(
+                !metadata.properties().contains_key(key),
+                modified(table, &format!("it sets {key}"))
+            );
+        }
         Ok(())
     }
 
@@ -357,8 +373,14 @@ impl IcebergChangeWriter {
         let owner = source_of(&table)?;
         ensure!(
             owner.tablet == source.tablet,
-            "Glue table {name} belongs to another tablet"
+            modified(&table, "its tablet property names another Convex table")
         );
+        if let Some(entry) = self.state.get(name) {
+            ensure!(
+                entry.component == owner.component && entry.table == owner.table,
+                modified(&table, "its component or table property was changed")
+            );
+        }
         self.validate(source, &table)?;
         Ok(Some(table))
     }
@@ -526,23 +548,45 @@ impl IcebergChangeWriter {
 /// only copy, so stop rather than drop it.
 fn source_of(table: &Table) -> Result<SourceTable> {
     let property = |key| table.metadata().properties().get(key).cloned();
-    let encoding = property(ENCODING_PROPERTY).with_context(|| {
-        format!(
-            "Glue table {} was not written by a Convex export",
-            table.identifier()
+    let encoding = property(ENCODING_PROPERTY).ok_or_else(|| {
+        ErrorMetadata::bad_request(
+            "S3ExportForeignTable",
+            format!(
+                "Glue table {} was not written by a Convex export. Remove it from the export's \
+                 Glue database or recreate the export.",
+                table.identifier().name()
+            ),
         )
     })?;
     ensure!(
         encoding == ENCODING,
-        "Glue table {} is in the {encoding} format, but this export writes {ENCODING}. Recreate \
-         the export to start over in {ENCODING}.",
-        table.identifier(),
+        ErrorMetadata::bad_request(
+            "S3ExportTableModified",
+            format!(
+                "Glue table {} is in the {encoding} format, which this export no longer writes. \
+                 Recreate the export to start over in {ENCODING}.",
+                table.identifier().name()
+            ),
+        )
     );
+    let required = |key| {
+        property(key).ok_or_else(|| modified(table, &format!("its {key} property is missing")))
+    };
     Ok(SourceTable {
-        component: property(COMPONENT_PROPERTY).context("Missing component property")?,
-        table: property(TABLE_PROPERTY).context("Missing table property")?,
-        tablet: names::parse_tablet(
-            &property(TABLET_PROPERTY).context("Missing tablet property")?,
-        )?,
+        component: required(COMPONENT_PROPERTY)?,
+        table: required(TABLE_PROPERTY)?,
+        tablet: names::parse_tablet(&required(TABLET_PROPERTY)?)
+            .map_err(|_| modified(table, "its tablet property is not a tablet ID"))?,
     })
+}
+
+/// A user error, so the dashboard shows it: the customer owns the table.
+fn modified(table: &Table, what: &str) -> ErrorMetadata {
+    ErrorMetadata::bad_request(
+        "S3ExportTableModified",
+        format!(
+            "Glue table {} was modified outside Convex: {what}. Recreate the export to start over.",
+            table.identifier().name()
+        ),
+    )
 }
