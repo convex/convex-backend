@@ -984,7 +984,6 @@ impl<RT: Runtime> Transaction<RT> {
             .get_component_path(component_id, &mut self.reads))
     }
 
-    // XXX move to table model?
     async fn table_number_for_system_table(
         &mut self,
         namespace: TableNamespace,
