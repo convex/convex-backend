@@ -13653,26 +13653,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "workos_client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "common",
- "errors",
- "http 1.5.0",
- "parking_lot",
- "reqwest 0.13.4",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "write16"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
