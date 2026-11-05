@@ -71,6 +71,7 @@ pub enum SyncEntry {
     /// The latest revision of a document as of its `ts`.
     Document {
         ts: Timestamp,
+        tablet: TabletId,
         component: ComponentPath,
         table: TableName,
         document: StreamingExportDocument,
@@ -78,6 +79,7 @@ pub enum SyncEntry {
     /// A document was deleted at `ts`.
     Tombstone {
         ts: Timestamp,
+        tablet: TabletId,
         component: ComponentPath,
         table: TableName,
         id: DeveloperDocumentId,
@@ -92,6 +94,9 @@ pub enum SyncEntry {
 /// Truncations logically apply before any [`SyncEntry`]s in the same page.
 #[derive(Debug)]
 pub struct SyncTruncate {
+    /// The tablet entering the export. `import --replace` enters as a new
+    /// tablet under the same name.
+    pub tablet: TabletId,
     pub component: ComponentPath,
     pub table: TableName,
 }
@@ -221,11 +226,11 @@ impl SyncCursor {
         Self::from_proto(prost::Message::decode(bytes)?)
     }
 
-    /// Tables the cursor has captured. At a consistent snapshot
+    /// Tables the cursor has captured, by tablet. At a consistent snapshot
     /// ([`SyncStatus::Stale`] or [`SyncStatus::UpToDate`]) this is every
     /// target table.
-    pub fn tables(&self) -> impl Iterator<Item = &(ComponentPath, TableName)> {
-        self.names.values()
+    pub fn tables(&self) -> impl Iterator<Item = (TabletId, &(ComponentPath, TableName))> {
+        self.names.iter().map(|(tablet, name)| (*tablet, name))
     }
 
     /// Unique id of the sync this cursor belongs to.
@@ -436,14 +441,15 @@ fn resolve_name(
 pub fn selected_tables<RT: Runtime>(
     db_snapshot: &DatabaseSnapshot<RT>,
     selection: &StreamingExportSelection,
-) -> anyhow::Result<Vec<(ComponentPath, TableName)>> {
+) -> anyhow::Result<Vec<(TabletId, ComponentPath, TableName)>> {
     let snapshot = &db_snapshot.snapshot;
     let table_mapping = snapshot.table_mapping();
     let component_paths = snapshot.component_ids_to_paths();
     let mut tables = vec![];
     for (tablet_id, ..) in table_mapping.iter() {
         if table_included(selection, tablet_id, table_mapping, &component_paths)? {
-            tables.push(resolve_name(snapshot, &component_paths, tablet_id)?);
+            let (component, table) = resolve_name(snapshot, &component_paths, tablet_id)?;
+            tables.push((tablet_id, component, table));
         }
     }
     Ok(tables)
@@ -530,6 +536,7 @@ pub async fn data_sync<RT: Runtime>(
                 usage.track_database_egress_rows(component.clone(), &table, 1, false);
                 entries.push(SyncEntry::Document {
                     ts,
+                    tablet: tablet_id,
                     component,
                     table,
                     document,
@@ -540,6 +547,7 @@ pub async fn data_sync<RT: Runtime>(
                 let developer_id = DeveloperDocumentId::new(table_number, id.internal_id());
                 entries.push(SyncEntry::Tombstone {
                     ts,
+                    tablet: tablet_id,
                     component,
                     table,
                     id: developer_id,
@@ -565,14 +573,14 @@ pub async fn data_sync<RT: Runtime>(
     // snapshot — since its rows are synced from scratch. Tables truncate only on
     // entry: a deselected table keeps whatever the consumer synced for it until
     // it is re-selected, which truncates it then.
-    let truncated: BTreeSet<(ComponentPath, TableName)> = names
+    let truncates = names
         .iter()
         .filter(|(tablet_id, _)| !tracked_before.contains(tablet_id))
-        .map(|(_, name)| name.clone())
-        .collect();
-    let truncates = truncated
-        .into_iter()
-        .map(|(component, table)| SyncTruncate { component, table })
+        .map(|(tablet, (component, table))| SyncTruncate {
+            tablet: *tablet,
+            component: component.clone(),
+            table: table.clone(),
+        })
         .collect();
 
     let status = match page.status {

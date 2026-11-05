@@ -37,6 +37,7 @@ use iceberg::{
     TableIdent,
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
+use value::TabletId;
 
 use super::{
     append,
@@ -46,6 +47,10 @@ use super::{
         AddColumn,
     },
     json,
+    names::{
+        self,
+        is_glue_name,
+    },
     Change,
     Format,
 };
@@ -55,11 +60,13 @@ const RETIRED_PROPERTY: &str = "convex.porter.retired";
 // Glue lowercases names, so these record the exact source table.
 const COMPONENT_PROPERTY: &str = "convex.porter.component";
 const TABLE_PROPERTY: &str = "convex.porter.table";
-const ROOT_COMPONENT: &str = "app";
-// Glue and Athena limit database and table names to 255 bytes.
-const MAX_NAME_BYTES: usize = 255;
+/// Base32, as in the Glue name.
+const TABLET_PROPERTY: &str = "convex.porter.tablet";
 // S3 keys are at most 1024 bytes; leave room for Iceberg's file names.
 const MAX_LOCATION_BYTES: usize = 896;
+/// Live plus retired. The state is rewritten every page, so this bounds it.
+/// Matches MAX_USER_TABLES.
+const MAX_TABLES: usize = 10_000;
 
 #[derive(Clone)]
 pub struct S3Destination {
@@ -72,10 +79,38 @@ pub struct S3Destination {
     pub session_token: Option<String>,
 }
 
+/// One Convex tablet. `import --replace` and delete-and-recreate make a new
+/// tablet under the same name, which exports as a new Iceberg table.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SourceTable {
     pub component: String,
     pub table: String,
+    pub tablet: TabletId,
+}
+
+/// One Iceberg table, as the state records it under its Glue name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableState {
+    /// As of first export. The Glue name is built from these and does not
+    /// follow a later rename.
+    pub component: String,
+    pub table: String,
+    /// Base32, as in the Glue name.
+    pub tablet: String,
+    /// Current `metadata.json`; moves every commit.
+    pub metadata: String,
+    /// Deselected or replaced.
+    pub retired: bool,
+}
+
+impl TableState {
+    pub fn source(&self) -> Result<SourceTable> {
+        Ok(SourceTable {
+            component: self.component.clone(),
+            table: self.table.clone(),
+            tablet: names::parse_tablet(&self.tablet)?,
+        })
+    }
 }
 
 pub struct IcebergChangeWriter {
@@ -83,17 +118,16 @@ pub struct IcebergChangeWriter {
     format: Format,
     namespace: NamespaceIdent,
     warehouse_uri: String,
-    selected: Vec<SourceTable>,
     tables: BTreeMap<SourceTable, Table>,
-    /// Metadata location of every table in the namespace, by Glue name.
-    locations: BTreeMap<String, String>,
-    /// Tables in `locations` that the catalog does not hold yet. Registering
-    /// reads the table's metadata from storage, so it waits until a page uses
-    /// it.
+    /// Every table ever created, by Glue name. The caller commits it after
+    /// the page.
+    state: BTreeMap<String, TableState>,
+    /// State entries not yet registered in the catalog. Registering reads
+    /// metadata from S3, so it waits until a page needs the table.
     unregistered: BTreeMap<String, String>,
-    /// Glue names of the tables marked retired, when known. `None` makes
-    /// retirement load every table to find out.
-    retired: Option<BTreeSet<String>>,
+    /// Whether `state` lists every table in the namespace. False for a writer
+    /// opened on a catalog alone, until retirement reconciles.
+    complete: bool,
     snapshot_properties: HashMap<String, String>,
     /// Parquet bytes this writer has committed to storage. S3 exports bill
     /// these bytes to the customer as data egress.
@@ -101,17 +135,15 @@ pub struct IcebergChangeWriter {
 }
 
 impl IcebergChangeWriter {
-    /// Writes Iceberg data and metadata to S3 without touching Glue. Table
-    /// pointers start at `locations` and live in memory; the caller commits
-    /// [`Self::locations`] and [`Self::retired`] once the page succeeds. Each
-    /// append records `snapshot_properties` in its snapshot summary.
+    /// Writes data and metadata to S3 without touching Glue. Tables start
+    /// from `state`; the caller commits [`Self::state`] after the page.
+    /// Appends record `snapshot_properties` in their snapshot summary.
     pub async fn staged(
         namespace: &str,
         warehouse_uri: &str,
         destination: S3Destination,
         selected: Vec<SourceTable>,
-        locations: &BTreeMap<String, String>,
-        retired: &BTreeSet<String>,
+        state: &BTreeMap<String, TableState>,
         snapshot_properties: HashMap<String, String>,
         format: Format,
     ) -> Result<Self> {
@@ -149,8 +181,7 @@ impl IcebergChangeWriter {
             namespace,
             warehouse_uri,
             selected,
-            locations,
-            retired,
+            state,
             snapshot_properties,
             format,
         )
@@ -158,15 +189,12 @@ impl IcebergChangeWriter {
     }
 
     /// Stages an export using an injected catalog and its storage. The
-    /// catalog's namespace must start with no table registrations;
-    /// `locations` is the complete committed state and its metadata
-    /// pointers register lazily as pages use them. `retired` must match
-    /// those committed metadata files. Namespace and source names follow
-    /// the same Glue naming rules as S3 exports. Each append records
-    /// `snapshot_properties` in its snapshot summary, and
+    /// catalog's namespace must start with no table registrations; `state`
+    /// is the complete committed state and its metadata pointers register
+    /// lazily as pages use them. Each append
+    /// records `snapshot_properties` in its snapshot summary, and
     /// [`Self::bytes_written`] counts Parquet bytes committed by this writer.
-    /// The caller commits [`Self::locations`] and [`Self::retired`] together
-    /// once the page succeeds.
+    /// The caller commits [`Self::state`] once the page succeeds.
     ///
     /// Use one writer per namespace at a time. To restart with OpenDAL memory
     /// storage, retain the catalog, drop the writer, and clear its
@@ -180,12 +208,11 @@ impl IcebergChangeWriter {
         namespace: &str,
         warehouse_uri: &str,
         selected: Vec<SourceTable>,
-        locations: &BTreeMap<String, String>,
-        retired: &BTreeSet<String>,
+        state: &BTreeMap<String, TableState>,
         snapshot_properties: HashMap<String, String>,
         format: Format,
     ) -> Result<Self> {
-        let mut writer = Self::open(catalog, namespace, warehouse_uri, selected, format).await?;
+        let mut writer = Self::open_empty(catalog, namespace, warehouse_uri, format).await?;
         ensure!(
             writer
                 .catalog
@@ -194,10 +221,19 @@ impl IcebergChangeWriter {
                 .is_empty(),
             "Staged catalog namespace must have no table registrations"
         );
-        writer.locations = locations.clone();
-        writer.unregistered = locations.clone();
-        writer.retired = Some(retired.clone());
+        for (name, table) in state {
+            ensure!(
+                *name == names::glue_name(&table.source()?),
+                "State entry {name:?} does not name its source"
+            );
+            writer
+                .unregistered
+                .insert(name.clone(), table.metadata.clone());
+        }
+        writer.state = state.clone();
+        writer.complete = true;
         writer.snapshot_properties = snapshot_properties;
+        drop(selected);
         Ok(writer)
     }
 
@@ -205,18 +241,24 @@ impl IcebergChangeWriter {
         self.format
     }
 
-    /// Metadata location of every table after this page, by Glue name.
-    pub fn locations(&self) -> &BTreeMap<String, String> {
-        &self.locations
-    }
-
-    /// Glue names of the tables marked retired after this page, when known.
-    pub fn retired(&self) -> Option<&BTreeSet<String>> {
-        self.retired.as_ref()
+    /// Every table after this page, by Glue name.
+    pub fn state(&self) -> &BTreeMap<String, TableState> {
+        &self.state
     }
 
     pub fn bytes_written(&self) -> u64 {
         self.bytes_written
+    }
+
+    /// A tablet keeps its first name for the life of the export, even if the
+    /// component path changes. Only an unseen tablet gets a fresh name.
+    fn name(&self, source: &SourceTable) -> String {
+        let tablet = names::tablet_str(source.tablet);
+        self.state
+            .iter()
+            .find(|(_, entry)| entry.tablet == tablet)
+            .map(|(name, _)| name.clone())
+            .unwrap_or_else(|| names::glue_name(source))
     }
 
     async fn register(&mut self, name: &str) -> Result<()> {
@@ -231,84 +273,73 @@ impl IcebergChangeWriter {
         Ok(())
     }
 
+    /// Records `table`'s current metadata pointer.
     fn record(&mut self, table: &Table) -> Result<()> {
-        self.locations.insert(
-            table.identifier().name().to_owned(),
-            table.metadata_location_result()?.to_owned(),
-        );
+        let name = table.identifier().name();
+        let metadata = table.metadata_location_result()?.to_owned();
+        match self.state.get_mut(name) {
+            Some(entry) => entry.metadata = metadata,
+            None => {
+                let source = source_of(table, self.format)?;
+                let retired = table
+                    .metadata()
+                    .properties()
+                    .get(RETIRED_PROPERTY)
+                    .is_some_and(|value| value == "true");
+                self.state.insert(
+                    name.to_owned(),
+                    TableState {
+                        component: source.component,
+                        table: source.table,
+                        tablet: names::tablet_str(source.tablet),
+                        metadata,
+                        retired,
+                    },
+                );
+            },
+        }
         Ok(())
     }
 
-    #[fastrace::trace]
-    async fn open(
+    async fn open_empty(
         catalog: Arc<dyn Catalog>,
         namespace: &str,
         warehouse_uri: &str,
-        selected: Vec<SourceTable>,
         format: Format,
     ) -> Result<Self> {
         ensure!(
             is_glue_name(namespace),
             "Invalid Glue database name {namespace:?}"
         );
-        Self::check_names(warehouse_uri, &selected)?;
         let namespace = NamespaceIdent::new(namespace.to_owned());
         if !catalog.namespace_exists(&namespace).await? {
             catalog.create_namespace(&namespace, HashMap::new()).await?;
         }
-        let writer = Self {
+        Ok(Self {
             catalog,
             format,
             namespace,
             warehouse_uri: warehouse_uri.trim_end_matches('/').to_owned(),
-            selected,
             tables: BTreeMap::new(),
-            locations: BTreeMap::new(),
+            state: BTreeMap::new(),
             unregistered: BTreeMap::new(),
-            retired: None,
+            complete: false,
             snapshot_properties: HashMap::new(),
             bytes_written: 0,
-        };
-        Ok(writer)
+        })
     }
 
-    fn component(source: &SourceTable) -> String {
-        if source.component.is_empty() {
-            ROOT_COMPONENT.to_owned()
-        } else {
-            source.component.replace('/', "__")
-        }
-    }
-
-    fn table_name(source: &SourceTable) -> Result<String> {
-        let name = format!("{}__{}", Self::component(source), source.table).to_lowercase();
-        ensure!(
-            is_glue_name(&name),
-            "Cannot name a Glue table for {source:?}: names must be at most {MAX_NAME_BYTES} bytes"
-        );
-        Ok(name)
-    }
-
-    /// Directories keep the exact Convex names, since S3 keys are
-    /// case-sensitive.
-    fn directory(source: &SourceTable) -> String {
-        format!("{}/{}", Self::component(source), source.table)
-    }
-
-    fn location(warehouse_uri: &str, source: &SourceTable) -> String {
-        format!(
-            "{}/{}",
-            warehouse_uri.trim_end_matches('/'),
-            Self::directory(source)
-        )
+    /// Each table gets its own directory, so distinct names never share files.
+    fn location(&self, name: &str) -> String {
+        format!("{}/{name}", self.warehouse_uri)
     }
 
     fn validate(&self, source: &SourceTable, table: &Table) -> Result<()> {
         let metadata = table.metadata();
+        let name = table.identifier().name();
         ensure!(
-            table.identifier().name() == Self::table_name(source)?
-                && metadata.location().trim_end_matches('/')
-                    == Self::location(&self.warehouse_uri, source),
+            name == self.name(source)
+                && metadata.location().trim_end_matches('/') == self.location(name),
             "Iceberg table name or location does not match its source"
         );
         let fields = metadata.current_schema().as_struct().fields();
@@ -324,48 +355,27 @@ impl IcebergChangeWriter {
         Ok(())
     }
 
-    fn check_names<'a>(
-        warehouse_uri: &str,
-        sources: impl IntoIterator<Item = &'a SourceTable>,
-    ) -> Result<()> {
-        let mut by_name = BTreeMap::new();
-        let mut by_directory = BTreeMap::new();
-        for source in sources {
-            ensure!(
-                Self::location(warehouse_uri, source).len() <= MAX_LOCATION_BYTES,
-                "Cannot store {source:?}: its S3 location is longer than {MAX_LOCATION_BYTES} \
-                 bytes"
-            );
-            for (key, claimed) in [
-                (Self::table_name(source)?, &mut by_name),
-                (Self::directory(source), &mut by_directory),
-            ] {
-                if let Some(other) = claimed.insert(key.clone(), source)
-                    && other != source
-                {
-                    anyhow::bail!(
-                        "Convex tables {other:?} and {source:?} both map to Iceberg table {key}"
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-
+    /// Loads `name` if the catalog has it. A table under this name written by
+    /// another tablet means a stale state, so that is an error.
     #[fastrace::trace]
-    async fn load_existing(&mut self, ident: &TableIdent) -> Result<Option<Table>> {
-        self.register(ident.name()).await?;
-        if !self.catalog.table_exists(ident).await? {
+    async fn load_existing(&mut self, source: &SourceTable, name: &str) -> Result<Option<Table>> {
+        self.register(name).await?;
+        let ident = TableIdent::new(self.namespace.clone(), name.to_owned());
+        if !self.catalog.table_exists(&ident).await? {
             return Ok(None);
         }
-        let table = self.catalog.load_table(ident).await?;
-        self.validate(&source_of(&table, self.format)?, &table)?;
+        let table = self.catalog.load_table(&ident).await?;
+        let owner = source_of(&table, self.format)?;
+        ensure!(
+            owner.tablet == source.tablet,
+            "Glue table {name} belongs to another tablet"
+        );
+        self.validate(source, &table)?;
         Ok(Some(table))
     }
 
-    /// The tables a page creates: those without a location yet, and the
-    /// truncated ones [`Self::apply`] drops and recreates. Their seed columns
-    /// come from the caller, which knows the tables' shapes.
+    /// Tables this page creates: new ones plus the truncated ones
+    /// [`Self::apply`] recreates. The caller supplies their seed columns.
     pub fn new_tables(
         &self,
         truncated: &[SourceTable],
@@ -373,7 +383,7 @@ impl IcebergChangeWriter {
     ) -> Result<BTreeSet<SourceTable>> {
         let mut new: BTreeSet<SourceTable> = truncated.iter().cloned().collect();
         for (source, _) in changes {
-            if !self.locations.contains_key(&Self::table_name(source)?) {
+            if !self.state.contains_key(&self.name(source)) {
                 new.insert(source.clone());
             }
         }
@@ -383,10 +393,19 @@ impl IcebergChangeWriter {
     /// Creates `source`'s table with the metadata columns and `seeds`.
     #[fastrace::trace]
     async fn create(&mut self, source: &SourceTable, seeds: Vec<AddColumn>) -> Result<()> {
-        let name = Self::table_name(source)?;
+        ensure!(
+            self.state.len() < MAX_TABLES,
+            "An export may create at most {MAX_TABLES} tables"
+        );
+        let name = self.name(source);
+        let location = self.location(&name);
+        ensure!(
+            location.len() <= MAX_LOCATION_BYTES,
+            "Cannot store {source:?}: its S3 location is longer than {MAX_LOCATION_BYTES} bytes"
+        );
         let creation = TableCreation::builder()
-            .name(name.clone())
-            .location(Self::location(&self.warehouse_uri, source))
+            .name(name)
+            .location(location)
             .schema(match self.format {
                 Format::Json => json::change_log_schema()?,
                 Format::Typed => metadata_schema()?,
@@ -395,6 +414,7 @@ impl IcebergChangeWriter {
                 (FORMAT_PROPERTY.to_owned(), self.format.to_string()),
                 (COMPONENT_PROPERTY.to_owned(), source.component.clone()),
                 (TABLE_PROPERTY.to_owned(), source.table.clone()),
+                (TABLET_PROPERTY.to_owned(), names::tablet_str(source.tablet)),
             ]))
             .build();
         let table = self.catalog.create_table(&self.namespace, creation).await?;
@@ -423,27 +443,14 @@ impl IcebergChangeWriter {
         changes: Vec<(SourceTable, Change)>,
         mut seeds: BTreeMap<SourceTable, Vec<AddColumn>>,
     ) -> Result<()> {
-        Self::check_names(
-            &self.warehouse_uri,
-            self.selected
-                .iter()
-                .chain(truncated)
-                .chain(changes.iter().map(|(source, _)| source)),
-        )?;
         for source in truncated {
-            let name = Self::table_name(source)?;
-            // No two selected tables share a name, so any other table holding
-            // this name is no longer selected, such as `Users` after the
-            // deployment replaced it with `users`.
-            let ident = TableIdent::new(self.namespace.clone(), name);
-            if let Some(table) = self.load_existing(&ident).await? {
-                self.catalog.drop_table(&ident).await?;
-                self.locations.remove(ident.name());
-                // The recreated table starts unmarked.
-                if let Some(retired) = &mut self.retired {
-                    retired.remove(ident.name());
-                }
-                self.tables.remove(&source_of(&table, self.format)?);
+            let name = self.name(source);
+            if self.load_existing(source, &name).await?.is_some() {
+                self.catalog
+                    .drop_table(&TableIdent::new(self.namespace.clone(), name.clone()))
+                    .await?;
+                self.state.remove(&name);
+                self.tables.remove(source);
             }
             self.create(source, seeds.remove(source).unwrap_or_default())
                 .await?;
@@ -454,17 +461,15 @@ impl IcebergChangeWriter {
         }
         for (source, changes) in by_table {
             if !self.tables.contains_key(&source) {
-                let ident = TableIdent::new(self.namespace.clone(), Self::table_name(&source)?);
-                if let Some(table) = self.load_existing(&ident).await? {
-                    ensure!(
-                        source_of(&table, self.format)? == source,
-                        "Glue table {} belongs to another source table",
-                        ident.name()
-                    );
-                    self.tables.insert(source.clone(), table);
-                } else {
-                    self.create(&source, seeds.remove(&source).unwrap_or_default())
-                        .await?;
+                let name = self.name(&source);
+                match self.load_existing(&source, &name).await? {
+                    Some(table) => {
+                        self.tables.insert(source.clone(), table);
+                    },
+                    None => {
+                        self.create(&source, seeds.remove(&source).unwrap_or_default())
+                            .await?;
+                    },
                 }
             }
             let (table, bytes_written) = append(
@@ -487,53 +492,52 @@ impl IcebergChangeWriter {
     /// `selected` lists every source table.
     #[fastrace::trace]
     pub async fn retire_unselected(&mut self, selected: &[SourceTable]) -> Result<()> {
-        let selected_names = selected
-            .iter()
-            .map(Self::table_name)
-            .collect::<Result<BTreeSet<_>>>()?;
-        let unselected = |locations: &BTreeMap<String, String>| -> BTreeSet<String> {
-            locations
-                .keys()
-                .filter(|name| !selected_names.contains(*name))
-                .cloned()
-                .collect()
-        };
-        // `locations` is complete whenever `retired` is known.
-        if self.retired.as_ref() == Some(&unselected(&self.locations)) {
-            return Ok(());
-        }
-        // Retirement needs the full catalog, including tables untouched by this page.
-        for name in self.unregistered.keys().cloned().collect::<Vec<_>>() {
-            self.register(&name).await?;
-        }
-        for ident in self.catalog.list_tables(&self.namespace).await? {
-            if let Some(table) = self.load_existing(&ident).await? {
+        if !self.complete {
+            // Retirement needs every table, not just this page's.
+            for name in self.unregistered.keys().cloned().collect::<Vec<_>>() {
+                self.register(&name).await?;
+            }
+            for ident in self.catalog.list_tables(&self.namespace).await? {
+                let table = self.catalog.load_table(&ident).await?;
+                let source = source_of(&table, self.format)?;
+                self.validate(&source, &table)?;
                 self.record(&table)?;
-                self.tables.insert(source_of(&table, self.format)?, table);
+                self.tables.insert(source, table);
+            }
+            self.complete = true;
+        }
+        let mut flips: Vec<(String, SourceTable, bool)> = Vec::new();
+        for (name, entry) in &self.state {
+            let source = entry.source()?;
+            let retired = !selected.iter().any(|s| s.tablet == source.tablet);
+            if entry.retired != retired {
+                flips.push((name.clone(), source, retired));
             }
         }
-        let retired = unselected(&self.locations);
-        for (source, table) in &mut self.tables {
-            let retired = !selected.contains(source);
-            let marked = table
-                .metadata()
-                .properties()
-                .get(RETIRED_PROPERTY)
-                .is_some_and(|value| value == "true");
-            if marked != retired {
-                let tx = Transaction::new(table);
-                let tx = tx
-                    .update_table_properties()
-                    .set(RETIRED_PROPERTY.to_owned(), retired.to_string())
-                    .apply(tx)?;
-                *table = tx.commit(&*self.catalog).await?;
-                self.locations.insert(
-                    table.identifier().name().to_owned(),
-                    table.metadata_location_result()?.to_owned(),
-                );
+        for (name, source, retired) in flips {
+            if !self.tables.contains_key(&source) {
+                let table = self.load_existing(&source, &name).await?.with_context(|| {
+                    format!("The state lists {name}, but the catalog has no such table")
+                })?;
+                self.tables.insert(source.clone(), table);
             }
+            let table = self
+                .tables
+                .remove(&source)
+                .context("table was just loaded")?;
+            let tx = Transaction::new(&table);
+            let tx = tx
+                .update_table_properties()
+                .set(RETIRED_PROPERTY.to_owned(), retired.to_string())
+                .apply(tx)?;
+            let table = tx.commit(&*self.catalog).await?;
+            self.record(&table)?;
+            self.state
+                .get_mut(&name)
+                .context("table was just recorded")?
+                .retired = retired;
+            self.tables.insert(source, table);
         }
-        self.retired = Some(retired);
         Ok(())
     }
 }
@@ -558,13 +562,8 @@ fn source_of(table: &Table, format: Format) -> Result<SourceTable> {
     Ok(SourceTable {
         component: property(COMPONENT_PROPERTY).context("Missing component property")?,
         table: property(TABLE_PROPERTY).context("Missing table property")?,
+        tablet: names::parse_tablet(
+            &property(TABLET_PROPERTY).context("Missing tablet property")?,
+        )?,
     })
-}
-
-fn is_glue_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAX_NAME_BYTES
-        && name
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }

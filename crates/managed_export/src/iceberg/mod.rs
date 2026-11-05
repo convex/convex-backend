@@ -37,11 +37,13 @@ use value::ConvexObject;
 
 pub mod columns;
 mod json;
+mod names;
 mod writer;
 pub use writer::{
     IcebergChangeWriter,
     S3Destination,
     SourceTable,
+    TableState,
 };
 
 /// How a table lays out a document. An export keeps the format it started

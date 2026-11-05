@@ -6,7 +6,6 @@
 
 use std::collections::{
     BTreeMap,
-    BTreeSet,
     HashMap,
 };
 
@@ -49,6 +48,7 @@ use prost::Message;
 use crate::iceberg::{
     Format,
     S3Destination,
+    TableState,
 };
 
 const EXPORT_ID_PARAMETER: &str = "convex.export-id";
@@ -71,11 +71,8 @@ pub struct ExportState {
     pub page: u64,
     /// Base64 `SyncCursor` after page `page`. `None` before the first page.
     pub cursor: Option<String>,
-    /// Current metadata location of each Iceberg table, by Glue table name.
-    pub tables: BTreeMap<String, String>,
-    /// Tables in `tables` marked retired. A page reloads every table only
-    /// when the selection no longer matches this set.
-    pub retired: BTreeSet<String>,
+    /// Every table ever created, live and retired, by Glue name.
+    pub tables: BTreeMap<String, TableState>,
 }
 
 impl ExportState {
@@ -86,7 +83,6 @@ impl ExportState {
             page: 0,
             cursor: None,
             tables: BTreeMap::new(),
-            retired: BTreeSet::new(),
         }
     }
 
@@ -100,18 +96,12 @@ impl ExportState {
     }
 
     /// The state after one more committed page.
-    pub fn next(
-        &self,
-        cursor: String,
-        tables: BTreeMap<String, String>,
-        retired: BTreeSet<String>,
-    ) -> Result<Self> {
+    pub fn next(&self, cursor: String, tables: BTreeMap<String, TableState>) -> Result<Self> {
         Ok(Self {
             format: self.format,
             page: self.next_page()?,
             cursor: Some(cursor),
             tables,
-            retired,
         })
     }
 
@@ -131,8 +121,11 @@ impl From<ExportState> for pb_state::ExportState {
             format: state.format.to_string(),
             page: state.page,
             cursor: state.cursor,
-            tables: state.tables.into_iter().collect(),
-            retired: state.retired.into_iter().collect(),
+            tables: state
+                .tables
+                .into_iter()
+                .map(|(name, table)| (name, table.into()))
+                .collect(),
         }
     }
 }
@@ -145,9 +138,36 @@ impl TryFrom<pb_state::ExportState> for ExportState {
             format: state.format.parse()?,
             page: state.page,
             cursor: state.cursor,
-            tables: state.tables.into_iter().collect(),
-            retired: state.retired.into_iter().collect(),
+            tables: state
+                .tables
+                .into_iter()
+                .map(|(name, table)| (name, table.into()))
+                .collect(),
         })
+    }
+}
+
+impl From<TableState> for pb_state::TableState {
+    fn from(table: TableState) -> Self {
+        Self {
+            component: table.component,
+            table: table.table,
+            tablet: table.tablet,
+            metadata: table.metadata,
+            retired: table.retired,
+        }
+    }
+}
+
+impl From<pb_state::TableState> for TableState {
+    fn from(table: pb_state::TableState) -> Self {
+        Self {
+            component: table.component,
+            table: table.table,
+            tablet: table.tablet,
+            metadata: table.metadata,
+            retired: table.retired,
+        }
     }
 }
 
@@ -283,7 +303,8 @@ impl ExportStore {
                 published.insert(table.name().to_owned(), table.clone());
             }
         }
-        for (name, location) in &state.tables {
+        for (name, table) in &state.tables {
+            let location = &table.metadata;
             let Some(current) = published.remove(name) else {
                 let columns = self.read_glue_columns(location).await?;
                 self.glue

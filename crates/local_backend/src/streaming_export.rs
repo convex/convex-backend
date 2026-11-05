@@ -619,10 +619,14 @@ async fn _data_sync(
 
     let truncates = truncates
         .into_iter()
-        .map(|SyncTruncate { component, table }| DataSyncTruncate {
-            component: component.to_string(),
-            table: table.to_string(),
-        })
+        .map(
+            |SyncTruncate {
+                 component, table, ..
+             }| DataSyncTruncate {
+                component: component.to_string(),
+                table: table.to_string(),
+            },
+        )
         .collect();
 
     let values = entries
@@ -634,6 +638,7 @@ async fn _data_sync(
                     component,
                     table,
                     document,
+                    ..
                 } => DataSyncValue {
                     component: component.to_string(),
                     table: table.to_string(),
@@ -646,6 +651,7 @@ async fn _data_sync(
                     component,
                     table,
                     id,
+                    ..
                 } => DataSyncValue {
                     component: component.to_string(),
                     table: table.to_string(),
