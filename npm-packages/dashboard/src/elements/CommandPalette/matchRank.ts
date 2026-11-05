@@ -69,17 +69,25 @@ const isUpper = (char: string) => char !== char.toLowerCase();
 const isLower = (char: string) => char !== char.toUpperCase();
 const isDigit = (char: string) => char >= "0" && char <= "9";
 
-// Whether a word starts at `index`: after a non-alphanumeric character, or at a
-// camelCase hump.
+// Whether a word starts at `index`: after a non-alphanumeric character, at a
+// camelCase hump ("my|Convex"), or where an acronym ends and a capitalized
+// word begins ("API|Key").
 function isWordStart(text: string, index: number): boolean {
   if (index === 0) {
     return true;
   }
   const previous = text[index - 1];
+  const char = text[index];
   if (!isUpper(previous) && !isLower(previous) && !isDigit(previous)) {
     return true;
   }
-  return (isLower(previous) || isDigit(previous)) && isUpper(text[index]);
+  if ((isLower(previous) || isDigit(previous)) && isUpper(char)) {
+    return true;
+  }
+  const next = text[index + 1];
+  return (
+    isUpper(previous) && isUpper(char) && next !== undefined && isLower(next)
+  );
 }
 
 function matchTier(
