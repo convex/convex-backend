@@ -1,7 +1,10 @@
 use std::{
     fs,
     path::PathBuf,
-    sync::Arc,
+    sync::{
+        Arc,
+        Mutex as StdMutex,
+    },
     time::Duration,
 };
 
@@ -26,7 +29,8 @@ use tokio::{
     },
     sync::{
         mpsc,
-        Mutex,
+        Mutex as AsyncMutex,
+        Notify,
     },
 };
 
@@ -47,8 +51,38 @@ const HEALTH_CHECK_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_HEALTH_CHECK_ATTEMPTS: u32 = 50;
 
 pub struct LocalNodeExecutor {
-    inner: Arc<Mutex<Option<InnerLocalNodeExecutor>>>,
+    inner: AsyncMutex<Option<InnerLocalNodeExecutor>>,
+    lifecycle: Arc<ExecutorLifecycle>,
     config: LocalNodeExecutorConfig,
+}
+
+struct ExecutorLifecycle {
+    state: StdMutex<ExecutorLifecycleState>,
+    state_changed: Notify,
+}
+
+struct ExecutorLifecycleState {
+    active_invocations: usize,
+    startup_in_progress: bool,
+    shutdown: ExecutorShutdownState,
+}
+
+enum ExecutorShutdownState {
+    Running,
+    ShuttingDown { shutdown_claimed: bool },
+    ShutDown,
+}
+
+struct InvocationLease {
+    lifecycle: Arc<ExecutorLifecycle>,
+}
+
+struct StartupLease {
+    lifecycle: Arc<ExecutorLifecycle>,
+}
+
+struct ShutdownLease {
+    lifecycle: Arc<ExecutorLifecycle>,
 }
 
 struct LocalNodeExecutorConfig {
@@ -61,9 +95,120 @@ struct LocalNodeExecutorConfig {
 }
 
 struct InnerLocalNodeExecutor {
-    _source_dir: TempDir,
+    source_dir: TempDir,
     client: reqwest::Client,
-    _server_handle: Child,
+    server_handle: Child,
+}
+
+impl ExecutorLifecycle {
+    fn new() -> Self {
+        Self {
+            state: StdMutex::new(ExecutorLifecycleState {
+                active_invocations: 0,
+                startup_in_progress: false,
+                shutdown: ExecutorShutdownState::Running,
+            }),
+            state_changed: Notify::new(),
+        }
+    }
+
+    fn begin_invocation(self: &Arc<Self>) -> anyhow::Result<InvocationLease> {
+        let mut state = self.state.lock().expect("Executor lifecycle lock poisoned");
+        if !matches!(state.shutdown, ExecutorShutdownState::Running) {
+            anyhow::bail!("Node executor is shutting down");
+        }
+        state.active_invocations += 1;
+        Ok(InvocationLease {
+            lifecycle: self.clone(),
+        })
+    }
+
+    async fn begin_startup(self: &Arc<Self>) -> anyhow::Result<StartupLease> {
+        loop {
+            let state_changed = self.state_changed.notified();
+            {
+                let mut state = self.state.lock().expect("Executor lifecycle lock poisoned");
+                if !matches!(state.shutdown, ExecutorShutdownState::Running) {
+                    anyhow::bail!("Node executor is shutting down");
+                }
+                if !state.startup_in_progress {
+                    state.startup_in_progress = true;
+                    return Ok(StartupLease {
+                        lifecycle: self.clone(),
+                    });
+                }
+            }
+            state_changed.await;
+        }
+    }
+
+    async fn begin_shutdown(self: &Arc<Self>) -> Option<ShutdownLease> {
+        loop {
+            let state_changed = self.state_changed.notified();
+            {
+                let mut state = self.state.lock().expect("Executor lifecycle lock poisoned");
+                let active_invocations = state.active_invocations;
+                match &mut state.shutdown {
+                    ExecutorShutdownState::Running => {
+                        state.shutdown = ExecutorShutdownState::ShuttingDown {
+                            shutdown_claimed: false,
+                        };
+                    },
+                    ExecutorShutdownState::ShutDown => return None,
+                    ExecutorShutdownState::ShuttingDown { .. } => {},
+                }
+                if let ExecutorShutdownState::ShuttingDown { shutdown_claimed } =
+                    &mut state.shutdown
+                    && active_invocations == 0
+                    && !*shutdown_claimed
+                {
+                    *shutdown_claimed = true;
+                    return Some(ShutdownLease {
+                        lifecycle: self.clone(),
+                    });
+                }
+            }
+            state_changed.await;
+        }
+    }
+
+    fn finish_invocation(&self) {
+        let mut state = self.state.lock().expect("Executor lifecycle lock poisoned");
+        state.active_invocations -= 1;
+        if state.active_invocations == 0 {
+            self.state_changed.notify_waiters();
+        }
+    }
+
+    fn finish_startup(&self) {
+        let mut state = self.state.lock().expect("Executor lifecycle lock poisoned");
+        state.startup_in_progress = false;
+        self.state_changed.notify_waiters();
+    }
+
+    fn finish_shutdown(&self) {
+        let mut state = self.state.lock().expect("Executor lifecycle lock poisoned");
+        state.shutdown = ExecutorShutdownState::ShutDown;
+        self.state_changed.notify_waiters();
+    }
+}
+
+impl Drop for InvocationLease {
+    fn drop(&mut self) {
+        self.lifecycle.finish_invocation();
+    }
+}
+
+impl Drop for StartupLease {
+    fn drop(&mut self) {
+        self.lifecycle.finish_startup();
+    }
+}
+
+impl Drop for ShutdownLease {
+    fn drop(&mut self) {
+        self.lifecycle.finish_shutdown();
+    }
 }
 
 impl InnerLocalNodeExecutor {
@@ -93,8 +238,6 @@ impl InnerLocalNodeExecutor {
         } else {
             panic!("not supported");
         };
-        let server_handle =
-            Self::start_node_with_listener(config, &source_path, &source_dir, &socket_path).await?;
         // Don't keep idle connections in the pool. The Node HTTP server closes
         // idle keep-alive connections after its (default 5s) `keepAliveTimeout`,
         // but hyper's pool would hold one much longer and reuse it right as the
@@ -103,26 +246,37 @@ impl InnerLocalNodeExecutor {
         let mut client_builder = Client::builder().pool_max_idle_per_host(0);
         #[cfg(unix)]
         {
-            client_builder = client_builder.unix_socket(socket_path);
+            client_builder = client_builder.unix_socket(socket_path.clone());
         }
         #[cfg(windows)]
         {
-            client_builder = client_builder.windows_named_pipe(socket_path);
+            client_builder = client_builder.windows_named_pipe(socket_path.clone());
         }
         let client = client_builder.build()?;
+        let server_handle =
+            Self::start_node_with_listener(config, &source_path, &source_dir, &socket_path).await?;
 
-        // Wait for the Node process to be ready to handle HTTP requests.
-        for _ in 0..MAX_HEALTH_CHECK_ATTEMPTS {
-            if Self::check_server_health(&client).await? {
-                return Ok(Self {
-                    _source_dir: source_dir,
-                    client,
-                    _server_handle: server_handle,
-                });
+        let executor = Self {
+            source_dir,
+            client,
+            server_handle,
+        };
+        let health_error = 'health: {
+            // Wait for the Node process to be ready to handle HTTP requests.
+            for _ in 0..MAX_HEALTH_CHECK_ATTEMPTS {
+                match Self::check_server_health(&executor.client).await {
+                    Ok(true) => return Ok(executor),
+                    Ok(false) => {},
+                    Err(error) => break 'health error,
+                }
+                tokio::time::sleep(HEALTH_CHECK_INTERVAL).await;
             }
-            tokio::time::sleep(HEALTH_CHECK_INTERVAL).await;
+            anyhow::anyhow!("Node executor server failed to start and become healthy")
+        };
+        if let Err(cleanup_error) = executor.shutdown().await {
+            tracing::warn!("Failed to stop unhealthy Node executor server: {cleanup_error:#}");
         }
-        anyhow::bail!("Node executor server failed to start and become healthy")
+        Err(health_error)
     }
 
     async fn check_node_version(node_path: &str) -> anyhow::Result<()> {
@@ -174,6 +328,8 @@ impl InnerLocalNodeExecutor {
             .arg(socket_path)
             .arg("--tempdir")
             .arg(temp_dir.path())
+            .arg("--parent-pid")
+            .arg(std::process::id().to_string())
             .kill_on_drop(true);
         if let Some(backoff) = config.callback_initial_backoff {
             cmd.env(
@@ -186,12 +342,27 @@ impl InnerLocalNodeExecutor {
 
         Ok(child)
     }
+
+    async fn shutdown(mut self) -> anyhow::Result<()> {
+        match self.server_handle.start_kill() {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {},
+            Err(error) => return Err(error).context("Failed to terminate Node executor server"),
+        }
+        self.server_handle
+            .wait()
+            .await
+            .context("Failed to wait for Node executor server to exit")?;
+        drop(self.source_dir);
+        Ok(())
+    }
 }
 
 impl LocalNodeExecutor {
     pub async fn new(node_process_timeout: Duration) -> anyhow::Result<Self> {
         let executor = Self {
-            inner: Arc::new(Mutex::new(None)),
+            inner: AsyncMutex::new(None),
+            lifecycle: Arc::new(ExecutorLifecycle::new()),
             config: LocalNodeExecutorConfig {
                 node_process_timeout,
                 callback_initial_backoff: None,
@@ -240,31 +411,54 @@ impl LocalNodeExecutor {
             }
         }
     }
-}
 
-#[async_trait]
-impl NodeExecutor for LocalNodeExecutor {
-    fn enable(&self) -> anyhow::Result<()> {
-        Ok(())
+    async fn client(&self) -> anyhow::Result<Client> {
+        loop {
+            if let Some(client) = self
+                .inner
+                .lock()
+                .await
+                .as_ref()
+                .map(|inner| inner.client.clone())
+            {
+                return Ok(client);
+            }
+
+            let _startup = self.lifecycle.begin_startup().await?;
+            if let Some(client) = self
+                .inner
+                .lock()
+                .await
+                .as_ref()
+                .map(|inner| inner.client.clone())
+            {
+                return Ok(client);
+            }
+
+            let inner = InnerLocalNodeExecutor::new(&self.config)
+                .await
+                .context("Failed to create inner local node executor")?;
+            let client = inner.client.clone();
+            *self.inner.lock().await = Some(inner);
+            return Ok(client);
+        }
     }
 
-    async fn invoke(
+    async fn discard_inner(&self) {
+        let inner = self.inner.lock().await.take();
+        if let Some(inner) = inner
+            && let Err(cleanup_error) = inner.shutdown().await
+        {
+            tracing::warn!("Failed to stop Node executor server: {cleanup_error:#}");
+        }
+    }
+
+    async fn invoke_with_client(
         &self,
+        client: reqwest::Client,
         request: ExecutorRequest,
         log_line_sender: mpsc::UnboundedSender<LogLine>,
     ) -> anyhow::Result<InvokeResponse> {
-        let client = {
-            let mut inner = self.inner.lock().await;
-            if inner.is_none() {
-                *inner = Some(
-                    InnerLocalNodeExecutor::new(&self.config)
-                        .await
-                        .context("Failed to create inner local node executor")?,
-                )
-            }
-            let inner = inner.as_ref().unwrap();
-            inner.client.clone()
-        };
         let request_json = JsonValue::try_from(request)?;
 
         let response_result = client
@@ -285,7 +479,7 @@ impl NodeExecutor for LocalNodeExecutor {
                     // Connection error likely means the Node server crashed (e.g., OOM).
                     // Drop the dead server so it will be restarted on next invoke.
                     tracing::warn!("Node server connection failed, dropping server: {e}");
-                    self.inner.lock().await.take();
+                    self.discard_inner().await;
                     return Err(anyhow::anyhow!(e).context("Node server request failed"));
                 } else {
                     return Err(anyhow::anyhow!(e).context("Node server request failed"));
@@ -316,7 +510,7 @@ impl NodeExecutor for LocalNodeExecutor {
                     .unwrap_or(false)
                 {
                     // Drop the server if it claims to be exiting.
-                    self.inner.lock().await.take();
+                    self.discard_inner().await;
                 }
                 Ok(InvokeResponse {
                     response: payload,
@@ -326,6 +520,106 @@ impl NodeExecutor for LocalNodeExecutor {
             Err(e) => Ok(e),
         }
     }
+}
 
-    fn shutdown(&self) {}
+#[async_trait]
+impl NodeExecutor for LocalNodeExecutor {
+    fn enable(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn invoke(
+        &self,
+        request: ExecutorRequest,
+        log_line_sender: mpsc::UnboundedSender<LogLine>,
+    ) -> anyhow::Result<InvokeResponse> {
+        let _invocation = self.lifecycle.begin_invocation()?;
+        let client = self.client().await?;
+        self.invoke_with_client(client, request, log_line_sender)
+            .await
+    }
+
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        let Some(_shutdown) = self.lifecycle.begin_shutdown().await else {
+            return Ok(());
+        };
+        let inner = self.inner.lock().await.take();
+        if let Some(inner) = inner {
+            inner.shutdown().await?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shutdown_stops_server_and_cleans_socket() -> anyhow::Result<()> {
+        let executor = InnerLocalNodeExecutor::new(&LocalNodeExecutorConfig {
+            node_process_timeout: Duration::from_secs(1),
+            callback_initial_backoff: None,
+        })
+        .await?;
+        let socket_path = executor.source_dir.path().join(".executor.sock");
+        assert!(socket_path.exists());
+
+        executor.shutdown().await?;
+
+        assert!(!socket_path.exists());
+        Ok(())
+    }
+
+    async fn wait_for_shutdown_to_start(lifecycle: &ExecutorLifecycle) {
+        for _ in 0..100 {
+            if !matches!(
+                lifecycle
+                    .state
+                    .lock()
+                    .expect("Executor lifecycle lock poisoned")
+                    .shutdown,
+                ExecutorShutdownState::Running
+            ) {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("shutdown did not start");
+    }
+
+    #[tokio::test]
+    async fn shutdown_rejects_invocation_that_could_start_replacement() {
+        let lifecycle = Arc::new(ExecutorLifecycle::new());
+        let invocation = lifecycle.begin_invocation().unwrap();
+        let shutdown_lifecycle = lifecycle.clone();
+        let shutdown = tokio::spawn(async move {
+            let shutdown = shutdown_lifecycle.begin_shutdown().await.unwrap();
+            drop(shutdown);
+        });
+
+        wait_for_shutdown_to_start(&lifecycle).await;
+        assert!(lifecycle.begin_invocation().is_err());
+
+        drop(invocation);
+        shutdown.await.unwrap();
+        assert!(lifecycle.begin_invocation().is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_active_invocation() {
+        let lifecycle = Arc::new(ExecutorLifecycle::new());
+        let invocation = lifecycle.begin_invocation().unwrap();
+        let shutdown_lifecycle = lifecycle.clone();
+        let shutdown = tokio::spawn(async move {
+            let shutdown = shutdown_lifecycle.begin_shutdown().await.unwrap();
+            drop(shutdown);
+        });
+
+        wait_for_shutdown_to_start(&lifecycle).await;
+        assert!(!shutdown.is_finished());
+
+        drop(invocation);
+        shutdown.await.unwrap();
+    }
 }
