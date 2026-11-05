@@ -146,8 +146,8 @@ const config: Config = {
       copyright: `Copyright © ${new Date().getFullYear()} Convex, Inc.`,
     },
     prism: {
-      theme: lightCodeTheme,
-      darkTheme: darkCodeTheme,
+      // The colors come from CSS, see src/plugins/prismThemeCss.js
+      theme: { plain: {}, styles: [] },
       additionalLanguages: ["rust", "kotlin", "swift", "bash", "shell-session"],
     },
     image: "img/social.png",
@@ -431,6 +431,10 @@ const config: Config = {
     ],
     "./src/plugins/prefixIds",
     "./src/plugins/imageZoomPlugin",
+    [
+      "./src/plugins/prismThemeCss",
+      { lightTheme: lightCodeTheme, darkTheme: darkCodeTheme },
+    ],
     async function versionPlugin() {
       // Exposes a /api/version route used by isitout
       return {
