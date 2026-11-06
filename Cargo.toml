@@ -283,6 +283,7 @@ v8 = { git = "https://github.com/convex/rusty_v8", rev = "105b32c50433c4cf6eb77f
 prometheus = { git = "https://github.com/convex/rust-prometheus", rev = "367f80d0d3678ed7989814fd5864598746a3b946" }
 tungstenite = { git = "https://github.com/danielsufrindisler/tungstenite-rs", rev = "eda0a0c5c15334feca45aec64af90fded2917cb7" }
 moka = { git = "https://github.com/convex/moka", rev = "ef75713ad43a39fae18c3c01fa414eefa9439af0" }
+h2 = { git = "https://github.com/convex/h2", rev = "802108be83230eb90ad5124a2b2ecdacbce70c02" }
 validator_derive = { git = "https://github.com/Keats/validator", rev = "598ad83024529a2ff57da44d398533e3d4528490" }
 tikv-jemalloc-sys = { git = "https://github.com/convex/jemallocator", rev = "d6f82852479c9962239a634688e60a3d1e873ffb" }
 shuttle = { git = "https://github.com/awslabs/shuttle", rev = "91e3cae8f73c2be3934960c46f8494a7ca981867" }
