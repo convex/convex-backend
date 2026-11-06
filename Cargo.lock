@@ -6800,6 +6800,7 @@ dependencies = [
  "streaming_export",
  "sync",
  "tempfile",
+ "tikv-jemallocator",
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
