@@ -62,3 +62,43 @@ actions**. This will have an influence on:
 - the value of `process.env.CONVEX_SITE_URL` in Convex functions.
 - when using Convex Auth: the redirection URLs, and the `issuer` used for Convex
   Auth tokens.
+
+## Disabling the default domains
+
+Once your custom domains are serving traffic, you can ask Convex to stop serving
+public traffic on your deployment's default `*.convex.cloud` and `*.convex.site`
+domains. This makes your custom domains the only way to reach your deployment,
+so requests can't bypass protections you've put in front of them, like
+[your own Cloudflare zone](/production/abuse-protection.mdx#bringing-your-own-cloudflare-zone).
+
+:::caution
+
+Most deployments should never need this. Disabling the default domains isn't
+transparent to your users: any client, integration, or stored URL that still
+uses a default domain stops working. Consider it only if you have a specific
+need, such as abuse that bypasses your own edge protections, and you've already
+moved all traffic to your custom domains.
+
+:::
+
+This isn't available in the dashboard yet. Contact support@convex.dev with your
+deployment name and which default domains to disable:
+
+- **Convex API** (`*.convex.cloud`): queries, mutations, and actions over HTTP
+  and WebSockets, and file storage URLs.
+- **HTTP actions** (`*.convex.site`).
+- **Both**.
+
+Before requesting this, make sure nothing still depends on the default domains:
+
+- Override `CONVEX_CLOUD_URL` and `CONVEX_SITE_URL` as described
+  [above](#changing-your-default-domain), so that file storage URLs and Convex
+  Auth use your custom domains.
+- Redeploy your front end and update any other clients, webhooks, and
+  integrations that call your deployment. Native clients that can't be updated
+  will stop working; see
+  [Native clients and custom domains](/production/abuse-protection.mdx#native-clients-and-custom-domains).
+
+The Convex dashboard and the `npx convex` CLI keep working, since they
+authenticate with admin credentials. To turn the default domains back on,
+contact support again.

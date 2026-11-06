@@ -75,10 +75,10 @@ redeploying. Plan for this **before** you ship:
   from a custom domain from the start, you control the host for the life of the
   app.
 
-If you later move your deployment exclusively to a custom domain and stop
-serving the default `*.convex.cloud` / `*.convex.site` endpoints, any client
-that was built against those endpoints — and has no way to be updated — will no
-longer be able to connect.
+If you later move your deployment exclusively to a custom domain and
+[disable the default `*.convex.cloud` / `*.convex.site` domains](/production/custom-domains.mdx#disabling-the-default-domains),
+any client that was built against those endpoints — and has no way to be updated
+— will no longer be able to connect.
 
 ## Application-layer controls you add yourself
 
