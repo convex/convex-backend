@@ -67,7 +67,9 @@
 //! 2. **`ts` dimension** — walk the document log forward from `synced_ts`, emit
 //!    captured documents at their new revision, and advance `synced_ts` to the
 //!    last fully-consumed timestamp. Documents not yet captured are skipped
-//!    (they will be read by `by_id` at the new `synced_ts`).
+//!    (they will be read by `by_id` at the new `synced_ts`). With an empty
+//!    target set the cursor captures nothing, so the walk could emit nothing;
+//!    the page skips it and moves `synced_ts` straight to `latest`.
 //!
 //! ```text
 //!     ◄══════════════════════════════ ID ════════════════════════════════=══►
@@ -660,7 +662,11 @@ impl<RT: Runtime> DataSyncIterator<RT> {
         // caught up to `latest`.
         let mut new_synced_ts = *latest;
 
-        if let Some(start) = cursor.synced_ts.succ_opt()
+        if cursor.synced_tables.is_empty() && cursor.table_cursor == TableCursor::Synced {
+            // When the synced target set is empty, it's safe to skip reading
+            // the document log.
+            cover!(coverage::TS_EMPTY_TARGET_SET);
+        } else if let Some(start) = cursor.synced_ts.succ_opt()
             && start <= *latest
         {
             let range = TimestampRange::new(start..=*latest);
