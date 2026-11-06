@@ -37,9 +37,14 @@ pub enum IndexScanCaller {
     /// Functions' reads: funrun's, which the conductor serves through
     /// `Database::index_page`, and the in-process function runner's.
     FunctionRunner,
-    /// Loading table and index metadata, when the database loads and when
-    /// table summaries bootstrap.
+    /// Loading table and index metadata when the database loads, including
+    /// the committer's first table summary, and in tools.
     Bootstrap,
+    /// Reloading table and index metadata for each table summary checkpoint.
+    TableSummaryCheckpoint,
+    /// Reloading table and index metadata to catch table shapes up to a
+    /// timestamp other than the published one.
+    TableShapes,
     InMemoryIndexLoad,
     IndexWorker,
     Retention,

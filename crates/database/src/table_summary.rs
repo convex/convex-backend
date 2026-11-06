@@ -17,6 +17,7 @@ use common::{
     },
     json::JsonForm,
     persistence::{
+        index_scan_attribution::IndexScanCaller,
         new_static_repeatable_recent,
         LatestDocument,
         Persistence,
@@ -517,6 +518,7 @@ impl<RT: Runtime> TableSummaryWriter<RT> {
             self.retention_validator.clone(),
             upper_bound,
             bootstrap_kind,
+            IndexScanCaller::TableSummaryCheckpoint,
         )
         .await?;
         Ok(new_snapshot)
@@ -567,6 +569,7 @@ pub async fn bootstrap<RT: Runtime>(
     retention_validator: Arc<dyn RetentionValidator>,
     target_ts: RepeatableTimestamp,
     bootstrap_kind: BootstrapKind,
+    caller: IndexScanCaller,
 ) -> anyhow::Result<(TableSummarySnapshot, usize)> {
     let _timer = metrics::bootstrap_table_summaries_timer();
     let stored_snapshot = match bootstrap_kind {
@@ -582,6 +585,7 @@ pub async fn bootstrap<RT: Runtime>(
                 retention_validator.clone(),
             )
             .read_snapshot(recent_ts)?,
+            caller,
         )
         .await?;
     let (base_snapshot, base_snapshot_ts) = match stored_snapshot {

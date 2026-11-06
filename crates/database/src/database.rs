@@ -436,6 +436,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
         index: IndexRef,
         tablet_id: TabletId,
         table: TableName,
+        caller: IndexScanCaller,
     ) -> anyhow::Result<(Vec<(Timestamp, PackedDocument)>, Vec<ParsedDocument<D>>)> {
         attribute_index_scan(
             persistence_snapshot.index_scan(
@@ -445,7 +446,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
                 Order::Asc,
                 usize::MAX,
             ),
-            IndexScanCaller::Bootstrap,
+            caller,
             IndexScanKind::ById,
             Some(table),
         )
@@ -511,6 +512,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
     #[fastrace::trace]
     pub async fn load_table_and_index_metadata(
         persistence_snapshot: &PersistenceSnapshot,
+        caller: IndexScanCaller,
     ) -> anyhow::Result<(
         TableMapping,
         OrdMap<TabletId, TableState>,
@@ -533,6 +535,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             index_by_id,
             index_tablet_id,
             INDEX_TABLE,
+            caller,
         )
         .await?;
         let (table_documents, parsed_table_documents) = Self::load_raw_and_parsed_table_documents(
@@ -540,6 +543,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             tables_by_id,
             tables_tablet_id,
             TABLES_TABLE,
+            caller,
         )
         .await?;
 
@@ -825,7 +829,8 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             table_documents,
             index_documents,
             bootstrap_metadata,
-        ) = Self::load_table_and_index_metadata(&persistence_snapshot).await?;
+        ) = Self::load_table_and_index_metadata(&persistence_snapshot, IndexScanCaller::Bootstrap)
+            .await?;
 
         // Step 2: Load bootstrap tables indexes into memory.
         let load_indexes_into_memory_timer = load_indexes_into_memory_timer();
@@ -929,6 +934,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             self.retention_validator.clone(),
             self.ts,
             BootstrapKind::FromCheckpoint,
+            IndexScanCaller::Bootstrap,
         )
         .await?;
         let table_counts = TableCounts::new(
@@ -1220,6 +1226,7 @@ impl<RT: Runtime> Database<RT> {
             self.retention_validator(),
             ts,
             BootstrapKind::FromCheckpoint,
+            IndexScanCaller::TableShapes,
         )
         .await?;
         Ok(Some(Arc::new(snapshot.into())))

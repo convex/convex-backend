@@ -51,6 +51,7 @@ use common::{
         TRANSACTION_WARN_READ_SET_INTERVALS,
     },
     persistence::{
+        index_scan_attribution::IndexScanCaller,
         DocumentLogEntry,
         Persistence,
         PersistenceGlobalKey,
@@ -757,6 +758,7 @@ impl<RT: Runtime> Committer<RT> {
             self.retention_validator.clone(),
             latest_ts,
             table_summary::BootstrapKind::FromCheckpoint,
+            IndexScanCaller::Bootstrap,
         )
         .await;
         let (table_summary_snapshot, _) = match bootstrap_result {
