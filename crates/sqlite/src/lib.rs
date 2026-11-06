@@ -600,6 +600,24 @@ impl PersistenceReader for SqlitePersistence {
         self._get_persistence_global(key)
     }
 
+    async fn max_ts(&self) -> anyhow::Result<Option<Timestamp>> {
+        let max_committed_ts = {
+            let connection = &self.inner.lock().connection;
+            // Match TimestampRange::all(), whose Timestamp::MAX upper bound is exclusive.
+            let max_ts: Option<u64> = connection.query_row(
+                MAX_DOCUMENT_TS,
+                params![i64::from(Timestamp::MIN), i64::from(Timestamp::MAX)],
+                |row| row.get(0),
+            )?;
+            max_ts.map(Timestamp::try_from).transpose()?
+        };
+        let max_repeatable_ts = self
+            ._get_persistence_global(PersistenceGlobalKey::MaxRepeatableTimestamp)?
+            .map(Timestamp::try_from)
+            .transpose()?;
+        Ok(cmp::max(max_committed_ts, max_repeatable_ts))
+    }
+
     fn version(&self) -> PersistenceVersion {
         PersistenceVersion::V5
     }
@@ -728,6 +746,8 @@ const DELETE_DOCUMENT: &str = "DELETE FROM documents WHERE table_id = ? AND id =
 const DELETE_TABLE_DOCUMENTS: &str = "DELETE FROM documents WHERE table_id = ? AND id IN (SELECT \
                                       id FROM documents WHERE table_id = ? LIMIT ?)";
 
+const MAX_DOCUMENT_TS: &str = "SELECT MAX(ts) FROM documents WHERE ts >= ?1 AND ts < ?2";
+
 const PREV_REV_QUERY: &str = r#"
 SELECT id, ts, table_id, json_value, deleted, prev_ts
 FROM documents
@@ -748,3 +768,149 @@ WHERE
     ts = $3
 ORDER BY ts ASC, table_id ASC, id ASC
 "#;
+
+#[cfg(test)]
+mod tests {
+    use common::{
+        persistence::{
+            Persistence,
+            PersistenceGlobalKey,
+            PersistenceReader,
+        },
+        types::Timestamp,
+    };
+    use rusqlite::params;
+
+    use super::SqlitePersistence;
+
+    fn timestamp(value: u64) -> Timestamp {
+        Timestamp::try_from(value).expect("valid test timestamp")
+    }
+
+    fn insert_raw_document(
+        persistence: &SqlitePersistence,
+        id_byte: u8,
+        ts: i64,
+        json_value: Option<&str>,
+    ) {
+        persistence
+            .inner
+            .lock()
+            .connection
+            .execute(
+                "INSERT INTO documents (id, ts, table_id, json_value, deleted, prev_ts) VALUES \
+                 (?, ?, ?, ?, ?, NULL)",
+                params![
+                    vec![id_byte; 16],
+                    ts,
+                    vec![1_u8; 16],
+                    json_value,
+                    u8::from(json_value.is_none()),
+                ],
+            )
+            .expect("insert test document");
+    }
+
+    fn insert_document(
+        persistence: &SqlitePersistence,
+        id_byte: u8,
+        ts: u64,
+        json_value: Option<&str>,
+    ) {
+        insert_raw_document(
+            persistence,
+            id_byte,
+            i64::try_from(ts).expect("test timestamp fits in SQLite INTEGER"),
+            json_value,
+        );
+    }
+
+    #[tokio::test]
+    async fn max_ts_returns_none_when_persistence_is_empty() {
+        let persistence = SqlitePersistence::new(":memory:").expect("open in-memory sqlite");
+
+        assert_eq!(persistence.max_ts().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn max_ts_returns_the_larger_document_or_repeatable_timestamp() {
+        let persistence = SqlitePersistence::new(":memory:").expect("open in-memory sqlite");
+
+        persistence
+            .write_persistence_global(
+                PersistenceGlobalKey::MaxRepeatableTimestamp,
+                timestamp(7).into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(persistence.max_ts().await.unwrap(), Some(timestamp(7)));
+
+        insert_document(&persistence, 1, 11, None);
+        assert_eq!(persistence.max_ts().await.unwrap(), Some(timestamp(11)));
+
+        persistence
+            .write_persistence_global(
+                PersistenceGlobalKey::MaxRepeatableTimestamp,
+                timestamp(13).into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(persistence.max_ts().await.unwrap(), Some(timestamp(13)));
+    }
+
+    #[tokio::test]
+    async fn max_ts_includes_tombstones() {
+        let persistence = SqlitePersistence::new(":memory:").expect("open in-memory sqlite");
+
+        insert_document(&persistence, 1, 7, Some("not-json"));
+        insert_document(&persistence, 2, 13, None);
+
+        assert_eq!(persistence.max_ts().await.unwrap(), Some(timestamp(13)));
+    }
+
+    #[tokio::test]
+    async fn max_ts_does_not_decode_document_values() {
+        let persistence = SqlitePersistence::new(":memory:").expect("open in-memory sqlite");
+
+        insert_document(&persistence, 1, 13, Some("not-json"));
+
+        assert_eq!(persistence.max_ts().await.unwrap(), Some(timestamp(13)));
+    }
+
+    #[tokio::test]
+    async fn max_ts_uses_the_all_timestamp_range() {
+        let persistence = SqlitePersistence::new(":memory:").expect("open in-memory sqlite");
+        let largest_in_range = i64::MAX - 1;
+
+        insert_raw_document(&persistence, 1, -1, None);
+        insert_raw_document(&persistence, 2, largest_in_range, None);
+        insert_raw_document(&persistence, 3, i64::MAX, None);
+
+        assert_eq!(
+            persistence.max_ts().await.unwrap(),
+            Some(timestamp(largest_in_range as u64)),
+        );
+    }
+
+    #[tokio::test]
+    async fn max_ts_errors_on_a_malformed_repeatable_timestamp() {
+        let persistence = SqlitePersistence::new(":memory:").expect("open in-memory sqlite");
+        persistence
+            .inner
+            .lock()
+            .connection
+            .execute(
+                "INSERT INTO persistence_globals (key, json_value) VALUES (?, ?)",
+                params![
+                    String::from(PersistenceGlobalKey::MaxRepeatableTimestamp),
+                    "not-json",
+                ],
+            )
+            .expect("insert malformed max repeatable timestamp");
+
+        persistence
+            .max_ts()
+            .await
+            .expect_err("malformed repeatable timestamp must fail max_ts");
+    }
+}
