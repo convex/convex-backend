@@ -113,12 +113,12 @@ struct IndexIntervalsInner {
 /// Tracks which (interval, order, max_size) triples are cached for a given
 /// index, using an IntervalMap for O((k+1) log n) point queries
 #[derive(Clone)]
-struct IndexIntervals {
+pub struct IndexIntervals {
     inner: Arc<Mutex<IndexIntervalsInner>>,
 }
 
 impl IndexIntervals {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(IndexIntervalsInner {
                 map: IntervalMap::new(),
@@ -131,7 +131,7 @@ impl IndexIntervals {
 
     /// Increments the refcount for an (interval, order, max_size) triple,
     /// inserting it into the IntervalMap if this is the first registration.
-    fn insert(&self, interval: Arc<Interval>, order: Order, max_size: usize) {
+    pub fn insert(&self, interval: Arc<Interval>, order: Order, max_size: usize) {
         let mut inner = self.inner.lock();
         if let Some((_, refcount)) =
             inner
@@ -158,7 +158,7 @@ impl IndexIntervals {
     /// Decrements the refcount for an (interval, order, max_size) triple,
     /// removing it from the IntervalMap when the refcount reaches zero.
     /// No-op if not present.
-    fn remove(&self, interval: Arc<Interval>, order: Order, max_size: usize) {
+    pub fn remove(&self, interval: Arc<Interval>, order: Order, max_size: usize) {
         let mut inner = self.inner.lock();
         if let Entry::Occupied(mut e) = inner.params_to_id.entry((interval, order, max_size)) {
             let (id, refcount) = e.get_mut();
@@ -191,7 +191,7 @@ impl IndexIntervals {
 
     /// Returns all (interval, order, max_size) triples whose interval contains
     /// `old` or `new`. Results are deduplicated.
-    fn query_keys(
+    pub fn query_keys(
         &self,
         old: Option<&[u8]>,
         new: Option<&[u8]>,
@@ -393,7 +393,7 @@ impl IndexCacheHandle {
         }
     }
 
-    pub(crate) fn get(
+    pub fn get(
         &self,
         index_id: IndexId,
         interval: Arc<Interval>,
@@ -457,7 +457,7 @@ impl IndexCacheHandle {
     /// conflicting writes.
     ///
     /// Phase 2: Mark the entry as ready.
-    pub(crate) fn populate(
+    pub fn populate(
         &self,
         index_id: IndexId,
         interval: Arc<Interval>,
@@ -725,8 +725,3 @@ impl CachedInterval {
             + self.cursor.heap_size()
     }
 }
-
-/// Shuttle-based concurrency tests. See `index_cache/shuttle_tests.rs`.
-/// N.B.: `cfg(rust_analyzer)` is enabled in rust-analyzer only, not in rustc.
-#[cfg(any(all(test, feature = "shuttle-testing"), rust_analyzer))]
-mod shuttle_tests;

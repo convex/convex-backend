@@ -692,7 +692,7 @@ impl IndexDocuments {
 }
 
 #[derive(Clone, Debug)]
-enum DatabaseIndexSnapshotCacheResult {
+pub enum DatabaseIndexSnapshotCacheResult {
     Document(IndexKeyBytes, Timestamp, PackedDocument),
     CacheMiss(Interval),
 }
@@ -721,7 +721,7 @@ impl DatabaseIndexSnapshotCache {
 
     /// Returns false if the cache is over the max size so the cache didn't
     /// populate.
-    fn populate(
+    pub fn populate(
         &mut self,
         index_id: IndexId,
         is_by_id: bool,
@@ -751,7 +751,7 @@ impl DatabaseIndexSnapshotCache {
         true
     }
 
-    fn record_interval_populated(&mut self, index_id: IndexId, interval: Interval) {
+    pub fn record_interval_populated(&mut self, index_id: IndexId, interval: Interval) {
         if self.cache_size <= *MAX_TRANSACTION_CACHE_SIZE {
             self.documents
                 .entry(index_id)
@@ -761,7 +761,7 @@ impl DatabaseIndexSnapshotCache {
         }
     }
 
-    fn get(
+    pub fn get(
         &self,
         index_id: IndexId,
         interval: &Interval,

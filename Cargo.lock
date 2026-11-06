@@ -5895,6 +5895,7 @@ dependencies = [
  "futures",
  "futures-async-stream",
  "imbl",
+ "indexing",
  "interval_map",
  "itertools 0.14.0",
  "maplit",
