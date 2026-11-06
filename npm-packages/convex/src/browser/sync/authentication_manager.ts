@@ -158,7 +158,10 @@ export class AuthenticationManager {
     const token = await this.fetchTokenAndGuardAgainstRace(fetchToken, {
       forceRefreshToken: false,
     });
-    if (token.isFromOutdatedConfig) {
+    if (
+      token.isFromOutdatedConfig ||
+      this.configVersion !== token.configVersion
+    ) {
       return;
     }
     const config: AuthConfig = {
@@ -179,7 +182,14 @@ export class AuthenticationManager {
         config,
       });
       // Try again with `forceRefreshToken: true`
-      await this.refetchToken();
+      // The guarded refetch increments the generation before invoking user
+      // code. Capture that generation before a fetcher can replace this config.
+      const refetchConfigVersion = this.configVersion + 1;
+      const refetch = this.refetchToken();
+      await refetch;
+      if (this.configVersion !== refetchConfigVersion) {
+        return;
+      }
     }
     this._logVerbose("resuming WS after auth token fetch");
     this.resumeSocket();
@@ -300,7 +310,10 @@ export class AuthenticationManager {
         forceRefreshToken: true,
       },
     );
-    if (token.isFromOutdatedConfig) {
+    if (
+      token.isFromOutdatedConfig ||
+      this.configVersion !== token.configVersion
+    ) {
       return;
     }
 
@@ -338,7 +351,10 @@ export class AuthenticationManager {
         forceRefreshToken: true,
       },
     );
-    if (token.isFromOutdatedConfig) {
+    if (
+      token.isFromOutdatedConfig ||
+      this.configVersion !== token.configVersion
+    ) {
       return;
     }
 
@@ -469,9 +485,18 @@ export class AuthenticationManager {
       this._logVerbose(
         `stale config version, expected ${originalConfigVersion}, got ${this.configVersion}`,
       );
-      return { isFromOutdatedConfig: true };
+      return {
+        isFromOutdatedConfig: true,
+        configVersion: originalConfigVersion,
+      };
     }
-    return { isFromOutdatedConfig: false, value: token };
+    // The caller resumes in another microtask. Carry the generation so it can
+    // recheck ownership before reading authState or mutating the socket.
+    return {
+      isFromOutdatedConfig: false,
+      value: token,
+      configVersion: originalConfigVersion,
+    };
   }
 
   stop() {
