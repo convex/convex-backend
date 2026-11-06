@@ -1,7 +1,7 @@
 import { endOfDay, endOfToday, startOfDay } from "date-fns";
 import { Link } from "@ui/Link";
 import { useRouter } from "next/router";
-import { useCallback, useContext, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { DeploymentEventContent } from "@common/elements/DeploymentEventContent";
 import {
   DateRangePicker,
@@ -28,6 +28,7 @@ import { LocalDevCallout } from "@common/elements/LocalDevCallout";
 const INITIAL_EVENTS_TO_LOAD = 10;
 const PAGE_SIZE = 10;
 const DISTANCE_FROM_BOTTOM_THRESHOLD_PX = 300;
+const MAX_PAGINATION_RESTARTS = 3;
 
 export function HistoryView() {
   const { useIsOperationAllowed } = useContext(PermissionsContext);
@@ -145,6 +146,23 @@ function HistoryList({ filters }: { filters: DeploymentAuditLogFilters }) {
     INITIAL_EVENTS_TO_LOAD,
   );
 
+  // Stop loading more if pagination keeps restarting without making progress.
+  const furthestResultCount = useRef(0);
+  const restartCount = useRef(0);
+  const filtersKey = `${filters.minDate}|${filters.maxDate}`;
+  useEffect(() => {
+    furthestResultCount.current = 0;
+    restartCount.current = 0;
+  }, [filtersKey]);
+  useEffect(() => {
+    if (results.length > furthestResultCount.current) {
+      furthestResultCount.current = results.length;
+      restartCount.current = 0;
+    } else if (results.length === 0 && furthestResultCount.current > 0) {
+      restartCount.current += 1;
+    }
+  }, [results.length]);
+
   // Keep track of scroll position.
   useEffect(() => {
     function onScroll() {
@@ -154,7 +172,8 @@ function HistoryList({ filters }: { filters: DeploymentAuditLogFilters }) {
           (parentElement.scrollTop + parentElement.clientHeight);
         if (
           distanceFromBottom < DISTANCE_FROM_BOTTOM_THRESHOLD_PX &&
-          status === "CanLoadMore"
+          status === "CanLoadMore" &&
+          restartCount.current < MAX_PAGINATION_RESTARTS
         ) {
           loadMore(PAGE_SIZE);
         }
