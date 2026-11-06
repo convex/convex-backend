@@ -217,9 +217,10 @@ impl TextFixtures {
         // Start as enabled -> disable it.
         let index_data = self.enabled_text_index().await?;
         let mut tx = self.db.begin_system().await?;
-        IndexModel::new(&mut tx)
-            .disable_index_for_test(index_data.index_id)
-            .await?;
+        let enabled = IndexModel::new(&mut tx)
+            .enabled_index_metadata(index_data.namespace, &index_data.index_name)?
+            .context("index should be enabled")?;
+        IndexModel::new(&mut tx).disable_index(enabled).await?;
         self.db.commit(tx, "test").await?;
         Ok(index_data)
     }

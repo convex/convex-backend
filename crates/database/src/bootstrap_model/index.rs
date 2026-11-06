@@ -40,6 +40,7 @@ use common::{
         IndexDiff,
         IndexName,
         IndexRef,
+        IndexTableIdentifier,
         StableIndexName,
         TableName,
         TabletIndexName,
@@ -359,9 +360,11 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
         Ok(())
     }
 
-    async fn disable_index(
+    /// Moves an enabled index back to backfilled with `staged: true`, keeping
+    /// its backfilled data.
+    pub async fn disable_index<T: IndexTableIdentifier>(
         &mut self,
-        doc: ParsedDocument<DeveloperIndexMetadata>,
+        doc: ParsedDocument<IndexMetadata<T>>,
     ) -> anyhow::Result<()> {
         tracing::info!("Disabling index: {doc:?}");
         let id = doc.id();
