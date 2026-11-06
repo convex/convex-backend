@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.50.0 (unreleased)
+
+- The types of `ctx.auth.signJwt` now match what deployments accept. `claims`
+  is required and must include an `aud` claim: a non-empty string or a
+  non-empty array of non-empty strings identifying the intended audiences. The
+  `jti` claim is typed as a string, and the docs note that Convex sets a random
+  one when you don't pass your own.
+
 ## 1.49.0
 
 - New `npx convex plugins install` command, which installs the Convex plugin for

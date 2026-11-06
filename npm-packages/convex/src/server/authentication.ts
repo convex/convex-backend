@@ -247,8 +247,14 @@ export interface MutationAuth extends Auth {
    * Sign an ES256 JWT with this deployment's key.
    *
    * Pass the `claims` and `expiresInSeconds` values that match your use case.
+   * The `aud` claim is required: set it to the service that verifies the
+   * token. `aud` only prevents misuse if that service checks that its own
+   * identifier is in `aud`. A service that skips this check may accept a token
+   * meant for another audience.
    *
    * Convex populates the header and sets the `iss`, `iat` and `exp` claims.
+   * It also sets `jti` to a random string unless you pass your own non-empty
+   * `jti`, e.g. to correlate tokens with your logs.
    *
    * The `iss` is `process.env.CONVEX_CLOUD_URL` for the app and
    * `${process.env.CONVEX_CLOUD_URL}/components/<name>` for a component.
@@ -307,10 +313,19 @@ type ReservedPrefixJwtClaims = {
  */
 export type SignJwtClaims = Record<string, JSONValue> & {
   [K in ReservedJwtClaim]?: never;
+} & {
+  /**
+   * The audience that verifies the token, e.g. the `applicationID` of a
+   * `customJwt` provider. Must be a non-empty string or a non-empty array of
+   * non-empty strings.
+   */
+  aud: string | string[];
+  /** The token's ID. Defaults to a random string. */
+  jti?: string;
 } & ReservedPrefixJwtClaims;
 
 export type SignJwtOptions = {
-  claims?: SignJwtClaims;
+  claims: SignJwtClaims;
   /** How long the token stays valid, at least 1 second and at most 1 hour. */
   expiresInSeconds: number;
 };
