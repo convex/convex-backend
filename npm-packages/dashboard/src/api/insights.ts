@@ -30,6 +30,8 @@ type OccRecentEvent = {
   occ_document_id?: string;
   occ_write_source?: string;
   occ_retry_count: number;
+  // Executions this event covers; absent on events recorded one per execution.
+  calls?: number;
 };
 
 type BytesReadRecentEvent = {
