@@ -10200,6 +10200,7 @@ dependencies = [
  "rand 0.9.4",
  "runtime",
  "search",
+ "search_index_workers",
  "segment",
  "storage",
  "tempfile",

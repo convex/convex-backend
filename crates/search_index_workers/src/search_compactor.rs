@@ -82,7 +82,7 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
         T::search_type()
     }
 
-    pub(crate) async fn step(&self) -> anyhow::Result<(BTreeMap<TabletIndexName, u64>, Token)> {
+    pub async fn step(&self) -> anyhow::Result<(BTreeMap<TabletIndexName, u64>, Token)> {
         let mut metrics = BTreeMap::new();
 
         let (to_build, token) = self.needs_compaction().await?;
