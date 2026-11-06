@@ -20,10 +20,7 @@ import {
   PROJECT_PAGE_SIZES,
 } from "hooks/useProjectsPageSize";
 import { useCurrentTeam } from "api/teams";
-import { useTeamOrbSubscription } from "api/billing";
-import { useReferralState } from "api/referrals";
 import { ProjectDetails, TeamResponse } from "generatedApi";
-import { ReferralsBanner } from "components/referral/ReferralsBanner";
 import { useCreateProjectModalRequest } from "hooks/useCreateProjectModal";
 import { useProjectTagFilter } from "hooks/useProjectTagFilter";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
@@ -52,12 +49,6 @@ export { getServerSideProps } from "lib/ssr";
 export function TeamIndexPage() {
   const team = useCurrentTeam();
   const router = useRouter();
-  const referralState = useReferralState(team?.id);
-  const { subscription } = useTeamOrbSubscription(team?.id);
-  const isFreePlan =
-    subscription === undefined ? undefined : subscription === null;
-  const [prefersReferralsBannerHidden, setPrefersReferralsBannerHidden] =
-    useGlobalLocalStorage("prefersReferralsBannerHidden", false);
 
   const viewFromQuery = (router.query.view as string | undefined) ?? "projects";
   const currentView = viewFromQuery;
@@ -90,12 +81,6 @@ export function TeamIndexPage() {
                   currentView={currentView}
                   onViewChange={handleViewChange}
                   projectFilter={projectFilter}
-                  referralState={referralState}
-                  isFreePlan={isFreePlan}
-                  prefersReferralsBannerHidden={prefersReferralsBannerHidden}
-                  setPrefersReferralsBannerHidden={
-                    setPrefersReferralsBannerHidden
-                  }
                 />
               </div>
             )}
@@ -119,20 +104,12 @@ function TeamContent({
   currentView,
   onViewChange,
   projectFilter,
-  referralState,
-  isFreePlan,
-  prefersReferralsBannerHidden,
-  setPrefersReferralsBannerHidden,
 }: {
   team: TeamResponse;
   isDeploymentsView: boolean;
   currentView: string;
   onViewChange: (view: string) => void;
   projectFilter?: number;
-  referralState: any;
-  isFreePlan: boolean | undefined;
-  prefersReferralsBannerHidden: boolean;
-  setPrefersReferralsBannerHidden: (value: boolean) => void;
 }) {
   const [projectQuery, setProjectQuery] = useState("");
   const [debouncedProjectQuery, setDebouncedProjectQuery] = useState("");
@@ -170,15 +147,6 @@ function TeamContent({
 
   return (
     <>
-      {!prefersReferralsBannerHidden && isFreePlan && referralState && (
-        <div className="mb-4">
-          <ReferralsBanner
-            team={team}
-            referralState={referralState}
-            onHide={() => setPrefersReferralsBannerHidden(true)}
-          />
-        </div>
-      )}
       <div className="mb-4 flex w-full animate-fadeInFromLoading flex-col gap-3">
         <div className="flex items-center gap-4">
           <SegmentedControl
