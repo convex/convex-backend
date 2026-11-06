@@ -31,6 +31,7 @@ use common::{
             },
             IndexConfig,
             IndexMetadata,
+            INDEX_TABLE,
         },
         tables::{
             TableMetadata,
@@ -363,6 +364,7 @@ impl<RT: Runtime> LeaderRetentionWorkerSeed<RT> {
                     ),
                     IndexScanCaller::Retention,
                     IndexScanKind::ById,
+                    Some(INDEX_TABLE),
                 );
                 let mut indexes = BTreeMap::new();
                 while let Some((_, rev)) = meta_index_scan.try_next().await? {

@@ -171,6 +171,7 @@ pub async fn load_metadata_fast_forward_ts(
         ),
         IndexScanCaller::IndexWorker,
         IndexScanKind::Defined,
+        Some(INDEX_WORKER_METADATA_TABLE),
     );
     let mut results: Vec<_> = stream
         .try_collect::<Vec<_>>()

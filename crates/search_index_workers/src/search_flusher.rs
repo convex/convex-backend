@@ -778,6 +778,7 @@ async fn incremental_table_scan_stream<'a, T: SearchIndex>(
             reader.index_scan(by_id, tablet_id, &cursor.interval(), Order::Asc, page_size),
             IndexScanCaller::SearchFlusher,
             IndexScanKind::ById,
+            None,
         );
         let page: Vec<_> = stream.take(page_size).try_collect().await?;
         if page.len() < page_size {

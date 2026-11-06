@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    borrow::Cow,
+    time::Duration,
+};
 
 use metrics::{
     log_counter,
@@ -13,6 +16,7 @@ use metrics::{
     Timer,
 };
 use prometheus::VMHistogram;
+use value::TableName;
 
 use crate::persistence::index_scan_attribution::{
     IndexScanCaller,
@@ -21,31 +25,41 @@ use crate::persistence::index_scan_attribution::{
 
 register_convex_counter!(
     PERSISTENCE_INDEX_SCANS_TOTAL,
-    "Index scans that read from persistence, by what issued them and the kind of index. A scan \
-     can span several queries to the database; each page a transaction or function reads is one \
-     scan",
-    &["caller", "index_kind"]
+    "Index scans that read from persistence, by what issued them, the kind of index and the \
+     table: a system table's name, `user` for any user table, or `unknown`. A scan can span \
+     several queries to the database; each page a transaction or function reads is one scan",
+    &["caller", "index_kind", "table"]
 );
 register_convex_counter!(
     PERSISTENCE_INDEX_SCAN_DOCUMENTS_TOTAL,
-    "Documents index scans read from persistence, by what issued the scan and the kind of index",
-    &["caller", "index_kind"]
+    "Documents index scans read from persistence, by what issued the scan, the kind of index and \
+     the table",
+    &["caller", "index_kind", "table"]
 );
 register_convex_counter!(
     PERSISTENCE_INDEX_SCAN_WAIT_MICROSECONDS_TOTAL,
-    "Time callers spent waiting on index scans of persistence, by what issued the scan and the \
-     kind of index",
-    &["caller", "index_kind"]
+    "Time callers spent waiting on index scans of persistence, by what issued the scan, the kind \
+     of index and the table",
+    &["caller", "index_kind", "table"]
 );
+/// User tables share the `user` label, so the label's values are bounded by
+/// the system tables and no developer's table name is exported.
 pub fn log_index_scan(
     caller: IndexScanCaller,
     kind: IndexScanKind,
+    table: Option<&TableName>,
     documents: u64,
     waited: Duration,
 ) {
+    let table: Cow<'static, str> = match table {
+        Some(table) if table.is_system() => table.to_string().into(),
+        Some(_) => "user".into(),
+        None => "unknown".into(),
+    };
     let labels = vec![
         StaticMetricLabel::new("caller", <&'static str>::from(caller)),
         StaticMetricLabel::new("index_kind", <&'static str>::from(kind)),
+        StaticMetricLabel::new("table", table),
     ];
     log_counter_with_labels(&PERSISTENCE_INDEX_SCANS_TOTAL, 1, labels.clone());
     log_counter_with_labels(

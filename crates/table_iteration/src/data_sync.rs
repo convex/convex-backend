@@ -564,6 +564,7 @@ impl<RT: Runtime> DataSyncIterator<RT> {
             ),
             IndexScanCaller::DataSync,
             IndexScanKind::ById,
+            None,
         );
         let mut count_limited = false;
 

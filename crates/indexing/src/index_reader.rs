@@ -31,6 +31,7 @@ use futures::StreamExt as _;
 use futures_async_stream::try_stream;
 use value::{
     heap_size::HeapSize,
+    TableMapping,
     TabletId,
 };
 
@@ -136,25 +137,28 @@ async fn read_page(
 }
 
 /// Reads `snapshot`, attributing each page to `caller` and to the kind of
-/// index it reads.
+/// index and the table it reads.
 pub struct AttributedIndexReader {
     snapshot: PersistenceSnapshot,
     caller: IndexScanCaller,
     index_registry: Option<IndexRegistry>,
+    table_mapping: Option<TableMapping>,
 }
 
 impl AttributedIndexReader {
     /// Without `index_registry`, the kind of index each read is attributed to
-    /// is unknown.
+    /// is unknown, and without `table_mapping`, so is its table.
     pub fn new(
         snapshot: PersistenceSnapshot,
         caller: IndexScanCaller,
         index_registry: Option<IndexRegistry>,
+        table_mapping: Option<TableMapping>,
     ) -> Self {
         Self {
             snapshot,
             caller,
             index_registry,
+            table_mapping,
         }
     }
 
@@ -192,6 +196,9 @@ impl IndexReader for AttributedIndexReader {
                 .index_scan(index, tablet_id, interval, order, max_results),
             self.caller,
             self.kind(index, tablet_id),
+            self.table_mapping
+                .as_ref()
+                .and_then(|table_mapping| table_mapping.tablet_name(tablet_id).ok()),
         );
         read_page(scan, interval, max_results).await
     }

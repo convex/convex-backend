@@ -240,6 +240,7 @@ impl BackendInMemoryIndexes {
             ),
             IndexScanCaller::InMemoryIndexLoad,
             IndexScanKind::Unknown,
+            None,
         )
         .try_collect()
         .await?;

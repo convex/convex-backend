@@ -435,6 +435,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
         persistence_snapshot: &PersistenceSnapshot,
         index: IndexRef,
         tablet_id: TabletId,
+        table: TableName,
     ) -> anyhow::Result<(Vec<(Timestamp, PackedDocument)>, Vec<ParsedDocument<D>>)> {
         attribute_index_scan(
             persistence_snapshot.index_scan(
@@ -446,6 +447,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             ),
             IndexScanCaller::Bootstrap,
             IndexScanKind::ById,
+            Some(table),
         )
         .map(|row| {
             let rev = row?.1;
@@ -530,12 +532,14 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             persistence_snapshot,
             index_by_id,
             index_tablet_id,
+            INDEX_TABLE,
         )
         .await?;
         let (table_documents, parsed_table_documents) = Self::load_raw_and_parsed_table_documents(
             persistence_snapshot,
             tables_by_id,
             tables_tablet_id,
+            TABLES_TABLE,
         )
         .await?;
 
@@ -1009,6 +1013,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
                 self.persistence_snapshot.clone(),
                 IndexScanCaller::Transaction,
                 Some(self.snapshot.index_registry.clone()),
+                Some(self.snapshot.table_registry.table_mapping().clone()),
             )),
             self.index_cache_handle.clone(),
             None,
@@ -1784,6 +1789,9 @@ impl<RT: Runtime> Database<RT> {
                 snapshot
                     .as_ref()
                     .map(|snapshot| snapshot.index_registry.clone()),
+                snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.table_registry.table_mapping().clone()),
             )) as Arc<dyn IndexReader>;
             if let Some(snapshot) = snapshot {
                 // TODO: it is probably OK to still use the index cache even if
@@ -2055,6 +2063,7 @@ impl<RT: Runtime> Database<RT> {
                     .read_snapshot(repeatable_ts)?,
                     IndexScanCaller::Transaction,
                     Some(snapshot.index_registry.clone()),
+                    Some(snapshot.table_registry.table_mapping().clone()),
                 )),
                 Some(self.index_cache_handle.clone()),
                 index_cache,

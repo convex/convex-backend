@@ -921,6 +921,7 @@ async fn fetch_page(
             ),
             IndexScanCaller::TableIterator,
             IndexScanKind::Unknown,
+            None,
         );
         let scan_timer = page_timer("scan");
         let documents_in_page: Vec<_> = match stream.take(page_size).try_collect().await {

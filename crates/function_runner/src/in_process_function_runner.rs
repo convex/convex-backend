@@ -282,6 +282,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
             repeatable_persistence.read_snapshot(ts)?,
             IndexScanCaller::FunctionRunner,
             Some(snapshot.index_registry),
+            Some(snapshot.table_registry.table_mapping().clone()),
         ));
         let request_metadata = RunRequestArgs {
             key_broker: self.key_broker.clone(),
