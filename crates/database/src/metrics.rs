@@ -498,12 +498,6 @@ register_convex_counter!(
      their `_creationTime` to the deleting commit. `lifetime` is the upper bound of its bucket.",
     &["is_system_table", "lifetime"]
 );
-register_convex_counter!(
-    DATABASE_COMMIT_INDEX_SUPERSEDED_TOTAL,
-    "Index entries in commits acknowledged by persistence that replaced an entry, by how long the \
-     replaced entry had been current. `age` is the upper bound of its bucket.",
-    &["operation", "is_system_index", "age"]
-);
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
 enum IndexWriteOperation {
@@ -525,12 +519,11 @@ impl From<&PersistenceIndexEntry> for IndexWriteOperation {
     }
 }
 
-/// How long a replaced index entry had been current, or a deleted document had
-/// existed, named by each bucket's upper bound. Fixed buckets keep each counter
-/// to a few series per conductor across ages that range from milliseconds to
-/// months.
+/// How long a deleted document had existed, named by each bucket's upper
+/// bound. Fixed buckets keep the counter to a few series per conductor across
+/// lifetimes that range from milliseconds to months.
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
-enum SupersededAge {
+enum DocumentLifetime {
     #[strum(serialize = "100ms")]
     Under100Millis,
     #[strum(serialize = "1s")]
@@ -549,7 +542,7 @@ enum SupersededAge {
     Older,
 }
 
-impl SupersededAge {
+impl DocumentLifetime {
     fn of(seconds: f64) -> Self {
         match seconds {
             s if s < 0.1 => Self::Under100Millis,
@@ -580,31 +573,20 @@ struct IndexWriteTotals {
 #[derive(Default)]
 pub(crate) struct CommitIndexWriteMetrics {
     totals: BTreeMap<IndexWriteLabels, IndexWriteTotals>,
-    /// Entries that replaced one, by operation, whether the index is a system
-    /// index, and how long the replaced entry had been current.
-    superseded: BTreeMap<(IndexWriteOperation, bool, SupersededAge), u64>,
 }
 
 impl CommitIndexWriteMetrics {
     pub(crate) fn record(&mut self, entry: &PersistenceIndexEntry, is_system_index: bool) {
-        let operation = IndexWriteOperation::from(entry);
         let totals = self
             .totals
             .entry(IndexWriteLabels {
-                operation,
+                operation: entry.into(),
                 is_system_index,
                 mode: entry.mode,
             })
             .or_default();
         totals.entries += 1;
         totals.bytes += entry.size();
-        if let Some(prev) = entry.prev {
-            let age = SupersededAge::of(entry.ts.secs_since_f64(prev.ts));
-            *self
-                .superseded
-                .entry((operation, is_system_index, age))
-                .or_default() += 1;
-        }
     }
 
     pub(crate) fn log(self) {
@@ -621,17 +603,6 @@ impl CommitIndexWriteMetrics {
             );
             log_counter_with_labels(&DATABASE_COMMIT_INDEX_BYTES_TOTAL, totals.bytes, labels);
         }
-        for ((operation, is_system_index, age), entries) in self.superseded {
-            log_counter_with_labels(
-                &DATABASE_COMMIT_INDEX_SUPERSEDED_TOTAL,
-                entries,
-                vec![
-                    StaticMetricLabel::new("operation", <&'static str>::from(operation)),
-                    StaticMetricLabel::new("is_system_index", is_system_index.as_label()),
-                    StaticMetricLabel::new("age", <&'static str>::from(age)),
-                ],
-            );
-        }
     }
 }
 
@@ -639,7 +610,7 @@ impl CommitIndexWriteMetrics {
 pub(crate) struct CommitDocumentDeleteMetrics {
     /// Deleted documents by whether their table is a system table and how long
     /// they had existed.
-    deleted: BTreeMap<(bool, SupersededAge), u64>,
+    deleted: BTreeMap<(bool, DocumentLifetime), u64>,
 }
 
 impl CommitDocumentDeleteMetrics {
@@ -652,7 +623,7 @@ impl CommitDocumentDeleteMetrics {
         let lifetime_ms = u64::from(deleted_at) as f64 / 1e6 - f64::from(created);
         *self
             .deleted
-            .entry((is_system_table, SupersededAge::of(lifetime_ms / 1e3)))
+            .entry((is_system_table, DocumentLifetime::of(lifetime_ms / 1e3)))
             .or_default() += 1;
     }
 
