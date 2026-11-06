@@ -25,6 +25,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
+rusqlite = { workspace = true, features = ["hooks"] }
 tempfile = { workspace = true }
 tokio = { workspace = true }
 
