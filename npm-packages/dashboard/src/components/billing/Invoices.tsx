@@ -4,7 +4,6 @@ import {
 } from "@heroicons/react/24/outline";
 import { Button } from "@ui/Button";
 import { HelpTooltip } from "@ui/HelpTooltip";
-import { Sheet } from "@ui/Sheet";
 import { cn } from "@ui/cn";
 import { formatDate } from "@common/lib/format";
 import { formatUsd } from "@common/lib/utils";
@@ -25,13 +24,7 @@ export function Invoices({
   isLoadingMore?: boolean;
 }) {
   return (
-    <Sheet className="flex w-full flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h3>Invoices</h3>
-        <span className="text-sm text-content-secondary">
-          Preview or download your upcoming and past invoices.
-        </span>
-      </div>
+    <div className="flex min-h-0 w-full flex-col gap-4">
       <InvoicingThresholdExplainer invoicingThreshold={invoicingThreshold} />
       {invoices.length > 0 ? (
         <InvoicesTable
@@ -42,7 +35,7 @@ export function Invoices({
       ) : (
         <EmptyState />
       )}
-    </Sheet>
+    </div>
   );
 }
 
@@ -62,9 +55,9 @@ function InvoicingThresholdExplainer({
   }
   const formatted = formatUsd(threshold);
   return (
-    <div className="flex items-center gap-1 text-sm text-content-secondary">
+    <div className="flex items-center gap-1 text-sm">
       Invoice threshold:
-      <span className="font-medium text-content-primary">{formatted}</span>
+      <span className="font-semibold">{formatted}</span>
       <HelpTooltip tipSide="top">
         {`Usage is invoiced in ${formatted} increments, so you may receive multiple invoices in a single billing period if your usage exceeds ${formatted}. For usage incurred within a short amount of time, invoices may be aggregated to multiple threshold increments.`}
       </HelpTooltip>
@@ -74,7 +67,7 @@ function InvoicingThresholdExplainer({
 
 function EmptyState() {
   return (
-    <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed py-16 text-content-secondary">
+    <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed bg-background-secondary py-16 text-content-secondary">
       <DocumentTextIcon className="size-8 text-content-tertiary" />
       <p className="text-sm">No invoices yet.</p>
       <p className="max-w-xs text-center text-xs text-content-tertiary">
@@ -99,7 +92,7 @@ function InvoicesTable({
 }) {
   return (
     <div
-      className="scrollbar max-h-120 overflow-y-auto rounded-lg border"
+      className="scrollbar min-h-0 overflow-y-auto rounded-lg border bg-background-secondary"
       // Allow scrollable zone to be focused
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- https://dequeuniversity.com/rules/axe/4.11/scrollable-region-focusable?application=axeAPI
       tabIndex={0}

@@ -1132,5 +1132,18 @@ export const screenshots = [
       "width": 1552,
       "height": 928
     }
+  },
+  {
+    "storyTitle": "docs/pages/TeamInvoices",
+    "light": {
+      "filename": "pages_team_invoices_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_team_invoices_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
   }
 ] as const;

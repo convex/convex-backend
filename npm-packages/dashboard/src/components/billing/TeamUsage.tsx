@@ -284,19 +284,28 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
           )}
         </h2>
         {subscription !== undefined && (
-          <Button
-            href={`/t/${team?.slug}/settings/billing`}
-            variant="neutral"
-            icon={<ExternalLinkIcon />}
-            className="animate-fadeInFromLoading"
-            size="xs"
-          >
-            {subscription
-              ? team.managedBy === "vercel"
-                ? "View Subscription"
-                : "View Subscription & Invoices"
-              : "Upgrade Subscription"}
-          </Button>
+          <div className="flex gap-2">
+            {subscription && team.managedBy !== "vercel" && (
+              <Button
+                href={`/t/${team?.slug}/settings/invoices`}
+                variant="neutral"
+                icon={<ExternalLinkIcon />}
+                className="animate-fadeInFromLoading"
+                size="xs"
+              >
+                View Invoices
+              </Button>
+            )}
+            <Button
+              href={`/t/${team?.slug}/settings/billing`}
+              variant="neutral"
+              icon={<ExternalLinkIcon />}
+              className="animate-fadeInFromLoading"
+              size="xs"
+            >
+              {subscription ? "View Subscription" : "Upgrade Subscription"}
+            </Button>
+          </div>
         )}
       </div>
 

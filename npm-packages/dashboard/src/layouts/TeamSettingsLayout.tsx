@@ -39,6 +39,7 @@ export function TeamSettingsLayout({
     "general",
     "members",
     "billing",
+    "invoices",
     "usage",
     "referrals",
     "access-tokens",

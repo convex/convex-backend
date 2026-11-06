@@ -267,6 +267,12 @@ export function teamNavigation(
       Icon: TEAM_SETTINGS_PAGE_ICONS.billing,
     },
     {
+      label: "Invoices",
+      parent: "Team Settings",
+      href: `${uriPrefix}/settings/invoices`,
+      Icon: TEAM_SETTINGS_PAGE_ICONS.invoices,
+    },
+    {
       label: "Audit Log",
       parent: "Team Settings",
       href: `${uriPrefix}/settings/audit-log`,

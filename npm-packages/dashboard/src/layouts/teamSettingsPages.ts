@@ -10,6 +10,7 @@ import {
 } from "@radix-ui/react-icons";
 import {
   CreditCardIcon,
+  DocumentTextIcon,
   KeyIcon,
   LockClosedIcon,
 } from "@heroicons/react/24/outline";
@@ -18,6 +19,7 @@ export type TeamSettingsPage =
   | "general"
   | "members"
   | "billing"
+  | "invoices"
   | "usage"
   | "audit-log"
   | "referrals"
@@ -35,6 +37,7 @@ export const TEAM_SETTINGS_PAGE_ICONS: Record<
   general: GearIcon,
   members: PersonIcon,
   billing: CreditCardIcon,
+  invoices: DocumentTextIcon,
   usage: PieChartIcon,
   // Same icon as the deployment History page: both are audit trails.
   "audit-log": CounterClockwiseClockIcon,
