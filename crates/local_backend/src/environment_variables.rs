@@ -6,14 +6,18 @@ use axum::{
     },
     response::IntoResponse,
 };
-use common::http::{
-    extract::{
-        Json,
-        MtState,
+use common::{
+    http::{
+        extract::{
+            Json,
+            MtState,
+        },
+        ExtractRequestMetadata,
+        HttpResponseError,
     },
-    ExtractRequestMetadata,
-    HttpResponseError,
+    types::MemberId,
 };
+use errors::ErrorMetadata;
 use http::StatusCode;
 use model::environment_variables::{
     types::{
@@ -64,6 +68,11 @@ impl UpdateEnvVarRequest {
 #[derive(Deserialize, ToSchema)]
 pub struct UpdateEnvVarsRequest {
     changes: Vec<UpdateEnvVarRequest>,
+    // Only the system identity uses the member override, so it should be
+    // excluded from the public API schema.
+    #[serde(default)]
+    #[schema(ignore)]
+    member_id: Option<MemberId>,
 }
 
 /// Update environment variables
@@ -89,9 +98,16 @@ pub async fn update_environment_variables(
     State(st): State<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
     ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
-    Json(UpdateEnvVarsRequest { changes }): Json<UpdateEnvVarsRequest>,
+    Json(UpdateEnvVarsRequest { changes, member_id }): Json<UpdateEnvVarsRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
     identity.require_operation(keybroker::DeploymentOp::WriteEnvironmentVariables)?;
+    if member_id.is_some() && !identity.is_system() {
+        return Err(anyhow::anyhow!(ErrorMetadata::forbidden(
+            "MemberIdOverrideRequiresSystemIdentity",
+            "Only system identities can override the audit log member ID.",
+        ))
+        .into());
+    }
 
     let mut env_var_changes = vec![];
     for change in changes {
@@ -106,7 +122,13 @@ pub async fn update_environment_variables(
         .await?;
 
     st.application
-        .commit_with_audit_log_events(tx, audit_events, request_metadata, "update_env_vars")
+        .commit_with_audit_log_events_with_member_override(
+            tx,
+            audit_events,
+            member_id,
+            request_metadata,
+            "update_env_vars",
+        )
         .await?;
 
     Ok(StatusCode::OK)

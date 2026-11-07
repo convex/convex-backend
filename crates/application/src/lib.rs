@@ -145,6 +145,7 @@ use common::{
         IndexId,
         IndexName,
         IndexRef,
+        MemberId,
         ModuleEnvironment,
         NodeDependency,
         ObjectKey,
@@ -3424,13 +3425,39 @@ impl<RT: Runtime> Application<RT> {
     /// transaction commits successfully.
     pub async fn commit_with_audit_log_events(
         &self,
-        mut transaction: Transaction<RT>,
+        transaction: Transaction<RT>,
         events: Vec<DeploymentAuditLogEvent>,
         request_metadata: RequestMetadata,
         write_source: impl Into<WriteSource>,
     ) -> anyhow::Result<Timestamp> {
+        self.commit_with_audit_log_events_with_member_override(
+            transaction,
+            events,
+            None,
+            request_metadata,
+            write_source,
+        )
+        .await
+    }
+
+    /// System tasks can attribute changes to the member who initiated them
+    /// while retaining their system identity for authorization.
+    pub async fn commit_with_audit_log_events_with_member_override(
+        &self,
+        mut transaction: Transaction<RT>,
+        events: Vec<DeploymentAuditLogEvent>,
+        member_id_override: Option<MemberId>,
+        request_metadata: RequestMetadata,
+        write_source: impl Into<WriteSource>,
+    ) -> anyhow::Result<Timestamp> {
+        if member_id_override.is_some() && !transaction.identity().is_system() {
+            anyhow::bail!(ErrorMetadata::forbidden(
+                "MemberIdOverrideRequiresSystemIdentity",
+                "Only system identities can override the audit log member ID.",
+            ));
+        }
         DeploymentAuditLogModel::new(&mut transaction)
-            .insert(events.clone(), &request_metadata)
+            .insert_with_member_override(events.clone(), member_id_override, &request_metadata)
             .await?;
         let ts = self.commit(transaction, write_source).await?;
         let logs = events
