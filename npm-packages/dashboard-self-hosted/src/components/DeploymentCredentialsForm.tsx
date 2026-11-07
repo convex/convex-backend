@@ -53,7 +53,6 @@ export function DeploymentCredentialsForm({
         label="Admin Key"
         type={showKey ? "text" : "password"}
         Icon={showKey ? EyeNoneIcon : EyeOpenIcon}
-        outerClassname="w-[30rem]"
         placeholder="Enter the admin key for this deployment"
         value={draftAdminKey}
         action={() => {
@@ -68,7 +67,7 @@ export function DeploymentCredentialsForm({
         type="submit"
         icon={<EnterIcon />}
         disabled={!draftAdminKey || !draftDeploymentUrl}
-        size="xs"
+        size="sm"
         className="ml-auto w-fit"
       >
         Log In
