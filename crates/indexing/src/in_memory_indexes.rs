@@ -201,7 +201,7 @@ impl BackendInMemoryIndexes {
         indexes.retain(|index| {
             !self
                 .in_memory_indexes
-                .contains_key(&index.id().internal_id().into())
+                .contains_key(&IndexId::from(index.id().internal_id()))
         });
         if indexes.is_empty() {
             // Already loaded in memory.
@@ -321,7 +321,7 @@ impl BackendInMemoryIndexes {
         {
             // Drop the index from memory.
             self.in_memory_indexes
-                .remove(&old_document.id().internal_id().into());
+                .remove(&IndexId::from(old_document.id().internal_id()));
         }
 
         // Build up the list of updates to apply to all database indexes.
