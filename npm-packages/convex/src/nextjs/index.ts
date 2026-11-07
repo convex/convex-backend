@@ -194,15 +194,13 @@ export async function fetchAction<
 }
 
 function setupClient(options: NextjsOptions) {
-  if ("url" in options && options.url === undefined) {
-    // This will be an error in the future.
-    // eslint-disable-next-line no-console
-    console.error(
-      "deploymentUrl is undefined, are your environment variables set? In the future explicitly passing undefined will cause an error. To explicitly use the default, pass `process.env.NEXT_PUBLIC_CONVEX_URL`.",
-    );
-  }
+  const isExplicit = "url" in options;
   const client = new ConvexHttpClient(
-    getConvexUrl(options.url, options.skipConvexDeploymentUrlCheck ?? false),
+    getConvexUrl(
+      options.url,
+      options.skipConvexDeploymentUrlCheck ?? false,
+      isExplicit,
+    ),
   );
   if (options.token !== undefined) {
     client.setAuth(options.token);
@@ -215,24 +213,20 @@ function setupClient(options: NextjsOptions) {
 }
 
 function getConvexUrl(
-  /**
-   * The URL of the Convex deployment to use for the function call.
-   *
-   * Defaults to `process.env.NEXT_PUBLIC_CONVEX_URL` if not provided.
-   *
-   * Explicitly passing undefined here (such as in broken ENV variables) will throw an error in the future
-   */
   deploymentUrl: string | undefined,
   skipConvexDeploymentUrlCheck: boolean,
+  isExplicit: boolean,
 ) {
-  const url = deploymentUrl ?? process.env.NEXT_PUBLIC_CONVEX_URL;
-  const isFromEnv = deploymentUrl === undefined;
-  if (typeof url !== "string") {
+  if (isExplicit && deploymentUrl === undefined) {
     throw new Error(
-      isFromEnv
-        ? `Environment variable NEXT_PUBLIC_CONVEX_URL is not set.`
-        : `Convex function called with invalid deployment address.`,
+      "Convex function called with `url` explicitly set to `undefined`. " +
+        "This usually means an environment variable is not set. " +
+        "To use the default, omit the `url` option or pass `process.env.NEXT_PUBLIC_CONVEX_URL`.",
     );
+  }
+  const url = deploymentUrl ?? process.env.NEXT_PUBLIC_CONVEX_URL;
+  if (typeof url !== "string") {
+    throw new Error(`Environment variable NEXT_PUBLIC_CONVEX_URL is not set.`);
   }
   if (!skipConvexDeploymentUrlCheck) {
     validateDeploymentUrl(url);
