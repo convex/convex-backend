@@ -367,7 +367,8 @@
           "Query",
           "Mutation",
           "Action",
-          "HttpAction"
+          "HttpAction",
+          "Init"
         ]
       },
       "UsageStatsJson": {

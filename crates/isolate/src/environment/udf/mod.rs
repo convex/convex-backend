@@ -271,6 +271,13 @@ fn not_allowed_in_udf(name: &str, description: &str) -> ErrorMetadata {
     )
 }
 
+fn not_allowed_in_init(name: &str, description: &str) -> ErrorMetadata {
+    ErrorMetadata::bad_request(
+        format!("{name}InInit"),
+        format!("Can't use {description} in an init function."),
+    )
+}
+
 impl<RT: Runtime> OpProvider for DatabaseUdfSyscallProvider<RT> {
     fn trace(&mut self, level: LogLevel, messages: Vec<String>) -> anyhow::Result<()> {
         self.emit_log_line(LogLine::new_developer_log_line(
@@ -300,14 +307,16 @@ impl<RT: Runtime> OpProvider for DatabaseUdfSyscallProvider<RT> {
             // Queries must be deterministic, so now() is fixed at its value at the
             // start of execution and doesn't observe elapsed time.
             UdfType::Query => self.phase.performance_now_fixed(),
-            UdfType::Mutation => self.phase.performance_now_incrementing(),
+            UdfType::Mutation | UdfType::Init => self.phase.performance_now_incrementing(),
             _ => anyhow::bail!("Expected a query or mutation"),
         }
     }
 
     fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
         match self.udf_type {
-            UdfType::Query | UdfType::Mutation => self.phase.performance_time_origin(),
+            UdfType::Query | UdfType::Mutation | UdfType::Init => {
+                self.phase.performance_time_origin()
+            },
             _ => anyhow::bail!("Expected a query or mutation"),
         }
     }
@@ -316,6 +325,9 @@ impl<RT: Runtime> OpProvider for DatabaseUdfSyscallProvider<RT> {
         &mut self,
         name: EnvVarName,
     ) -> anyhow::Result<Option<EnvVarValue>> {
+        if self.udf_type == UdfType::Init {
+            anyhow::bail!(not_allowed_in_init("EnvVar", "environment variables"));
+        }
         self.phase.get_environment_variable(name)
     }
 
@@ -492,7 +504,7 @@ impl<RT: Runtime> DatabaseUdfInnerProvider<RT> for DatabaseUdfSyscallProvider<RT
         };
         let outcome = match self.udf_type {
             UdfType::Query => FunctionOutcome::Query(outcome),
-            UdfType::Mutation => FunctionOutcome::Mutation(outcome),
+            UdfType::Mutation | UdfType::Init => FunctionOutcome::Mutation(outcome),
             _ => anyhow::bail!("UdfEnvironment should only run queries and mutations"),
         };
         Ok((self.phase.into_transaction()?, outcome))
@@ -1046,7 +1058,7 @@ where
 
         let invoke_str = match (udf_type, is_query, is_mutation) {
             (UdfType::Query, true, false) => invoke_query_str,
-            (UdfType::Mutation, false, true) => invoke_mutation_str,
+            (UdfType::Mutation | UdfType::Init, false, true) => invoke_mutation_str,
             (_, false, false) => {
                 let message = format!(
                     "Function {udf_path:?} is neither a query or mutation. Did you forget to wrap \
@@ -1061,7 +1073,7 @@ where
                 );
                 return Ok(Err(JsError::from_message(message)));
             },
-            (UdfType::Mutation, true, false) => {
+            (UdfType::Mutation | UdfType::Init, true, false) => {
                 let message = format!(
                     "Function {udf_path:?} is registered as a query but is being run as a \
                      mutation."
@@ -1269,7 +1281,7 @@ where
                 // from a pending write). A top-level query has no commit
                 // timestamp to resolve to, so it cannot return one.
                 let result = deserialize_udf_result_pending(&path, &result_str)?;
-                if udf_type == UdfType::Mutation || reactor_depth > 0 {
+                if matches!(udf_type, UdfType::Mutation | UdfType::Init) || reactor_depth > 0 {
                     result
                 } else {
                     match result {

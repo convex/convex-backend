@@ -309,7 +309,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         // function execution. It is important that we do not surface any errors
         // or results until after we call `validate_run_function_result` below.
         let result = match udf_type {
-            UdfType::Query | UdfType::Mutation | UdfType::Action => {
+            UdfType::Query | UdfType::Mutation | UdfType::Init | UdfType::Action => {
                 self.server
                     .run_function_no_retention_check(request_metadata, function_metadata, None)
                     .await

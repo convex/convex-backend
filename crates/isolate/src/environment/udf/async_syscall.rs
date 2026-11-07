@@ -556,11 +556,14 @@ impl<RT: Runtime> DatabaseUdfSyscallProvider<RT> {
         &mut self,
         storage_ids: &BTreeMap<BatchKey, FileStorageId>,
     ) -> anyhow::Result<BTreeMap<BatchKey, anyhow::Result<Option<(Bytes, Option<String>)>>>> {
-        if self.udf_type != UdfType::Mutation {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "StorageGetNotSupported",
-                "Getting files from storage is only supported in mutations and actions",
-            ));
+        match self.udf_type {
+            UdfType::Mutation | UdfType::Init => {},
+            UdfType::Query | UdfType::Action | UdfType::HttpAction => {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "StorageGetNotSupported",
+                    "Getting files from storage is only supported in mutations and actions",
+                ));
+            },
         }
         let component = self.phase.component()?;
         let tx = self.phase.tx()?;
@@ -635,6 +638,12 @@ impl<RT: Runtime> DatabaseUdfSyscallProvider<RT> {
         udf_callback: impl UdfCallback<RT>,
     ) -> anyhow::Result<PendingValue> {
         match (self.udf_type, nested_udf_type) {
+            (UdfType::Init, _) => {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "InvalidFunctionCall",
+                    "Can't call another function from an init function.",
+                ));
+            },
             // Queries can call other queries, but not snapshot queries.
             (UdfType::Query, NestedUdfType::Query) => (),
             // Mutations can call queries (including snapshot queries) or mutations.
@@ -1034,13 +1043,15 @@ fn deployment_metadata<RT: Runtime>(
 fn request_metadata<RT: Runtime>(
     provider: &mut DatabaseUdfSyscallProvider<RT>,
 ) -> anyhow::Result<Box<RawValue>> {
-    anyhow::ensure!(
-        provider.udf_type == UdfType::Mutation,
-        ErrorMetadata::bad_request(
-            "RequestMetadataNotAllowed",
-            format!("Cannot get request metadata in a {}", provider.udf_type)
-        )
-    );
+    match provider.udf_type {
+        UdfType::Mutation | UdfType::Init => {},
+        UdfType::Query | UdfType::Action | UdfType::HttpAction => {
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "RequestMetadataNotAllowed",
+                format!("Cannot get request metadata in a {}", provider.udf_type)
+            ));
+        },
+    }
     // Expose the raw auth JWT the request was authenticated with, if any. Only
     // `User` identities carry a JWT (an OIDC or custom JWT); admin keys and
     // logged-out requests have no token.
@@ -1151,11 +1162,14 @@ async fn sign_deployment_jwt<RT: Runtime>(
     provider: &mut DatabaseUdfSyscallProvider<RT>,
     args: JsonValue,
 ) -> anyhow::Result<Box<RawValue>> {
-    if provider.udf_type != UdfType::Mutation {
-        anyhow::bail!(ErrorMetadata::bad_request(
-            "JwtSignInQuery",
-            "ctx.auth.signJwt() can't be called from a query. Call it from a mutation.",
-        ));
+    match provider.udf_type {
+        UdfType::Mutation | UdfType::Init => {},
+        UdfType::Query | UdfType::Action | UdfType::HttpAction => {
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "JwtSignInQuery",
+                "ctx.auth.signJwt() can't be called from a query. Call it from a mutation.",
+            ));
+        },
     }
     let default_system_env_vars = provider.phase.default_system_env_vars().clone();
     let component = provider.phase.component()?;
@@ -1968,7 +1982,7 @@ async fn run_udf<RT: Runtime>(
         // Only a mutation can hold an unresolved commit timestamp to pass
         // along; queries keep rejecting the `$commitTs` token.
         let args = match caller_udf_type {
-            UdfType::Mutation => {
+            UdfType::Mutation | UdfType::Init => {
                 let args = PendingValue::from_uncommitted_json(args).context(ArgName("args"))?;
                 if !args.is_object() {
                     return Err(anyhow::anyhow!("Value must be an Object").context(ArgName("args")));

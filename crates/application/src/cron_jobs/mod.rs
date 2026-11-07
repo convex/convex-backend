@@ -357,6 +357,7 @@ impl<RT: Runtime> CronJobContext<RT> {
             UdfType::Action => {
                 self.handle_action(tx, job, usage_tracker).await?;
             },
+            UdfType::Init => anyhow::bail!("Unexpected init function"),
             UdfType::Query | UdfType::HttpAction => {
                 anyhow::bail!(
                     "Cron trying to execute {} which is a {} function. This should have been \
@@ -927,7 +928,7 @@ impl<RT: Runtime> CronJobContext<RT> {
                         .await?;
                     tracing::error!("{err:#}");
                 },
-                UdfType::Query | UdfType::HttpAction => {
+                UdfType::Query | UdfType::HttpAction | UdfType::Init => {
                     anyhow::bail!("Executing unexpected function type as a cron")
                 },
             }

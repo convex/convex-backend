@@ -300,7 +300,7 @@ fn check_visibility_access(
                 if identity.is_admin() || identity.is_system() || identity.is_acting_as_user() {
                     let op = match expected_udf_type {
                         UdfType::Query => DeploymentOp::RunInternalQueries,
-                        UdfType::Mutation => DeploymentOp::RunInternalMutations,
+                        UdfType::Mutation | UdfType::Init => DeploymentOp::RunInternalMutations,
                         UdfType::Action | UdfType::HttpAction => DeploymentOp::RunInternalActions,
                     };
                     identity.require_operation(op)?;
@@ -327,7 +327,9 @@ fn require_admin_data_op(
     if identity.is_admin() || identity.is_system() || identity.is_acting_as_user() {
         let op = match expected_udf_type {
             UdfType::Query => DeploymentOp::ViewData,
-            UdfType::Mutation | UdfType::Action | UdfType::HttpAction => DeploymentOp::WriteData,
+            UdfType::Mutation | UdfType::Action | UdfType::HttpAction | UdfType::Init => {
+                DeploymentOp::WriteData
+            },
         };
         identity.require_operation(op)?;
         Ok(Ok(()))

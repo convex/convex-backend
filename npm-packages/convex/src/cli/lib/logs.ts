@@ -147,7 +147,7 @@ export async function watchLogs(
   }
 }
 
-type UdfType = "Query" | "Mutation" | "Action" | "HttpAction";
+type UdfType = "Query" | "Mutation" | "Action" | "HttpAction" | "Init";
 
 type StructuredLogLine = {
   messages: string[];

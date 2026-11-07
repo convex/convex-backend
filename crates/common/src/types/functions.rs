@@ -50,6 +50,7 @@ pub enum UdfType {
     Mutation,
     Action,
     HttpAction,
+    Init,
 }
 
 #[derive(
@@ -68,6 +69,7 @@ pub enum UdfTypeJson {
     Mutation,
     Action,
     HttpAction,
+    Init,
 }
 
 impl From<UdfType> for UdfTypeJson {
@@ -77,6 +79,7 @@ impl From<UdfType> for UdfTypeJson {
             UdfType::Mutation => UdfTypeJson::Mutation,
             UdfType::Action => UdfTypeJson::Action,
             UdfType::HttpAction => UdfTypeJson::HttpAction,
+            UdfType::Init => UdfTypeJson::Init,
         }
     }
 }
@@ -88,6 +91,7 @@ impl From<UdfTypeJson> for UdfType {
             UdfTypeJson::Mutation => UdfType::Mutation,
             UdfTypeJson::Action => UdfType::Action,
             UdfTypeJson::HttpAction => UdfType::HttpAction,
+            UdfTypeJson::Init => UdfType::Init,
         }
     }
 }
@@ -103,6 +107,7 @@ impl UdfType {
             UdfType::Mutation => "mutation",
             UdfType::Action => "action",
             UdfType::HttpAction => "http_action",
+            UdfType::Init => "init",
         }
     }
 }
@@ -115,6 +120,7 @@ impl FromStr for UdfType {
             "Query" | "query" => Ok(Self::Query),
             "Mutation" | "mutation" => Ok(Self::Mutation),
             "Action" | "action" => Ok(Self::Action),
+            "Init" | "init" => Ok(Self::Init),
             "HttpEndpoint" | "httpEndpoint" | "HttpAction" | "httpAction" | "http_action" => {
                 Ok(Self::HttpAction)
             },
@@ -130,6 +136,7 @@ impl fmt::Display for UdfType {
             UdfType::Mutation => "Mutation",
             UdfType::Action => "Action",
             UdfType::HttpAction => "HttpAction",
+            UdfType::Init => "Init",
         };
         write!(f, "{s}")
     }
@@ -148,6 +155,7 @@ impl From<UdfType> for UdfTypeProto {
             UdfType::Mutation => UdfTypeProto::Mutation,
             UdfType::Action => UdfTypeProto::Action,
             UdfType::HttpAction => UdfTypeProto::HttpAction,
+            UdfType::Init => UdfTypeProto::Init,
         }
     }
 }
@@ -159,6 +167,7 @@ impl From<UdfTypeProto> for UdfType {
             UdfTypeProto::Mutation => UdfType::Mutation,
             UdfTypeProto::Action => UdfType::Action,
             UdfTypeProto::HttpAction => UdfType::HttpAction,
+            UdfTypeProto::Init => UdfType::Init,
         }
     }
 }

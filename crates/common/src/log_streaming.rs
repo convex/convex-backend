@@ -1050,6 +1050,7 @@ impl FunctionEventSource {
             UdfType::Mutation => "mutation",
             UdfType::Action => "action",
             UdfType::HttpAction => "http_action",
+            UdfType::Init => "init",
         };
         let runtime = match self.module_environment {
             ModuleEnvironment::Isolate => Some("convex"),

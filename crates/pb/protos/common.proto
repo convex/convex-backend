@@ -115,6 +115,7 @@ enum UdfType {
   MUTATION = 1;
   ACTION = 2;
   HTTP_ACTION = 3;
+  INIT = 4;
 }
 
 // Only construct this via

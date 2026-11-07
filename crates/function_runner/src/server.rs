@@ -227,7 +227,7 @@ pub async fn validate_run_function_result(
     match udf_type {
         // Since queries and mutations have no side effects, we perform the
         // retention check here, when validating the result.
-        UdfType::Query | UdfType::Mutation => retention_validator
+        UdfType::Query | UdfType::Mutation | UdfType::Init => retention_validator
             .validate_snapshot(ts)
             .await
             .context("Function runner retention check changed"),
@@ -373,7 +373,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         };
 
         match udf_type {
-            UdfType::Query | UdfType::Mutation => {
+            UdfType::Query | UdfType::Mutation | UdfType::Init => {
                 let FunctionMetadata {
                     path_and_args,
                     journal,

@@ -88,7 +88,7 @@ export interface components {
             code: string;
         };
         /** @enum {string} */
-        UdfTypeJson: "Query" | "Mutation" | "Action" | "HttpAction";
+        UdfTypeJson: "Query" | "Mutation" | "Action" | "HttpAction" | "Init";
         UsageStatsJson: {
             /** Format: int64 */
             databaseReadBytes: number;

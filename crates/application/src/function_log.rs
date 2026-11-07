@@ -1754,7 +1754,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
                         .map(|(_, entry)| match entry {
                             FunctionExecutionPart::Completion(c) => {
                                 let with_stripped_log_lines = match c.udf_type {
-                                    UdfType::Query | UdfType::Mutation => c.clone(),
+                                    UdfType::Query | UdfType::Mutation | UdfType::Init => c.clone(),
                                     UdfType::Action | UdfType::HttpAction => {
                                         let mut cloned = c.clone();
                                         cloned.log_lines = vec![].into();

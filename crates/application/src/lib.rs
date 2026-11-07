@@ -1662,6 +1662,7 @@ impl<RT: Runtime> Application<RT> {
                      message should be returned instead."
                 )
             },
+            UdfType::Init => anyhow::bail!("Unexpected init function"),
         }
     }
 
@@ -2925,6 +2926,7 @@ impl<RT: Runtime> Application<RT> {
                     "HTTP actions are not supported in the REPL yet."
                 ))
             },
+            UdfType::Init => anyhow::bail!("Unexpected init function"),
         }?;
         let log_lines = RedactedLogLines::from_log_lines(log_lines, block_logging);
         Ok(match result {

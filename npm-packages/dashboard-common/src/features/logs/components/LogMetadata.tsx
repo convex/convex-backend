@@ -540,6 +540,8 @@ function FunctionType({
         return "Action";
       case "HttpAction":
         return "HTTP Action";
+      case "Init":
+        return "Init";
       default:
         return <Running />;
     }

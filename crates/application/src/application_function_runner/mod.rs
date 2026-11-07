@@ -320,7 +320,7 @@ impl<RT: Runtime> FunctionRouter<RT> {
     fn limiter(&self, udf_type: UdfType) -> &Limiter<RT> {
         match udf_type {
             UdfType::Query => &self.query_limiter,
-            UdfType::Mutation => &self.mutation_limiter,
+            UdfType::Mutation | UdfType::Init => &self.mutation_limiter,
             UdfType::Action | UdfType::HttpAction => &self.action_limiter,
         }
     }
@@ -576,7 +576,7 @@ impl<RT: Runtime> Limiter<RT> {
                 log_function_wait_timeout(self.env, self.udf_type);
                 let functions = match self.udf_type {
                     UdfType::Query => "queries",
-                    UdfType::Mutation => "mutations",
+                    UdfType::Mutation | UdfType::Init => "mutations",
                     UdfType::Action => "actions",
                     UdfType::HttpAction => "HTTP actions",
                 };
@@ -1984,6 +1984,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                             cron_spec.udf_path
                         ))));
                     },
+                    UdfType::Init => anyhow::bail!("Unexpected init function"),
                     UdfType::Mutation => {},
                     UdfType::Action => {},
                 }

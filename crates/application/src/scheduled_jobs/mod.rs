@@ -659,6 +659,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 self.handle_action(caller, tx, job, job_id, usage_tracker)
                     .await?
             },
+            UdfType::Init => anyhow::bail!("Unexpected init function"),
             UdfType::Query | UdfType::HttpAction => {
                 let message = format!(
                     r#"Unsupported function type. {:?} in module "{:?}"{} is defined as a {udf_type}. "
@@ -723,6 +724,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     // Should be unreachable given the outer match statement
                     UdfType::Mutation => unreachable!(),
                     UdfType::Action => unreachable!(),
+                    UdfType::Init => unreachable!(),
                 }
             },
         };
