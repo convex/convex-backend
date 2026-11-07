@@ -1,149 +1,106 @@
 /**
- * Taken from https://github.com/rocicorp/compare-utf8/blob/main/LICENSE
+ * Derived from https://github.com/rocicorp/compare-utf8/tree/v0.1.1
  * (Apache Version 2.0, January 2004)
  */
 
 /**
- * This is copied here instead of added as a dependency to avoid bundling issues.
+ * This is kept here instead of added as a dependency to avoid bundling issues.
  */
 
 /**
- * Compares two JavaScript strings as if they were UTF-8 encoded byte arrays.
+ * Orders two JavaScript strings as if they were UTF-8 encoded byte arrays.
+ * Returns the difference between the first unequal bytes, or the difference
+ * between the UTF-16 lengths after all compared code points are equal. For
+ * malformed UTF-16, lone surrogate code units are treated as three-byte code
+ * points to preserve the historical behavior.
+ *
  * @param {string} a
  * @param {string} b
  * @returns {number}
  */
 export function compareUTF8(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+
   const aLength = a.length;
   const bLength = b.length;
   const length = Math.min(aLength, bLength);
   for (let i = 0; i < length; ) {
-    const aCodePoint = a.codePointAt(i)!;
-    const bCodePoint = b.codePointAt(i)!;
-    if (aCodePoint !== bCodePoint) {
+    const aCodeUnit = a.charCodeAt(i);
+    const bCodeUnit = b.charCodeAt(i);
+    if (aCodeUnit !== bCodeUnit) {
       // Code points below 0x80 are represented the same way in UTF-8 as in
       // UTF-16.
-      if (aCodePoint < 0x80 && bCodePoint < 0x80) {
-        return aCodePoint - bCodePoint;
+      if (aCodeUnit < 0x80 && bCodeUnit < 0x80) {
+        return aCodeUnit - bCodeUnit;
       }
-
-      // get the UTF-8 bytes for the code points
-      const aLength = utf8Bytes(aCodePoint, aBytes);
-      const bLength = utf8Bytes(bCodePoint, bBytes);
-      return compareArrays(aBytes, aLength, bBytes, bLength);
+      const aCodePoint =
+        aCodeUnit >= 0xd800 && aCodeUnit <= 0xdbff
+          ? a.codePointAt(i)!
+          : aCodeUnit;
+      const bCodePoint =
+        bCodeUnit >= 0xd800 && bCodeUnit <= 0xdbff
+          ? b.codePointAt(i)!
+          : bCodeUnit;
+      return compareCodePointsAsUTF8(aCodePoint, bCodePoint);
     }
 
-    i += utf16LengthForCodePoint(aCodePoint);
+    if (aCodeUnit >= 0xd800 && aCodeUnit <= 0xdbff) {
+      // Equal leading surrogates can still represent different code points
+      // when only one string has a trailing surrogate.
+      const aCodePoint = a.codePointAt(i)!;
+      const bCodePoint = b.codePointAt(i)!;
+      if (aCodePoint !== bCodePoint) {
+        return compareCodePointsAsUTF8(aCodePoint, bCodePoint);
+      }
+      if (aCodePoint > 0xffff) {
+        i += 2;
+        continue;
+      }
+    }
+    i++;
   }
 
   return aLength - bLength;
 }
 
 /**
- * @param {number[]} a
- * @param {number} aLength
- * @param {number[]} b
- * @param {number} bLength
+ * Return the difference between the first unequal bytes in the UTF-8
+ * encodings of two different code points.
+ *
+ * @param {number} a
+ * @param {number} b
  * @returns {number}
  */
-function compareArrays(
-  a: number[],
-  aLength: number,
-  b: number[],
-  bLength: number,
-) {
-  const length = Math.min(aLength, bLength);
-  for (let i = 0; i < length; i++) {
-    const aValue = a[i];
-    const bValue = b[i];
-    if (aValue !== bValue) {
-      return aValue - bValue;
-    }
-  }
-  return aLength - bLength;
-}
+function compareCodePointsAsUTF8(a: number, b: number): number {
+  const aByteLength = a < 0x80 ? 1 : a <= 0x07ff ? 2 : a <= 0xffff ? 3 : 4;
+  const bByteLength = b < 0x80 ? 1 : b <= 0x07ff ? 2 : b <= 0xffff ? 3 : 4;
 
-/**
- * @param {number} aCodePoint
- * @returns {number}
- */
-export function utf16LengthForCodePoint(aCodePoint: number) {
-  return aCodePoint > 0xffff ? 2 : 1;
-}
-
-// 2 preallocated arrays for utf8Bytes.
-const arr = () => Array.from({ length: 4 }, () => 0);
-const aBytes = arr();
-const bBytes = arr();
-
-/**
- * @param {number} codePoint
- * @param {number[]} bytes
- * @returns {number}
- */
-function utf8Bytes(codePoint: number, bytes: number[]) {
-  if (codePoint < 0x80) {
-    bytes[0] = codePoint;
-    return 1;
+  if (aByteLength === bByteLength) {
+    // Code points fit in 21 bits, so signed 32-bit bitwise coercion preserves
+    // their values. UTF-8 stores those bits in six-bit groups. With equal byte
+    // lengths, the encoding prefixes cancel, so the highest differing group
+    // gives the first unequal byte without materializing either encoding.
+    const shift = Math.floor((31 - Math.clz32(a ^ b)) / 6) * 6;
+    return (a >> shift) - (b >> shift);
   }
 
-  let count;
-  let offset;
-
-  if (codePoint <= 0x07ff) {
-    count = 1;
-    offset = 0xc0;
-  } else if (codePoint <= 0xffff) {
-    count = 2;
-    offset = 0xe0;
-  } else if (codePoint <= 0x10ffff) {
-    count = 3;
-    offset = 0xf0;
-  } else {
-    throw new Error("Invalid code point");
-  }
-
-  bytes[0] = (codePoint >> (6 * count)) + offset;
-  let i = 1;
-  for (; count > 0; count--) {
-    const temp = codePoint >> (6 * (count - 1));
-    bytes[i++] = 0x80 | (temp & 0x3f);
-  }
-  return i;
-}
-
-/**
- * @param {string} a
- * @param {string} b
- * @returns {boolean}
- */
-export function greaterThan(a: string, b: string) {
-  return compareUTF8(a, b) > 0;
-}
-
-/**
- * @param {string} a
- * @param {string} b
- * @returns {boolean}
- */
-export function greaterThanEq(a: string, b: string) {
-  return compareUTF8(a, b) >= 0;
-}
-
-/**
- * @param {string} a
- * @param {string} b
- * @returns {boolean}
- */
-export function lessThan(a: string, b: string) {
-  return compareUTF8(a, b) < 0;
-}
-
-/**
- * @param {string} a
- * @param {string} b
- * @returns {boolean}
- */
-export function lessThanEq(a: string, b: string) {
-  return compareUTF8(a, b) <= 0;
+  const aLeadingByte =
+    aByteLength === 1
+      ? a
+      : aByteLength === 2
+        ? 0xc0 | (a >> 6)
+        : aByteLength === 3
+          ? 0xe0 | (a >> 12)
+          : 0xf0 | (a >> 18);
+  const bLeadingByte =
+    bByteLength === 1
+      ? b
+      : bByteLength === 2
+        ? 0xc0 | (b >> 6)
+        : bByteLength === 3
+          ? 0xe0 | (b >> 12)
+          : 0xf0 | (b >> 18);
+  return aLeadingByte - bLeadingByte;
 }
