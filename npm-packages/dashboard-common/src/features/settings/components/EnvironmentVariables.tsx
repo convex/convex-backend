@@ -45,7 +45,7 @@ type FormState<T extends BaseEnvironmentVariable> = {
   deletedVars: T[];
 };
 
-type RenderSaveExtra = (props: {
+type RenderSaveButton = (props: {
   isSubmitting: boolean;
   isValid: boolean;
   submitForm: () => Promise<unknown>;
@@ -67,12 +67,12 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
   onEnvironmentVariablesAdded,
   renderDisplayExtra,
   renderEditExtra,
-  renderSaveExtra,
+  renderSaveButton,
   validateNameUniqueness = defaultValidateNameUniqueness,
   initEnvVar,
   envVarKey,
 }: {
-  renderSaveExtra?: RenderSaveExtra;
+  renderSaveButton?: RenderSaveButton;
   environmentVariables: Array<T> | undefined;
   initialFormValues?: Array<T>;
   /** Returns true after saving, or false to preserve pending edits. */
@@ -238,7 +238,7 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
         disabledTipForDelete={disabledTipForDelete ?? disabledTip}
         renderDisplayExtra={renderDisplayExtra}
         renderEditExtra={renderEditExtra}
-        renderSaveExtra={renderSaveExtra}
+        renderSaveButton={renderSaveButton}
         initEnvVar={initEnvVar}
         envVarKey={envVarKey}
       />
@@ -256,11 +256,11 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
   disabledTipForDelete,
   renderDisplayExtra,
   renderEditExtra,
-  renderSaveExtra,
+  renderSaveButton,
   initEnvVar,
   envVarKey,
 }: {
-  renderSaveExtra?: RenderSaveExtra;
+  renderSaveButton?: RenderSaveButton;
   environmentVariables: Array<T> | undefined;
   canCreate: boolean;
   canEdit: boolean;
@@ -354,7 +354,7 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
             canCreate={canCreate}
             disabledTipForCreate={disabledTipForCreate}
             renderEditExtra={renderEditExtra}
-            renderSaveExtra={renderSaveExtra}
+            renderSaveButton={renderSaveButton}
             initEnvVar={initEnvVar}
           />
         </>
@@ -795,11 +795,11 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
   canCreate,
   disabledTipForCreate,
   renderEditExtra,
-  renderSaveExtra,
+  renderSaveButton,
   initEnvVar,
 }: {
   existingEnvVars: Array<T>;
-  renderSaveExtra?: RenderSaveExtra;
+  renderSaveButton?: RenderSaveButton;
   canCreate: boolean;
   disabledTipForCreate?: React.ReactNode;
   renderEditExtra?: (props: { formKey: string; envVar: T }) => React.ReactNode;
@@ -945,22 +945,23 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
 
         {hasPendingChanges && (
           <div className="flex flex-wrap items-center gap-3">
-            {renderSaveExtra?.({
+            {renderSaveButton?.({
               isSubmitting: formState.isSubmitting,
               isValid: formState.isValid,
               submitForm: formState.submitForm,
-            })}
-            <Button
-              type="submit"
-              disabled={formState.isSubmitting || !formState.isValid}
-            >
-              {formState.values.editedVars.length +
-                formState.values.newVars.length +
-                formState.values.deletedVars.length >=
-              2
-                ? "Save All"
-                : "Save"}
-            </Button>
+            }) ?? (
+              <Button
+                type="submit"
+                disabled={formState.isSubmitting || !formState.isValid}
+              >
+                {formState.values.editedVars.length +
+                  formState.values.newVars.length +
+                  formState.values.deletedVars.length >=
+                2
+                  ? "Save All"
+                  : "Save"}
+              </Button>
+            )}
           </div>
         )}
       </div>
