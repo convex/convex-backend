@@ -34,7 +34,7 @@
   @apply rounded-lg text-sm flex items-center gap-2 p-2 cursor-pointer;
 
   &[data-selected="true"] {
-    @apply bg-background-secondary dark:bg-background-tertiary;
+    @apply bg-[color-mix(in_srgb,var(--accent)_9%,var(--background-secondary))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_22%,transparent)] dark:bg-background-tertiary dark:shadow-[inset_0_0_0_1px_var(--border-transparent)];
   }
 
   &[data-disabled="true"] {
@@ -42,7 +42,7 @@
   }
 
   &:active {
-    @apply bg-background-secondary dark:bg-background-tertiary;
+    @apply bg-[color-mix(in_srgb,var(--accent)_9%,var(--background-secondary))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_22%,transparent)] dark:bg-background-tertiary dark:shadow-[inset_0_0_0_1px_var(--border-transparent)];
   }
 
   & + [cmdk-item] {
@@ -86,7 +86,7 @@
 
   &[data-selected="true"] > [data-item-primary],
   & > [data-item-primary]:active {
-    @apply bg-background-secondary dark:bg-background-tertiary;
+    @apply bg-[color-mix(in_srgb,var(--accent)_9%,var(--background-secondary))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_22%,transparent)] dark:bg-background-tertiary dark:shadow-[inset_0_0_0_1px_var(--border-transparent)];
   }
 }
 
@@ -127,7 +127,7 @@
 [cmdk-group-heading] {
   /* Headings scroll with their group (not sticky): floating them would need
      an opaque background band over the glass surface. */
-  @apply select-none text-xs text-content-tertiary px-2 py-1 flex items-center;
+  @apply select-none text-xs font-medium text-content-secondary px-2 py-1 flex items-center;
 }
 
 [cmdk-empty] {

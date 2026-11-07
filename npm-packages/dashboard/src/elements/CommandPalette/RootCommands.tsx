@@ -101,11 +101,7 @@ export function RootCommands({
     <>
       {currentPage && (
         <Command.Group heading="Current Page">
-          <NavigationItem
-            target={currentPage}
-            onNavigate={onNavigate}
-            hint="Current Page"
-          />
+          <NavigationItem target={currentPage} onNavigate={onNavigate} />
         </Command.Group>
       )}
       {deploymentNav && project && (
