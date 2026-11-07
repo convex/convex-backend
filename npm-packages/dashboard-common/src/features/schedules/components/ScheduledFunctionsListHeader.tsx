@@ -63,6 +63,7 @@ export function ScheduledFunctionsListHeader({
         )}
         <Button
           size="xs"
+          variant="neutral"
           className="text-xs"
           icon={
             isPaused ? (
