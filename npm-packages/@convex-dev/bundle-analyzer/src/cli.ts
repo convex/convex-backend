@@ -11,11 +11,7 @@ import { analyzerVersion } from "./version.js";
 
 const program = new Command("bundle-analyzer")
   .description(
-    [
-      "Analyze the code bundle for the Convex project in the current directory.",
-      "",
-      "This package is in alpha. Commands and output shapes may change between releases.",
-    ].join("\n"),
+    "Analyze the code bundle for the Convex project in the current directory.",
   )
   .version(analyzerVersion)
   .addCommand(summary)

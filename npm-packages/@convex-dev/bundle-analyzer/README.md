@@ -1,10 +1,5 @@
 # @convex-dev/bundle-analyzer
 
-<!-- prettier-ignore -->
-> [!NOTE]
-> This package is in alpha. Commands and output shapes may change between
-> releases.
-
 Analyze your Convex project to identify ways to optimize your bundle size.
 
 Run the analyzer from the root directory of your project:
