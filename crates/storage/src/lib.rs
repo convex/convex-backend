@@ -928,6 +928,17 @@ fn remove_local_object(storage_root: &Path, path: &Path) -> anyhow::Result<()> {
     }
 }
 
+fn local_object_attributes(path: &Path) -> anyhow::Result<Option<ObjectAttributes>> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    Ok(Some(ObjectAttributes {
+        size: metadata.len(),
+    }))
+}
+
 #[async_trait]
 impl<RT: Runtime> Storage for LocalDirStorage<RT> {
     async fn start_upload(&self) -> anyhow::Result<Box<BufferedUpload>> {
@@ -1086,17 +1097,7 @@ impl<RT: Runtime> Storage for LocalDirStorage<RT> {
         &self,
         key: &FullyQualifiedObjectKey,
     ) -> anyhow::Result<Option<ObjectAttributes>> {
-        let path = Path::new(key.as_str());
-        let mut buf = vec![];
-        let result = File::open(path);
-        if result.is_err() {
-            return Ok(None);
-        }
-        let mut file = result.unwrap();
-        file.read_to_end(&mut buf)?;
-        Ok(Some(ObjectAttributes {
-            size: buf.len() as u64,
-        }))
+        local_object_attributes(Path::new(key.as_str()))
     }
 
     fn storage_type_proto(&self) -> pb::searchlight::StorageType {
@@ -1160,6 +1161,37 @@ impl<RT: Runtime> Storage for LocalDirStorage<RT> {
             });
         }
         Ok(objects)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::local_object_attributes;
+
+    #[test]
+    fn local_object_attributes_returns_file_length() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("large.blob");
+        let contents = vec![0_u8; 1024 * 1024];
+        fs::write(&path, &contents).expect("write test blob");
+
+        let attributes = local_object_attributes(&path)
+            .expect("read object attributes")
+            .expect("object should exist");
+
+        assert_eq!(attributes.size, contents.len() as u64);
+    }
+
+    #[test]
+    fn local_object_attributes_returns_none_for_missing_objects() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let path = temp_dir.path().join("missing.blob");
+
+        assert!(local_object_attributes(&path)
+            .expect("read missing object attributes")
+            .is_none());
     }
 }
 
