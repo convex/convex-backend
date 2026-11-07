@@ -34,6 +34,7 @@ export function FileActions({ file }: { file: FileMetadata }) {
           download
           inline
           target="_blank"
+          className="text-content-secondary hover:text-content-primary"
         >
           <DownloadIcon aria-label="Download" />
         </Button>
@@ -43,12 +44,15 @@ export function FileActions({ file }: { file: FileMetadata }) {
         variant="danger"
         inline
         size="sm"
+        // Quiet until hovered so per-row delete doesn't dominate the list.
+        className="text-content-secondary hover:text-content-error"
         disabled={!canDeleteFiles || isInUnmountedComponent}
         tip={
           isInUnmountedComponent
             ? "Cannot delete files in an unmounted component."
-            : !canDeleteFiles &&
-              "You do not have permission to delete files in this deployment."
+            : !canDeleteFiles
+              ? "You do not have permission to delete files in this deployment."
+              : "Delete"
         }
         onClick={() => setShowDeleteModal(true)}
         icon={<TrashIcon />}
