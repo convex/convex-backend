@@ -309,4 +309,8 @@ Same format as .env.local or .env files, and overrides them.`,
           ]
         : []),
     ]);
+    // Exit through the context so registered cleanups run (e.g. stopping a
+    // local backend started above); returning instead exits via `index.ts`,
+    // which skips them.
+    await ctx.flushAndExit(0);
   });
