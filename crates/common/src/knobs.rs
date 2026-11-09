@@ -2206,6 +2206,15 @@ pub static HTTP2_CLIENT_KEEPALIVE_INTERVAL: LazyLock<Duration> = LazyLock::new(|
 pub static HTTP2_CLIENT_KEEPALIVE_TIMEOUT: LazyLock<Duration> =
     LazyLock::new(|| Duration::from_secs(env_config("HTTP2_CLIENT_KEEPALIVE_TIMEOUT_SECONDS", 15)));
 
+/// HTTP/2 keepalive PING interval for internal gRPC clients and servers.
+pub static GRPC_KEEPALIVE_INTERVAL: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("GRPC_KEEPALIVE_INTERVAL_SECONDS", 15)));
+
+/// Timeout for an unacked gRPC HTTP/2 keepalive PING before the connection is
+/// closed.
+pub static GRPC_KEEPALIVE_TIMEOUT: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("GRPC_KEEPALIVE_TIMEOUT_SECONDS", 15)));
+
 /// Longest lifetime `ctx.auth.signJwt` may give a token.
 pub static DEPLOYMENT_JWT_MAX_LIFETIME: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_secs(env_config("DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS", 60 * 60))
