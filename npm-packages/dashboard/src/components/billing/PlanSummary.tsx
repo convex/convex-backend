@@ -368,13 +368,10 @@ export function BusinessPlanSummary({
       className="animate-fadeInFromLoading overflow-hidden"
       padding={false}
     >
-      <div className="flex flex-col gap-1 overflow-x-clip">
-        <div
-          className={cn(
-            "grid items-center gap-2 rounded-t border-b px-4 py-2 text-sm text-content-secondary",
-            gridColumns,
-          )}
-        >
+      {/* Rows are subgrids of one shared grid, so a wide value in any row
+          widens its column for every row instead of shifting just its own. */}
+      <div className={cn("grid gap-x-2 gap-y-1 overflow-x-clip", gridColumns)}>
+        <div className="col-span-full grid grid-cols-subgrid items-center rounded-t border-b px-4 py-2 text-sm text-content-secondary">
           <div>Resource</div>
           <div>
             {showIncluded ? (
@@ -504,10 +501,7 @@ export function BusinessPlanSummary({
             return (
               <div
                 key={index}
-                className={cn(
-                  "group grid min-h-10 items-center gap-2 rounded-sm px-4 py-2 text-left transition-colors focus-within:bg-background-primary hover:bg-background-primary",
-                  gridColumns,
-                )}
+                className="group col-span-full grid min-h-10 grid-cols-subgrid items-center rounded-sm px-4 py-2 text-left transition-colors focus-within:bg-background-primary hover:bg-background-primary"
               >
                 <div className="flex items-center gap-2">
                   {showIncludedLimits &&
@@ -700,7 +694,7 @@ function SpendValue({
 
 function PlanSummaryError() {
   return (
-    <div className="flex h-56 flex-col items-center justify-center p-4 text-center">
+    <div className="col-span-full flex h-56 flex-col items-center justify-center p-4 text-center">
       <CrossCircledIcon className="size-6 text-content-error" />
       <h5 className="mt-2">Error fetching Usage summary data</h5>
       <p className="mt-1 text-sm text-content-secondary">
@@ -713,7 +707,7 @@ function PlanSummaryError() {
 
 function PlanSummaryLoading() {
   return (
-    <div className="flex h-100 items-center justify-center p-4">
+    <div className="col-span-full flex h-100 items-center justify-center p-4">
       <div className="flex items-center justify-center">
         <Spinner className="size-12" />
       </div>
