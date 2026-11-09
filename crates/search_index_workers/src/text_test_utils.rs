@@ -436,7 +436,7 @@ impl TextFixtures {
         let compactor = self.new_compactor();
         let compact_during_flush = async move {
             if let Some(pause_guard) = hold_guard.wait_for_blocked().await {
-                let (metrics, _) = compactor.step().await?;
+                let (metrics, ..) = compactor.step().await?;
                 for (_index_name, num_segments_compacted) in metrics {
                     assert!(num_segments_compacted > 0);
                 }

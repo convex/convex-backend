@@ -106,6 +106,7 @@ use crate::{
     BuildReason,
     FlusherType,
     MultiSegmentBackfillResult,
+    SearchIndexPresence,
 };
 
 pub(crate) const FLUSH_RUNNING_LABEL: &str = "flush_running";
@@ -205,11 +206,14 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
     /// Run one step of the flusher's main loop.
     ///
     /// Returns a map of IndexName to number of documents indexed for each
-    /// index that was built.
-    pub async fn step(&self) -> anyhow::Result<(BTreeMap<TabletIndexName, u64>, Token)> {
+    /// index that was built, and whether any index of this flusher's search
+    /// type exists.
+    pub async fn step(
+        &self,
+    ) -> anyhow::Result<(BTreeMap<TabletIndexName, u64>, Token, SearchIndexPresence)> {
         let mut metrics = BTreeMap::new();
 
-        let (to_build, token) = self.needs_backfill().await?;
+        let (to_build, token, presence) = self.needs_backfill().await?;
         let num_to_build = to_build.len();
         let index_type = self.index_type_name();
         if num_to_build > 0 {
@@ -237,7 +241,7 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
             );
         }
 
-        Ok((metrics, token))
+        Ok((metrics, token, presence))
     }
 
     fn search_type() -> SearchType {
@@ -302,9 +306,13 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
         Ok(new_segment_stats.num_documents())
     }
 
-    /// Compute the set of indexes that need to be backfilled.
-    async fn needs_backfill(&self) -> anyhow::Result<(Vec<IndexBuild<T>>, Token)> {
+    /// Compute the set of indexes that need to be backfilled, and whether any
+    /// index of this search type exists.
+    async fn needs_backfill(
+        &self,
+    ) -> anyhow::Result<(Vec<IndexBuild<T>>, Token, SearchIndexPresence)> {
         let mut to_build = vec![];
+        let mut presence = SearchIndexPresence::Absent;
 
         let mut tx = self.database.begin(Identity::system()).await?;
         let step_ts = tx.begin_timestamp();
@@ -319,6 +327,7 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
             let Some(config) = T::get_config(&index_doc.config) else {
                 continue;
             };
+            presence = SearchIndexPresence::Present;
             let name = &index_doc.name;
 
             let needs_backfill = match &config.on_disk_state {
@@ -398,7 +407,7 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
                 );
             }
         }
-        Ok((to_build, tx.into_token()?))
+        Ok((to_build, tx.into_token()?, presence))
     }
 
     /// Build a segment for a search index, handling both partial updates to

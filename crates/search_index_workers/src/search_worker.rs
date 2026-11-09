@@ -71,6 +71,7 @@ use crate::{
     },
     writer::SearchIndexMetadataWriter,
     FlusherType,
+    SearchIndexPresence,
 };
 
 /// Builds and compacts text/vector search indexes.
@@ -263,7 +264,10 @@ impl<RT: Runtime> SearchIndexWorker<RT> {
 
     // The actual work future is fairly large, so box it to avoid consuming
     // steady-state memory.
-    fn step(&mut self) -> BoxFuture<'_, anyhow::Result<(BTreeMap<TabletIndexName, u64>, Token)>> {
+    fn step(
+        &mut self,
+    ) -> BoxFuture<'_, anyhow::Result<(BTreeMap<TabletIndexName, u64>, Token, SearchIndexPresence)>>
+    {
         match self {
             Self::VectorFlusher(flusher) => flusher.step().boxed(),
             Self::VectorCompactor(compactor) => compactor.step().boxed(),
@@ -281,7 +285,7 @@ impl<RT: Runtime> SearchIndexWorker<RT> {
     ) -> anyhow::Result<()> {
         let mut wake_subscriber = self.wake_subscriber();
         loop {
-            let (metrics, token) = self.step().await?;
+            let (metrics, token, presence) = self.step().await?;
 
             if !metrics.is_empty() {
                 // We did some useful work this loop iteration that we expect is committed.
@@ -296,8 +300,20 @@ impl<RT: Runtime> SearchIndexWorker<RT> {
             //    indexes
             // 2. Our soft index size is exceeded so we need to flush to disk - Implement
             //    via a signal from the committer, and via polling as a backstop in case no
-            //    commits arrive to trigger the signal.
-            let poll = timeout_with_jitter(rt, *DATABASE_WORKERS_POLL_INTERVAL);
+            //    commits arrive to trigger the signal. Polling also catches indexes that
+            //    become too old to leave unflushed.
+            //
+            // Polling only finds work on existing indexes, and the subscription covers the
+            // whole `_index` table, so a deployment without indexes of this search type
+            // skips the poll until one is created.
+            let poll = async {
+                match presence {
+                    SearchIndexPresence::Present => {
+                        timeout_with_jitter(rt, *DATABASE_WORKERS_POLL_INTERVAL).await
+                    },
+                    SearchIndexPresence::Absent => std::future::pending().await,
+                }
+            };
             pin_mut!(poll);
             let subscription_fut = db.subscribe_and_wait_for_invalidation(token);
             pin_mut!(subscription_fut);

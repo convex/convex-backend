@@ -49,6 +49,7 @@ use crate::{
         CompactionReason,
     },
     writer::SearchIndexMetadataWriter,
+    SearchIndexPresence,
 };
 
 pub(crate) const COMPACTION_RUNNING_LABEL: &str = "compaction_running";
@@ -82,10 +83,12 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
         T::search_type()
     }
 
-    pub async fn step(&self) -> anyhow::Result<(BTreeMap<TabletIndexName, u64>, Token)> {
+    pub async fn step(
+        &self,
+    ) -> anyhow::Result<(BTreeMap<TabletIndexName, u64>, Token, SearchIndexPresence)> {
         let mut metrics = BTreeMap::new();
 
-        let (to_build, token) = self.needs_compaction().await?;
+        let (to_build, token, presence) = self.needs_compaction().await?;
         let num_to_build = to_build.len();
         if num_to_build > 0 {
             tracing::info!(
@@ -112,11 +115,14 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
             );
         }
 
-        Ok((metrics, token))
+        Ok((metrics, token, presence))
     }
 
-    async fn needs_compaction(&self) -> anyhow::Result<(Vec<CompactionJob<T>>, Token)> {
+    async fn needs_compaction(
+        &self,
+    ) -> anyhow::Result<(Vec<CompactionJob<T>>, Token, SearchIndexPresence)> {
         let mut to_build = vec![];
+        let mut presence = SearchIndexPresence::Absent;
         let mut tx = self.database.begin(Identity::system()).await?;
 
         let non_empty_search_indexes = IndexModel::new(&mut tx)
@@ -129,6 +135,7 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
             let Some(config) = T::get_config(&index_metadata.config) else {
                 continue;
             };
+            presence = SearchIndexPresence::Present;
             let name = index_metadata.name;
 
             let maybe_segments_to_compact = match &config.on_disk_state {
@@ -190,7 +197,7 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
                 to_build.push(job);
             }
         }
-        Ok((to_build, tx.into_token()?))
+        Ok((to_build, tx.into_token()?, presence))
     }
 
     async fn build_one(&self, job: CompactionJob<T>) -> anyhow::Result<u64> {

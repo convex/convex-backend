@@ -81,6 +81,14 @@ impl BuildReason {
     }
 }
 
+/// Whether the deployment has any index of a search worker's search type, as
+/// seen by its last step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchIndexPresence {
+    Present,
+    Absent,
+}
+
 // Timeout from 1/2 the target duration to 1.5 the target duration.
 pub async fn timeout_with_jitter<RT: Runtime>(rt: &RT, duration: Duration) {
     let half_timer = duration / 2;
