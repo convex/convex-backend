@@ -18,6 +18,7 @@ use common::{
     components::{
         ComponentDefinitionPath,
         ComponentName,
+        ResolvedComponentFunctionPath,
         Resource,
     },
     errors::JsError,
@@ -90,6 +91,7 @@ use sync_types::{
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use udf::{
+    validation::ValidatedPathAndArgs,
     ActionCallbacks,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
@@ -309,7 +311,8 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         // function execution. It is important that we do not surface any errors
         // or results until after we call `validate_run_function_result` below.
         let result = match udf_type {
-            UdfType::Query | UdfType::Mutation | UdfType::Init | UdfType::Action => {
+            UdfType::Init => Err(anyhow::anyhow!("Unexpected init function")),
+            UdfType::Query | UdfType::Mutation | UdfType::Action => {
                 self.server
                     .run_function_no_retention_check(request_metadata, function_metadata, None)
                     .await
@@ -323,6 +326,75 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
             },
         };
         validate_run_function_result(udf_type, *ts, self.database.retention_validator()).await?;
+        result
+    }
+
+    #[fastrace::trace]
+    async fn run_component_inits(
+        &self,
+        identity: Identity,
+        ts: RepeatableTimestamp,
+        existing_writes: FunctionWrites,
+        path_and_args: Vec<ValidatedPathAndArgs>,
+        default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
+        in_memory_index_last_modified: BTreeMap<IndexId, Timestamp>,
+        context: ExecutionContext,
+    ) -> anyhow::Result<(
+        FunctionFinalTransaction,
+        BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>,
+        FunctionUsageStats,
+    )> {
+        let snapshot = self.database.snapshot(ts)?;
+        let table_count_snapshot = Arc::new(snapshot.table_counts);
+        let text_index_snapshot = Arc::new(TextIndexManagerSnapshot::new(
+            snapshot.index_registry,
+            snapshot.text_indexes,
+            self.database.searcher.clone(),
+            self.database.search_storage.clone(),
+        ));
+        let action_callbacks = self
+            .action_callbacks
+            .read()
+            .clone()
+            .context("Action callbacks not set")?
+            .upgrade()
+            .context(shutdown_error())?;
+
+        let repeatable_persistence = RepeatablePersistence::new(
+            self.persistence_reader.clone(),
+            ts,
+            self.database.retention_validator(),
+        );
+        let index_reader = Arc::new(repeatable_persistence.read_snapshot(ts)?);
+        let run_request_args = RunRequestArgs {
+            key_broker: self.key_broker.clone(),
+            index_reader,
+            convex_origin: self.convex_origin.clone(),
+            bootstrap_metadata: self.database.bootstrap_metadata.clone(),
+            table_count_snapshot,
+            text_index_snapshot,
+            action_callbacks,
+            fetch_client: self.fetch_client.clone(),
+            log_line_sender: None,
+            function_started_sender: None,
+            udf_type: UdfType::Init,
+            identity,
+            existing_writes,
+            default_system_env_vars,
+            in_memory_index_last_modified,
+            context,
+            subfunctions_in_same_isolate: *SUBFUNCTIONS_IN_SAME_ISOLATE,
+            deployment: self.deployment.clone(),
+        };
+        // NOTE: We run the inits without checking retention until after they
+        // execute. It is important that we do not surface any errors or results
+        // until after we call `validate_run_function_result` below.
+        let result = self
+            .server
+            .run_component_inits_no_retention_check(run_request_args, path_and_args)
+            .await;
+        validate_run_function_result(UdfType::Init, *ts, self.database.retention_validator())
+            .await?;
         result
     }
 

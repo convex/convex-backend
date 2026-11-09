@@ -16,6 +16,7 @@ use common::{
     components::{
         ComponentDefinitionPath,
         ComponentName,
+        ResolvedComponentFunctionPath,
         Resource,
     },
     document::PendingDocumentUpdate,
@@ -66,6 +67,7 @@ use sync_types::{
 };
 use tokio::sync::mpsc;
 use udf::{
+    validation::ValidatedPathAndArgs,
     ActionCallbacks,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
@@ -101,6 +103,21 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
     ) -> anyhow::Result<(
         Option<FunctionFinalTransaction>,
         FunctionOutcome,
+        FunctionUsageStats,
+    )>;
+
+    async fn run_component_inits(
+        &self,
+        identity: Identity,
+        ts: RepeatableTimestamp,
+        existing_writes: FunctionWrites,
+        path_and_args: Vec<ValidatedPathAndArgs>,
+        default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
+        in_memory_index_last_modified: BTreeMap<IndexId, Timestamp>,
+        context: ExecutionContext,
+    ) -> anyhow::Result<(
+        FunctionFinalTransaction,
+        BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>,
         FunctionUsageStats,
     )>;
 

@@ -15,6 +15,7 @@ use common::{
     components::{
         ComponentDefinitionPath,
         ComponentName,
+        ResolvedComponentFunctionPath,
         Resource,
     },
     document::udf_unix_timestamp,
@@ -24,7 +25,16 @@ use common::{
         fetch::FetchClient,
         RoutedHttpPath,
     },
-    knobs::MAX_ISOLATE_WORKERS,
+    knobs::{
+        INIT_MAX_NUM_SCHEDULED,
+        INIT_MAX_NUM_USER_WRITES,
+        INIT_MAX_READ_SET_INTERVALS,
+        INIT_MAX_READ_SIZE_BYTES,
+        INIT_MAX_READ_SIZE_ROWS,
+        INIT_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
+        INIT_MAX_USER_WRITE_SIZE_BYTES,
+        MAX_ISOLATE_WORKERS,
+    },
     log_lines::LogLine,
     persistence::RetentionValidator,
     query_journal::QueryJournal,
@@ -45,6 +55,7 @@ use database::{
     BootstrapMetadata,
     TableCountSnapshot,
     Transaction,
+    TransactionLimits,
     TransactionTextSnapshot,
 };
 use file_storage::TransactionalFileStorage;
@@ -93,6 +104,7 @@ use tokio::sync::{
     oneshot,
 };
 use udf::{
+    metrics::is_developer_ok,
     validation::{
         ValidatedHttpPath,
         ValidatedPathAndArgs,
@@ -479,6 +491,159 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         }
     }
 
+    /// Runs the given component init functions in one transaction.
+    ///
+    /// NOTE: The caller of this is responsible of checking retention by calling
+    /// `validate_function_runner_result`. If the retention check fails, we
+    /// should ignore any results or errors returned by this method.
+    #[fastrace::trace]
+    pub async fn run_component_inits_no_retention_check(
+        &self,
+        run_request_args: RunRequestArgs,
+        inits: Vec<ValidatedPathAndArgs>,
+    ) -> anyhow::Result<(
+        FunctionFinalTransaction,
+        BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>,
+        FunctionUsageStats,
+    )> {
+        self.run_component_inits_no_retention_check_inner(run_request_args, inits)
+            .boxed()
+            .await
+    }
+
+    async fn run_component_inits_no_retention_check_inner(
+        &self,
+        RunRequestArgs {
+            key_broker,
+            index_reader,
+            convex_origin,
+            bootstrap_metadata,
+            table_count_snapshot,
+            text_index_snapshot,
+            action_callbacks: _,
+            fetch_client: _,
+            log_line_sender: _,
+            mut function_started_sender,
+            udf_type,
+            identity,
+            existing_writes,
+            default_system_env_vars,
+            in_memory_index_last_modified,
+            context,
+            subfunctions_in_same_isolate: _,
+            deployment,
+        }: RunRequestArgs,
+        inits: Vec<ValidatedPathAndArgs>,
+    ) -> anyhow::Result<(
+        FunctionFinalTransaction,
+        BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>,
+        FunctionUsageStats,
+    )> {
+        anyhow::ensure!(
+            udf_type == UdfType::Init,
+            "Unexpected udf type {udf_type} for run_component_inits"
+        );
+        check_component_inits(inits.iter().map(ValidatedPathAndArgs::path))?;
+        let deployment_name = deployment.name.clone();
+        let usage_tracker = FunctionUsageTracker::new();
+        let mut transaction = self
+            .index_cache
+            .begin_tx(
+                identity,
+                existing_writes,
+                index_reader,
+                deployment_name.clone(),
+                in_memory_index_last_modified,
+                bootstrap_metadata,
+                table_count_snapshot,
+                text_index_snapshot,
+                usage_tracker.clone(),
+            )
+            .await?;
+        let storage = self
+            .storage
+            .storage_for_deployment(&mut transaction, StorageUseCase::Files)
+            .await?;
+        let file_storage = TransactionalFileStorage::new(self.rt.clone(), storage, convex_origin);
+        let modules_storage = self
+            .storage
+            .storage_for_deployment(&mut transaction, StorageUseCase::Modules)
+            .await?;
+
+        let environment_data = EnvironmentData {
+            key_broker,
+            default_system_env_vars,
+            file_storage: file_storage.clone(),
+            module_loader: Arc::new(FunctionRunnerModuleLoader {
+                deployment_name: deployment_name.clone(),
+                cache: self.module_cache.clone(),
+                code_cache: self.code_cache.clone(),
+                modules_storage,
+                storage: self.storage.clone(),
+            }),
+            deployment,
+        };
+        let mut outcomes = BTreeMap::new();
+        let mut failed = false;
+        for path_and_args in inits {
+            let path = path_and_args.path().clone();
+            let tokens = transaction.begin_subtransaction();
+            transaction.set_transaction_limits(TransactionLimits {
+                bytes_read: *INIT_MAX_READ_SIZE_BYTES,
+                documents_read: *INIT_MAX_READ_SIZE_ROWS,
+                database_queries: *INIT_MAX_READ_SET_INTERVALS,
+                documents_written: *INIT_MAX_NUM_USER_WRITES,
+                bytes_written: *INIT_MAX_USER_WRITE_SIZE_BYTES,
+                functions_scheduled: *INIT_MAX_NUM_SCHEDULED,
+                scheduled_function_args_bytes: *INIT_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES,
+                // We don't allow file storage access in init for now
+                files_written: 0,
+                file_write_bytes: 0,
+                files_read: 0,
+                file_read_bytes: 0,
+            });
+            let rng_seed = self.rt.rng().random();
+            let unix_timestamp = udf_unix_timestamp(transaction.next_creation_time());
+            let (tx, outcome) = self
+                .isolate_client
+                .execute_udf(
+                    UdfType::Init,
+                    path_and_args,
+                    transaction,
+                    QueryJournal::new(),
+                    context.clone(),
+                    environment_data.clone(),
+                    rng_seed,
+                    unix_timestamp,
+                    0,
+                    deployment_name.clone(),
+                    function_started_sender.take(),
+                    false,
+                )
+                .await?;
+            transaction = tx;
+            if is_developer_ok(&outcome) {
+                transaction.commit_subtransaction(tokens)?;
+            } else {
+                transaction.rollback_subtransaction(tokens)?;
+                failed = true;
+            }
+            outcomes.insert(path, outcome);
+        }
+        if failed {
+            transaction.discard_pending_file_uploads()?;
+        } else {
+            file_storage
+                .upload_pending_files(&mut transaction, &usage_tracker)
+                .await?;
+        }
+        Ok((
+            transaction.try_into()?,
+            outcomes,
+            usage_tracker.gather_user_stats(),
+        ))
+    }
+
     pub async fn analyze(
         &self,
         udf_config: UdfConfig,
@@ -592,4 +757,25 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
             )
             .await
     }
+}
+
+/// Check that each init function is in a different component, and that no init
+/// function is in the root component.
+fn check_component_inits<'a>(
+    paths: impl IntoIterator<Item = &'a ResolvedComponentFunctionPath>,
+) -> anyhow::Result<()> {
+    let mut components = BTreeSet::new();
+    for path in paths {
+        anyhow::ensure!(
+            !path.component.is_root(),
+            "init {:?} is in the root component",
+            path.udf_path
+        );
+        anyhow::ensure!(
+            components.insert(path.component),
+            "More than one init for component {:?}",
+            path.component_path
+        );
+    }
+    Ok(())
 }

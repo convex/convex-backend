@@ -657,6 +657,38 @@ pub static MAX_TRANSACTION_CACHE_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| 
 pub static TRANSACTION_MAX_READ_SET_INTERVALS: LazyLock<usize> =
     LazyLock::new(|| env_config("TRANSACTION_MAX_READ_SET_INTERVALS", 4096));
 
+/// Bytes that can be read in a single init mutation.
+pub static INIT_MAX_READ_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| {
+    env_config("INIT_MAX_READ_SIZE_BYTES", 1 << 14) // 16 KiB
+});
+
+/// Bytes that can be written in a single init mutation.
+pub static INIT_MAX_USER_WRITE_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| {
+    env_config("INIT_MAX_USER_WRITE_SIZE_BYTES", 1 << 14) // 16 KiB
+});
+
+/// Documents that can be read in a single init mutation.
+pub static INIT_MAX_READ_SIZE_ROWS: LazyLock<usize> =
+    LazyLock::new(|| env_config("INIT_MAX_READ_SIZE_ROWS", 100));
+
+/// Intervals that can be read in a single init mutation.
+pub static INIT_MAX_READ_SET_INTERVALS: LazyLock<usize> =
+    LazyLock::new(|| env_config("INIT_MAX_READ_SET_INTERVALS", 100));
+
+/// Documents that can be written in a single init mutation.
+pub static INIT_MAX_NUM_USER_WRITES: LazyLock<usize> =
+    LazyLock::new(|| env_config("INIT_MAX_NUM_USER_WRITES", 100));
+
+/// Functions that can be scheduled in a single init mutation.
+pub static INIT_MAX_NUM_SCHEDULED: LazyLock<usize> =
+    LazyLock::new(|| env_config("INIT_MAX_NUM_SCHEDULED", 10));
+
+/// Total bytes of arguments that can be provided to the functions scheduled in
+/// a single init mutation.
+pub static INIT_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| {
+    env_config("INIT_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES", 1 << 14) // 16 KiB
+});
+
 /// Intervals that can be read in a transaction before warning.
 pub static TRANSACTION_WARN_READ_SET_INTERVALS: LazyLock<usize> =
     LazyLock::new(|| env_config("TRANSACTION_WARN_READ_SET_INTERVALS", 3072));
