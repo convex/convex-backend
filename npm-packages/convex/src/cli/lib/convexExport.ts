@@ -10,6 +10,7 @@ import {
   logFailure,
   showSpinner,
   logFinishedStep,
+  logMessage,
   logError,
   stopSpinner,
   changeSpinner,
@@ -26,7 +27,7 @@ export async function exportFromDeployment(
   options: {
     deploymentUrl: string;
     adminKey: string;
-    path: string;
+    path?: string;
     includeFileStorage?: boolean;
     deploymentNotice: string;
     snapshotExportDashboardLink: string | undefined;
@@ -45,7 +46,6 @@ export async function exportFromDeployment(
 
   const snapshotExportState = await startSnapshotExport(ctx, {
     includeStorage,
-    inputPath,
     adminKey,
     deploymentUrl,
     snapshotExportDashboardLink,
@@ -55,20 +55,20 @@ export async function exportFromDeployment(
     case "completed":
       stopSpinner();
       logFinishedStep(
-        `Created snapshot export at timestamp ${snapshotExportState.start_ts}`,
+        `Snapshot export completed at ${formatExportTimestamp(snapshotExportState.complete_ts)}`,
       );
-      if (snapshotExportDashboardLink !== undefined) {
-        logFinishedStep(
-          `Export is available at ${snapshotExportDashboardLink}`,
-        );
-      }
       break;
     case "requested":
     case "in_progress": {
+      stopSpinner();
+      logMessage("Export is still in progress on server.");
+      return;
+    }
+    case "canceled": {
       return await ctx.crash({
         exitCode: 1,
         errorType: "fatal",
-        printedMessage: `WARNING: Export is continuing to run on the server.`,
+        printedMessage: `Snapshot export was canceled at ${formatExportTimestamp(snapshotExportState.canceled_ts)}.`,
       });
     }
     case "failed": {
@@ -89,6 +89,10 @@ export async function exportFromDeployment(
     }
   }
 
+  if (inputPath === undefined) {
+    return;
+  }
+
   showSpinner(`Downloading snapshot export to ${chalkStderr.bold(inputPath)}`);
   const { filePath } = await downloadSnapshotExport(ctx, {
     snapshotExportTs: snapshotExportState.start_ts,
@@ -106,12 +110,20 @@ type SnapshotExportState =
   | { state: "requested" }
   | { state: "in_progress" }
   | { state: "failed" }
+  | { state: "canceled"; canceled_ts: bigint }
   | {
       state: "completed";
       complete_ts: bigint;
       start_ts: bigint;
       zip_object_key: string;
     };
+
+function formatExportTimestamp(timestampNs: bigint): string {
+  return new Date(Number(timestampNs / 1_000_000n)).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "long",
+  });
+}
 
 async function waitForStableExportState(
   ctx: Context,
@@ -139,6 +151,7 @@ async function waitForStableExportState(
             break;
           case "completed":
           case "failed":
+          case "canceled":
             onDone();
             break;
           default: {
@@ -156,7 +169,6 @@ export async function startSnapshotExport(
   ctx: Context,
   args: {
     includeStorage: boolean;
-    inputPath: string;
     adminKey: string;
     deploymentUrl: string;
     snapshotExportDashboardLink?: string | undefined;
@@ -193,6 +205,14 @@ export async function startSnapshotExport(
     }
     return await logAndHandleFetchError(ctx, e);
   }
+
+  if (args.snapshotExportDashboardLink !== undefined) {
+    logMessage(
+      `↗ ${chalkStderr.blue.underline(args.snapshotExportDashboardLink)}`,
+    );
+  }
+
+  changeSpinner("Waiting for snapshot export to complete");
 
   const snapshotExportState = await waitForStableExportState(
     ctx,

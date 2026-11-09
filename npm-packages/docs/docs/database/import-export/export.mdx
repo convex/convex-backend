@@ -14,6 +14,16 @@ Alternatively, you can export the same data with the
 [command line](/cli/reference/export.mdx):
 
 ```sh
+npx convex export
+```
+
+This creates an export without downloading it. As soon as the export starts, the
+command prints a dashboard link where you can view its progress and download it
+when ready.
+
+To also download the export from the command line, provide `--path`:
+
+```sh
 npx convex export --path ~/Downloads
 ```
 

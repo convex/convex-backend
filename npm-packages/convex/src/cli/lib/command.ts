@@ -120,7 +120,7 @@ declare module "@commander-js/extra-typings" {
     addExportOptions(): Command<
       Args,
       Opts & {
-        path: string;
+        path?: string;
         includeFileStorage?: boolean;
       }
     >;
@@ -527,9 +527,9 @@ Command.prototype.addImportOptions = function () {
 };
 
 Command.prototype.addExportOptions = function () {
-  return this.requiredOption(
+  return this.option(
     "--path <zipFilePath>",
-    "Exports data into a ZIP file at this path, which may be a directory or unoccupied .zip path",
+    "If provided, download the export to a ZIP file at this path. If omitted, only a link is provided",
   ).addOption(
     new Option(
       "--include-file-storage",

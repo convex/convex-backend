@@ -9,10 +9,12 @@ description: "Export data from your deployment to a ZIP file"
 
 # `npx convex export`
 
-Export data, and optionally file storage, from your Convex deployment to a ZIP file.
+Export data, and optionally file storage, from your Convex deployment to a ZIP file downloadable from Convex.
+Without --path, create an export and download it later from the dashboard link.
 
-- Export to a directory: <CodeWithCopyButton text={"npx convex export --path dir/"} />
-- Export to a ZIP file: <CodeWithCopyButton text={"npx convex export --path snapshot.zip"} />
+- Create an export without downloading: <CodeWithCopyButton text={"npx convex export"} />
+- Download to a directory: <CodeWithCopyButton text={"npx convex export --path dir/"} />
+- Download as a ZIP file: <CodeWithCopyButton text={"npx convex export --path snapshot.zip"} />
 - Include file storage: <CodeWithCopyButton text={"npx convex export --include-file-storage --path dir/"} />
 
 By default, this exports from your dev deployment.
@@ -31,7 +33,7 @@ npx convex export [options]
 <dt>`--path <zipFilePath>`</dt>
 <dd>
 
-Exports data into a ZIP file at this path, which may be a directory or unoccupied .zip path
+If provided, download the export to a ZIP file at this path. If omitted, only a link is provided
 
 </dd>
 <dt>`--include-file-storage`</dt>
