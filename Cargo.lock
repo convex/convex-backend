@@ -3487,6 +3487,7 @@ dependencies = [
  "convex_macro",
  "convex_sync_types",
  "criterion",
+ "database",
  "derive_more",
  "errors",
  "events",
