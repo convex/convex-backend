@@ -54,6 +54,19 @@ use tokio::{
     sync::oneshot,
 };
 
+// Use jemalloc as the global allocator. glibc's malloc does not return
+// fragmented heap memory to the OS, which makes transient spikes (e.g.
+// loading the document log at startup) permanently inflate RSS.
+// `background_thread` lets jemalloc purge dirty pages off the hot path.
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[allow(non_upper_case_globals)]
+#[unsafe(export_name = "malloc_conf")]
+pub static malloc_conf: &[u8] = b"background_thread:true,dirty_decay_ms:10000,muzzy_decay_ms:0\0";
+
 fn main() -> Result<(), MainError> {
     let config = LocalConfig::parse();
     if let Some(subcommand) = &config.subcommand {
