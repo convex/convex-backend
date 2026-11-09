@@ -2110,6 +2110,7 @@ export interface components {
         };
         CurrentPlanPriceResponse: components["schemas"]["MetricPriceRate"] & {
             includedUnits: string;
+            roundUpUnits: boolean;
         };
         /** Format: int64 */
         CustomRoleId: number;

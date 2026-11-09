@@ -4250,11 +4250,15 @@
           {
             "type": "object",
             "required": [
-              "includedUnits"
+              "includedUnits",
+              "roundUpUnits"
             ],
             "properties": {
               "includedUnits": {
                 "type": "string"
+              },
+              "roundUpUnits": {
+                "type": "boolean"
               }
             }
           }
