@@ -454,7 +454,9 @@ export function S3ExportConfigurationForm({
               existingConfig.roleArn === "" &&
               values.roleArn !== ""
               ? "Role saved. The first sync is starting."
-              : "Export updated.",
+              : selection
+                ? "Tables updated. Tables you already export keep their progress."
+                : "Export updated.",
           );
         }
         onClose();
@@ -881,9 +883,9 @@ export function S3ExportConfigurationForm({
             {!isNewIntegration &&
               !isEqual(formState.values.selection, initialSelection) && (
                 <p className="text-xs text-content-secondary" role="status">
-                  Saving keeps the progress of tables you already export. Tables
-                  you add sync from the start, and tables you remove stay in S3
-                  but stop updating.
+                  Saving keeps the progress of tables you already export. Only
+                  the tables you add sync from the start, and tables you remove
+                  stay in S3 but stop updating.
                 </p>
               )}
             <p className="max-w-prose text-xs text-content-secondary">

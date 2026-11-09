@@ -214,9 +214,7 @@ function SnapshotProgressBar({
   // The totals are 0 until the deployment's table summaries finish
   // bootstrapping, leaving nothing to measure the snapshot against.
   if (status.totalDocuments === 0) {
-    return (
-      <ProgressBar fraction={undefined} ariaLabel="Initial snapshot progress" />
-    );
+    return <ProgressBar fraction={undefined} ariaLabel="Sync progress" />;
   }
   return (
     <ProgressBarWithPercent
@@ -228,7 +226,7 @@ function SnapshotProgressBar({
         status.numDocumentsSynced / status.totalDocuments,
       )}
       variant="stripes"
-      ariaLabel="Initial snapshot progress"
+      ariaLabel="Sync progress"
     />
   );
 }
@@ -284,10 +282,10 @@ function distanceToNow(ms: number): string {
 
 function snapshotProgressLabel(status: ActiveDataSyncSnapshotting): string {
   if (status.totalDocuments === 0) {
-    return "initial snapshot";
+    return `${formatNumber(status.numDocumentsSynced)} documents synced`;
   }
   const percent = Math.round(
     Math.min(0.99, status.numDocumentsSynced / status.totalDocuments) * 100,
   );
-  return `${percent}% of initial snapshot`;
+  return `${percent}% of documents synced`;
 }

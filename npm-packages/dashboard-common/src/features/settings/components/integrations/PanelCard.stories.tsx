@@ -168,7 +168,7 @@ export const FivetranSyncing: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() => canvas.getByText("Syncing"));
-    await canvas.findByText("42% of initial snapshot");
+    await canvas.findByText("42% of documents synced");
     if (canvas.queryByText("Get Started")) {
       throw new Error("still offering setup instructions during a sync");
     }
@@ -176,13 +176,13 @@ export const FivetranSyncing: Story = {
 };
 
 // Without table summaries there is no percentage to report, so the detail line
-// falls back to naming the phase.
+// falls back to the count of documents synced.
 export const FivetranSyncingWithoutTotals: Story = {
   parameters: { activeDataSyncs: [bootstrappingSync] },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() => canvas.getByText("Syncing"));
-    await canvas.findByText("initial snapshot");
+    await canvas.findByText(/documents synced$/);
   },
 };
 
@@ -275,7 +275,7 @@ export const FivetranSyncDetailModalWithoutTotals: Story = {
   play: async ({ canvasElement }) => {
     const dialog = await openSyncDetails(canvasElement);
     const bar = await dialog.findByRole("progressbar", {
-      name: "Initial snapshot progress",
+      name: "Sync progress",
     });
     if (bar.getAttribute("aria-valuenow") !== null) {
       throw new Error("reported a percentage without knowing the total");
