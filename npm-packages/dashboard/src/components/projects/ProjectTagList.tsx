@@ -1,6 +1,6 @@
 import { cn } from "@ui/cn";
 
-export function ProjectTags({
+export function ProjectTagList({
   tags,
   chipClassName,
 }: {

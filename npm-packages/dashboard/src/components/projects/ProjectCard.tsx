@@ -38,7 +38,7 @@ import { projectResource } from "lib/permissions";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { HighlightMatch } from "elements/HighlightMatch";
 import { DeleteProjectModal } from "./modals/DeleteProjectModal";
-import { ProjectTags } from "./ProjectTags";
+import { ProjectTagList } from "./ProjectTagList";
 
 const TOOLTIP_DELAY_MS = 500;
 
@@ -270,7 +270,7 @@ export function ProjectCard({
         {overlayLink}
         {identity}
         <div className="mr-12 hidden max-w-64 min-w-0 flex-1 basis-0 md:flex">
-          <ProjectTags
+          <ProjectTagList
             tags={project.tags}
             chipClassName="group-hover:bg-background-secondary"
           />
@@ -296,7 +296,7 @@ export function ProjectCard({
             <CardMenu items={dropdownItems} />
           </div>
         </div>
-        <ProjectTags tags={project.tags} />
+        <ProjectTagList tags={project.tags} />
       </div>
       {/* Translucent like the data page's selected-document panel, so the page
           background shows through and sets the footer apart from the body. */}
