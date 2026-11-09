@@ -193,7 +193,9 @@ export async function watchAndPush(
   let ran = false;
   let pushed = false;
   let shellChild: ChildProcess | undefined;
-  let shellExited: Promise<void> | undefined;
+  // Resolves once the `--start` command exits. `failureExit` is the
+  // in-flight `flushAndExit(1)` if it failed.
+  let shellExited: Promise<{ failureExit?: Promise<never> }> | undefined;
   let shellCleanupHandle: string | undefined;
   let shellSigintListener: (() => void) | undefined;
   let tableNameTriggeringRetry;
@@ -326,30 +328,31 @@ export async function watchAndPush(
                 }
                 await shellExited;
               });
-              shellExited = new Promise<void>((resolve) => {
+              // A failed --start command exits from here. A long-running
+              // `convex dev`, whose loop is blocked on watchers, ends right
+              // away. With --once or --until-success, the `finally` below
+              // awaits the `flushAndExit(1)` Promise.
+              shellExited = new Promise((resolve) => {
                 shellChild!.on("error", (error) => {
                   logError(
                     `Failed to run command \`${shellCommand}\`: ${error.message}`,
                   );
                   shellChild = undefined;
-                  resolve();
-                  void outerCtx.flushAndExit(1);
+                  resolve({ failureExit: outerCtx.flushAndExit(1) });
                 });
                 shellChild!.on("exit", (code, signal) => {
                   shellChild = undefined;
-                  resolve();
                   // If killed by a signal (e.g. from cleanup on shutdown),
                   // don't treat it as a failure — convex dev is already
                   // shutting down.
-                  if (signal) {
+                  if (signal || code === null || code === 0) {
+                    resolve({});
                     return;
                   }
-                  if (code !== null && code !== 0) {
-                    logError(
-                      `Command \`${shellCommand}\` exited with code ${code}`,
-                    );
-                    void outerCtx.flushAndExit(1);
-                  }
+                  logError(
+                    `Command \`${shellCommand}\` exited with code ${code}`,
+                  );
+                  resolve({ failureExit: outerCtx.flushAndExit(1) });
                 });
               });
               break;
@@ -454,15 +457,16 @@ export async function watchAndPush(
     // Ctrl+C during the wait still forwards to the child. On signal
     // exit (e.g. Ctrl+C), the registered cleanup handler will have
     // already killed it.
-    if (shellExited) {
-      await shellExited;
-    }
+    const shellResult = shellExited ? await shellExited : undefined;
     if (shellSigintListener) {
       process.off("SIGINT", shellSigintListener);
       shellSigintListener = undefined;
     }
     if (shellCleanupHandle) {
       outerCtx.removeCleanup(shellCleanupHandle);
+    }
+    if (shellResult?.failureExit) {
+      await shellResult.failureExit;
     }
   }
 }
