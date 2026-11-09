@@ -1,8 +1,5 @@
-import { Button } from "@ui/Button";
-import { Menu, MenuItem } from "@ui/Menu";
-import { Chip } from "@ui/Chip";
-import { PlusIcon } from "@radix-ui/react-icons";
-import { useMemo } from "react";
+import { ChipInput } from "@ui/ChipInput";
+import { useMemo, useState } from "react";
 import sortBy from "lodash/sortBy";
 import type { CustomRoleResponse } from "@convex-dev/platform/managementApi";
 
@@ -16,16 +13,18 @@ type CustomRolesSelectorProps = {
 };
 
 /**
- * Multi-select for custom team roles: chips for each selected role with an
- * inline remove button, plus a "+" menu listing the unselected roles.
- * Used both when inviting a member with `role=custom` and when changing an
- * existing member's role to `custom`.
+ * Multi-select for custom team roles: a `ChipInput` whose list offers the
+ * team's unselected roles that match the typed search. Used when inviting a
+ * member with `role=custom`, when changing an existing member's role to
+ * `custom`, and when mapping a directory group to custom roles.
  */
 export function CustomRolesSelector({
   availableRoles,
   selectedIds,
   onChange,
 }: CustomRolesSelectorProps) {
+  const [query, setQuery] = useState("");
+
   const sortedRoles = useMemo(
     () => sortBy(availableRoles, (r) => r.name.toLowerCase()),
     [availableRoles],
@@ -34,77 +33,51 @@ export function CustomRolesSelector({
     () => new Map(sortedRoles.map((r) => [r.id, r.name] as const)),
     [sortedRoles],
   );
-  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const selectedSorted = useMemo(
     () => sortBy(selectedIds, (id) => (nameById.get(id) ?? "").toLowerCase()),
     [selectedIds, nameById],
   );
-  const unselectedRoles = useMemo(
-    () => sortedRoles.filter((r) => !selectedSet.has(r.id)),
-    [sortedRoles, selectedSet],
-  );
-  const noRolesExist = sortedRoles.length === 0;
+  const unselectedRoles = useMemo(() => {
+    const selectedSet = new Set(selectedIds);
+    return sortedRoles.filter((r) => !selectedSet.has(r.id));
+  }, [sortedRoles, selectedIds]);
 
-  const remove = (id: number) => onChange(selectedIds.filter((x) => x !== id));
-  const add = (id: number) => {
-    if (selectedIds.includes(id)) return;
-    onChange([...selectedIds, id]);
-  };
+  const normalizedQuery = query.trim().toLowerCase();
+  const matchingRoles =
+    normalizedQuery === ""
+      ? unselectedRoles
+      : unselectedRoles.filter((r) =>
+          r.name.toLowerCase().includes(normalizedQuery),
+        );
+  const noRolesExist = sortedRoles.length === 0;
+  const nameOf = (id: number) => nameById.get(id) ?? `Role #${id}`;
+
+  const note = noRolesExist
+    ? "No custom roles exist for this team yet."
+    : unselectedRoles.length === 0
+      ? "All custom roles are added."
+      : matchingRoles.length === 0
+        ? `No custom roles match "${query.trim()}".`
+        : undefined;
 
   return (
-    <div className="flex flex-col gap-1">
-      <span className="text-sm text-content-primary">Custom roles</span>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {selectedSorted.map((id) => {
-          const name = nameById.get(id) ?? `Role #${id}`;
-          return (
-            <Chip
-              key={id}
-              onRemove={() => remove(id)}
-              removeLabel={`Remove custom role ${name}`}
-              removeTip="Remove custom role"
-              className="max-w-56"
-            >
-              {name}
-            </Chip>
-          );
-        })}
-        {unselectedRoles.length === 0 ? (
-          <Button
-            variant="neutral"
-            size="xs"
-            icon={<PlusIcon />}
-            aria-label="Add custom role"
-            tip={
-              noRolesExist
-                ? "No custom roles exist for this team yet."
-                : "All custom roles are already added."
-            }
-            disabled
-          />
-        ) : (
-          <Menu
-            placement="bottom-start"
-            buttonProps={{
-              variant: "neutral",
-              size: "xs",
-              icon: <PlusIcon />,
-              "aria-label": "Add custom role",
-            }}
-          >
-            {unselectedRoles.map((r) => (
-              <MenuItem key={r.id} action={() => add(r.id)}>
-                {r.name}
-              </MenuItem>
-            ))}
-          </Menu>
-        )}
-      </div>
-      {noRolesExist && (
-        <span className="text-xs text-content-secondary">
-          No custom roles exist for this team yet.
-        </span>
-      )}
-    </div>
+    <ChipInput
+      label="Custom roles"
+      values={selectedSorted}
+      // The query stays after a pick, so several roles matching one search
+      // can be added in a row.
+      onChange={onChange}
+      chipLabel={nameOf}
+      removeLabel={(id) => `Remove custom role ${nameOf(id)}`}
+      removeTip="Remove custom role"
+      chipClassName="max-w-56"
+      query={query}
+      onQueryChange={setQuery}
+      options={matchingRoles.map((r) => ({ value: r.id, label: r.name }))}
+      onBlur={() => setQuery("")}
+      placeholder="Search custom roles"
+      disabled={noRolesExist}
+      description={note}
+    />
   );
 }

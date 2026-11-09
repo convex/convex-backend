@@ -79,6 +79,10 @@
       "import": "./dist/Chip.jsx",
       "types": "./dist/Chip.d.ts"
     },
+    "./ChipInput": {
+      "import": "./dist/ChipInput.jsx",
+      "types": "./dist/ChipInput.d.ts"
+    },
     "./ConfirmationDialog": {
       "import": "./dist/ConfirmationDialog.jsx",
       "types": "./dist/ConfirmationDialog.d.ts"
