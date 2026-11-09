@@ -86,6 +86,30 @@ code snippets.
 This is a manual process and generally only needs to be done when the component
 docs change and there is a new release of the component package.
 
+## Updating the Convex Auth docs
+
+The Convex Auth docs live in `packages/docs/docs` of
+https://github.com/convex/convex-auth. Its `publish-docs` workflow attaches them
+to the GitHub Release of each release tag as `convex-auth-docs.tar.gz`, with the
+API reference generated and the code blocks inlined. To update them, run the
+following command with the release tag to publish:
+
+```sh
+just import-convex-auth-docs <tag>
+```
+
+or, in this directory, `node scripts/import-convex-auth-docs.js <tag>`.
+
+This downloads and checks that archive, then replaces `docs/auth/convex-auth`
+with the guides and `docs/convex-auth-api` with the API reference, prefixing the
+site-absolute links of the guides with `/auth/convex-auth`. It runs no code of
+the Convex Auth repo. Check in the result.
+
+To correct the imported docs between releases, edit `docs/auth/convex-auth` or
+`docs/convex-auth-api` here and make the same change in the Convex Auth repo.
+The next import replaces both directories, so a correction made only here is
+reverted then; check the import's diff for removed fixes.
+
 # Dependency notes
 
 These typedoc plugins are forked because they didn't work when the monorepo used
