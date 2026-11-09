@@ -54,7 +54,7 @@ const inProgressExport: Export = {
   ...baseExport,
   state: "in_progress",
   start_ts: toNanoseconds(NOW - 45_000),
-  progress_message: "Exporting tables",
+  progress_message: "Backing up messages: 1,000 / 5,000 documents",
 };
 
 const canceledExport: Export = {
@@ -153,7 +153,31 @@ export const Requested: Story = {
   args: { existingExport: requestedExport },
 };
 
-export const InProgress: Story = {};
+export const InProgress: Story = {
+  play: async ({ canvasElement }) => {
+    await expect(
+      within(canvasElement).getByText(
+        "Backing up messages: 1,000 / 5,000 documents",
+      ),
+    ).toBeVisible();
+  },
+};
+
+export const InProgressWithoutProgressMessage: Story = {
+  args: {
+    existingExport: { ...inProgressExport, progress_message: null },
+  },
+};
+
+export const InProgressWithFileStorage: Story = {
+  args: {
+    existingExport: {
+      ...inProgressExport,
+      progress_message:
+        "Backing up _storage in component attachments: 250 / 1,000 files (downloading)",
+    },
+  },
+};
 
 export const InProgressWithoutPermission: Story = {
   args: { canCancel: false },
