@@ -39,7 +39,7 @@ The
 [`nuxt-convex-module` npm package](https://www.npmjs.com/package/nuxt-convex-module)
 provides integration of Convex with the Nuxt 4 ecosystem. It ports the official
 [Convex React](/client/react/overview.mdx) and
-[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients in full, with
+[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients, with some
 additions. The port also covers the [Clerk](/auth/clerk.mdx) and
 [Auth0](/auth/auth0.mdx) adapters and the clients of the
 [Better Auth](https://labs.convex.dev/better-auth) and
@@ -55,7 +55,7 @@ getter functions, and query results are refs. The Next.js server helpers, such
 as `preloadQuery` and `fetchQuery`, keep their signatures and run in
 [server routes](https://nuxt.com/docs/4.x/directory-structure/server).
 
-Its additions include:
+Beyond the port, it adds:
 
 - [`useAsyncQuery`](https://nuxt-convex-module.dev/guide/server-and-ssr#useasyncquery-ssr-data-the-nuxt-way)
   and `useAsyncPaginatedQuery`, which render query data on the server and keep
