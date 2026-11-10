@@ -50,16 +50,6 @@ additions. The port also covers the [Clerk](/auth/clerk.mdx) and
 [Better Auth](https://labs.convex.dev/better-auth) and
 [Polar](https://www.convex.dev/components/polar) components.
 
-Each hook becomes a
-[composable](https://vuejs.org/guide/reusability/composables.html) with the same
-name and arguments, and Nuxt
-[auto-imports](https://nuxt.com/docs/4.x/guide/concepts/auto-imports) it. Query
-arguments can also be
-[refs](https://vuejs.org/guide/essentials/reactivity-fundamentals.html#ref) or
-getter functions, and query results are refs. The Next.js server helpers, such
-as `preloadQuery` and `fetchQuery`, keep their signatures and run in
-[server routes](https://nuxt.com/docs/4.x/directory-structure/server).
-
 Beyond the port, it adds:
 
 - [`useAsyncQuery`](https://nuxt-convex-module.dev/guide/server-and-ssr#useasyncquery-ssr-data-the-nuxt-way)
