@@ -36,13 +36,15 @@ documentation.
 ## nuxt-convex-module
 
 The [`nuxt-convex-module`](https://www.npmjs.com/package/nuxt-convex-module) npm
-package includes a Vue.js integration library for Convex at
-`nuxt-convex-module/vue`, which works in any Vue.js app without Nuxt. It also
-powers the package's [Nuxt integration](./nuxt.mdx#nuxt-convex-module).
+package includes a Vue.js integration library for Convex. It also powers the
+package's [Nuxt integration](./nuxt.mdx#nuxt-convex-module).
 
-It ports the [Convex React client](/client/react/overview.mdx): hooks become
-composables with the same names, arguments and return shapes.
+It is a complete port of the official
+[Convex React client](/client/react/overview.mdx). Each hook becomes a
+composable with the same name and arguments. Arguments can also be refs or
+getters, and results such as query data are returned as refs.
 
+Its `nuxt-convex-module/vue` entry point works in any Vue.js app without Nuxt.
 See the [plain Vue guide](https://nuxt-convex-module.dev/guide/plain-vue) to get
 started or the
 [nuxt-convex-module GitHub page](https://github.com/qruto/nuxt-convex-module)
