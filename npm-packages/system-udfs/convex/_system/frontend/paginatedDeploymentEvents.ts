@@ -65,20 +65,38 @@ export default queryPrivateSystem("ViewAuditLog")({
   },
 });
 
+const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
+
+// rounded to a whole day so pagination cursors stay valid across executions
+export function minDateForAuditLogRetention(
+  auditLogRetentionDays: number,
+  now: number,
+) {
+  return (
+    Math.floor(now / MILLIS_PER_DAY) * MILLIS_PER_DAY -
+    auditLogRetentionDays * MILLIS_PER_DAY
+  );
+}
+
 export async function clampForAuditLogRetention(
   db: DatabaseReader,
   minDate: number,
 ) {
   const backendInfo = await db.query("_backend_info").first();
-  const auditLogRetentionDays = Number(backendInfo?.auditLogRetentionDays || 0);
+  // Deployments outside Convex Cloud have no _backend_info document and no
+  // retention limit.
+  if (backendInfo === null) {
+    return minDate;
+  }
+  const auditLogRetentionDays = Number(backendInfo.auditLogRetentionDays || 0);
   // no limit if auditLogRetentionDays is -1
   if (auditLogRetentionDays === -1) {
     return minDate;
   }
-  const minAllowable =
-    Date.now() - (auditLogRetentionDays + 1) * 24 * 60 * 60 * 1000;
-  if (minDate < minAllowable) {
-    return minAllowable;
-  }
-  return minDate;
+  return Math.max(
+    minDate,
+    // FIXME: Date.now() shifts the index range at each UTC day boundary, which
+    // invalidates pagination cursors (InvalidCursor) whenever the clamp applies.
+    minDateForAuditLogRetention(auditLogRetentionDays, Date.now()),
+  );
 }
