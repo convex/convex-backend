@@ -127,6 +127,7 @@ libsodium-sys-stable = { version = "1.22.2", features = [ "minimal" ] }
 log_interleaver = { path = "crates/log_interleaver" }
 lru = "0.18.0"
 lz4_flex = "0.14"
+managed_export_worker = { path = "crates/managed_export_worker" }
 maplit = "1"
 memchr = "2.7"
 memory-stats = "1"

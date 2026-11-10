@@ -210,6 +210,7 @@ use keybroker::{
     Identity,
     KeyBroker,
 };
+use managed_export_worker::S3ExportWorker;
 use maplit::{
     btreemap,
     btreeset,
@@ -423,7 +424,6 @@ use crate::{
         RedactedJsError,
         RedactedLogLines,
     },
-    s3_export_worker::S3ExportWorker,
     snapshot_import::{
         clear_tables,
         SnapshotImportWorker,
@@ -449,7 +449,6 @@ pub mod integrations;
 pub mod log_visibility;
 mod metrics;
 pub mod redaction;
-mod s3_export_worker;
 pub mod scheduled_jobs;
 mod schema_worker;
 pub mod snapshot_import;

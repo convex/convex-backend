@@ -1,3 +1,5 @@
+#![cfg_attr(test, feature(try_blocks_heterogeneous))]
+
 use std::{
     sync::Arc,
     time::Duration,
@@ -58,6 +60,8 @@ use crate::metrics::{
     log_s3_export_worker_failed,
     s3_export_sync_timer,
 };
+
+mod metrics;
 
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);

@@ -79,6 +79,7 @@ isolate = { workspace = true }
 itertools = { workspace = true }
 keybroker = { workspace = true }
 lru = { workspace = true }
+managed_export_worker = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
 model = { workspace = true }

@@ -458,6 +458,7 @@ dependencies = [
  "itertools 0.14.0",
  "keybroker",
  "lru 0.18.5",
+ "managed_export_worker",
  "maplit",
  "metrics",
  "model",
@@ -6978,6 +6979,31 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
+ "value",
+]
+
+[[package]]
+name = "managed_export_worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "common",
+ "convex_macro",
+ "database",
+ "errors",
+ "events",
+ "exports",
+ "fastrace",
+ "futures",
+ "keybroker",
+ "metrics",
+ "model",
+ "parking_lot",
+ "runtime",
+ "streaming_export",
+ "tokio",
+ "usage_tracking",
  "value",
 ]
 
