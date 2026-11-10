@@ -35,14 +35,25 @@ documentation.
 
 The
 [`nuxt-convex-module` npm package](https://www.npmjs.com/package/nuxt-convex-module)
-provides integration of Convex with the Nuxt 4 ecosystem. It ports the Convex
-React and Next.js clients: hooks become auto-imported composables with the same
-names, arguments and return shapes, and `preloadQuery` and `fetchQuery` work as
-in [Next.js server rendering](/client/nextjs/app-router/server-rendering.mdx).
-It also includes integrations for Better Auth, Clerk, Auth0 and Polar.
+provides integration of Convex with the Nuxt 4 ecosystem. It is a complete port
+of the official [Convex React](/client/react/overview.mdx) and
+[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients: hooks become
+auto-imported composables with the same names, arguments and return shapes, and
+`preloadQuery` and `fetchQuery` work the same way on the server. It also ports
+the [Clerk](/auth/clerk.mdx) and [Auth0](/auth/auth0.mdx) adapters and the
+clients of the [Better Auth](https://labs.convex.dev/better-auth) and
+[Polar](https://www.convex.dev/components/polar) components.
 
-It uses its own [Vue.js integration library](./overview.mdx#nuxt-convex-module)
-under the hood.
+On top of the official clients, it adds features for Nuxt:
+
+- [`useAsyncQuery`](https://nuxt-convex-module.dev/guide/server-and-ssr#useasyncquery-ssr-data-the-nuxt-way)
+  and `useAsyncPaginatedQuery` for server rendering with Nuxt data fetching
+- [File storage](https://nuxt-convex-module.dev/guide/file-storage) composables
+  and a `<ConvexImage>` component
+- A Convex tab in [Nuxt DevTools](https://nuxt-convex-module.dev/guide/devtools)
+- A
+  [Content Security Policy](https://nuxt-convex-module.dev/getting-started/security)
+  for your deployment with `nuxt-security`
 
 See the
 [installation guide](https://nuxt-convex-module.dev/getting-started/installation)
