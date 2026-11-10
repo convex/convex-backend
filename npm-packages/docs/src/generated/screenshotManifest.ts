@@ -159,6 +159,71 @@ export const screenshots = [
     }
   },
   {
+    "storyTitle": "docs/components/ProjectCard#With Recent Deployment",
+    "light": {
+      "filename": "components_project_card_with_recent_deployment_light.webp",
+      "width": 1216,
+      "height": 286
+    },
+    "dark": {
+      "filename": "components_project_card_with_recent_deployment_dark.webp",
+      "width": 1216,
+      "height": 286
+    }
+  },
+  {
+    "storyTitle": "docs/components/ProjectCard#Grid",
+    "light": {
+      "filename": "components_project_card_grid_light.webp",
+      "width": 2048,
+      "height": 986
+    },
+    "dark": {
+      "filename": "components_project_card_grid_dark.webp",
+      "width": 2048,
+      "height": 986
+    }
+  },
+  {
+    "storyTitle": "docs/components/ProjectCard#List",
+    "light": {
+      "filename": "components_project_card_list_light.webp",
+      "width": 2052,
+      "height": 636
+    },
+    "dark": {
+      "filename": "components_project_card_list_dark.webp",
+      "width": 2052,
+      "height": 636
+    }
+  },
+  {
+    "storyTitle": "docs/components/ProjectCard#Custom Role Grid",
+    "light": {
+      "filename": "components_project_card_custom_role_grid_light.webp",
+      "width": 2048,
+      "height": 540
+    },
+    "dark": {
+      "filename": "components_project_card_custom_role_grid_dark.webp",
+      "width": 2048,
+      "height": 540
+    }
+  },
+  {
+    "storyTitle": "docs/components/ProjectCard#Custom Role List",
+    "light": {
+      "filename": "components_project_card_custom_role_list_light.webp",
+      "width": 2052,
+      "height": 408
+    },
+    "dark": {
+      "filename": "components_project_card_custom_role_list_dark.webp",
+      "width": 2052,
+      "height": 408
+    }
+  },
+  {
     "storyTitle": "docs/components/ProjectDefaultEnvironmentVariables",
     "light": {
       "filename": "components_project_default_environment_variables_light.webp",
@@ -224,6 +289,19 @@ export const screenshots = [
     }
   },
   {
+    "storyTitle": "docs/pages/Profile#Available Teams",
+    "light": {
+      "filename": "pages_profile_available_teams_light.webp",
+      "width": 1552,
+      "height": 532
+    },
+    "dark": {
+      "filename": "pages_profile_available_teams_dark.webp",
+      "width": 1552,
+      "height": 532
+    }
+  },
+  {
     "storyTitle": "docs/pages/Projects",
     "light": {
       "filename": "pages_projects_light.webp",
@@ -250,6 +328,71 @@ export const screenshots = [
     }
   },
   {
+    "storyTitle": "docs/pages/Projects#Team Switcher With Invitation",
+    "light": {
+      "filename": "pages_projects_team_switcher_with_invitation_light.webp",
+      "width": 1344,
+      "height": 1027
+    },
+    "dark": {
+      "filename": "pages_projects_team_switcher_with_invitation_dark.webp",
+      "width": 1344,
+      "height": 1027
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Filtered By Tag",
+    "light": {
+      "filename": "pages_projects_filtered_by_tag_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_filtered_by_tag_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Tag Filter Without Permission",
+    "light": {
+      "filename": "pages_projects_tag_filter_without_permission_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_tag_filter_without_permission_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Tag Filter Without Tags",
+    "light": {
+      "filename": "pages_projects_tag_filter_without_tags_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_tag_filter_without_tags_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Create Project With Tags",
+    "light": {
+      "filename": "pages_projects_create_project_with_tags_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_projects_create_project_with_tags_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
     "storyTitle": "docs/pages/TeamAuditLog",
     "light": {
       "filename": "pages_team_audit_log_light.webp",
@@ -263,6 +406,214 @@ export const screenshots = [
     }
   },
   {
+    "storyTitle": "docs/pages/TeamAuthentication",
+    "light": {
+      "filename": "pages_team_authentication_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_team_authentication_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#SSO Sections",
+    "light": {
+      "filename": "pages_team_authentication_sso_sections_light.webp",
+      "width": 1472,
+      "height": 772
+    },
+    "dark": {
+      "filename": "pages_team_authentication_sso_sections_dark.webp",
+      "width": 1472,
+      "height": 772
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Domains",
+    "light": {
+      "filename": "pages_team_authentication_domains_light.webp",
+      "width": 1472,
+      "height": 532
+    },
+    "dark": {
+      "filename": "pages_team_authentication_domains_dark.webp",
+      "width": 1472,
+      "height": 532
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Single Sign On",
+    "light": {
+      "filename": "pages_team_authentication_single_sign_on_light.webp",
+      "width": 1472,
+      "height": 432
+    },
+    "dark": {
+      "filename": "pages_team_authentication_single_sign_on_dark.webp",
+      "width": 1472,
+      "height": 432
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Single Sign On Configured",
+    "light": {
+      "filename": "pages_team_authentication_single_sign_on_configured_light.webp",
+      "width": 1472,
+      "height": 448
+    },
+    "dark": {
+      "filename": "pages_team_authentication_single_sign_on_configured_dark.webp",
+      "width": 1472,
+      "height": 448
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Single Sign On Menu",
+    "light": {
+      "filename": "pages_team_authentication_single_sign_on_menu_light.webp",
+      "width": 1472,
+      "height": 608
+    },
+    "dark": {
+      "filename": "pages_team_authentication_single_sign_on_menu_dark.webp",
+      "width": 1472,
+      "height": 608
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Require SSO",
+    "light": {
+      "filename": "pages_team_authentication_require_sso_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_team_authentication_require_sso_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync",
+    "light": {
+      "filename": "pages_team_authentication_directory_sync_light.webp",
+      "width": 1472,
+      "height": 432
+    },
+    "dark": {
+      "filename": "pages_team_authentication_directory_sync_dark.webp",
+      "width": 1472,
+      "height": 432
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync Configure",
+    "light": {
+      "filename": "pages_team_authentication_directory_sync_configure_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_team_authentication_directory_sync_configure_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync Initial Sync",
+    "light": {
+      "filename": "pages_team_authentication_directory_sync_initial_sync_light.webp",
+      "width": 1472,
+      "height": 748
+    },
+    "dark": {
+      "filename": "pages_team_authentication_directory_sync_initial_sync_dark.webp",
+      "width": 1472,
+      "height": 748
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync Synced",
+    "light": {
+      "filename": "pages_team_authentication_directory_sync_synced_light.webp",
+      "width": 1472,
+      "height": 488
+    },
+    "dark": {
+      "filename": "pages_team_authentication_directory_sync_synced_dark.webp",
+      "width": 1472,
+      "height": 488
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Directory Group Roles",
+    "light": {
+      "filename": "pages_team_authentication_directory_group_roles_light.webp",
+      "width": 1472,
+      "height": 570
+    },
+    "dark": {
+      "filename": "pages_team_authentication_directory_group_roles_dark.webp",
+      "width": 1472,
+      "height": 570
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Edit Group Role",
+    "light": {
+      "filename": "pages_team_authentication_edit_group_role_light.webp",
+      "width": 812,
+      "height": 544
+    },
+    "dark": {
+      "filename": "pages_team_authentication_edit_group_role_dark.webp",
+      "width": 812,
+      "height": 544
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Review Directory Changes",
+    "light": {
+      "filename": "pages_team_authentication_review_directory_changes_light.webp",
+      "width": 2168,
+      "height": 1752
+    },
+    "dark": {
+      "filename": "pages_team_authentication_review_directory_changes_dark.webp",
+      "width": 2168,
+      "height": 1752
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync Enabled",
+    "light": {
+      "filename": "pages_team_authentication_directory_sync_enabled_light.webp",
+      "width": 1472,
+      "height": 358
+    },
+    "dark": {
+      "filename": "pages_team_authentication_directory_sync_enabled_dark.webp",
+      "width": 1472,
+      "height": 358
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamAuthentication#Pending Members",
+    "light": {
+      "filename": "pages_team_authentication_pending_members_light.webp",
+      "width": 1674,
+      "height": 1352
+    },
+    "dark": {
+      "filename": "pages_team_authentication_pending_members_dark.webp",
+      "width": 1674,
+      "height": 1352
+    }
+  },
+  {
     "storyTitle": "docs/pages/TeamBilling",
     "light": {
       "filename": "pages_team_billing_light.webp",
@@ -271,6 +622,19 @@ export const screenshots = [
     },
     "dark": {
       "filename": "pages_team_billing_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/TeamInvoices",
+    "light": {
+      "filename": "pages_team_invoices_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_team_invoices_dark.webp",
       "width": 2048,
       "height": 1400
     }
@@ -315,6 +679,19 @@ export const screenshots = [
     }
   },
   {
+    "storyTitle": "docs/pages/TeamUsage#AI Gateway",
+    "light": {
+      "filename": "pages_team_usage_ai_gateway_light.webp",
+      "width": 1626,
+      "height": 854
+    },
+    "dark": {
+      "filename": "pages_team_usage_ai_gateway_dark.webp",
+      "width": 1626,
+      "height": 854
+    }
+  },
+  {
     "storyTitle": "docs/pages/project/ProjectSettings",
     "light": {
       "filename": "pages_project_project_settings_light.webp",
@@ -325,6 +702,19 @@ export const screenshots = [
       "filename": "pages_project_project_settings_dark.webp",
       "width": 2048,
       "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/ProjectSettings#Tags",
+    "light": {
+      "filename": "pages_project_project_settings_tags_light.webp",
+      "width": 1552,
+      "height": 928
+    },
+    "dark": {
+      "filename": "pages_project_project_settings_tags_dark.webp",
+      "width": 1552,
+      "height": 928
     }
   },
   {
@@ -341,16 +731,16 @@ export const screenshots = [
     }
   },
   {
-    "storyTitle": "docs/pages/project/deployment/Data#Filters",
+    "storyTitle": "docs/pages/project/deployment/Data#Index Filter Bar",
     "light": {
-      "filename": "pages_project_deployment_data_filters_light.webp",
+      "filename": "pages_project_deployment_data_index_filter_bar_light.webp",
       "width": 1434,
-      "height": 608
+      "height": 270
     },
     "dark": {
-      "filename": "pages_project_deployment_data_filters_dark.webp",
+      "filename": "pages_project_deployment_data_index_filter_bar_dark.webp",
       "width": 1434,
-      "height": 608
+      "height": 270
     }
   },
   {
@@ -397,12 +787,12 @@ export const screenshots = [
     "light": {
       "filename": "pages_project_deployment_data_context_menu_light.webp",
       "width": 1034,
-      "height": 798
+      "height": 780
     },
     "dark": {
       "filename": "pages_project_deployment_data_context_menu_dark.webp",
       "width": 1034,
-      "height": 798
+      "height": 780
     }
   },
   {
@@ -656,13 +1046,39 @@ export const screenshots = [
     "storyTitle": "docs/pages/project/deployment/settings/Backups",
     "light": {
       "filename": "pages_project_deployment_settings_backups_light.webp",
-      "width": 2560,
-      "height": 1440
+      "width": 2048,
+      "height": 1400
     },
     "dark": {
       "filename": "pages_project_deployment_settings_backups_dark.webp",
-      "width": 2560,
-      "height": 1440
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Backups#Request Immediate Backup",
+    "light": {
+      "filename": "pages_project_deployment_settings_backups_request_immediate_backup_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_backups_request_immediate_backup_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Backups#Request Immediate Backup With Too Much File Storage",
+    "light": {
+      "filename": "pages_project_deployment_settings_backups_request_immediate_backup_with_too_much_file_storage_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_backups_request_immediate_backup_with_too_much_file_storage_dark.webp",
+      "width": 2048,
+      "height": 1400
     }
   },
   {
@@ -744,6 +1160,19 @@ export const screenshots = [
     }
   },
   {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Configure S 3 Export",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s_3_export_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s_3_export_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
     "storyTitle": "docs/pages/project/deployment/settings/Integrations#Custom Audit Topic",
     "light": {
       "filename": "pages_project_deployment_settings_integrations_custom_audit_topic_light.webp",
@@ -780,370 +1209,6 @@ export const screenshots = [
       "filename": "pages_project_deployment_settings_usage_limits_empty_dark.webp",
       "width": 3024,
       "height": 2440
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamUsage#AI Gateway",
-    "light": {
-      "filename": "pages_team_usage_ai_gateway_light.webp",
-      "width": 1626,
-      "height": 854
-    },
-    "dark": {
-      "filename": "pages_team_usage_ai_gateway_dark.webp",
-      "width": 1626,
-      "height": 854
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication",
-    "light": {
-      "filename": "pages_team_authentication_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_team_authentication_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Domains",
-    "light": {
-      "filename": "pages_team_authentication_domains_light.webp",
-      "width": 1472,
-      "height": 532
-    },
-    "dark": {
-      "filename": "pages_team_authentication_domains_dark.webp",
-      "width": 1472,
-      "height": 532
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Single Sign On",
-    "light": {
-      "filename": "pages_team_authentication_single_sign_on_light.webp",
-      "width": 1472,
-      "height": 432
-    },
-    "dark": {
-      "filename": "pages_team_authentication_single_sign_on_dark.webp",
-      "width": 1472,
-      "height": 432
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Single Sign On Configured",
-    "light": {
-      "filename": "pages_team_authentication_single_sign_on_configured_light.webp",
-      "width": 1472,
-      "height": 448
-    },
-    "dark": {
-      "filename": "pages_team_authentication_single_sign_on_configured_dark.webp",
-      "width": 1472,
-      "height": 448
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Single Sign On Menu",
-    "light": {
-      "filename": "pages_team_authentication_single_sign_on_menu_light.webp",
-      "width": 1472,
-      "height": 608
-    },
-    "dark": {
-      "filename": "pages_team_authentication_single_sign_on_menu_dark.webp",
-      "width": 1472,
-      "height": 608
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Require SSO",
-    "light": {
-      "filename": "pages_team_authentication_require_sso_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_team_authentication_require_sso_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync",
-    "light": {
-      "filename": "pages_team_authentication_directory_sync_light.webp",
-      "width": 1472,
-      "height": 432
-    },
-    "dark": {
-      "filename": "pages_team_authentication_directory_sync_dark.webp",
-      "width": 1472,
-      "height": 432
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync Configure",
-    "light": {
-      "filename": "pages_team_authentication_directory_sync_configure_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_team_authentication_directory_sync_configure_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync Initial Sync",
-    "light": {
-      "filename": "pages_team_authentication_directory_sync_initial_sync_light.webp",
-      "width": 1472,
-      "height": 748
-    },
-    "dark": {
-      "filename": "pages_team_authentication_directory_sync_initial_sync_dark.webp",
-      "width": 1472,
-      "height": 748
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync Synced",
-    "light": {
-      "filename": "pages_team_authentication_directory_sync_synced_light.webp",
-      "width": 1472,
-      "height": 488
-    },
-    "dark": {
-      "filename": "pages_team_authentication_directory_sync_synced_dark.webp",
-      "width": 1472,
-      "height": 488
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Edit Group Role",
-    "light": {
-      "filename": "pages_team_authentication_edit_group_role_light.webp",
-      "width": 812,
-      "height": 544
-    },
-    "dark": {
-      "filename": "pages_team_authentication_edit_group_role_dark.webp",
-      "width": 812,
-      "height": 544
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Review Directory Changes",
-    "light": {
-      "filename": "pages_team_authentication_review_directory_changes_light.webp",
-      "width": 2168,
-      "height": 1752
-    },
-    "dark": {
-      "filename": "pages_team_authentication_review_directory_changes_dark.webp",
-      "width": 2168,
-      "height": 1752
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Directory Sync Enabled",
-    "light": {
-      "filename": "pages_team_authentication_directory_sync_enabled_light.webp",
-      "width": 1472,
-      "height": 358
-    },
-    "dark": {
-      "filename": "pages_team_authentication_directory_sync_enabled_dark.webp",
-      "width": 1472,
-      "height": 358
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Pending Members",
-    "light": {
-      "filename": "pages_team_authentication_pending_members_light.webp",
-      "width": 1674,
-      "height": 1352
-    },
-    "dark": {
-      "filename": "pages_team_authentication_pending_members_dark.webp",
-      "width": 1674,
-      "height": 1352
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#Directory Group Roles",
-    "light": {
-      "filename": "pages_team_authentication_directory_group_roles_light.webp",
-      "width": 1472,
-      "height": 570
-    },
-    "dark": {
-      "filename": "pages_team_authentication_directory_group_roles_dark.webp",
-      "width": 1472,
-      "height": 570
-    }
-  },
-  {
-    "storyTitle": "docs/pages/Profile#Available Teams",
-    "light": {
-      "filename": "pages_profile_available_teams_light.webp",
-      "width": 1552,
-      "height": 532
-    },
-    "dark": {
-      "filename": "pages_profile_available_teams_dark.webp",
-      "width": 1552,
-      "height": 532
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamAuthentication#SSO Sections",
-    "light": {
-      "filename": "pages_team_authentication_sso_sections_light.webp",
-      "width": 1472,
-      "height": 772
-    },
-    "dark": {
-      "filename": "pages_team_authentication_sso_sections_dark.webp",
-      "width": 1472,
-      "height": 772
-    }
-  },
-  {
-    "storyTitle": "docs/pages/Projects#Team Switcher With Invitation",
-    "light": {
-      "filename": "pages_projects_team_switcher_with_invitation_light.webp",
-      "width": 1344,
-      "height": 1027
-    },
-    "dark": {
-      "filename": "pages_projects_team_switcher_with_invitation_dark.webp",
-      "width": 1344,
-      "height": 1027
-    }
-  },
-  {
-    "storyTitle": "docs/pages/Projects#Filtered By Tag",
-    "light": {
-      "filename": "pages_projects_filtered_by_tag_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_projects_filtered_by_tag_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
-    "storyTitle": "docs/pages/Projects#Tag Filter Without Permission",
-    "light": {
-      "filename": "pages_projects_tag_filter_without_permission_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_projects_tag_filter_without_permission_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
-    "storyTitle": "docs/pages/Projects#Tag Filter Without Tags",
-    "light": {
-      "filename": "pages_projects_tag_filter_without_tags_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_projects_tag_filter_without_tags_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
-    "storyTitle": "docs/pages/Projects#Create Project With Tags",
-    "light": {
-      "filename": "pages_projects_create_project_with_tags_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_projects_create_project_with_tags_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
-    "storyTitle": "docs/components/ProjectCard#With Recent Deployment",
-    "light": {
-      "filename": "components_project_card_with_recent_deployment_light.webp",
-      "width": 1216,
-      "height": 286
-    },
-    "dark": {
-      "filename": "components_project_card_with_recent_deployment_dark.webp",
-      "width": 1216,
-      "height": 286
-    }
-  },
-  {
-    "storyTitle": "docs/components/ProjectCard#Grid",
-    "light": {
-      "filename": "components_project_card_grid_light.webp",
-      "width": 2048,
-      "height": 986
-    },
-    "dark": {
-      "filename": "components_project_card_grid_dark.webp",
-      "width": 2048,
-      "height": 986
-    }
-  },
-  {
-    "storyTitle": "docs/components/ProjectCard#List",
-    "light": {
-      "filename": "components_project_card_list_light.webp",
-      "width": 2052,
-      "height": 636
-    },
-    "dark": {
-      "filename": "components_project_card_list_dark.webp",
-      "width": 2052,
-      "height": 636
-    }
-  },
-  {
-    "storyTitle": "docs/pages/project/ProjectSettings#Tags",
-    "light": {
-      "filename": "pages_project_project_settings_tags_light.webp",
-      "width": 1552,
-      "height": 928
-    },
-    "dark": {
-      "filename": "pages_project_project_settings_tags_dark.webp",
-      "width": 1552,
-      "height": 928
-    }
-  },
-  {
-    "storyTitle": "docs/pages/TeamInvoices",
-    "light": {
-      "filename": "pages_team_invoices_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_team_invoices_dark.webp",
-      "width": 2048,
-      "height": 1400
     }
   }
 ] as const;
