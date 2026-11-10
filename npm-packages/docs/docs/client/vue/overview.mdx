@@ -14,13 +14,17 @@ The following npm packages integrate Convex with Vue.
 <Admonition type="info">
 
 These packages are community-maintained. Thank you to their maintainers,
-[Chris Visser](https://github.com/chris-visser) (`convex-vue`, `convex-nuxt`)
-and [Slava Razum](https://github.com/slavarazum) (`nuxt-convex-module`), for
-their work!
+[Chris Visser](https://github.com/chris-visser)
+([`convex-vue`](https://github.com/chris-visser/convex-vue),
+[`convex-nuxt`](https://github.com/chris-visser/convex-nuxt)) and
+[Slava Razum](https://github.com/slavarazum)
+([`nuxt-convex-module`](https://github.com/qruto/nuxt-convex-module)), for their
+work!
 
 You're welcome to ask questions about them on the
-[Convex Discord](https://convex.dev/community) but opening a GitHub issue is a
-better way to request a new feature or report a bug.
+[Convex Discord](https://convex.dev/community) but opening an issue in the
+package's GitHub repository is a better way to request a new feature or report a
+bug.
 
 </Admonition>
 
@@ -40,11 +44,21 @@ package includes a Vue.js integration library for Convex. It also powers the
 package's [Nuxt integration](./nuxt.mdx#nuxt-convex-module).
 
 It is a complete port of the official
-[Convex React client](/client/react/overview.mdx). Each hook becomes a
-composable with the same name. The composable takes the same arguments, which
-can also be refs or getters, and returns results such as query data as refs.
+[Convex React client](/client/react/overview.mdx): each hook becomes a
+[composable](https://vuejs.org/guide/reusability/composables.html) with the same
+name and arguments. Query arguments can also be
+[refs or getters](https://vuejs.org/guide/reusability/composables.html#input-arguments),
+and query results are
+[refs](https://vuejs.org/guide/essentials/reactivity-fundamentals.html#ref). The
+port also covers the [Clerk](/auth/clerk.mdx) and [Auth0](/auth/auth0.mdx)
+adapters and the [Polar](https://www.convex.dev/components/polar) component's
+client.
 
-Its `nuxt-convex-module/vue` entry point works in any Vue.js app without Nuxt.
-See the [plain Vue guide](https://nuxt-convex-module.dev/guide/plain-vue) to get
+On top of the official client, it adds
+[file storage](https://nuxt-convex-module.dev/guide/file-storage) composables
+and a `<ConvexImage>` component.
+
+Its `nuxt-convex-module/vue` entry point works in Vue.js apps without Nuxt. See
+the [plain Vue guide](https://nuxt-convex-module.dev/guide/plain-vue) to get
 started or the [nuxt-convex-module docs](https://nuxt-convex-module.dev) for
 more documentation.
