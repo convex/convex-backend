@@ -23,6 +23,7 @@ use application::{
     QueryCache,
     SourceMapCache,
 };
+use beacon::BuildRevision;
 use common::{
     self,
     http::{
@@ -159,6 +160,7 @@ pub async fn make_app(
     persistence: Arc<dyn Persistence>,
     zombify_rx: async_broadcast::Receiver<()>,
     preempt_tx: ShutdownSignal,
+    build_revision: BuildRevision,
 ) -> anyhow::Result<LocalAppState> {
     let key_broker = config.key_broker()?;
     let in_process_searcher = Arc::new(InProcessSearcher::new(runtime.clone())?);
@@ -296,6 +298,7 @@ pub async fn make_app(
             database.clone(),
             config.beacon_tag.clone(),
             config.beacon_fields.clone(),
+            build_revision,
         );
         runtime.spawn_background("beacon_worker", beacon_future);
     }

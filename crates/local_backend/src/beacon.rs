@@ -26,10 +26,15 @@ use reqwest::Client;
 use runtime::prod::ProdRuntime;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
-const COMPILED_REVISION: &str = env!("VERGEN_GIT_SHA");
-const COMMIT_TIMESTAMP: &str = env!("VERGEN_GIT_COMMIT_TIMESTAMP");
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(900); // 15 minutes
+
+/// The git revision a backend binary was built from.
+#[derive(Clone, Copy, Debug)]
+pub struct BuildRevision {
+    pub git_sha: &'static str,
+    pub commit_timestamp: &'static str,
+}
 
 // Allow sending in overrides for the UUID when there's a better concept of
 // "unique user" than the database UUID, and also allow sending arbitrary
@@ -45,6 +50,7 @@ pub async fn start_beacon(
     database: Database<ProdRuntime>,
     beacon_tag: String,
     beacon_fields: Option<JsonValue>,
+    build_revision: BuildRevision,
 ) {
     tracing::info!("Starting beacon coroutine...");
     let start_time = SystemTime::now();
@@ -58,8 +64,8 @@ pub async fn start_beacon(
 
             let client = Client::new();
             let migration_version = globals.version;
-            let compiled_revision = COMPILED_REVISION.to_string();
-            let commit_timestamp = COMMIT_TIMESTAMP.to_string();
+            let compiled_revision = build_revision.git_sha;
+            let commit_timestamp = build_revision.commit_timestamp;
             let uptime = SystemTime::now()
                 .duration_since(start_time)
                 .unwrap_or_default()
