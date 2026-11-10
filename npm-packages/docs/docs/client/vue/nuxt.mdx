@@ -39,10 +39,10 @@ The
 [`nuxt-convex-module` npm package](https://www.npmjs.com/package/nuxt-convex-module)
 provides integration of Convex with the Nuxt 4 ecosystem. It ports the official
 [Convex React](/client/react/overview.mdx) and
-[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients in full and
-adds features built on Nuxt's own capabilities. The port also covers the
-[Clerk](/auth/clerk.mdx) and [Auth0](/auth/auth0.mdx) adapters and the clients
-of the [Better Auth](https://labs.convex.dev/better-auth) and
+[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients in full, with
+additions. The port also covers the [Clerk](/auth/clerk.mdx) and
+[Auth0](/auth/auth0.mdx) adapters and the clients of the
+[Better Auth](https://labs.convex.dev/better-auth) and
 [Polar](https://www.convex.dev/components/polar) components.
 
 Each hook becomes a
@@ -55,21 +55,18 @@ getter functions, and query results are refs. The Next.js server helpers, such
 as `preloadQuery` and `fetchQuery`, keep their signatures and run in
 [server routes](https://nuxt.com/docs/4.x/directory-structure/server).
 
-Beyond the port, it adds:
+Its additions include:
 
-- **Server rendering**:
-  [`useAsyncQuery`](https://nuxt-convex-module.dev/guide/server-and-ssr#useasyncquery-ssr-data-the-nuxt-way)
-  and `useAsyncPaginatedQuery` render query data on the server, then keep it
-  live
-- **File storage**:
-  [composables](https://nuxt-convex-module.dev/guide/file-storage) with upload
-  progress, queues and retries, and a `<ConvexImage>` component
-- **Auth**: a
+- [`useAsyncQuery`](https://nuxt-convex-module.dev/guide/server-and-ssr#useasyncquery-ssr-data-the-nuxt-way)
+  and `useAsyncPaginatedQuery`, which render query data on the server and keep
+  it live in the browser
+- [File storage](https://nuxt-convex-module.dev/guide/file-storage) composables
+  with upload progress, queues and retries, and a `<ConvexImage>` component
+- A
   [`convex-auth` route middleware](https://nuxt-convex-module.dev/components/better-auth#use)
   that protects pages with Better Auth
-- **DevTools**: a Convex tab in
-  [Nuxt DevTools](https://nuxt-convex-module.dev/guide/devtools)
-- **Security**: Convex URLs added to the
+- A Convex tab in [Nuxt DevTools](https://nuxt-convex-module.dev/guide/devtools)
+- Convex URLs added to the
   [Content Security Policy](https://nuxt-convex-module.dev/getting-started/security)
   that `nuxt-security` sets
 
