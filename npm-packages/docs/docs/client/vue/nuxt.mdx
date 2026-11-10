@@ -49,11 +49,9 @@ Each hook becomes a
 name and arguments, and Nuxt
 [auto-imports](https://nuxt.com/docs/4.x/guide/concepts/auto-imports) it. Query
 arguments can also be
-[refs or getters](https://vuejs.org/guide/reusability/composables.html#input-arguments),
-and query results are
-[refs](https://vuejs.org/guide/essentials/reactivity-fundamentals.html#ref). The
-Next.js server helpers, such as `preloadQuery` and `fetchQuery`, keep their
-signatures and run in
+[refs](https://vuejs.org/guide/essentials/reactivity-fundamentals.html#ref) or
+getter functions, and query results are refs. The Next.js server helpers, such
+as `preloadQuery` and `fetchQuery`, keep their signatures and run in
 [server routes](https://nuxt.com/docs/4.x/directory-structure/server).
 
 On top of the official clients, it adds features for Nuxt:
@@ -64,7 +62,14 @@ On top of the official clients, it adds features for Nuxt:
   [Nuxt data fetching](https://nuxt.com/docs/4.x/getting-started/data-fetching)
   and then stay live
 - [File storage](https://nuxt-convex-module.dev/guide/file-storage) composables
-  and a `<ConvexImage>` component
+  that upload with progress, cancellation, queues and retries, and a
+  `<ConvexImage>` component
+- A
+  [`convex-auth` route middleware](https://nuxt-convex-module.dev/components/better-auth#use)
+  and a same-origin proxy for Better Auth
+- A `dev` script that runs `convex dev` and `nuxt dev` together, and
+  [`#convex` aliases](https://nuxt-convex-module.dev/getting-started/configuration#import-aliases)
+  for your generated code
 - A Convex tab in [Nuxt DevTools](https://nuxt-convex-module.dev/guide/devtools)
 - Your deployment's origins in the `nuxt-security`
   [Content Security Policy](https://nuxt-convex-module.dev/getting-started/security)
