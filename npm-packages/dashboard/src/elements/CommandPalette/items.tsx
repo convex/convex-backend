@@ -379,17 +379,14 @@ function DrillButton({ onDrill }: { onDrill: () => void }) {
     <Button
       variant="unstyled"
       aria-label="Browse"
+      data-drill-button=""
       tip={
         <span className="flex items-center gap-1">
           Browse
           <KeyboardShortcut value={["Right"]} className={KEYCAP_CLASSES} />
         </span>
       }
-      className={cn(
-        "mr-1 ml-1.5 shrink-0 rounded-lg p-1.5 text-content-tertiary",
-        "hover:bg-background-secondary hover:text-content-primary",
-        "dark:hover:bg-background-tertiary",
-      )}
+      className="flex shrink-0 items-center self-stretch rounded-r-lg px-3 text-content-tertiary hover:text-content-primary"
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();

@@ -31,18 +31,27 @@
 }
 
 [cmdk-item] {
+  --item-fill: color-mix(
+    in srgb,
+    var(--accent) 9%,
+    var(--background-secondary)
+  );
+  --item-outline: color-mix(in srgb, var(--accent) 22%, transparent);
+  @variant dark {
+    --item-fill: var(--background-tertiary);
+    --item-outline: var(--border-transparent);
+  }
+
   @apply rounded-lg text-sm flex items-center gap-2 p-2 cursor-pointer;
 
-  &[data-selected="true"] {
-    @apply bg-[color-mix(in_srgb,var(--accent)_9%,var(--background-secondary))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_22%,transparent)] dark:bg-background-tertiary dark:shadow-[inset_0_0_0_1px_var(--border-transparent)];
+  &[data-selected="true"],
+  &:active {
+    background-color: var(--item-fill);
+    box-shadow: inset 0 0 0 1px var(--item-outline);
   }
 
   &[data-disabled="true"] {
     @apply text-content-tertiary cursor-not-allowed;
-  }
-
-  &:active {
-    @apply bg-[color-mix(in_srgb,var(--accent)_9%,var(--background-secondary))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_22%,transparent)] dark:bg-background-tertiary dark:shadow-[inset_0_0_0_1px_var(--border-transparent)];
   }
 
   & + [cmdk-item] {
@@ -86,7 +95,43 @@
 
   &[data-selected="true"] > [data-item-primary],
   & > [data-item-primary]:active {
-    @apply bg-[color-mix(in_srgb,var(--accent)_9%,var(--background-secondary))] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--accent)_22%,transparent)] dark:bg-background-tertiary dark:shadow-[inset_0_0_0_1px_var(--border-transparent)];
+    background-color: var(--item-fill);
+    box-shadow: inset 0 0 0 1px var(--item-outline);
+  }
+}
+
+/* Rows with a drill button split into two halves that share the row's outline
+   and a straight separator, and the fill moves to the drill button while it's
+   hovered, so the shape stays the same whichever half a click would act on.
+   The row's outline is an `outline` rather than an inset shadow because it
+   paints above the halves' fills. */
+[cmdk-item]:has(> [data-drill-button]) {
+  &[data-selected="true"],
+  &:active {
+    box-shadow: none;
+    outline: 1px solid var(--item-outline);
+    outline-offset: -1px;
+  }
+
+  & > [data-item-primary] {
+    @apply rounded-r-none;
+  }
+
+  &[data-selected="true"] > [data-item-primary],
+  & > [data-item-primary]:active {
+    box-shadow: none;
+  }
+
+  &[data-selected="true"] > [data-drill-button] {
+    box-shadow: inset 1px 0 0 var(--item-outline);
+  }
+
+  & > [data-drill-button]:hover {
+    background-color: var(--item-fill);
+  }
+
+  &:has(> [data-drill-button]:hover) > [data-item-primary] {
+    background-color: transparent;
   }
 }
 
