@@ -676,6 +676,8 @@ pub enum MaintenanceRoundOutcome {
     /// Another conductor holds the lease; the steady state for every
     /// conductor on the cluster but one.
     LeaseHeldElsewhere,
+    /// `V6_MAINTENANCE_ENABLED` is off.
+    Disabled,
 }
 pub fn log_indexes_log_maintenance_round(cluster_name: &str, outcome: MaintenanceRoundOutcome) {
     INDEXES_LOG_MAINTENANCE_ROUNDS_TOTAL

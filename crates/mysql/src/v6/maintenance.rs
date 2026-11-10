@@ -22,6 +22,7 @@ use common::{
     knobs::{
         INDEXES_LOG_LOOKAHEAD_BUCKETS,
         INDEX_RETENTION_DELAY,
+        V6_MAINTENANCE_ENABLED,
     },
     runtime::Runtime,
     types::Timestamp,
@@ -174,8 +175,17 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
 
     /// Creates the buckets writes will need, drop at most one that has aged
     /// out, and publish the new ceiling and floor. Returns `None` when
-    /// another conductor holds the lease.
+    /// another conductor holds the lease or `V6_MAINTENANCE_ENABLED` is off;
+    /// `run_once_with_lease` ignores the knob so operators can still run a
+    /// round by hand.
     pub async fn run_once(&self, now: Timestamp) -> anyhow::Result<Option<MaintenanceRound>> {
+        if !*V6_MAINTENANCE_ENABLED {
+            metrics::log_indexes_log_maintenance_round(
+                self.pool.cluster_name(),
+                MaintenanceRoundOutcome::Disabled,
+            );
+            return Ok(None);
+        }
         self.run_once_with_lease(now, MaintenanceLease::Acquire)
             .await
     }

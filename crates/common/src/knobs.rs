@@ -746,6 +746,13 @@ pub static INDEXES_LOG_MAINTENANCE_INTERVAL: LazyLock<Duration> = LazyLock::new(
     Duration::from_secs(env_config("INDEXES_LOG_MAINTENANCE_INTERVAL", 60).max(1))
 });
 
+/// Kill switch for MySQL V6 `indexes_log` bucket maintenance. While off,
+/// rounds do nothing, so commits start failing once writes pass the last
+/// bucket created; that is at most `INDEXES_LOG_LOOKAHEAD_BUCKETS` buckets
+/// away.
+pub static V6_MAINTENANCE_ENABLED: LazyLock<bool> =
+    LazyLock::new(|| env_config("V6_MAINTENANCE_ENABLED", true));
+
 /// How many `indexes_log_<bucket>` tables to create beyond the one taking
 /// writes now.
 pub static INDEXES_LOG_LOOKAHEAD_BUCKETS: LazyLock<usize> =
