@@ -22,6 +22,7 @@ use common::{
     knobs::{
         INDEXES_LOG_LOOKAHEAD_BUCKETS,
         INDEX_RETENTION_DELAY,
+        V6_INDEX_LOG_RETENTION_DELAY,
         V6_MAINTENANCE_ENABLED,
     },
     runtime::Runtime,
@@ -156,6 +157,7 @@ pub struct IndexesLogMaintenance<RT: Runtime> {
     pool: Arc<ConvexMySqlPool<RT>>,
     db_name: String,
     owner: String,
+    log_retention_delay: Duration,
 }
 
 impl<RT: Runtime> IndexesLogMaintenance<RT> {
@@ -165,7 +167,13 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
             pool,
             db_name,
             owner,
+            log_retention_delay: *V6_INDEX_LOG_RETENTION_DELAY,
         }
+    }
+
+    pub fn with_log_retention_delay(mut self, log_retention_delay: Duration) -> Self {
+        self.log_retention_delay = log_retention_delay;
+        self
     }
 
     pub async fn initialize(&self) -> anyhow::Result<()> {
@@ -323,6 +331,7 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
             prev_oldest_kept_ts,
             now,
             *INDEX_RETENTION_DELAY,
+            self.log_retention_delay,
             *INDEXES_LOG_LOOKAHEAD_BUCKETS,
         )
     }
@@ -390,14 +399,14 @@ fn compute_bucket_plan(
     existing: BTreeSet<LogBucket>,
     prev_oldest_kept_ts: Timestamp,
     now: Timestamp,
-    retention_delay: Duration,
+    index_retention_delay: Duration,
+    log_retention_delay: Duration,
     lookahead: usize,
 ) -> anyhow::Result<BucketPlan> {
     let now_bucket = LogBucket::from_successor_ts(now);
-    let retention_start = now.sub(retention_delay).unwrap_or(Timestamp::MIN);
     let oldest_kept_ts = cmp::max(
         prev_oldest_kept_ts,
-        LogBucket::from_successor_ts(retention_start).start_ts()?,
+        LogBucket::from_successor_ts(retention_start(now, index_retention_delay)).start_ts()?,
     );
     let floor_bucket = LogBucket::from_successor_ts(oldest_kept_ts);
     let missing = buckets_to_create(
@@ -407,13 +416,26 @@ fn compute_bucket_plan(
         &existing,
     )?;
     let after_create = existing.iter().chain(&missing).copied().collect();
-    let to_drop = bucket_to_drop(&after_create, prev_oldest_kept_ts, now_bucket)?;
+    // The published floor bounds the buckets every index scan unions, so it
+    // follows index retention. Nothing reads a table below it; the table stays
+    // until its last timestamp is a log retention delay old only as history for
+    // operators, and is never dropped above the floor a previous round
+    // published.
+    let drop_before = cmp::min(
+        prev_oldest_kept_ts,
+        retention_start(now, log_retention_delay),
+    );
+    let to_drop = bucket_to_drop(&after_create, drop_before, now_bucket)?;
     Ok(BucketPlan {
         existing,
         missing,
         oldest_kept_ts,
         to_drop,
     })
+}
+
+fn retention_start(now: Timestamp, delay: Duration) -> Timestamp {
+    now.sub(delay).unwrap_or(Timestamp::MIN)
 }
 
 async fn read_state<RT: Runtime>(
@@ -472,12 +494,12 @@ fn buckets_to_create(
 
 fn bucket_to_drop(
     existing: &BTreeSet<LogBucket>,
-    prev_oldest_kept_ts: Timestamp,
+    drop_before: Timestamp,
     now_bucket: LogBucket,
 ) -> anyhow::Result<Option<LogBucket>> {
     let Some(&bucket) = existing.first() else {
         return Ok(None);
     };
     let past_backstop = bucket.value() < now_bucket.value() - 1;
-    Ok((past_backstop && bucket.end_ts()? <= prev_oldest_kept_ts).then_some(bucket))
+    Ok((past_backstop && bucket.end_ts()? <= drop_before).then_some(bucket))
 }
