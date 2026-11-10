@@ -1,4 +1,3 @@
-import { Button } from "@ui/Button";
 import { Sheet } from "@ui/Sheet";
 import { Tooltip } from "@ui/Tooltip";
 import { Spinner } from "@ui/Spinner";
@@ -16,6 +15,7 @@ import {
   ChevronRightIcon,
 } from "@radix-ui/react-icons";
 import { cn } from "@ui/cn";
+import Link from "next/link";
 import { useRouter } from "next/router";
 import { Donut } from "@ui/Donut";
 import { Loading } from "@ui/Loading";
@@ -522,7 +522,7 @@ export function BusinessPlanSummary({
             return (
               <div
                 key={index}
-                className="group col-span-full grid min-h-10 grid-cols-subgrid items-center rounded-sm px-4 py-2 text-left transition-colors focus-within:bg-background-primary hover:bg-background-primary"
+                className="group relative col-span-full grid min-h-10 grid-cols-subgrid items-center rounded-sm px-4 py-2 text-left transition-colors focus-within:bg-background-primary hover:bg-background-primary"
               >
                 <div className="flex items-center gap-2">
                   {showIncludedLimits &&
@@ -531,7 +531,7 @@ export function BusinessPlanSummary({
                         aria-label={`${section.title} included usage`}
                         side="bottom"
                         tip={`Your team has used ${(100 * (displayedUsage / entitlement)).toFixed(2)}% of the included amount of ${section.title}.`}
-                        className="flex animate-fadeInFromLoading items-center rounded-sm focus-visible:ring-2 focus-visible:ring-border-selected"
+                        className="relative z-10 flex animate-fadeInFromLoading items-center rounded-sm focus-visible:ring-2 focus-visible:ring-border-selected"
                       >
                         <Donut current={displayedUsage} max={entitlement} />
                       </Tooltip>
@@ -643,19 +643,17 @@ export function BusinessPlanSummary({
                     )}
                   </div>
                 )}
-                <Button
-                  variant="unstyled"
+                <Link
+                  href={linkHref}
+                  shallow
                   aria-label={`View ${section.title} breakdown by day`}
-                  onClick={() => {
-                    void router.push(linkHref, undefined, { shallow: true });
-                  }}
-                  className="flex items-center gap-1 rounded-sm text-xs text-content-secondary hover:text-content-primary focus-visible:outline-2 focus-visible:outline-border-selected"
+                  className="flex items-center gap-1 text-xs text-content-secondary group-hover:text-content-primary after:absolute after:inset-0 after:rounded-sm focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-border-selected"
                 >
                   <span className="hidden whitespace-nowrap opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 sm:inline">
                     View breakdown by day
                   </span>
                   <ChevronRightIcon className="size-4" />
-                </Button>
+                </Link>
               </div>
             );
           })
@@ -751,7 +749,7 @@ function SectionLabel({
           aria-label={`${title} details`}
           tip={detail}
           side="right"
-          className="hidden rounded-sm focus-visible:ring-2 focus-visible:ring-border-selected sm:block"
+          className="relative z-10 hidden rounded-sm focus-visible:ring-2 focus-visible:ring-border-selected sm:block"
         >
           <QuestionMarkCircledIcon className="ml-1" />
         </Tooltip>
