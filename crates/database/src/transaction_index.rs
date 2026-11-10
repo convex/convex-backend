@@ -44,6 +44,7 @@ use common::{
         WriteTimestamp,
     },
 };
+use errors::ErrorMetadata;
 use imbl::OrdMap;
 use indexing::{
     database_index_snapshot::{
@@ -349,10 +350,12 @@ impl TransactionIndex {
         // updates in the search request, but there is no need to bother since we
         // don't yet have a use case of modifying an index metadata and performing
         // a text search in the same transaction.
-        anyhow::ensure!(
-            !self.index_registry_updated,
-            "Text search and index registry update not allowed in the same transaction"
-        );
+        if self.index_registry_updated {
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "TextSearchUnavailable",
+                "Text search isn't available in a transaction that changes index definitions.",
+            ));
+        }
         // HACK: instead of using `self.require_enabled` we access the
         // `IndexRegistry` directly to fetch index info, which skips recording the
         // read of `index.id()` into our `TransactionReadSet`.
