@@ -6,7 +6,7 @@ import { formatBytes, formatNumberCompact } from "@common/lib/format";
 import { UsageSummaryRow } from "hooks/usageMetrics";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { formatQuantity } from "./lib/formatQuantity";
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { captureException } from "@sentry/nextjs";
 import { TeamEntitlementsResponse } from "generatedApi";
 
@@ -250,6 +250,7 @@ export function BusinessPlanSummary({
   isBusinessPlan = true,
   entitlements,
   hasSubscription = false,
+  subscriptionLoading = false,
   showEntitlements = false,
   isCurrentBillingPeriod = true,
   pricing = { status: "unavailable", reason: "unsupported-period" },
@@ -263,6 +264,7 @@ export function BusinessPlanSummary({
   isBusinessPlan?: boolean;
   entitlements?: TeamEntitlementsResponse;
   hasSubscription?: boolean;
+  subscriptionLoading?: boolean;
   showEntitlements?: boolean;
   isCurrentBillingPeriod?: boolean;
   pricing?: UsagePricing;
@@ -302,11 +304,30 @@ export function BusinessPlanSummary({
     );
   const showIncluded = hasSubscription || showHistoricalIncluded;
   const showIncludedLimits = showEntitlements && isCurrentBillingPeriod;
-  const gridColumns = showIncluded
-    ? showSpend
+
+  const layoutDecided =
+    !subscriptionLoading &&
+    (!dashboardShowCashUsage || pricing.status !== "loading");
+  const [settledColumns, setSettledColumns] = useState<{
+    showIncluded: boolean;
+    showSpend: boolean;
+  }>();
+  if (
+    layoutDecided &&
+    (settledColumns?.showIncluded !== showIncluded ||
+      settledColumns?.showSpend !== showSpend)
+  ) {
+    setSettledColumns({ showIncluded, showSpend });
+  }
+  const columns = (!layoutDecided && settledColumns) || {
+    showIncluded,
+    showSpend,
+  };
+  const gridColumns = columns.showIncluded
+    ? columns.showSpend
       ? "grid-cols-[4fr_3fr_2fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_2fr_auto]"
       : "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
-    : showSpend
+    : columns.showSpend
       ? "grid-cols-[5fr_4fr_2fr_auto]"
       : "grid-cols-[5fr_4fr_auto]";
 
@@ -374,7 +395,7 @@ export function BusinessPlanSummary({
         <div className="col-span-full grid grid-cols-subgrid items-center rounded-t border-b px-4 py-2 text-sm text-content-secondary">
           <div>Resource</div>
           <div>
-            {showIncluded ? (
+            {columns.showIncluded ? (
               <div className="flex items-center gap-1">
                 Included{" "}
                 <Tooltip
@@ -389,7 +410,7 @@ export function BusinessPlanSummary({
               "Usage"
             )}
           </div>
-          {showIncluded && (
+          {columns.showIncluded && (
             <div className="flex items-center gap-1">
               On-demand{" "}
               <Tooltip
@@ -401,7 +422,7 @@ export function BusinessPlanSummary({
               </Tooltip>
             </div>
           )}
-          {showSpend && (
+          {columns.showSpend && (
             <div className="flex items-center gap-1">
               Spend
               <Tooltip
@@ -421,7 +442,7 @@ export function BusinessPlanSummary({
         </div>
         {error ? (
           <PlanSummaryError />
-        ) : !aggregated ? (
+        ) : !aggregated || !layoutDecided ? (
           <PlanSummaryLoading />
         ) : (
           visibleSections.map((section, index) => {

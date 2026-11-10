@@ -350,6 +350,7 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
                   isBusinessPlan={isBusinessPlanType}
                   entitlements={entitlements}
                   hasSubscription={hasSubscription}
+                  subscriptionLoading={subscription === undefined}
                   showEntitlements={showEntitlements}
                   isCurrentBillingPeriod={isCurrentBillingPeriod}
                 />
