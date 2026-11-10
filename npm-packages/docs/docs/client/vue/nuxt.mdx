@@ -9,7 +9,7 @@ The following npm packages integrate Convex with Nuxt.
 
 <Admonition type="info">
 
-Both libraries are community-maintained. Thank you to their maintainers,
+These packages are community-maintained. Thank you to their maintainers,
 [Chris Visser](https://github.com/chris-visser) (`convex-vue`, `convex-nuxt`)
 and [Slava Razum](https://github.com/slavarazum) (`nuxt-convex-module`), for
 their work!
@@ -37,13 +37,15 @@ The
 [`nuxt-convex-module` npm package](https://www.npmjs.com/package/nuxt-convex-module)
 provides integration of Convex with the Nuxt 4 ecosystem. It is a complete port
 of the official [Convex React](/client/react/overview.mdx) and
-[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients. Each hook
-becomes an auto-imported composable with the same name and arguments. Arguments
-can also be refs or getters, and results such as query data are returned as
-refs. `preloadQuery` and `fetchQuery` work the same way on the server. It also
-ports the [Clerk](/auth/clerk.mdx) and [Auth0](/auth/auth0.mdx) adapters and the
+[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients. It also ports
+the [Clerk](/auth/clerk.mdx) and [Auth0](/auth/auth0.mdx) adapters and the
 clients of the [Better Auth](https://labs.convex.dev/better-auth) and
 [Polar](https://www.convex.dev/components/polar) components.
+
+Each hook becomes an auto-imported composable with the same name. The composable
+takes the same arguments, which can also be refs or getters, and returns results
+such as query data as refs. Server code calls `preloadQuery` and `fetchQuery` as
+in Next.js.
 
 On top of the official clients, it adds features for Nuxt:
 
