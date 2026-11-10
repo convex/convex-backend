@@ -13,18 +13,29 @@
 
 pub mod managed;
 
-use std::collections::{
-    BTreeMap,
-    BTreeSet,
+use std::{
+    collections::{
+        BTreeMap,
+        BTreeSet,
+    },
+    sync::Arc,
 };
 
 use anyhow::Context as _;
 use common::{
+    bootstrap_model::tables::{
+        TableMetadata,
+        TableState,
+        TABLES_TABLE,
+    },
     components::{
         ComponentId,
         ComponentPath,
     },
+    document::ParsedDocument,
+    interval::Interval,
     persistence::DocumentLogEntry,
+    query::Order,
     runtime::Runtime,
     types::{
         IndexRef,
@@ -51,6 +62,7 @@ use table_iteration::data_sync::{
     DataSyncCursor,
     DataSyncIterator,
     DataSyncStatus,
+    ProgressStatus,
 };
 use usage_tracking::{
     FunctionUsageStats,
@@ -61,6 +73,7 @@ use value::{
     InternalId,
     TableMapping,
     TableName,
+    TableNamespace,
     TabletId,
 };
 
@@ -138,12 +151,10 @@ impl From<&ClientType> for DataSyncClient {
 pub struct SyncProgress {
     pub num_tables_synced: u64,
     pub total_tables: u64,
-    /// The component of the table currently being traversed. An in-progress
-    /// sync always has a current table: finishing one either starts the next
-    /// or completes the sync ([`SyncStatus::Stale`] or
-    /// [`SyncStatus::UpToDate`]).
+    /// The component of `current_table`.
     pub current_component: ComponentPath,
-    /// The table currently being traversed.
+    /// The table currently being traversed. Once every table is traversed,
+    /// a sync still catching up to a table change names one of them.
     pub current_table: TableName,
     /// Documents emitted so far from the current table's `by_id` traversal.
     pub num_documents_in_current_table: u64,
@@ -462,6 +473,59 @@ fn new_sync_id<RT: Runtime>(runtime: &RT, sync_client: DataSyncClient) -> String
     format!("{}{}", sync_client.sync_id_prefix(), runtime.new_uuid_v4())
 }
 
+/// Every tablet's `_tables` document with the timestamp of its last write:
+/// the table's creation, its activation by an import, or its deletion. A
+/// deleted tablet keeps its document until document retention passes the
+/// deletion.
+fn table_documents(
+    snapshot: &Snapshot,
+) -> anyhow::Result<Vec<(Timestamp, Arc<ParsedDocument<TableMetadata>>)>> {
+    let tables_tablet = snapshot
+        .table_mapping()
+        .namespace(TableNamespace::Global)
+        .id(&TABLES_TABLE)?
+        .tablet_id;
+    let by_id = snapshot.index_registry.must_get_by_id(tables_tablet)?.id();
+    snapshot
+        .in_memory_indexes
+        .range(by_id, &Interval::all(), Order::Asc)?
+        .context("`_tables` is always in memory")?
+        .into_iter()
+        .map(|(_, ts, doc)| Ok((ts, doc.force()?)))
+        .collect()
+}
+
+/// The newest table change that affects which tablets `selection` resolves
+/// to: the creation or import activation of one of `target_tables`, or the
+/// deletion of a table the selection covered.
+fn selection_metadata_ts(
+    snapshot: &Snapshot,
+    selection: &StreamingExportSelection,
+    target_tables: &BTreeMap<TabletId, IndexRef>,
+    component_paths: &BTreeMap<ComponentId, ComponentPath>,
+) -> anyhow::Result<Option<Timestamp>> {
+    Ok(table_documents(snapshot)?
+        .into_iter()
+        .filter(|(_, table)| match table.state {
+            // `target_tables` holds only active tablets (see `table_included`).
+            // An import's hidden tablet becomes a target when it is activated,
+            // which rewrites this document.
+            TableState::Active | TableState::Hidden => {
+                target_tables.contains_key(&TabletId(table.id().internal_id()))
+            },
+            TableState::Deleting => {
+                !table.name.is_system()
+                    && component_paths
+                        .get(&ComponentId::from(table.namespace))
+                        .is_some_and(|component| {
+                            selection.is_table_included(component, &table.name)
+                        })
+            },
+        })
+        .map(|(ts, _)| ts)
+        .max())
+}
+
 /// Streaming export pages resolved against a consistent metadata snapshot.
 ///
 /// The iterator must read the same database as `db_snapshot`, with compatible
@@ -532,10 +596,25 @@ impl<'a, RT: Runtime> DataSync<'a, RT> {
             .unwrap_or_else(|| new_sync_id(self.db_snapshot.runtime(), self.sync_client));
 
         let mut entries = Vec::new();
-        let page = self
+        let mut page = self
             .iterator
             .next_page(cursor.map(|c| c.inner), &target_tables)
             .await?;
+        // An empty selection captures no documents, so its cursor is consistent
+        // at any timestamp. Move it up to the snapshot, where the selection is
+        // known to be empty: the iterator may have read at an earlier
+        // timestamp, when a since-deleted table was still selected.
+        let snapshot_ts = *self.db_snapshot.timestamp();
+        if target_tables.is_empty() && page.cursor.synced_ts() < snapshot_ts {
+            page.cursor = DataSyncCursor::from_parts(
+                snapshot_ts,
+                BTreeSet::new(),
+                None,
+                0,
+                page.cursor.num_docs_synced(),
+            );
+            page.status = DataSyncStatus::UpToDate { ts: snapshot_ts };
+        }
 
         for DocumentLogEntry { ts, id, value, .. } in page.entries {
             let tablet_id = id.table();
@@ -600,7 +679,32 @@ impl<'a, RT: Runtime> DataSync<'a, RT> {
             })
             .collect();
 
-        let status = match page.status {
+        // `target_tables` and `names` come from the snapshot, so they describe
+        // the export's tables back to the newest change to those tables and no
+        // further: before it, a name may have belonged to the tablet an import
+        // replaced, or to a table since deleted. A snapshot older than that
+        // change would be reported under the wrong tables, so the sync keeps
+        // snapshotting until the document log carries it past the change.
+        let metadata_ts =
+            selection_metadata_ts(snapshot, &self.selection, &target_tables, &component_paths)?;
+        let mut page_status = page.status;
+        if let DataSyncStatus::Stale { ts } | DataSyncStatus::UpToDate { ts } = page_status
+            && metadata_ts.is_some_and(|metadata_ts| ts < metadata_ts)
+        {
+            page_status = DataSyncStatus::Snapshotting {
+                progress: ProgressStatus {
+                    num_tables_synced: page.cursor.synced_tables().len() as u64,
+                    total_tables: target_tables.len() as u64,
+                    current_table: *target_tables
+                        .keys()
+                        .next()
+                        .context("an empty selection is always caught up")?,
+                    num_documents_in_current_table: 0,
+                    num_documents_synced: page.cursor.num_docs_synced(),
+                },
+            };
+        }
+        let status = match page_status {
             DataSyncStatus::Stale { ts } => SyncStatus::Stale { ts },
             DataSyncStatus::UpToDate { ts } => SyncStatus::UpToDate { ts },
             DataSyncStatus::Snapshotting { progress } => {
@@ -678,7 +782,7 @@ pub async fn data_sync_cursor_from_deltas<RT: Runtime>(
     let snapshot = &db_snapshot.snapshot;
     let component_paths = snapshot.component_ids_to_paths();
     let target_tables = ResolvedStreamingExportSelection::new(snapshot, &selection)?.target_tables;
-    let names = target_tables
+    let mut names = target_tables
         .keys()
         .map(|tablet_id| {
             Ok((
@@ -688,11 +792,23 @@ pub async fn data_sync_cursor_from_deltas<RT: Runtime>(
         })
         .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
 
+    // An import fills a tablet while it is hidden and activates it later, so a
+    // tablet activated after `ts` can hold documents from before `ts` that
+    // the legacy sync never saw. Leaving it out of the synced set makes the
+    // first page snapshot it.
+    let changed_after_ts: BTreeSet<TabletId> = table_documents(snapshot)?
+        .into_iter()
+        .filter(|(metadata_ts, _)| *metadata_ts > ts)
+        .map(|(_, table)| TabletId(table.id().internal_id()))
+        .collect();
+    names.retain(|tablet_id, _| !changed_after_ts.contains(tablet_id));
+
     Ok(SyncCursor {
         inner: DataSyncCursor::from_parts(
             ts,
-            target_tables.keys().copied().collect(),
-            // No in-progress table: the whole ID space is already synced.
+            names.keys().copied().collect(),
+            // No in-progress table: the first page starts one for any target
+            // tablet missing from the synced set.
             None,
             0,
             0,
