@@ -3,6 +3,8 @@
 ## Unreleased
 
 - The package is no longer marked as alpha.
+- For devDependencies imported by application code, `dev-dependency-bundled`
+  insights list the importing files in `items[].importedBy`.
 
 ## 0.1.0
 

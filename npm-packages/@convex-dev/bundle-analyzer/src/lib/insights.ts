@@ -853,7 +853,7 @@ function devCodeInsights(
       ...savings(saved),
       buildIds,
       subject: pkg.key,
-      items: [],
+      items: [{ subject: pkg.key, ...saved, importedBy: app }],
     });
   }
   const testFiles = new Map<
