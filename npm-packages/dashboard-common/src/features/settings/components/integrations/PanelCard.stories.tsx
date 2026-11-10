@@ -366,7 +366,9 @@ function s3Export(progress: S3Progress | undefined): S3Integration {
         bucket: "acme-analytics",
         region: "us-west-2",
         prefix: "convex",
-        accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+        roleArn:
+          "arn:aws:iam::123456789012:role/convex/ConvexIntegrations-Qk9xT3mZa8vLw2Hc5RfG1uYpN7dB4eJs",
+        roleExternalId: "Qk9xT3mZa8vLw2Hc5RfG1uYpN7dB4eJs",
         selection: {},
       },
     },
@@ -517,9 +519,7 @@ export const S3ExportFinishAwsSetup: Story = {
     pending.existing!.status = { type: "pending" };
     pending.existing!.config = {
       ...pending.existing!.config,
-      accessKeyId: "",
       roleArn: "",
-      roleExternalId: "Qk9xT3mZa8vLw2Hc5RfG1uYpN7dB4eJs",
     };
     return (
       <S3Providers>

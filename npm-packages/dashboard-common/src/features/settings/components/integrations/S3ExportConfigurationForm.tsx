@@ -7,7 +7,6 @@ import {
   selectionWithComponents,
 } from "./s3ExportSelection";
 import { Button } from "@ui/Button";
-import { Link } from "@ui/Link";
 import { TextInput } from "@ui/TextInput";
 import { Combobox, Option } from "@ui/Combobox";
 import { Stepper } from "@ui/Stepper";
@@ -20,13 +19,10 @@ import {
 import {
   ChevronDownIcon,
   ChevronUpIcon,
-  EyeNoneIcon,
-  EyeOpenIcon,
   ExternalLinkIcon,
 } from "@radix-ui/react-icons";
 import { useFormik } from "formik";
 import { useContext, useMemo, useState } from "react";
-import { Callout } from "@ui/Callout";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import * as Yup from "yup";
@@ -42,7 +38,6 @@ import { CopyButton } from "@common/elements/CopyButton";
 import {
   exportRoot,
   glueDatabaseName,
-  iamPolicy,
   useDeploymentName,
 } from "./S3ExportStatus";
 
@@ -74,20 +69,10 @@ const bucketSchema = Yup.string()
       !["-s3alias", "--ol-s3"].some((suffix) => value?.endsWith(suffix)),
   );
 
-// The fields each step collects, in step order. Leaving a new role export's
-// first step creates it, since Connect AWS needs the External ID the backend
+// The fields each step collects, in step order. Leaving a new export's first
+// step creates it, since Connect AWS needs the External ID the backend
 // generates.
-const ROLE_STEP_FIELDS = [
-  ["bucket", "region", "prefix"],
-  ["roleArn"],
-  [],
-] as const;
-// Access-key exports keep the shape they were created with.
-const ACCESS_KEY_STEP_FIELDS = [
-  ["bucket", "region", "prefix"],
-  ["accessKeyId", "secretAccessKey"],
-  [],
-] as const;
+const STEP_FIELDS = [["bucket", "region", "prefix"], ["roleArn"], []] as const;
 
 /**
  * The same role the CloudFormation template creates, as Terraform for teams
@@ -313,18 +298,12 @@ export function S3ExportConfigurationForm({
 
   const isNewIntegration = existingConfig === null || !logStreamId;
 
-  const [showSecretAccessKey, setShowSecretAccessKey] = useState(false);
-  // New exports use a role. A stored role export carries an empty access key
-  // ID, so the role fields decide which kind a saved export is.
-  const usesAccessKeys =
-    existingConfig !== null && existingConfig.roleExternalId === undefined;
-  const stepFields = usesAccessKeys ? ACCESS_KEY_STEP_FIELDS : ROLE_STEP_FIELDS;
-  const awaitingRole = !usesAccessKeys && existingConfig?.roleArn === "";
+  const awaitingRole = existingConfig?.roleArn === "";
   // The worker records why AWS refused the export, e.g. a role it cannot
   // assume. For a role export that is almost always fixed on Connect AWS.
   const externalId = existingConfig?.roleExternalId ?? "";
   const failure =
-    !usesAccessKeys && integration.existing?.status.type === "failed"
+    integration.existing?.status.type === "failed"
       ? integration.existing.status.reason
       : undefined;
   const deploymentName = useDeploymentName();
@@ -352,15 +331,7 @@ export function S3ExportConfigurationForm({
           /^[^*?$]*$/,
           "Prefixes may not contain `*`, `?` or `$`",
         ),
-        accessKeyId: usesAccessKeys
-          ? Yup.string().required("Access key ID is required")
-          : Yup.string(),
-        secretAccessKey:
-          usesAccessKeys && isNewIntegration
-            ? Yup.string().required("Secret access key is required")
-            : // Blank keeps the stored secret.
-              Yup.string(),
-        roleArn: (!usesAccessKeys && !isNewIntegration
+        roleArn: (!isNewIntegration
           ? Yup.string().required(
               "Paste your AWS account ID or the stack's ARN",
             )
@@ -385,15 +356,13 @@ export function S3ExportConfigurationForm({
             (value) => !value || roleArnFor(value, externalId) !== undefined,
           ),
       }),
-    [externalId, isNewIntegration, usesAccessKeys],
+    [externalId, isNewIntegration],
   );
 
   const formState = useFormik<{
     bucket: string;
     region: string;
     prefix: string;
-    accessKeyId: string;
-    secretAccessKey: string;
     roleArn: string;
     selection: SyncSelection;
   }>({
@@ -405,8 +374,6 @@ export function S3ExportConfigurationForm({
         `convex-export-${deploymentName}`,
       region: existingConfig?.region ?? deploymentRegion,
       prefix: existingConfig?.prefix ?? "",
-      accessKeyId: existingConfig?.accessKeyId ?? "",
-      secretAccessKey: "",
       // Saved role ARNs differ only in the account, so show just that.
       roleArn: existingConfig?.roleArn?.split(":")[4] ?? "",
       selection: initialSelection,
@@ -417,42 +384,19 @@ export function S3ExportConfigurationForm({
         const selection = isEqual(values.selection, initialSelection)
           ? undefined
           : values.selection;
-        const config = {
-          bucket: values.bucket,
-          region: values.region,
-          prefix: values.prefix || null,
-          // OpenAPI's flattened map type cannot represent the `_other` default.
-          ...(selection ? { selection: selection as Selection } : {}),
-        };
-
-        if (isNewIntegration) {
-          await createLogStream({
-            logStreamType: "s3Export",
-            ...config,
-            accessKeyId: values.accessKeyId,
-            secretAccessKey: values.secretAccessKey,
-          });
-          onAddedIntegration?.();
-          toast("success", "Export saved. The first sync is starting.");
-        } else {
-          // Omitting the secret keeps the one already stored; omitting the
-          // ARN keeps the one already pasted.
+        // `createRoleExport` creates a new export, so a submit only updates.
+        if (!isNewIntegration) {
+          // Omitting the ARN keeps the one already pasted.
           const roleArn = roleArnFor(values.roleArn, externalId) ?? "";
           await updateLogStream(logStreamId, {
             logStreamType: "s3Export",
+            // OpenAPI's flattened map type cannot represent the `_other` default.
             ...(selection ? { selection: selection as Selection } : {}),
-            ...(usesAccessKeys && values.secretAccessKey
-              ? { secretAccessKey: values.secretAccessKey }
-              : {}),
-            ...(!usesAccessKeys && roleArn !== existingConfig.roleArn
-              ? { roleArn }
-              : {}),
+            ...(roleArn !== existingConfig.roleArn ? { roleArn } : {}),
           });
           toast(
             "success",
-            !usesAccessKeys &&
-              existingConfig.roleArn === "" &&
-              values.roleArn !== ""
+            existingConfig.roleArn === "" && values.roleArn !== ""
               ? "Role saved. The first sync is starting."
               : selection
                 ? "Tables updated. Tables you already export keep their progress."
@@ -505,10 +449,9 @@ export function S3ExportConfigurationForm({
       ? formState.errors[field]
       : undefined;
   const { bucket, region, prefix } = formState.values;
-  const policy = iamPolicy({ bucket, region, prefix, deploymentName });
   // The first invalid field in a step, if any.
   const stepError = (step: number) =>
-    stepFields[step]
+    STEP_FIELDS[step]
       .map((field) => {
         try {
           validationSchema.validateSyncAt(field, formState.values);
@@ -540,7 +483,7 @@ export function S3ExportConfigurationForm({
         await formState.setTouched(
           {
             ...formState.touched,
-            ...Object.fromEntries(stepFields[step].map((f) => [f, true])),
+            ...Object.fromEntries(STEP_FIELDS[step].map((f) => [f, true])),
           },
           true,
         );
@@ -554,7 +497,7 @@ export function S3ExportConfigurationForm({
   );
   // Until the role is connected, the steps run in order and only the last one
   // saves, so the ARN reaches the backend together with the sync settings.
-  const pending = !usesAccessKeys && (isNewIntegration || awaitingRole);
+  const pending = isNewIntegration || awaitingRole;
   const resolvedRoleArn = roleArnFor(formState.values.roleArn, externalId);
   const roleArnChanged =
     (resolvedRoleArn ?? formState.values.roleArn) !==
@@ -635,196 +578,110 @@ export function S3ExportConfigurationForm({
     >
       <div className="scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-4">
         <Stepper activeStep={activeStep} onSelectStep={setActiveStep}>
-          {usesAccessKeys ? (
-            <Stepper.Step label="Destination">
-              <Callout variant="instructions">
-                Access keys are being retired. To switch to an IAM role, delete
-                this export and add it again with +. That needs a new AWS stack,
-                re-exports every table, and the bucket gets no syncs until the
-                role is connected.
-              </Callout>
-              {destinationFields}
-              {continueButton(0)}
-            </Stepper.Step>
-          ) : (
-            <Stepper.Step label="Bucket">
-              {isNewIntegration && (
-                <fieldset className="flex flex-col gap-2">
-                  <legend className="sr-only">Bucket</legend>
-                  {[
-                    [true, "Create a new bucket"],
-                    [false, "Use an existing bucket"],
-                  ].map(([value, label]) => (
-                    <label
-                      key={String(value)}
-                      className="flex items-center gap-2 text-sm"
-                    >
-                      <input
-                        type="radio"
-                        name="bucketChoice"
-                        checked={createBucket === value}
-                        onChange={() => {
-                          setCreateBucket(value as boolean);
-                          void formState.setFieldValue(
-                            "bucket",
-                            value ? `convex-export-${deploymentName}` : "",
-                          );
-                        }}
-                      />
-                      {label}
-                    </label>
-                  ))}
-                </fieldset>
-              )}
-              {destinationFields}
-              {isNewIntegration ? (
-                <div className="flex flex-col gap-1">
-                  {continueButton(0, "Continue", createRoleExport)}
-                  <p className="text-xs text-content-secondary">
-                    Creates the export. Nothing syncs until you finish.
-                  </p>
-                </div>
-              ) : (
-                continueButton(0)
-              )}
-            </Stepper.Step>
-          )}
-          {usesAccessKeys && (
-            <Stepper.Step label="AWS access">
-              <>
-                <PolicyActions
-                  policy={policy}
-                  disabledReason={destinationError}
-                >
-                  <ol className="flex list-[lower-alpha] flex-col gap-1 pl-4 text-xs text-content-secondary">
-                    <li>
-                      In the bucket's AWS account,{" "}
-                      <Link
-                        href="https://console.aws.amazon.com/iam/home#/users/create"
-                        target="_blank"
-                      >
-                        create an IAM user
-                      </Link>
-                      .
-                    </li>
-                    <li>
-                      Open the user, then choose Add permissions, Create inline
-                      policy, and JSON. Paste this policy and save it.
-                    </li>
-                    <li>
-                      Under Security credentials, create an access key for an
-                      application running outside AWS. Copy both values: AWS
-                      shows the secret only once.
-                    </li>
-                  </ol>
-                </PolicyActions>
-                <TextInput
-                  value={formState.values.accessKeyId}
-                  onChange={formState.handleChange}
-                  label="Access Key ID"
-                  placeholder="AKIAIOSFODNN7EXAMPLE"
-                  id="accessKeyId"
-                  error={fieldError("accessKeyId")}
-                  onBlur={formState.handleBlur}
-                  disabled={destinationFixed}
-                  description={
-                    destinationFixed ? destinationFixedDescription : undefined
-                  }
-                />
-                <TextInput
-                  value={formState.values.secretAccessKey}
-                  onChange={formState.handleChange}
-                  type={showSecretAccessKey ? "text" : "password"}
-                  label={
-                    isNewIntegration
-                      ? "Secret Access Key"
-                      : "Secret Access Key (stored)"
-                  }
-                  id="secretAccessKey"
-                  className="max-w-full"
-                  placeholder={
-                    isNewIntegration ? undefined : "Leave blank to keep"
-                  }
-                  action={() => setShowSecretAccessKey(!showSecretAccessKey)}
-                  Icon={showSecretAccessKey ? EyeNoneIcon : EyeOpenIcon}
-                  iconTooltip={
-                    showSecretAccessKey
-                      ? "Hide secret access key"
-                      : "Show secret access key"
-                  }
-                  error={fieldError("secretAccessKey")}
-                  onBlur={formState.handleBlur}
-                  description="Permissions can take a minute to apply. Convex retries automatically."
-                />
-              </>
-              {continueButton(1)}
-            </Stepper.Step>
-          )}
-          {!usesAccessKeys && (
-            <Stepper.Step label="Connect AWS">
-              {isNewIntegration ? (
-                <p className="text-xs text-content-secondary" role="status">
-                  Creating the export…
+          <Stepper.Step label="Bucket">
+            {isNewIntegration && (
+              <fieldset className="flex flex-col gap-2">
+                <legend className="sr-only">Bucket</legend>
+                {[
+                  [true, "Create a new bucket"],
+                  [false, "Use an existing bucket"],
+                ].map(([value, label]) => (
+                  <label
+                    key={String(value)}
+                    className="flex items-center gap-2 text-sm"
+                  >
+                    <input
+                      type="radio"
+                      name="bucketChoice"
+                      checked={createBucket === value}
+                      onChange={() => {
+                        setCreateBucket(value as boolean);
+                        void formState.setFieldValue(
+                          "bucket",
+                          value ? `convex-export-${deploymentName}` : "",
+                        );
+                      }}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            {destinationFields}
+            {isNewIntegration ? (
+              <div className="flex flex-col gap-1">
+                {continueButton(0, "Continue", createRoleExport)}
+                <p className="text-xs text-content-secondary">
+                  Creates the export. Nothing syncs until you finish.
                 </p>
-              ) : (
-                <>
-                  {!createdHere && (
-                    <div className="flex flex-col gap-1">
-                      <label className="flex items-center gap-2 text-sm">
-                        <Checkbox
-                          checked={createBucket}
-                          onChange={() => setCreateBucket(!createBucket)}
-                        />
-                        Create the bucket <code>{bucket}</code>
-                      </label>
-                      <p className="pl-6 text-xs text-content-secondary">
-                        Turn this off if the bucket already exists.
-                      </p>
-                    </div>
-                  )}
-                  <RoleSetup
-                    role={{
-                      externalId,
-                      bucket,
-                      exportPath: `${exportRoot(
-                        prefix,
-                        deploymentName,
-                      )}/data-lake`,
-                      glueDatabase: glueDatabaseName(deploymentName),
-                      createBucket,
-                    }}
-                    region={region}
-                  />
-                  <TextInput
-                    value={formState.values.roleArn}
-                    onChange={formState.handleChange}
-                    label="AWS account ID"
-                    id="roleArn"
-                    placeholder="123456789012"
-                    error={fieldError("roleArn") ?? failure}
-                    onBlur={formState.handleBlur}
-                    description={
-                      resolvedRoleArn ? (
-                        <>
-                          Convex connects to <code>{resolvedRoleArn}</code>
-                        </>
-                      ) : (
-                        "Find it in the account menu at the top right of the AWS console. You can also paste the stack's ARN."
-                      )
-                    }
-                  />
+              </div>
+            ) : (
+              continueButton(0)
+            )}
+          </Stepper.Step>
+          <Stepper.Step label="Connect AWS">
+            {isNewIntegration ? (
+              <p className="text-xs text-content-secondary" role="status">
+                Creating the export…
+              </p>
+            ) : (
+              <>
+                {!createdHere && (
                   <div className="flex flex-col gap-1">
-                    {continueButton(1, "Next: sync settings")}
-                    {pending && (
-                      <p className="text-xs text-content-secondary">
-                        Nothing is saved until you save on the next step.
-                      </p>
-                    )}
+                    <label className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={createBucket}
+                        onChange={() => setCreateBucket(!createBucket)}
+                      />
+                      Create the bucket <code>{bucket}</code>
+                    </label>
+                    <p className="pl-6 text-xs text-content-secondary">
+                      Turn this off if the bucket already exists.
+                    </p>
                   </div>
-                </>
-              )}
-            </Stepper.Step>
-          )}
+                )}
+                <RoleSetup
+                  role={{
+                    externalId,
+                    bucket,
+                    exportPath: `${exportRoot(
+                      prefix,
+                      deploymentName,
+                    )}/data-lake`,
+                    glueDatabase: glueDatabaseName(deploymentName),
+                    createBucket,
+                  }}
+                  region={region}
+                />
+                <TextInput
+                  value={formState.values.roleArn}
+                  onChange={formState.handleChange}
+                  label="AWS account ID"
+                  id="roleArn"
+                  placeholder="123456789012"
+                  error={fieldError("roleArn") ?? failure}
+                  onBlur={formState.handleBlur}
+                  description={
+                    resolvedRoleArn ? (
+                      <>
+                        Convex connects to <code>{resolvedRoleArn}</code>
+                      </>
+                    ) : (
+                      "Find it in the account menu at the top right of the AWS console. You can also paste the stack's ARN."
+                    )
+                  }
+                />
+                <div className="flex flex-col gap-1">
+                  {continueButton(1, "Next: sync settings")}
+                  {pending && (
+                    <p className="text-xs text-content-secondary">
+                      Nothing is saved until you save on the next step.
+                    </p>
+                  )}
+                </div>
+              </>
+            )}
+          </Stepper.Step>
           <Stepper.Step label="Sync settings">
             <div className="overflow-hidden rounded-sm border">
               <div className="flex flex-col gap-1 p-3">
@@ -947,7 +804,7 @@ export function S3ExportConfigurationForm({
               // Open the first step with an error, since the others are
               // collapsed.
               const errors = await formState.validateForm();
-              const step = stepFields.findIndex((fields) =>
+              const step = STEP_FIELDS.findIndex((fields) =>
                 fields.some((field) => errors[field]),
               );
               if (step !== -1) {
@@ -1033,41 +890,6 @@ function RoleSetup({
         </ol>
       )}
     </div>
-  );
-}
-
-function PolicyActions({
-  policy,
-  disabledReason,
-  children,
-}: {
-  policy: string;
-  disabledReason: string | undefined;
-  children: React.ReactNode;
-}) {
-  return (
-    <Disclosure as="div" className="flex flex-col gap-2">
-      {children}
-      <div className="flex flex-wrap items-center gap-2">
-        <CopyButton
-          text={policy}
-          label="Copy policy"
-          size="sm"
-          disabled={disabledReason !== undefined}
-        />
-        <DisclosureButton as={Button} variant="neutral" size="sm">
-          {({ open }) => <>{open ? "Hide policy" : "Show policy"}</>}
-        </DisclosureButton>
-        <p className="text-xs text-content-secondary" aria-live="polite">
-          {disabledReason}
-        </p>
-      </div>
-      <DisclosurePanel>
-        <pre className="scrollbar max-h-64 overflow-auto rounded-sm border bg-background-tertiary p-2 font-mono text-xs">
-          {policy}
-        </pre>
-      </DisclosurePanel>
-    </Disclosure>
   );
 }
 

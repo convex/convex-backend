@@ -511,8 +511,8 @@ fn ensure_same_s3_destination(
         !existing.requires_resync(&updated),
         ErrorMetadata::bad_request(
             "S3ExportDestinationChanged",
-            "An S3 export's bucket, region, prefix, and credential type can't change. Delete the \
-             export and create a new one instead.",
+            "An S3 export's bucket, region, and prefix can't change. Delete the export and create \
+             a new one instead.",
         )
     );
     Ok(updated)
@@ -566,7 +566,7 @@ fn validate_s3_bucket(bucket: &str) -> anyhow::Result<()> {
 }
 
 #[derive(Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(as = CreateS3ExportLogStreamArgs)]
 pub struct CreateS3ExportIntegrationArgs {
     /// Name of the S3 bucket to mirror into.
@@ -576,20 +576,12 @@ pub struct CreateS3ExportIntegrationArgs {
     /// Key prefix within the bucket. Omit to write at the bucket root.
     #[serde(default)]
     prefix: Option<String>,
-    /// Access key of an IAM user that can write to the bucket. Send both key
-    /// fields, or `roleArn` instead.
-    // TODO(ENG-11116): drop the access key fields once existing exports have
-    // moved to roles, so an export authenticates with a role only.
-    #[serde(default)]
-    access_key_id: Option<String>,
-    #[serde(default)]
-    secret_access_key: Option<String>,
     /// ARN of a role in the bucket's account that Convex assumes to write.
-    /// Send an empty string to create the export first: the response carries
-    /// the `roleExternalId` the role's trust policy needs, and the export waits
+    /// Omit it to create the export first: the response carries the
+    /// `roleExternalId` the role's trust policy needs, and the export waits
     /// until an update supplies the ARN.
     #[serde(default)]
-    role_arn: Option<String>,
+    role_arn: String,
     /// The components and tables to export. Defaults to everything. Each table
     /// exports whole documents, so filtering fields within a table is rejected.
     #[serde(default)]
@@ -605,21 +597,9 @@ impl TryFrom<CreateS3ExportIntegrationArgs> for S3ExportConfig {
         validate_s3_prefix(value.prefix.as_deref().unwrap_or_default())?;
         let selection = value.selection.unwrap_or_default();
         validate_s3_selection(&selection)?;
-        let credentials = match (value.access_key_id, value.secret_access_key, value.role_arn) {
-            (Some(access_key_id), Some(secret_access_key), None) => {
-                S3ExportCredentials::AccessKey {
-                    access_key_id: access_key_id.into(),
-                    secret_access_key: secret_access_key.into(),
-                }
-            },
-            (None, None, Some(role_arn)) => S3ExportCredentials::Role {
-                role_arn,
-                external_id: S3ExportCredentials::new_external_id(),
-            },
-            _ => anyhow::bail!(ErrorMetadata::bad_request(
-                "S3ExportCredentialsRequired",
-                "Send `accessKeyId` with `secretAccessKey`, or `roleArn` on its own.",
-            )),
+        let credentials = S3ExportCredentials {
+            role_arn: value.role_arn,
+            external_id: S3ExportCredentials::new_external_id(),
         };
         Ok(Self {
             bucket: value.bucket,
@@ -694,10 +674,8 @@ pub enum CreateIntegrationResponse {
     #[serde(rename_all = "camelCase")]
     S3Export {
         id: String,
-        /// Set for role exports. The role's trust policy must require it as
-        /// `sts:ExternalId`.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        role_external_id: Option<String>,
+        /// The role's trust policy must require it as `sts:ExternalId`.
+        role_external_id: String,
     },
 }
 
@@ -885,10 +863,7 @@ pub async fn create_integration(
             ensure_integration_does_not_exist(&st.application, &IntegrationType::S3Export).await?;
 
             let config: S3ExportConfig = args.try_into()?;
-            let role_external_id = match &config.credentials {
-                S3ExportCredentials::Role { external_id, .. } => Some(external_id.clone()),
-                S3ExportCredentials::AccessKey { .. } => None,
-            };
+            let role_external_id = config.credentials.external_id.clone();
             let id = st
                 .application
                 .add_integration(
@@ -1128,17 +1103,11 @@ pub struct S3ExportIntegrationConfig {
     /// Key prefix within the bucket.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
-    /// AWS access key ID used to write to the bucket. The matching secret
-    /// access key is write-only and is never returned. Absent for role exports.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub access_key_id: Option<String>,
     /// ARN of the role Convex assumes to write. Empty until the admin pastes
-    /// it. Absent for access-key exports.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role_arn: Option<String>,
+    /// it.
+    pub role_arn: String,
     /// Value the role's trust policy must require as `sts:ExternalId`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role_external_id: Option<String>,
+    pub role_external_id: String,
     /// The components and tables being exported.
     pub selection: Selection,
 }
@@ -1204,24 +1173,14 @@ fn integration_to_api_config(integration: IntegrationWithId) -> Option<Integrati
             }),
         ),
         IntegrationConfig::S3Export(config) => {
-            let (access_key_id, role_arn, role_external_id) = match config.credentials {
-                S3ExportCredentials::AccessKey { access_key_id, .. } => {
-                    (Some(access_key_id.into_value()), None, None)
-                },
-                S3ExportCredentials::Role {
-                    role_arn,
-                    external_id,
-                } => (None, Some(role_arn), Some(external_id)),
-            };
             Some(IntegrationResponse::S3Export(S3ExportIntegrationConfig {
                 id: integration.id.to_string(),
                 status,
                 bucket: config.bucket,
                 region: config.region,
                 prefix: config.prefix,
-                access_key_id,
-                role_arn,
-                role_external_id,
+                role_arn: config.credentials.role_arn,
+                role_external_id: config.credentials.external_id,
                 selection: config.selection,
             }))
         },
@@ -1408,14 +1367,11 @@ pub struct UpdatePostHogErrorTrackingIntegrationArgs {
     host: Option<Option<String>>,
 }
 
-/// Destination and AWS access key ID are fixed at creation.
+/// The destination is fixed at creation.
 #[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(as = UpdateS3ExportSinkArgs)]
 pub struct UpdateS3ExportIntegrationArgs {
-    /// A new secret for the export's access key ID. Access-key exports only.
-    #[serde(default)]
-    secret_access_key: Option<String>,
     /// The role ARN from the customer's stack. Role exports only; sets or
     /// replaces the ARN, within the same AWS account.
     #[serde(default)]
@@ -1732,35 +1688,13 @@ pub async fn update_integration(
             if let Some(selection) = &update_args.selection {
                 validate_s3_selection(selection)?;
             }
-            let credentials = match (
-                existing_config.credentials.clone(),
-                update_args.secret_access_key,
-                update_args.role_arn,
-            ) {
-                (credentials, None, None) => credentials,
-                (S3ExportCredentials::AccessKey { access_key_id, .. }, Some(secret), None) => {
-                    S3ExportCredentials::AccessKey {
-                        access_key_id,
-                        secret_access_key: secret.into(),
-                    }
-                },
-                (S3ExportCredentials::Role { external_id, .. }, None, Some(role_arn)) => {
-                    S3ExportCredentials::Role {
-                        role_arn,
-                        external_id,
-                    }
-                },
-                _ => {
-                    return Err(anyhow::anyhow!(ErrorMetadata::bad_request(
-                        "S3ExportCredentialTypeMismatch",
-                        "Send `secretAccessKey` for an access-key export or `roleArn` for a role \
-                         export, not the other.",
-                    ))
-                    .into());
-                },
-            };
             let config = S3ExportConfig {
-                credentials,
+                credentials: S3ExportCredentials {
+                    role_arn: update_args
+                        .role_arn
+                        .unwrap_or(existing_config.credentials.role_arn.clone()),
+                    external_id: existing_config.credentials.external_id.clone(),
+                },
                 selection: update_args
                     .selection
                     .unwrap_or(existing_config.selection.clone()),

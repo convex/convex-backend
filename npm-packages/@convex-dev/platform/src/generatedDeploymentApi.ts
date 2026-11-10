@@ -832,9 +832,8 @@ export interface components {
             logStreamType: "postHogErrorTracking";
         } | {
             id: string;
-            /** @description Set for role exports. The role's trust policy must require it as
-             *     `sts:ExternalId`. */
-            roleExternalId?: string | null;
+            /** @description The role's trust policy must require it as `sts:ExternalId`. */
+            roleExternalId: string;
             /** @enum {string} */
             logStreamType: "s3Export";
         };
@@ -862,15 +861,11 @@ export interface components {
             region: string;
             /** @description Key prefix within the bucket. Omit to write at the bucket root. */
             prefix?: string | null;
-            /** @description Access key of an IAM user that can write to the bucket. Send both key
-             *     fields, or `roleArn` instead. */
-            accessKeyId?: string | null;
-            secretAccessKey?: string | null;
             /** @description ARN of a role in the bucket's account that Convex assumes to write.
-             *     Send an empty string to create the export first: the response carries
-             *     the `roleExternalId` the role's trust policy needs, and the export waits
+             *     Omit it to create the export first: the response carries the
+             *     `roleExternalId` the role's trust policy needs, and the export waits
              *     until an update supplies the ARN. */
-            roleArn?: string | null;
+            roleArn?: string;
             selection?: null | components["schemas"]["Selection"];
         };
         CreateSentryLogStreamArgs: {
@@ -1213,14 +1208,11 @@ export interface components {
             region: string;
             /** @description Key prefix within the bucket. */
             prefix?: string | null;
-            /** @description AWS access key ID used to write to the bucket. The matching secret
-             *     access key is write-only and is never returned. Absent for role exports. */
-            accessKeyId?: string | null;
             /** @description ARN of the role Convex assumes to write. Empty until the admin pastes
-             *     it. Absent for access-key exports. */
-            roleArn?: string | null;
+             *     it. */
+            roleArn: string;
             /** @description Value the role's trust policy must require as `sts:ExternalId`. */
-            roleExternalId?: string | null;
+            roleExternalId: string;
             /** @description The components and tables being exported. */
             selection: components["schemas"]["Selection"];
         };
@@ -1356,10 +1348,8 @@ export interface components {
              *     added in the future). */
             topics?: components["schemas"]["LogTopic"][] | null;
         };
-        /** @description Destination and AWS access key ID are fixed at creation. */
+        /** @description The destination is fixed at creation. */
         UpdateS3ExportSinkArgs: {
-            /** @description A new secret for the export's access key ID. Access-key exports only. */
-            secretAccessKey?: string | null;
             /** @description The role ARN from the customer's stack. Role exports only; sets or
              *     replaces the ARN, within the same AWS account. */
             roleArn?: string | null;

@@ -34,72 +34,6 @@ export function glueDatabaseName(deploymentName: string) {
 }
 
 /**
- * The least-privilege IAM policy the export's access key needs. The account ID
- * is `*` so users don't have to look theirs up. The key still can't reach
- * another account's catalog unless that account grants it access.
- */
-export function iamPolicy({
-  bucket,
-  region,
-  prefix,
-  deploymentName,
-}: {
-  bucket: string;
-  region: string;
-  prefix: string;
-  deploymentName: string;
-}): string {
-  const root = exportRoot(prefix, deploymentName);
-  const glue = `arn:aws:glue:${region || "<region>"}:*`;
-  const database = glueDatabaseName(deploymentName);
-  const bucketArn = `arn:aws:s3:::${bucket || "<bucket>"}`;
-  return JSON.stringify(
-    {
-      Version: "2012-10-17",
-      Statement: [
-        {
-          Effect: "Allow",
-          Action: ["s3:ListBucket"],
-          Resource: bucketArn,
-          Condition: { StringLike: { "s3:prefix": [`${root}/*`] } },
-        },
-        {
-          Effect: "Allow",
-          // Iceberg uploads large files in parts and aborts the upload when a
-          // write fails.
-          Action: [
-            "s3:GetObject",
-            "s3:PutObject",
-            "s3:DeleteObject",
-            "s3:AbortMultipartUpload",
-          ],
-          Resource: `${bucketArn}/${root}/*`,
-        },
-        {
-          Effect: "Allow",
-          Action: [
-            "glue:GetDatabase",
-            "glue:CreateDatabase",
-            "glue:GetTable",
-            "glue:GetTables",
-            "glue:CreateTable",
-            "glue:UpdateTable",
-            "glue:DeleteTable",
-          ],
-          Resource: [
-            `${glue}:catalog`,
-            `${glue}:database/${database}`,
-            `${glue}:table/${database}/*`,
-          ],
-        },
-      ],
-    },
-    null,
-    2,
-  );
-}
-
-/**
  * The right-hand side of the S3 export card: the sync's status, and its
  * destination on click.
  */
@@ -192,7 +126,9 @@ function S3ExportDetails({ existing }: { existing: S3Export }) {
         <dt className="text-content-secondary">S3 location</dt>
         <dd className="min-w-0 break-all">
           <Link
-            href={`https://s3.console.aws.amazon.com/s3/buckets/${bucket}?region=${encodeURIComponent(region)}&prefix=${encodeURIComponent(dataLakePath)}`}
+            href={`https://s3.console.aws.amazon.com/s3/buckets/${bucket}?region=${encodeURIComponent(
+              region,
+            )}&prefix=${encodeURIComponent(dataLakePath)}`}
             target="_blank"
             className="inline-flex items-center gap-1"
           >
@@ -203,7 +139,9 @@ function S3ExportDetails({ existing }: { existing: S3Export }) {
         <dt className="text-content-secondary">Glue database</dt>
         <dd className="min-w-0 break-all">
           <Link
-            href={`https://console.aws.amazon.com/glue/home?region=${encodeURIComponent(region)}#/v2/data-catalog/databases/view/${database}`}
+            href={`https://console.aws.amazon.com/glue/home?region=${encodeURIComponent(
+              region,
+            )}#/v2/data-catalog/databases/view/${database}`}
             target="_blank"
             className="inline-flex items-center gap-1"
           >

@@ -23,17 +23,11 @@ pub enum SyncDestination {
     Managed,
 }
 
-/// How Porter signs its writes to a customer's bucket.
-pub enum ByoAwsCredentials {
-    AccessKey {
-        access_key_id: String,
-        secret_access_key: String,
-    },
-    /// A role in the customer's account, assumed with the export's ExternalId.
-    Role {
-        role_arn: String,
-        external_id: String,
-    },
+/// A role in the customer's account that Porter assumes, with the export's
+/// ExternalId, to write to their bucket.
+pub struct ByoAwsCredentials {
+    pub role_arn: String,
+    pub external_id: String,
 }
 
 /// The on-disk format written to the destination.

@@ -5,10 +5,7 @@
 
 use std::fmt;
 
-use common::{
-    pii::PII,
-    types::streaming_export::selection::Selection,
-};
+use common::types::streaming_export::selection::Selection;
 use rand::Rng as _;
 use serde::{
     Deserialize,
@@ -28,24 +25,14 @@ pub struct S3ExportConfig {
     pub selection: Selection,
 }
 
-/// How Porter signs its writes to the bucket.
+/// A role in the customer's account that Porter assumes per page.
 #[derive(Debug, Clone, PartialEq)]
-pub enum S3ExportCredentials {
-    /// Long-lived keys of an IAM user the customer created by hand.
-    // TODO(ENG-11116): drop this variant and the two stored key fields once
-    // existing exports have moved to roles.
-    AccessKey {
-        access_key_id: PII<String>,
-        secret_access_key: PII<String>,
-    },
-    /// A role in the customer's account that Porter assumes per page.
-    /// `role_arn` is empty until the admin pastes it; the worker waits for it.
-    Role {
-        role_arn: String,
-        /// Convex generates this once per export. AWS requires it in the
-        /// role's trust policy so only this export can assume the role.
-        external_id: String,
-    },
+pub struct S3ExportCredentials {
+    /// Empty until the admin pastes it; the worker waits for it.
+    pub role_arn: String,
+    /// Convex generates this once per export. AWS requires it in the role's
+    /// trust policy so only this export can assume the role.
+    pub external_id: String,
 }
 
 impl S3ExportCredentials {
@@ -57,14 +44,6 @@ impl S3ExportCredentials {
             .take(32)
             .map(char::from)
             .collect()
-    }
-
-    /// The admin has finished the AWS side and Porter can write.
-    pub fn is_ready(&self) -> bool {
-        match self {
-            Self::AccessKey { .. } => true,
-            Self::Role { role_arn, .. } => !role_arn.is_empty(),
-        }
     }
 }
 
@@ -78,42 +57,25 @@ impl S3ExportConfig {
             bucket,
             region,
             prefix,
-            credentials,
+            credentials: _,
             selection: _,
         } = self;
         // `Some("")` and `None` both write at the bucket root.
         let root_as_none = |prefix: &Option<String>| prefix.clone().filter(|p| !p.is_empty());
-        // A rotated secret or a replaced role still points at the same
-        // destination; a different access key ID is a different IAM user.
-        let credentials_changed = match (credentials, &new.credentials) {
-            (
-                S3ExportCredentials::AccessKey { access_key_id, .. },
-                S3ExportCredentials::AccessKey {
-                    access_key_id: new_id,
-                    ..
-                },
-            ) => access_key_id != new_id,
-            (S3ExportCredentials::Role { .. }, S3ExportCredentials::Role { .. }) => false,
-            _ => true,
-        };
         *bucket != new.bucket
             || *region != new.region
             || root_as_none(prefix) != root_as_none(&new.prefix)
-            || credentials_changed
     }
 }
 
-/// Stored shape. The credential fields stay flat, and a role export stores
-/// empty strings in the two key fields, so binaries from before and after
-/// roles existed both decode every document.
+/// Stored shape. Documents written by older binaries also have `accessKeyId`
+/// and `secretAccessKey`, which serde skips.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SerializedS3ExportConfig {
     pub bucket: String,
     pub region: String,
     pub prefix: Option<String>,
-    pub access_key_id: String,
-    pub secret_access_key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role_arn: Option<String>,
     /// The `sts:ExternalId` the role's trust policy requires.
@@ -124,30 +86,12 @@ pub struct SerializedS3ExportConfig {
 
 impl From<S3ExportConfig> for SerializedS3ExportConfig {
     fn from(value: S3ExportConfig) -> Self {
-        let (access_key_id, secret_access_key, role_arn, role_external_id) = match value.credentials
-        {
-            S3ExportCredentials::AccessKey {
-                access_key_id,
-                secret_access_key,
-            } => (access_key_id.0, secret_access_key.0, None, None),
-            S3ExportCredentials::Role {
-                role_arn,
-                external_id,
-            } => (
-                String::new(),
-                String::new(),
-                Some(role_arn),
-                Some(external_id),
-            ),
-        };
         Self {
             bucket: value.bucket,
             region: value.region,
             prefix: value.prefix,
-            access_key_id,
-            secret_access_key,
-            role_arn,
-            role_external_id,
+            role_arn: Some(value.credentials.role_arn),
+            role_external_id: Some(value.credentials.external_id),
             selection: value.selection,
         }
     }
@@ -157,22 +101,17 @@ impl TryFrom<SerializedS3ExportConfig> for S3ExportConfig {
     type Error = anyhow::Error;
 
     fn try_from(value: SerializedS3ExportConfig) -> anyhow::Result<Self> {
-        let credentials = match (value.role_arn, value.role_external_id) {
-            (None, None) => S3ExportCredentials::AccessKey {
-                access_key_id: PII(value.access_key_id),
-                secret_access_key: PII(value.secret_access_key),
-            },
-            (Some(role_arn), Some(external_id)) => S3ExportCredentials::Role {
-                role_arn,
-                external_id,
-            },
-            _ => anyhow::bail!("A role export stores both `roleArn` and `roleExternalId`"),
+        let (Some(role_arn), Some(external_id)) = (value.role_arn, value.role_external_id) else {
+            anyhow::bail!("An S3 export stores both `roleArn` and `roleExternalId`");
         };
         Ok(Self {
             bucket: value.bucket,
             region: value.region,
             prefix: value.prefix,
-            credentials,
+            credentials: S3ExportCredentials {
+                role_arn,
+                external_id,
+            },
             selection: value.selection,
         })
     }

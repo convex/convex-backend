@@ -10,10 +10,7 @@ use value::FieldName;
 use crate::integrations::types::{
     axiom::AxiomAttribute,
     posthog_logs::DEFAULT_POSTHOG_HOST,
-    s3_export::{
-        S3ExportConfig,
-        S3ExportCredentials,
-    },
+    s3_export::S3ExportConfig,
     serialize_topics,
     webhook::WebhookFormat,
     IntegrationConfig,
@@ -235,35 +232,12 @@ pub fn audit_credential_changes(
             let IntegrationConfig::S3Export(previous) = previous else {
                 return None;
             };
-            let (access_key_id_changed, secret_access_key_changed, role_arn_changed) =
-                match (&previous.credentials, &current.credentials) {
-                    (
-                        S3ExportCredentials::AccessKey {
-                            access_key_id,
-                            secret_access_key,
-                        },
-                        S3ExportCredentials::AccessKey {
-                            access_key_id: new_id,
-                            secret_access_key: new_secret,
-                        },
-                    ) => (
-                        access_key_id != new_id,
-                        secret_access_key != new_secret,
-                        false,
-                    ),
-                    (
-                        S3ExportCredentials::Role { role_arn, .. },
-                        S3ExportCredentials::Role {
-                            role_arn: new_arn, ..
-                        },
-                    ) => (false, false, role_arn != new_arn),
-                    // Switching between keys and a role replaces every credential.
-                    _ => (true, true, true),
-                };
+            // The key flags stay in the audit log's schema for entries
+            // written while exports could use access keys.
             IntegrationAuditCredentialChanges::S3Export {
-                access_key_id_changed,
-                secret_access_key_changed,
-                role_arn_changed,
+                access_key_id_changed: false,
+                secret_access_key_changed: false,
+                role_arn_changed: previous.credentials.role_arn != current.credentials.role_arn,
             }
         },
         IntegrationConfig::Local(_) => return None,
