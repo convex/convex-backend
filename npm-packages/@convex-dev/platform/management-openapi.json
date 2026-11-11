@@ -3695,7 +3695,8 @@
                 "deployment:usage:view",
                 "deployment:aiGateway:use"
               ]
-            }
+            },
+            "description": "Optional list of allowed operations for this deploy key. If omitted, the key is allowed every action the caller is currently allowed to perform on this deployment. Must contain at least one action if provided."
           },
           "expiresAt": {
             "type": [
@@ -4075,7 +4076,8 @@
                 "deployment:usage:view",
                 "deployment:aiGateway:use"
               ]
-            }
+            },
+            "description": "The same operations as `allowedOperations`, in the colon-based action format (e.g. `\"deployment:data:view\"`). Unlike `allowedOperations`, this is always present: an unrestricted key (where `allowedOperations` is omitted) lists every deployment action here."
           }
         }
       },
