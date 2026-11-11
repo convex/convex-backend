@@ -30,6 +30,7 @@ import {
   formatPathForPrinting,
   globalConfigPath,
   modifyGlobalConfig,
+  ensureNotRunningUnderSudo,
 } from "./utils/globalConfig.js";
 import { updateBigBrainAuthAfterLogin } from "./deploymentSelection.js";
 
@@ -310,6 +311,10 @@ export async function performLogin(
   } = {},
 ) {
   loginFlow = loginFlow || "auto";
+  // Check before the device flow so a sudo run fails before creating a token.
+  if (!dumpAccessToken) {
+    await ensureNotRunningUnderSudo(ctx);
+  }
   // Get access token from big-brain
   // Default the device name to the hostname, but allow the user to change this if the terminal is interactive.
   // On Macs, the `hostname()` may be a weirdly-truncated form of the computer name. Attempt to read the "real" name before falling back to hostname.

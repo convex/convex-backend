@@ -81,6 +81,7 @@ export interface Filesystem {
   ): void;
   rmdir(path: string): void;
   unlink(path: string): void;
+  chmod(path: string, mode: Mode): void;
   swapTmpFile(fromPath: TempPath, toPath: string): void;
 
   registerPath(path: string, st: Stats | null): void;
@@ -192,6 +193,16 @@ export class NodeFs implements Filesystem {
   writeUtf8File(path: string, contents: string, mode?: Mode) {
     const fd = stdFs.openSync(path, "w", mode);
     try {
+      // openSync only applies `mode` when it creates the file, so also
+      // tighten an existing file. Intersect with the current mode so this
+      // only removes bits and never undoes the umask or widens a file.
+      if (mode !== undefined) {
+        const current = stdFs.fstatSync(fd).mode & 0o777;
+        const restricted = current & Number(mode);
+        if (restricted !== current) {
+          stdFs.fchmodSync(fd, restricted);
+        }
+      }
       stdFs.writeFileSync(fd, contents, { encoding: "utf-8" });
       try {
         stdFs.fsyncSync(fd);
@@ -227,6 +238,9 @@ export class NodeFs implements Filesystem {
   }
   unlink(path: string) {
     return stdFs.unlinkSync(path);
+  }
+  chmod(path: string, mode: Mode) {
+    stdFs.chmodSync(path, mode);
   }
   swapTmpFile(fromPath: TempPath, toPath: string) {
     try {
@@ -405,6 +419,11 @@ export class RecordingFs implements Filesystem {
     const absPath = path.resolve(filePath);
     stdFs.unlinkSync(absPath);
     this.updateOnDelete(absPath);
+  }
+  chmod(filePath: string, mode: Mode) {
+    const absPath = path.resolve(filePath);
+    nodeFs.chmod(absPath, mode);
+    this.updateOnWrite(absPath);
   }
   swapTmpFile(fromPath: TempPath, toPath: string) {
     const absToPath = path.resolve(toPath);
