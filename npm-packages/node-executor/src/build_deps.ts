@@ -125,7 +125,7 @@ async function buildDepsInner(
 
   // Run "npm install"
   const startInstall = performance.now();
-  execSync("npm install", { cwd: dir });
+  execSync("npm install --no-audit", { cwd: dir });
   logDurationMs("npm install", startInstall);
 
   // Zip generated "node_modules"
