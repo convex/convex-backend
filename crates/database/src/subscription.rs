@@ -505,43 +505,42 @@ impl SubscriptionManager {
                 self.log.for_each_index(
                     from_ts,
                     next_ts,
+                    self.subscriptions
+                        .indexed
+                        .iter()
+                        .map(|(index_name, (_, interval_map))| (index_name, interval_map)),
+                    self.subscriptions.search.iter(),
                     &mut to_notify,
                     &mut num_index_updates,
-                    |index_name, updates, to_notify, num_index_updates| {
-                        if let Some(interval_map) = self.interval_map(index_name) {
-                            Self::process_log_entry(
-                                to_notify,
-                                num_index_updates,
-                                index_name,
-                                |notify, num_index_updates| {
-                                    Self::overlapping_database(
-                                        interval_map,
-                                        updates,
-                                        notify,
-                                        num_index_updates,
-                                    )
-                                },
-                            );
-                        }
+                    |index_name, interval_map, updates, to_notify, num_index_updates| {
+                        Self::process_log_entry(
+                            to_notify,
+                            num_index_updates,
+                            index_name,
+                            |notify, num_index_updates| {
+                                Self::overlapping_database(
+                                    interval_map,
+                                    updates,
+                                    notify,
+                                    num_index_updates,
+                                )
+                            },
+                        );
                     },
-                    |index_name, updates, to_notify, num_index_updates| {
-                        if let Some(text_subscription) =
-                            self.text_subscription_for_index(index_name)
-                        {
-                            Self::process_log_entry(
-                                to_notify,
-                                num_index_updates,
-                                index_name,
-                                |notify, num_index_updates| {
-                                    self.overlapping_text(
-                                        text_subscription,
-                                        updates,
-                                        notify,
-                                        num_index_updates,
-                                    )
-                                },
-                            );
-                        }
+                    |index_name, text_subscription, updates, to_notify, num_index_updates| {
+                        Self::process_log_entry(
+                            to_notify,
+                            num_index_updates,
+                            index_name,
+                            |notify, num_index_updates| {
+                                self.overlapping_text(
+                                    text_subscription,
+                                    updates,
+                                    notify,
+                                    num_index_updates,
+                                )
+                            },
+                        );
                     },
                 )?;
                 metrics::log_subscriptions_processed_index_updates(num_index_updates);

@@ -599,6 +599,10 @@ impl TextSearchSubscriptions {
         self.subscriptions.get(index_name)
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&TabletIndexName, &TextSearchSubscription)> {
+        self.subscriptions.iter()
+    }
+
     pub fn filter_len(&self) -> usize {
         self.subscriptions
             .values()
