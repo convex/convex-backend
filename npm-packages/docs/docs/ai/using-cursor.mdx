@@ -60,19 +60,22 @@ environments, we recommend installing rules and the MCP server manually.
 If you'd rather not install the plugin, you can wire up rules and the MCP server
 yourself.
 
-### Add Convex `.cursor/rules`
+### Add Convex Rules
 
-To get the best results from Cursor put the model specific `.mdc` files in your
-project's `.cursor/rules` directory.
+The Convex CLI can install and maintain a managed section in your project's
+`AGENTS.md` file that teaches Cursor about Convex conventions and best
+practices.
 
-- [Convex Cursor Rules](https://convex.link/convex_rules.mdc)
+```sh
+npx convex ai-files install
+```
 
-<video
-  src="/video/showing_where_to_put_convex_rules.mp4"
-  autoPlay
-  loop
-  controls
-></video>
+This will create or update `AGENTS.md` and install Convex
+[Agent Skills](/ai/agent-skills.mdx) into `.agents/skills/`, which Cursor loads
+automatically.
+
+See [Convex AI files](/ai/overview.mdx#convex-ai-files) for more on managing
+these files.
 
 We're constantly working on improving the quality of these rules for Convex by
 using rigorous evals. You can help by
