@@ -7,6 +7,7 @@ import {
   useBBQuery,
   useManagementApiQuery,
   useMutateManagementApi,
+  useSSOLoginRequired,
 } from "./api";
 import { useCallback } from "react";
 
@@ -62,6 +63,21 @@ export function useCurrentTeam() {
     return;
   }
   return currentTeam;
+}
+
+export function useIsCurrentTeamSSOLocked() {
+  const router = useRouter();
+  const [{ teamIds, teamSlugs }] = useSSOLoginRequired();
+  const { teams } = useTeams();
+  const teamSlug = router.query.team;
+  if (typeof teamSlug !== "string") {
+    return false;
+  }
+  if (teamSlugs.includes(teamSlug)) {
+    return true;
+  }
+  const team = teams?.find((t) => t.slug === teamSlug);
+  return team !== undefined && teamIds.includes(team.id.toString());
 }
 
 export function useTeamMembers(teamId: number | undefined) {

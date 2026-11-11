@@ -2,10 +2,12 @@ import type { Meta, StoryObj } from "@storybook/nextjs";
 import { fn, mocked } from "storybook/test";
 import { TransferProject } from "components/projects/TransferProject";
 import { useBBMutation } from "api/api";
+import { useTeamOrbSubscription } from "api/billing";
 import { useProfile } from "api/profile";
 import { useCurrentProject } from "api/projects";
 import { useHasCustomRolePermission } from "api/roles";
 import { useCurrentTeam, useTeamMembers, useTeams } from "api/teams";
+import type { OrbSubscriptionResponse } from "generatedApi";
 
 const originTeam = {
   id: 2,
@@ -47,6 +49,12 @@ const members: NonNullable<ReturnType<typeof useTeamMembers>> = [
   { id: 1, name: "Nicolas Ettlin", email: "nicolas@acme.dev", role: "admin" },
 ];
 
+// The component only checks whether a team has a subscription, so a partial
+// response is enough to represent a team on a paid plan.
+const paidSubscription = {
+  plan: { name: "Starter", planType: "CONVEX_STARTER_PLUS" },
+} as OrbSubscriptionResponse;
+
 const meta = {
   component: TransferProject,
   decorators: [
@@ -67,6 +75,16 @@ const meta = {
     mocked(useTeamMembers).mockReturnValue(members);
     mocked(useHasCustomRolePermission).mockReturnValue(true);
     mocked(useBBMutation).mockReturnValue(fn());
+    mocked(useTeamOrbSubscription).mockImplementation((teamId) => ({
+      isLoading: false,
+      hasError: false,
+      subscription:
+        teamId === undefined
+          ? undefined
+          : teamId === originTeam.id
+            ? paidSubscription
+            : null,
+    }));
   },
 } satisfies Meta<typeof TransferProject>;
 

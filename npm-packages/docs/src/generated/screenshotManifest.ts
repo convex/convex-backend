@@ -254,12 +254,12 @@ export const screenshots = [
     "light": {
       "filename": "components_transfer_project_light.webp",
       "width": 1856,
-      "height": 548
+      "height": 588
     },
     "dark": {
       "filename": "components_transfer_project_dark.webp",
       "width": 1856,
-      "height": 548
+      "height": 588
     }
   },
   {
