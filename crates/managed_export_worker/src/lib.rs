@@ -13,6 +13,7 @@ use common::{
     fastrace_helpers::get_sampled_span,
     runtime::Runtime,
     types::UdfIdentifier,
+    value::DeveloperDocumentId,
     RequestId,
 };
 use database::Database;
@@ -65,6 +66,8 @@ mod metrics;
 const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const CONTINUOUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
+/// About five minutes of retries, with the backoff capped at a minute.
+const MAX_CONSECUTIVE_FAILED_SYNCS: u32 = 10;
 
 pub struct S3ExportWorker<RT: Runtime> {
     runtime: RT,
@@ -73,6 +76,9 @@ pub struct S3ExportWorker<RT: Runtime> {
     export_provider: Arc<dyn ExportProvider<RT>>,
     usage_counter: UsageCounter,
     key_broker: KeyBroker,
+    /// Consecutive failed syncs, and the export they belong to, so a
+    /// recreated export starts from zero.
+    failed_syncs: Option<(DeveloperDocumentId, u32)>,
 }
 
 impl<RT: Runtime> S3ExportWorker<RT> {
@@ -91,10 +97,11 @@ impl<RT: Runtime> S3ExportWorker<RT> {
             export_provider,
             usage_counter,
             key_broker,
+            failed_syncs: None,
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         let mut backoff = Backoff::new(INITIAL_BACKOFF, MAX_BACKOFF);
         loop {
             match self.run_once().await {
@@ -109,7 +116,7 @@ impl<RT: Runtime> S3ExportWorker<RT> {
         }
     }
 
-    async fn run_once(&self) -> anyhow::Result<()> {
+    async fn run_once(&mut self) -> anyhow::Result<()> {
         let mut tx = self.database.begin(Identity::system()).await?;
         let export = IntegrationsModel::new(&mut tx)
             .get_by_provider(IntegrationType::S3Export)
@@ -193,9 +200,34 @@ impl<RT: Runtime> S3ExportWorker<RT> {
                     .await?;
                     return Err(error);
                 },
-                Err(error) => return Err(error),
+                // Anything else retries on its own. Once it has failed for
+                // minutes the export says so instead of looking healthy. A
+                // user error already showing says more, so it stays.
+                Err(error) => {
+                    let id = export.developer_id();
+                    let failed = match self.failed_syncs {
+                        Some((counted, failed)) if counted == id => failed + 1,
+                        _ => 1,
+                    };
+                    self.failed_syncs = Some((id, failed));
+                    if failed >= MAX_CONSECUTIVE_FAILED_SYNCS
+                        && !matches!(export.status, IntegrationState::Failed { .. })
+                    {
+                        let status = IntegrationState::Failed {
+                            reason: format!(
+                                "Convex couldn't sync this export after {failed} attempts. We've \
+                                 been alerted and it keeps retrying."
+                            ),
+                        };
+                        if let Err(mut write) = self.set_status(&export, status).await {
+                            report_error(&mut write).await;
+                        }
+                    }
+                    return Err(error);
+                },
             }
         };
+        self.failed_syncs = None;
         log_s3_export_progress(&page.status, *self.database.now_ts_for_reads());
         // Porter commits the page in the destination before returning it, so
         // a returned page is a billed page. The progress checkpoint below is
