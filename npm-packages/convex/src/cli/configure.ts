@@ -1,5 +1,6 @@
 import { chalkStderr } from "chalk";
 import { Context } from "../bundler/context.js";
+import { handleNoAccessToConfiguredProject } from "./account.js";
 import {
   logFailure,
   logFinishedStep,
@@ -354,15 +355,30 @@ async function handleDeploymentWithinProject(
     ctx,
     deploymentSelection.targetProject,
   );
-  if (accessResult.kind === "noAccess") {
-    logMessage("You don't have access to the selected project.");
-    const result = await handleChooseProject(
+  let access = accessResult;
+  while (access.kind === "noAccess") {
+    // With --team and --project, the user already said which project to use.
+    const next =
+      cmdOptions.team !== undefined && cmdOptions.project !== undefined
+        ? "chooseProject"
+        : await handleNoAccessToConfiguredProject(
+            ctx,
+            deploymentSelection.targetProject,
+          );
+    if (next === "chooseProject") {
+      logMessage("You don't have access to the selected project.");
+      const result = await handleChooseProject(
+        ctx,
+        chosenConfiguration,
+        deploymentSelection.selectionWithinProject,
+        cmdOptions,
+      );
+      return result;
+    }
+    access = await checkAccessToSelectedProject(
       ctx,
-      chosenConfiguration,
-      deploymentSelection.selectionWithinProject,
-      cmdOptions,
+      deploymentSelection.targetProject,
     );
-    return result;
   }
 
   const selectedDeployment = await loadSelectedDeploymentCredentials(
