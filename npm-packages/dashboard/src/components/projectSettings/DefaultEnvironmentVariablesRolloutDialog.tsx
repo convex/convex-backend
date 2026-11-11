@@ -1,5 +1,9 @@
 import { useState } from "react";
-import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
+import {
+  ExclamationTriangleIcon,
+  EyeNoneIcon,
+  EyeOpenIcon,
+} from "@radix-ui/react-icons";
 import { Modal } from "@ui/Modal";
 import { Button } from "@ui/Button";
 import { Checkbox } from "@ui/Checkbox";
@@ -44,7 +48,7 @@ export function DefaultEnvironmentVariablesRolloutDialog({
       size="lg"
       onClose={onClose}
     >
-      <div className="flex flex-col gap-4 text-sm">
+      <div className="flex flex-col gap-4 pt-4 text-sm">
         <RolloutTable
           rollout={rollout}
           selected={selected}
@@ -88,7 +92,7 @@ function RolloutTable({
           <col className="w-[28%]" />
           <col className="w-[28%]" />
         </colgroup>
-        <thead className="border-b bg-background-tertiary text-xs text-content-secondary">
+        <thead className="border-b bg-background-tertiary text-xs text-content-primary">
           <tr>
             <th scope="col" className="px-3 py-2">
               Environment variable name
@@ -161,13 +165,9 @@ function RolloutTableEntry({
       </td>
       <td className="p-3">
         {value === null ? (
-          <div className="w-full rounded-md border bg-background-primary px-2 py-1 font-mono text-sm text-content-secondary italic">
-            Deleted
-          </div>
+          <span className="text-content-secondary italic">Will be deleted</span>
         ) : (
-          <pre className="max-h-10 w-full overflow-auto rounded-md border bg-background-primary px-2 py-1 font-mono text-sm whitespace-pre text-content-primary">
-            {value}
-          </pre>
+          <HiddenValue value={value} />
         )}
       </td>
       <td className="p-3">
@@ -197,6 +197,36 @@ function RolloutTableEntry({
         </label>
       </td>
     </tr>
+  );
+}
+
+function HiddenValue({ value }: { value: string }) {
+  const [showValue, setShowValue] = useState(false);
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      <Button
+        tip={showValue ? "Hide value" : "Show value"}
+        aria-label={showValue ? "Hide value" : "Show value"}
+        type="button"
+        onClick={() => setShowValue(!showValue)}
+        variant="neutral"
+        inline
+        size="sm"
+        icon={showValue ? <EyeNoneIcon /> : <EyeOpenIcon />}
+      />
+      {showValue ? (
+        <pre className="max-h-20 min-w-0 flex-1 overflow-auto font-mono text-sm break-all whitespace-pre-wrap text-content-primary">
+          {value}
+        </pre>
+      ) : (
+        <span
+          title="Hidden environment variable value"
+          className="min-w-0 flex-1 truncate font-mono text-xs text-content-primary"
+        >
+          •••••••••••••••
+        </span>
+      )}
+    </div>
   );
 }
 
