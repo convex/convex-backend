@@ -812,7 +812,9 @@ export async function pullConfig(
         // This field is not stored in the backend, which is ok since it is also
         // not used to diff configs.
         externalPackages: [],
-        nodeVersion: data.nodeVersion,
+        // The backend sends `null` when unset, and `diffConfig` compares
+        // against `undefined` from `convex.json`.
+        nodeVersion: data.nodeVersion ?? undefined,
       },
       // This field is not stored in the backend, it only affects the client.
       generateCommonJSApi: false,
