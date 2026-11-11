@@ -208,6 +208,9 @@ minimumReleaseAgeExclude:
   - "@convex-dev/platform"
   # Security fix for RSA PKCS#1 v1.5 signature verification.
   - node-forge@1.4.1
+  # Pulled in alongside the Dependabot vite 6.4.5 bump, which re-resolved the
+  # vite 7 line too.
+  - vite@7.3.8
 
 # Keep react and react-dom out of pnpm's hoisted fallback layer. The workspace
 # has both React 18 (the demos) and React 19 (the dashboards), and
