@@ -5,8 +5,14 @@ import { log, setDebugLogging } from "./log";
 import os from "node:os";
 import http from "node:http";
 import express, { Request, Response } from "express";
+import { setNodeExecutorProcessTitle } from "./processTitle";
 
 const DEFAULT_PORT = 3002;
+
+setNodeExecutorProcessTitle(
+  process,
+  process.env.CONVEX_NODE_EXECUTOR_PROCESS_TITLE,
+);
 
 async function startServer(
   listenTarget: number | { path: string },
