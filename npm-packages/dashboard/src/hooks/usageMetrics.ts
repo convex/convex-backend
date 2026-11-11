@@ -2,6 +2,8 @@ import { DatabricksQueryId, DateRange, useUsageQuery } from "api/usage";
 import { DeploymentType } from "generatedApi";
 
 export const USAGE_SUMMARY_QUERY_ID = "b63fe48d-320c-401a-8682-0a0b36b50e2b";
+export const USAGE_SUMMARY_BY_DAY_QUERY_ID =
+  "45c7e1d6-4f9b-478e-8a8e-72427d1929ab";
 
 const QUERY_IDS_: {
   summary: DatabricksQueryId;
@@ -78,6 +80,12 @@ export type UsageSummaryRow = {
   deploymentCount: number;
   pausedDeploymentCount: number;
   idleDeploymentCount: number;
+};
+
+export type DailyUsageSummaryRow = UsageSummaryRow & {
+  ds: string;
+  // Null on team-wide metrics (deployment counts), which have no project.
+  projectId: number | null;
 };
 
 export type BackupStorageSummary = {
@@ -192,47 +200,89 @@ export function useUsageTeamSummary(
 }
 
 export function parseUsageSummary(data: string[][]): UsageSummaryRow[] {
-  return data.map(
-    ([
-      _teamId,
-      deploymentClass,
-      region,
-      databaseStorage,
-      databaseIO,
-      functionCalls,
-      queryMutationCompute,
-      actionComputeConvex,
-      actionComputeNode,
-      fileStorage,
-      searchStorage,
-      dataEgress,
-      searchQueries,
-      actionComputeUser,
-      deploymentCount,
-      pausedDeploymentCount,
-      idleDeploymentCount,
-      auditLogBandwidth,
-    ]) =>
-      ({
-        deploymentClass,
-        region,
-        databaseStorage: Number(databaseStorage),
-        databaseIO: Number(databaseIO),
-        functionCalls: Number(functionCalls),
-        queryMutationCompute: Number(queryMutationCompute) / 60 / 60,
-        actionComputeConvex: Number(actionComputeConvex) / 60 / 60,
-        actionComputeNode: Number(actionComputeNode) / 60 / 60,
-        fileStorage: Number(fileStorage),
-        searchStorage: Number(searchStorage),
-        dataEgress: Number(dataEgress),
-        searchQueries: Number(searchQueries),
-        actionComputeUser: Number(actionComputeUser) / 60 / 60,
-        deploymentCount: Number(deploymentCount),
-        pausedDeploymentCount: Number(pausedDeploymentCount),
-        idleDeploymentCount: Number(idleDeploymentCount),
-        auditLogBandwidth: Number(auditLogBandwidth),
-      }) satisfies UsageSummaryRow,
-  );
+  return data.map(parseUsageSummaryRow);
+}
+
+export function useUsageTeamSummaryByDay(
+  teamId: number,
+  period: DateRange | null,
+  projectId: number | null,
+  componentPrefix: string | null,
+  options: { skip?: boolean } = {},
+) {
+  const { data, error } = useUsageQuery({
+    queryId: USAGE_SUMMARY_BY_DAY_QUERY_ID,
+    teamId,
+    projectId,
+    period,
+    componentPrefix,
+    skip: options.skip,
+  });
+
+  if (error) {
+    return { data: undefined, error };
+  }
+
+  if (!data) {
+    return { data: undefined, error: undefined };
+  }
+
+  return { data: parseDailyUsageSummary(data), error: undefined };
+}
+
+// The by-day query returns the Summary columns with ds and project_id inserted
+// after team_id.
+export function parseDailyUsageSummary(
+  data: string[][],
+): DailyUsageSummaryRow[] {
+  return data.map(([teamId, ds, projectId, ...summaryColumns]) => ({
+    ...parseUsageSummaryRow([teamId, ...summaryColumns]),
+    ds,
+    // SQL NULL arrives as "" (see useUsageQuery).
+    projectId: projectId === "" ? null : Number(projectId),
+  }));
+}
+
+function parseUsageSummaryRow(row: string[]): UsageSummaryRow {
+  const [
+    _teamId,
+    deploymentClass,
+    region,
+    databaseStorage,
+    databaseIO,
+    functionCalls,
+    queryMutationCompute,
+    actionComputeConvex,
+    actionComputeNode,
+    fileStorage,
+    searchStorage,
+    dataEgress,
+    searchQueries,
+    actionComputeUser,
+    deploymentCount,
+    pausedDeploymentCount,
+    idleDeploymentCount,
+    auditLogBandwidth,
+  ] = row;
+  return {
+    deploymentClass,
+    region,
+    databaseStorage: Number(databaseStorage),
+    databaseIO: Number(databaseIO),
+    functionCalls: Number(functionCalls),
+    queryMutationCompute: Number(queryMutationCompute) / 60 / 60,
+    actionComputeConvex: Number(actionComputeConvex) / 60 / 60,
+    actionComputeNode: Number(actionComputeNode) / 60 / 60,
+    fileStorage: Number(fileStorage),
+    searchStorage: Number(searchStorage),
+    dataEgress: Number(dataEgress),
+    searchQueries: Number(searchQueries),
+    actionComputeUser: Number(actionComputeUser) / 60 / 60,
+    deploymentCount: Number(deploymentCount),
+    pausedDeploymentCount: Number(pausedDeploymentCount),
+    idleDeploymentCount: Number(idleDeploymentCount),
+    auditLogBandwidth: Number(auditLogBandwidth),
+  };
 }
 
 export function useBackupStorageSummary(
