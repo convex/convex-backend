@@ -26,7 +26,10 @@ export function useTeamOrbSubscription(teamId?: number) {
   return { isLoading, subscription, hasError: false };
 }
 
-export function useTeamPrices(teamId: number, range: DateRange | null) {
+export function useTeamPrices(
+  teamId: number | undefined,
+  range: DateRange | null,
+) {
   const { dashboardShowCashUsage } = useLaunchDarkly();
   const canView = useHasCustomRolePermission(
     teamId,
@@ -38,7 +41,10 @@ export function useTeamPrices(teamId: number, range: DateRange | null) {
     path: "/teams/{team_id}/get_prices",
     pathParams: {
       team_id:
-        dashboardShowCashUsage && canView === true && range !== null
+        dashboardShowCashUsage &&
+        canView === true &&
+        range !== null &&
+        teamId !== undefined
           ? teamId.toString()
           : "",
     },

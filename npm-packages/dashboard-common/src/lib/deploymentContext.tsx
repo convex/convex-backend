@@ -43,6 +43,14 @@ type FallbackRender = (errorData: {
   resetError(): void;
 }) => React.ReactElement;
 
+// A metric's price per unit for a deployment.
+export type UnitPrice = {
+  // List price in USD per unit, before any discount.
+  listPrice: number;
+  // Whether a discount currently applies to this metric's price.
+  hasDiscount: boolean;
+};
+
 export type DeploymentInfo = (
   | {
       ok: true;
@@ -97,6 +105,15 @@ export type DeploymentInfo = (
   // subscription (Free) or plan tier isn't available (self-hosted). Note that
   // Business and Enterprise share the "CONVEX_BUSINESS" plan type.
   useTeamPlanType(teamId: number | null): string | null | undefined;
+  // The current deployment's undiscounted price per unit of each billable
+  // metric, keyed by metric name (e.g. "functionCalls"). `unitPrices` is
+  // undefined while loading (`isLoading`) or when prices aren't available
+  // (disabled, self-hosted, local deployments, or members without billing
+  // access). Prices are only fetched when `enabled`.
+  useCurrentDeploymentUnitPrices(enabled: boolean): {
+    unitPrices: Record<string, UnitPrice> | undefined;
+    isLoading: boolean;
+  };
   useCurrentProject():
     | {
         id: number;
@@ -347,6 +364,8 @@ export type DeploymentInfo = (
   showFivetranSyncProgress: boolean;
   /** Shows the component switcher as a tree of nested components. */
   componentSwitcherTreeEnabled: boolean;
+  /** Shows the approximate cost of each usage limit. */
+  estimateUsageLimitsCost: boolean;
   /** Opens the feedback sheet. Absent where there is nowhere to send it,
    *  such as the self-hosted dashboard. */
   openFeedbackForm?: (context: FeedbackContext) => void;

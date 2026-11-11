@@ -323,6 +323,10 @@ const deploymentInfo: Omit<DeploymentInfo, "deploymentUrl" | "adminKey"> = {
   DisconnectOverlay: () => <SelfHostedDisconnectOverlay />,
   useTeamUsageState: () => "Default",
   useTeamPlanType: () => null,
+  useCurrentDeploymentUnitPrices: () => ({
+    unitPrices: undefined,
+    isLoading: false,
+  }),
   teamsURI: "",
   projectsURI: "",
   deploymentsURI: "",
@@ -333,6 +337,7 @@ const deploymentInfo: Omit<DeploymentInfo, "deploymentUrl" | "adminKey"> = {
   connectionStateCheckIntervalMs: 2500,
   showFivetranSyncProgress: false,
   componentSwitcherTreeEnabled: false,
+  estimateUsageLimitsCost: false,
 };
 
 function DeploymentInfoProvider({

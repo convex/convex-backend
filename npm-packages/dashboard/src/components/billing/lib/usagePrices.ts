@@ -59,6 +59,17 @@ export function getUsagePricing(
     : { status: "unavailable", reason: "unsupported-period" };
 }
 
+// The pricing period in effect at `now`, if any. Periods are half-open.
+export function getPricingPeriodAt(
+  prices: GetPricesResponse,
+  now: number,
+): PricesPeriod | undefined {
+  return prices.periods.find(
+    (period) =>
+      period.start <= now && (period.end === null || now < period.end),
+  );
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function getUsagePricingPeriods(

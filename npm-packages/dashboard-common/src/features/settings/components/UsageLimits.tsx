@@ -25,6 +25,7 @@ import type {
   UsageLimitConfigResponse,
 } from "@convex-dev/platform/deploymentApi";
 import { formatNumberCompact } from "@common/lib/format";
+import type { UnitPrice } from "@common/lib/deploymentContext";
 
 // The usage metrics that a deployment-level usage limit can be applied to.
 // These match the `UsageLimitMetric` enum on the backend (serialized with
@@ -273,6 +274,14 @@ export function formatAmount(value: number): string {
   return formatted === "-0" ? "0" : formatted;
 }
 
+export function formatApproximateCost(usd: number): string {
+  if (usd > 0 && usd < 1) {
+    return "< $1";
+  }
+
+  return `≈ $${formatNumberCompact(usd, usd < 1000 ? 0 : 2)}`;
+}
+
 // The compact unit label for an amount, using the singular form when the amount
 // is exactly 1 (e.g. "1 call" vs "5 calls"). Unit symbols that don't inflect
 // (GB, GBh, qGB) have no singular form and are returned unchanged.
@@ -444,6 +453,8 @@ export function UsageLimits({
   isLoading = false,
   title = "Usage Limits",
   unbilledMetrics = {},
+  unitPrices = {},
+  isLoadingUnitPrices = false,
   currentUsage = {},
   seedStatus,
   deploymentCreateTime,
@@ -467,6 +478,10 @@ export function UsageLimits({
   // Metrics that aren't billed on the current plan/deployment, mapped to a
   // short explanation. See `computeUnbilledMetrics`. Absent = billed.
   unbilledMetrics?: Partial<Record<UsageMetric, string>>;
+  unitPrices?: Partial<Record<string, UnitPrice>>;
+  // Whether `unitPrices` is still loading, which shows a skeleton in place of
+  // each cost estimate.
+  isLoadingUnitPrices?: boolean;
   // Current usage per metric/window, shown even for metrics without a limit.
   currentUsage?: CurrentUsage;
   // Progress of the historical-usage backfill. When not "complete", the current
@@ -558,6 +573,11 @@ export function UsageLimits({
       ),
     };
   });
+
+  // Unbilled metrics cost nothing, regardless of any listed rate, and amounts
+  // already in USD need no dollar estimate.
+  const hasCostEstimate = (metric: UsageMetric) =>
+    !unbilledMetrics[metric] && METRIC_CONFIG[metric].rawUnit !== "USD";
 
   const limitFor = (metric: UsageMetric, limitType: UsageLimitType) =>
     usageLimits.find(
@@ -669,6 +689,12 @@ export function UsageLimits({
                 disableLimit={limitFor(metric, "disable")}
                 currentUsage={currentUsage[metric]?.[selectedWindow]}
                 unbilledReason={unbilledMetrics[metric]}
+                unitPrice={
+                  hasCostEstimate(metric) ? unitPrices[metric] : undefined
+                }
+                isLoadingUnitPrice={
+                  hasCostEstimate(metric) && isLoadingUnitPrices
+                }
                 deploymentType={deploymentType}
                 canWrite={canWrite}
                 writePermissionTip={writePermissionTip}
@@ -698,6 +724,8 @@ function UsageLimitMetricRow({
   disableLimit,
   currentUsage,
   unbilledReason,
+  unitPrice,
+  isLoadingUnitPrice,
   deploymentType,
   canWrite,
   writePermissionTip,
@@ -716,6 +744,10 @@ function UsageLimitMetricRow({
   // Current usage of this metric in the selected window, if known.
   currentUsage?: number;
   unbilledReason?: string;
+  // This metric's price per unit, if known.
+  unitPrice?: UnitPrice;
+  // Whether this metric's unit price is still loading.
+  isLoadingUnitPrice: boolean;
   deploymentType: DeploymentType | undefined;
   canWrite: boolean;
   writePermissionTip: ReactNode;
@@ -801,6 +833,8 @@ function UsageLimitMetricRow({
             limit={limitByType[limitType]}
             counterpartAmount={counterpartAmount}
             currentUsage={currentUsage}
+            unitPrice={unitPrice}
+            isLoadingUnitPrice={isLoadingUnitPrice}
             deploymentType={deploymentType}
             canWrite={canWrite}
             writePermissionTip={writePermissionTip}
@@ -855,6 +889,8 @@ function UsageLimitThreshold({
   limit,
   counterpartAmount,
   currentUsage,
+  unitPrice,
+  isLoadingUnitPrice,
   deploymentType,
   canWrite,
   writePermissionTip,
@@ -877,6 +913,11 @@ function UsageLimitThreshold({
   counterpartAmount?: number;
   // Current usage of this metric in the window, used to fill the progress bar.
   currentUsage?: number;
+  // This metric's price per unit, if known, used to show the limit's
+  // approximate cost.
+  unitPrice?: UnitPrice;
+  // Whether this metric's unit price is still loading.
+  isLoadingUnitPrice: boolean;
   deploymentType: DeploymentType | undefined;
   canWrite: boolean;
   writePermissionTip: ReactNode;
@@ -909,6 +950,8 @@ function UsageLimitThreshold({
         limit={limit}
         counterpartAmount={counterpartAmount}
         currentUsage={currentUsage}
+        unitPrice={unitPrice}
+        isLoadingUnitPrice={isLoadingUnitPrice}
         deploymentType={deploymentType}
         onDone={onStopEdit}
         onDirtyChange={onDirtyChange}
@@ -936,13 +979,8 @@ function UsageLimitThreshold({
   const isTriggered =
     limit.enabled && currentUsage !== undefined && currentUsage >= limit.limit;
 
-  // The whole limit fits on one line: usage gauge, amount, then status pills.
-  // Status is only called out when it's the exception: an Inactive pill for an
-  // unenforced limit, a triggered pill for an exceeded one. flex-wrap lets the
-  // pills drop to a second line rather than overflow if the column runs out of
-  // room.
   return (
-    <div className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
+    <div className="flex items-center gap-x-2">
       {currentUsage !== undefined && (
         <UsageDonut
           metric={metric}
@@ -951,17 +989,28 @@ function UsageLimitThreshold({
           limit={limit}
         />
       )}
-      <span className="text-sm text-content-primary tabular-nums">
-        {formatAmount(limit.limit)} {rawUnitShortFor(config, limit.limit)}
-      </span>
-      {!limit.enabled && <InactivePill />}
-      {isTriggered && <TriggeredBadge limitType={limit.limitType} />}
-      <ThresholdOverflowMenu
-        canWrite={canWrite}
-        writePermissionTip={writePermissionTip}
-        onEdit={onStartEdit}
-        onDelete={() => onDelete(limit.id)}
-      />
+      <div className="flex flex-col">
+        <div className="flex min-h-6 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="text-sm text-content-primary tabular-nums">
+            {formatAmount(limit.limit)} {rawUnitShortFor(config, limit.limit)}
+          </span>
+          {!limit.enabled && <InactivePill />}
+          {isTriggered && <TriggeredBadge limitType={limit.limitType} />}
+          <ThresholdOverflowMenu
+            canWrite={canWrite}
+            writePermissionTip={writePermissionTip}
+            onEdit={onStartEdit}
+            onDelete={() => onDelete(limit.id)}
+          />
+        </div>
+        {isLoadingUnitPrice ? (
+          <CostEstimateSkeleton />
+        ) : (
+          unitPrice !== undefined && (
+            <CostEstimate amount={limit.limit} unitPrice={unitPrice} />
+          )
+        )}
+      </div>
     </div>
   );
 }
@@ -1050,6 +1099,8 @@ function UsageLimitThresholdEditor({
   limit,
   counterpartAmount,
   currentUsage,
+  unitPrice,
+  isLoadingUnitPrice,
   deploymentType,
   onDone,
   onDirtyChange,
@@ -1065,6 +1116,11 @@ function UsageLimitThresholdEditor({
   // Current usage of this metric in the window, used to warn when the entered
   // amount is below it.
   currentUsage?: number;
+  // This metric's price per unit, used to show the entered amount's
+  // approximate cost beneath the input.
+  unitPrice?: UnitPrice;
+  // Whether this metric's unit price is still loading.
+  isLoadingUnitPrice: boolean;
   // Used to confirm before adding an enforced disable threshold on prod.
   deploymentType: DeploymentType | undefined;
   onDone: () => void;
@@ -1206,6 +1262,14 @@ function UsageLimitThresholdEditor({
               </span>
             }
           />
+          {isValid &&
+            (isLoadingUnitPrice ? (
+              <CostEstimateSkeleton />
+            ) : (
+              unitPrice !== undefined && (
+                <CostEstimate amount={parsedLimit} unitPrice={unitPrice} />
+              )
+            ))}
           {hasAmount && !isInRange && (
             <p className="text-xs text-content-errorSecondary">
               Enter an amount between 1 and 100 trillion.
@@ -1309,6 +1373,40 @@ function UsageLimitThresholdEditor({
       )}
     </>
   );
+}
+
+// The approximate cost of a usage amount at list price, with a tooltip noting
+// what the estimate leaves out. Discounts are only mentioned when one currently
+// applies to the metric.
+function CostEstimate({
+  amount,
+  unitPrice,
+}: {
+  amount: number;
+  unitPrice: UnitPrice;
+}) {
+  return (
+    <Tooltip
+      asChild
+      delayDuration={TOOLTIP_DELAY_MS}
+      tip={
+        unitPrice.hasDiscount
+          ? "Estimated cost before included usage, credits, or discounts apply."
+          : "Estimated cost before included usage or credits apply."
+      }
+      side="bottom"
+    >
+      <span className="w-fit text-xs text-content-secondary tabular-nums">
+        {formatApproximateCost(amount * unitPrice.listPrice)}
+      </span>
+    </Tooltip>
+  );
+}
+
+// Stands in for a cost estimate while unit prices load, at the height of its
+// text-xs line so the layout doesn't shift when the estimate arrives.
+function CostEstimateSkeleton() {
+  return <Loading fullHeight={false} className="h-4 w-12" />;
 }
 
 // A pill marking a limit that exists but isn't enforced. Enforced limits get no

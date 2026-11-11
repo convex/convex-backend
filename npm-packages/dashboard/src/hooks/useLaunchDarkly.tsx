@@ -18,6 +18,7 @@ export const flagDefaults: {
   preAuthorizeStarterPlan: boolean;
   preAuthorizePaymentMethodChange: boolean;
   tagEditUi: boolean;
+  estimateUsageLimitsCost: boolean;
 } = {
   allowDefaultEnvRollout: false,
   commandPaletteDeleteProjects: false,
@@ -35,6 +36,7 @@ export const flagDefaults: {
   preAuthorizeStarterPlan: false,
   preAuthorizePaymentMethodChange: false,
   tagEditUi: false,
+  estimateUsageLimitsCost: false,
 };
 
 export const flagDefaultsKebabCase = Object.entries(flagDefaults).reduce(

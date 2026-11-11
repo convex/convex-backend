@@ -39,6 +39,7 @@ import { useAccessToken } from "hooks/useServerSideData";
 import { Fallback } from "pages/500";
 import { useTeamUsageState } from "api/usage";
 import { useTeamOrbSubscription } from "api/billing";
+import { useCurrentDeploymentUnitPrices } from "hooks/useCurrentDeploymentUnitPrices";
 import { useProjectEnvironmentVariables } from "api/environmentVariables";
 import { useCurrentProject, useCurrentProjectWithStatus } from "api/projects";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
@@ -159,6 +160,7 @@ export function DeploymentInfoProvider({
     showFivetranSyncProgress,
     healthDeployProgress,
     componentSwitcherTreeEnabled,
+    estimateUsageLimitsCost,
   } = useLaunchDarkly();
   const [, openFeedbackForm] = useFeedbackFormOpen();
   const posthog = usePostHogLib();
@@ -286,6 +288,7 @@ export function DeploymentInfoProvider({
           const { subscription } = useTeamOrbSubscription(teamId ?? undefined);
           return subscription?.plan?.planType ?? null;
         },
+        useCurrentDeploymentUnitPrices,
         useCurrentDeployment: () => {
           const deployment = useCurrentDeployment();
           if (!deployment) return undefined;
@@ -344,6 +347,7 @@ export function DeploymentInfoProvider({
         connectionStateCheckIntervalMs,
         showFivetranSyncProgress,
         componentSwitcherTreeEnabled,
+        estimateUsageLimitsCost,
       });
     };
     if (accessTokenRef.current && (deploymentOverride || deploymentName)) {
@@ -366,6 +370,7 @@ export function DeploymentInfoProvider({
     healthDeployProgress,
     s3ExportIntegration,
     componentSwitcherTreeEnabled,
+    estimateUsageLimitsCost,
   ]);
 
   return deploymentInfo ? (

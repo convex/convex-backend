@@ -3,6 +3,7 @@ import type {
   GetPricesPeriodResponse as PricesPeriod,
   MetricPriceAmount as PriceAmount,
 } from "generatedApi";
+import type { UnitPrice } from "@common/lib/deploymentContext";
 import type { UsageSummaryRow } from "hooks/usageMetrics";
 
 export type PricedUsageState =
@@ -98,6 +99,42 @@ function discountedRate(price: PriceAmount | undefined): number | undefined {
     return undefined;
   }
   return amount * (1 - discount);
+}
+
+// The rate that applies to usage in a deployment class and region, if the
+// price has one.
+function priceAmountFor(
+  price: MetricPrice,
+  { deploymentClass, region }: { deploymentClass: string; region: string },
+): PriceAmount | undefined {
+  return "rate" in price
+    ? price.rate
+    : "regionRate" in price
+      ? price.regionRate[region]
+      : price.deploymentClassRate[deploymentClass]?.regionRate[region];
+}
+
+// The undiscounted price of one unit of each metric for a deployment in a
+// pricing period, and whether a discount applies to it, keyed by metric name.
+// Metrics without a valid rate for the deployment's class and region are
+// omitted.
+export function getDeploymentUnitPrices(
+  period: PricesPeriod,
+  deployment: { deploymentClass: string; region: string },
+): Record<string, UnitPrice> {
+  const unitPrices: Record<string, UnitPrice> = {};
+  for (const [metric, price] of Object.entries(period.metrics)) {
+    const amount = priceAmountFor(price, deployment);
+    const listPrice = amount && parseNonNegativeNumber(amount.amount);
+    if (!amount || listPrice === undefined) {
+      continue;
+    }
+    unitPrices[metric] = {
+      listPrice,
+      hasDiscount: (amount.percentageDiscount ?? 0) > 0,
+    };
+  }
+  return unitPrices;
 }
 
 export type UsageSpend = {
@@ -213,14 +250,7 @@ function metricSpend(
       missingDimensions.add(metric.name);
       continue;
     }
-    const amount =
-      "rate" in price
-        ? price.rate
-        : "regionRate" in price
-          ? price.regionRate[row.region]
-          : price.deploymentClassRate[row.deploymentClass]?.regionRate[
-              row.region
-            ];
+    const amount = priceAmountFor(price, row);
     if (!amount) {
       missingDimensions.add(
         "regionRate" in price

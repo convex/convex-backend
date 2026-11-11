@@ -267,6 +267,34 @@ export const WithCurrentUsage: Story = {
   },
 };
 
+// Unit prices are known, so editing a threshold shows the entered amount's
+// approximate cost beneath the input, and each
+// configured limit shows its cost beneath the amount. The rates are illustrative.
+export const WithUnitPrices: Story = {
+  args: {
+    usageLimits: EXAMPLE_USAGE_LIMITS,
+    currentUsage: EXAMPLE_CURRENT_USAGE,
+    // Function calls are discounted, so their tooltip mentions discounts.
+    unitPrices: {
+      functionCalls: { listPrice: 0.000002, hasDiscount: true },
+      actionComputeConvexGbHours: { listPrice: 0.3, hasDiscount: false },
+      actionComputeNodeJsGbHours: { listPrice: 0.3, hasDiscount: false },
+      databaseIoGb: { listPrice: 0.2, hasDiscount: false },
+      searchQueryGb: { listPrice: 0.0001, hasDiscount: false },
+      dataEgressGb: { listPrice: 0.12, hasDiscount: false },
+    },
+  },
+};
+
+// Unit prices are still loading, so each cost estimate shows a skeleton.
+export const LoadingUnitPrices: Story = {
+  args: {
+    usageLimits: EXAMPLE_USAGE_LIMITS,
+    currentUsage: EXAMPLE_CURRENT_USAGE,
+    isLoadingUnitPrices: true,
+  },
+};
+
 // AI Gateway usage is reported as fractional USD while thresholds are whole
 // dollars, so this verifies the two values remain directly comparable.
 export const AiGatewayUsage: Story = {
