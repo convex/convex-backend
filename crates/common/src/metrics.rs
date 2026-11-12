@@ -12,10 +12,14 @@ use metrics::{
     register_convex_gauge,
     register_convex_histogram,
     register_convex_int_gauge,
+    CancelableTimer,
     StaticMetricLabel,
     Timer,
 };
-use prometheus::VMHistogram;
+use prometheus::{
+    IntGauge,
+    VMHistogram,
+};
 use value::TableName;
 
 use crate::persistence::index_scan_attribution::{
@@ -157,6 +161,52 @@ pub fn log_http_service_max_concurrent_requests(
     HTTP_SERVICE_MAX_CONCURRENT_REQUESTS
         .with_label_values(&[service_name])
         .set(max_concurrent_requests as i64);
+}
+
+register_convex_int_gauge!(
+    HTTP_SERVICE_PERMIT_WAITING_REQUESTS,
+    "Requests that wait for a concurrency permit on an HTTP service. Waiting requests with no \
+     `success` in http_service_permit_wait_seconds mean that no permit is released",
+    &["service_name"]
+);
+register_convex_histogram!(
+    HTTP_SERVICE_PERMIT_WAIT_SECONDS,
+    "Time a request waited for a concurrency permit on an HTTP service. The status is `success` \
+     if it got the permit and `canceled` if it was dropped first. A request that does not wait is \
+     not recorded",
+    &["service_name", "status"]
+);
+
+/// A request in the queue for an HTTP concurrency permit. It leaves the count
+/// of waiting requests when it is dropped, with or without a permit.
+pub struct HttpPermitWaiter {
+    timer: CancelableTimer,
+    _waiting: WaitingForPermit,
+}
+
+impl HttpPermitWaiter {
+    pub fn new(service_name: &'static str) -> Self {
+        let waiting = HTTP_SERVICE_PERMIT_WAITING_REQUESTS.with_label_values(&[service_name]);
+        waiting.inc();
+        let mut timer = CancelableTimer::new(&HTTP_SERVICE_PERMIT_WAIT_SECONDS);
+        timer.add_label(StaticMetricLabel::new("service_name", service_name));
+        Self {
+            timer,
+            _waiting: WaitingForPermit(waiting),
+        }
+    }
+
+    pub fn acquired(self) {
+        self.timer.finish(true);
+    }
+}
+
+struct WaitingForPermit(IntGauge);
+
+impl Drop for WaitingForPermit {
+    fn drop(&mut self) {
+        self.0.dec();
+    }
 }
 
 register_convex_histogram!(

@@ -90,7 +90,6 @@ use serde::{
 };
 use tokio::net::TcpSocket;
 use tower::{
-    limit::GlobalConcurrencyLimitLayer,
     timeout::TimeoutLayer,
     Layer,
     Service,
@@ -120,6 +119,7 @@ use crate::{
     metrics::{
         log_client_version_unsupported,
         log_http_service_max_concurrent_requests,
+        HttpPermitWaiter,
     },
     runtime::TaskManager,
     version::{
@@ -542,7 +542,13 @@ impl ConvexHttpService {
                         stats_middleware::<RM>,
                     ))
                     .layer(axum::middleware::from_fn(client_version_state_middleware))
-                    .layer(GlobalConcurrencyLimitLayer::with_semaphore(semaphore))
+                    .layer(axum::middleware::from_fn_with_state(
+                        ConcurrencyLimit {
+                            semaphore,
+                            service_name,
+                        },
+                        concurrency_limit_middleware,
+                    ))
                     .layer(tower_cookies::CookieManagerLayer::new())
                     .layer(HandleErrorLayer::new(|_: BoxError| async {
                         StatusCode::REQUEST_TIMEOUT
@@ -1114,6 +1120,35 @@ where
             .and_then(SpanContext::decode_w3c_traceparent);
         Ok(Self(traceparent))
     }
+}
+
+#[derive(Clone)]
+struct ConcurrencyLimit {
+    semaphore: Arc<tokio::sync::Semaphore>,
+    service_name: &'static str,
+}
+
+async fn concurrency_limit_middleware(
+    State(limit): State<ConcurrencyLimit>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let _permit = match limit.semaphore.try_acquire() {
+        Ok(permit) => permit,
+        // `try_acquire` cannot overtake queued requests: the semaphore gives a
+        // released permit to the longest waiter first.
+        Err(_) => {
+            let waiter = HttpPermitWaiter::new(limit.service_name);
+            let permit = limit
+                .semaphore
+                .acquire()
+                .await
+                .expect("The HTTP concurrency semaphore is never closed");
+            waiter.acquired();
+            permit
+        },
+    };
+    next.run(req).await
 }
 
 async fn tokio_instrumentation_middleware(
