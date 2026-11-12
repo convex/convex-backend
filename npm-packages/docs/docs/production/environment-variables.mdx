@@ -234,10 +234,11 @@ Settings.
   alt="Project default environment variables"
 />
 
-These default values will be used when creating a new deployment, and will have
-no effect on existing deployments (they are not kept in sync). You can set a
+These default values will be used when creating a new deployment. You can set a
 different default value for each
 [deployment type](/production/multiple-deployments.mdx#deployment-types).
+Existing deployments keep their current values unless you
+[apply your changes to them](#applying-default-changes-to-existing-deployments).
 
 The Deployment Settings will indicate when a deployment has environment
 variables that do not match the project defaults.
@@ -249,3 +250,26 @@ variables that do not match the project defaults.
 
 You can also change the default environment variables from the CLI using
 `npx convex env default`.
+
+### Applying default changes to existing deployments
+
+When you edit the defaults in Project Settings, click **Review changes** to see
+each change and the deployment types it affects. Select the changes you also
+want applied to existing deployments, then click **Save and apply**. Changes you
+do not apply to all eligible deployments only affect new deployments.
+
+<Screenshot
+  story="docs/pages/project/ReviewDefaultEnvironmentVariableChanges"
+  alt="Reviewing default environment variable changes before applying them to existing deployments"
+/>
+
+Applying a change updates every existing cloud deployment of the affected
+deployment types, including your teammates' development deployments:
+
+- A new or edited default sets the variable on those deployments, overwriting
+  any value they already have.
+- A deleted default removes the variable from those deployments.
+
+You need permission to edit environment variables on every affected deployment,
+so applying changes to production deployments requires
+[Project Admin](/dashboard/teams/teams.mdx#project-admins) access.

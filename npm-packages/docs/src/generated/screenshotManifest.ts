@@ -1210,5 +1210,18 @@ export const screenshots = [
       "width": 3024,
       "height": 2440
     }
+  },
+  {
+    "storyTitle": "docs/pages/project/ReviewDefaultEnvironmentVariableChanges",
+    "light": {
+      "filename": "pages_project_review_default_environment_variable_changes_light.webp",
+      "width": 2200,
+      "height": 838
+    },
+    "dark": {
+      "filename": "pages_project_review_default_environment_variable_changes_dark.webp",
+      "width": 2200,
+      "height": 842
+    }
   }
 ] as const;

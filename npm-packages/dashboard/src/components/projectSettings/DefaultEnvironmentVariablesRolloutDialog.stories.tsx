@@ -9,9 +9,9 @@ const meta = {
     onConfirm: fn(),
     rollout: [
       {
-        name: "OPENAI_API_KEY",
+        name: "LOG_LEVEL",
         operation: "set",
-        value: "sk-proj-1234567890abcdef",
+        value: "debug",
         deploymentTypes: ["dev", "prod"],
       },
       {
@@ -21,7 +21,7 @@ const meta = {
         deploymentTypes: ["preview"],
       },
       {
-        name: "LEGACY_TOKEN",
+        name: "LEGACY_API_URL",
         operation: "delete",
         value: null,
         deploymentTypes: ["dev", "preview", "prod"],
