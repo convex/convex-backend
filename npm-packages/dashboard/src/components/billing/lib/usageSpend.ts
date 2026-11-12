@@ -188,50 +188,19 @@ export function getIncludedUsage(
   return hasConsumedUnits && Number.isFinite(total) ? total : undefined;
 }
 
-// Gauge metrics bill monthly on a snapshot rather than on accumulated usage, so
-// their spend is a monthly estimate from the most recent snapshot.
-export function isGaugeMetric(sectionMetric: string): boolean {
-  return (
-    sectionMetric === "databaseStorage" ||
-    sectionMetric === "fileStorage" ||
-    sectionMetric === "searchStorage" ||
-    sectionMetric === "deploymentCount"
-  );
-}
-
-function metricSpend(
+// Sums a metric's usage per rate, which is per dimension the price varies by:
+// global, region, or deployment class and region. Rates are keyed by identity,
+// so lookups must use rates from the same `price`. Usage in a dimension without
+// a rate is reported in `missingDimensions` instead.
+function usageByRate(
   summary: UsageSummaryRow[],
   metric: Metric,
   price: MetricPrice | undefined,
-  estimateMonthly: boolean,
-): UsageSpend | undefined {
-  let gross = 0;
-  let estimatedUnits = 0;
-  let coveredSpend = 0;
+):
+  | { usage: Map<PriceAmount, number>; missingDimensions: Set<string> }
+  | undefined {
+  const usage = new Map<PriceAmount, number>();
   const missingDimensions = new Set<string>();
-
-  const rates = estimateMonthly ? [] : priceAmounts(price);
-  for (const amount of rates) {
-    if (amount.consumedUnits === undefined || amount.consumedUnits === null) {
-      continue;
-    }
-    const rate = discountedRate(amount);
-
-    if (
-      rate === undefined ||
-      !Number.isFinite(amount.consumedUnits) ||
-      amount.consumedUnits < 0
-    ) {
-      return undefined;
-    }
-    // consumedUnits is already post-discount application, so multiply by the
-    // undiscounted rate here.
-    coveredSpend += amount.consumedUnits * Number(amount.amount);
-  }
-  const usageByDimension = new Map<
-    string,
-    { quantity: number; amount: PriceAmount }
-  >();
   for (const row of summary) {
     const { field } = metric;
     const quantities = (
@@ -259,19 +228,54 @@ function metricSpend(
       );
       continue;
     }
-    const dimension =
-      "rate" in price
-        ? "global"
-        : "regionRate" in price
-          ? row.region
-          : JSON.stringify([row.deploymentClass, row.region]);
-    const existing = usageByDimension.get(dimension);
-    usageByDimension.set(dimension, {
-      quantity: (existing?.quantity ?? 0) + quantity,
-      amount,
-    });
+    usage.set(amount, (usage.get(amount) ?? 0) + quantity);
   }
-  for (const { quantity, amount } of usageByDimension.values()) {
+  return { usage, missingDimensions };
+}
+
+// Gauge metrics bill monthly on a snapshot rather than on accumulated usage, so
+// their spend is a monthly estimate from the most recent snapshot.
+export function isGaugeMetric(sectionMetric: string): boolean {
+  return (
+    sectionMetric === "databaseStorage" ||
+    sectionMetric === "fileStorage" ||
+    sectionMetric === "searchStorage" ||
+    sectionMetric === "deploymentCount"
+  );
+}
+
+function metricSpend(
+  summary: UsageSummaryRow[],
+  metric: Metric,
+  price: MetricPrice | undefined,
+  estimateMonthly: boolean,
+): UsageSpend | undefined {
+  let gross = 0;
+  let estimatedUnits = 0;
+  let coveredSpend = 0;
+
+  const rates = estimateMonthly ? [] : priceAmounts(price);
+  for (const amount of rates) {
+    if (amount.consumedUnits === undefined || amount.consumedUnits === null) {
+      continue;
+    }
+    const rate = discountedRate(amount);
+
+    if (
+      rate === undefined ||
+      !Number.isFinite(amount.consumedUnits) ||
+      amount.consumedUnits < 0
+    ) {
+      return undefined;
+    }
+    // consumedUnits is already post-discount application, so multiply by the
+    // undiscounted rate here.
+    coveredSpend += amount.consumedUnits * Number(amount.amount);
+  }
+  const byRate = usageByRate(summary, metric, price);
+  if (byRate === undefined) return undefined;
+  const { usage, missingDimensions } = byRate;
+  for (const [amount, quantity] of usage) {
     const rate = discountedRate(amount);
     if (rate === undefined) return undefined;
     const roundedQuantity = Math.ceil(quantity);
