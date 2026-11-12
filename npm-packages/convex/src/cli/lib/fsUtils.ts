@@ -6,12 +6,15 @@ import { NodeFs } from "../../bundler/fs.js";
 export function recursivelyDelete(
   ctx: Context,
   deletePath: string,
-  opts?: { force?: boolean; dryRun?: boolean },
+  opts?: { force?: boolean; dryRun?: boolean; followSymlinks?: boolean },
 ) {
   const dryRun = !!opts?.dryRun;
   let st;
   try {
-    st = ctx.fs.stat(deletePath);
+    st =
+      opts?.followSymlinks === false
+        ? ctx.fs.lstat(deletePath)
+        : ctx.fs.stat(deletePath);
   } catch (err: any) {
     if (err.code === "ENOENT" && opts?.force) {
       return;

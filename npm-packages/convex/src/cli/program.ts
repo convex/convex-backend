@@ -1,5 +1,6 @@
 import { Command } from "@commander-js/extra-typings";
 import { aiFiles } from "./aiFiles.js";
+import { account } from "./account.js";
 import { auth } from "./auth.js";
 import { codegen } from "./codegen.js";
 import { convexExport } from "./convexExport.js";
@@ -57,6 +58,7 @@ export function buildProgram() {
       .addCommand(codegen)
       .addCommand(update)
       .addCommand(logout)
+      .addCommand(account)
       .addCommand(networkTest, { hidden: true })
       .addCommand(integration, { hidden: true })
       .addCommand(functionSpec)

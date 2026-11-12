@@ -54,6 +54,7 @@ export type BigBrainAuth = {
   | {
       kind: "accessToken";
       accessToken: string;
+      account?: { name: string; source: string } | null;
     }
 );
 
@@ -190,16 +191,19 @@ export const oneoffContext: (args: {
   url?: string | undefined;
   adminKey?: string | undefined;
   envFile?: string | undefined;
+  skipAuth?: boolean;
 }) => Promise<OneoffCtx> = async (args) => {
   const ctx = new OneoffContextImpl();
   await detectSuspiciousEnvironmentVariables(
     ctx,
     !!process.env.CONVEX_IGNORE_SUSPICIOUS_ENV_VARS,
   );
-  await initializeBigBrainAuth(ctx, {
-    url: args.url,
-    adminKey: args.adminKey,
-    envFile: args.envFile,
-  });
+  if (!args.skipAuth) {
+    await initializeBigBrainAuth(ctx, {
+      url: args.url,
+      adminKey: args.adminKey,
+      envFile: args.envFile,
+    });
+  }
   return ctx;
 };

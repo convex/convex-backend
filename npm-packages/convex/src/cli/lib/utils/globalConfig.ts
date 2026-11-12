@@ -52,7 +52,7 @@ export function readGlobalConfig(ctx: Context): GlobalConfig | null {
  * default permissions (usually 0644), so remove group and other access
  * whenever it's read.
  */
-function restrictConfigPermissions(ctx: Context, configPath: string) {
+export function restrictConfigPermissions(ctx: Context, configPath: string) {
   if (process.platform === "win32") {
     return;
   }
@@ -123,7 +123,7 @@ export async function ensureNotRunningUnderSudo(ctx: Context) {
     exitCode: 1,
     errorType: "fatal",
     printedMessage: chalkStderr.red(
-      `Don't run \`npx convex login\` with sudo. It would save your credentials to ${formatPathForPrinting(globalConfigPath())} as root, and your own user couldn't read them. Run it again without sudo.`,
+      `Don't run this command with sudo. It would write ${formatPathForPrinting(globalConfigPath())} as root, and your own user couldn't read the credentials saved there. Run it again without sudo.`,
     ),
   });
 }

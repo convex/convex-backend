@@ -20,6 +20,7 @@ import {
   logMessage,
   logOutput,
   logVerbose,
+  logWarning,
   showSpinner,
 } from "../../bundler/log.js";
 import { Issuer } from "openid-client";
@@ -33,6 +34,15 @@ import {
   ensureNotRunningUnderSudo,
 } from "./utils/globalConfig.js";
 import { updateBigBrainAuthAfterLogin } from "./deploymentSelection.js";
+import {
+  authEnvFile,
+  getAccountSelection,
+  AccountSelection,
+  accountConfigPath,
+  writeAccountCredentials,
+  readAccountCredentials,
+} from "./accounts.js";
+import { accountApi, accountLoginMetadata } from "./accountManagement.js";
 
 // Per https://github.com/panva/node-openid-client/tree/main/docs#customizing
 custom.setHttpOptionsDefaults({
@@ -292,6 +302,7 @@ export async function performLogin(
     anonymousId,
     vercel,
     vercelOverride,
+    account: selectedAccount,
   }: {
     overrideAuthUrl?: string | undefined;
     overrideAuthClient?: string | undefined;
@@ -308,8 +319,16 @@ export async function performLogin(
     anonymousId?: string | undefined;
     vercel?: boolean | undefined;
     vercelOverride?: string | undefined;
+    account?: AccountSelection | null;
   } = {},
 ) {
+  const auth = ctx.bigBrainAuth();
+  const account =
+    selectedAccount !== undefined
+      ? selectedAccount
+      : auth?.kind === "accessToken" && auth.account !== undefined
+        ? auth.account
+        : await getAccountSelection(ctx, { envFile: authEnvFile(ctx) });
   loginFlow = loginFlow || "auto";
   // Check before the device flow so a sudo run fails before creating a token.
   if (!dumpAccessToken) {
@@ -405,6 +424,12 @@ export async function performLogin(
   }
 
   // Exchange the WorkOS access token for a Convex personal access token.
+  const previous =
+    account === null ? null : await readAccountCredentials(ctx, account, true);
+  const metadata =
+    account === null
+      ? {}
+      : await accountLoginMetadata(ctx, account, accessToken, previous);
   ctx._updateBigBrainAuth({
     accessToken: accessToken,
     kind: "accessToken",
@@ -422,8 +447,34 @@ export async function performLogin(
   const newAccessToken = response.data!.accessToken;
   const globalConfig = { accessToken: newAccessToken };
   try {
-    await modifyGlobalConfig(ctx, globalConfig);
-    const path = globalConfigPath();
+    if (account !== null) {
+      await writeAccountCredentials(
+        ctx,
+        account.name,
+        newAccessToken,
+        metadata,
+        previous,
+        async () => {
+          try {
+            const response = await accountApi(
+              newAccessToken,
+              "/v1/delete_personal_access_token",
+              { id: newAccessToken },
+            );
+            if (response.ok) return;
+          } catch {
+            // Report cleanup failure alongside the save failure below.
+          }
+          logWarning(
+            "The unused login token could not be revoked. You can remove it in the dashboard's account settings.",
+          );
+        },
+      );
+    } else {
+      await modifyGlobalConfig(ctx, globalConfig);
+    }
+    const path =
+      account !== null ? accountConfigPath(account.name) : globalConfigPath();
     logFinishedStep(`Saved credentials to ${formatPathForPrinting(path)}`);
   } catch (err: unknown) {
     return await ctx.crash({
@@ -435,7 +486,7 @@ export async function performLogin(
   }
 
   logVerbose(`performLogin: updating big brain auth after login`);
-  await updateBigBrainAuthAfterLogin(ctx, newAccessToken);
+  await updateBigBrainAuthAfterLogin(ctx, newAccessToken, account ?? undefined);
 
   logVerbose(`performLogin: checking opt ins, acceptOptIns: ${acceptOptIns}`);
   // Do opt in to TOS and Privacy Policy stuff

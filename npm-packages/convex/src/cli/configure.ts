@@ -1,4 +1,5 @@
 import { chalkStderr } from "chalk";
+import { handleNoAccessToConfiguredProject } from "./account.js";
 import { Context } from "../bundler/context.js";
 import {
   logFailure,
@@ -350,11 +351,26 @@ async function handleDeploymentWithinProject(
     return result;
   }
 
-  const accessResult = await checkAccessToSelectedProject(
+  let accessResult = await checkAccessToSelectedProject(
     ctx,
     deploymentSelection.targetProject,
   );
-  if (accessResult.kind === "noAccess") {
+  while (accessResult.kind === "noAccess") {
+    const next =
+      cmdOptions.team !== undefined && cmdOptions.project !== undefined
+        ? "chooseProject"
+        : await handleNoAccessToConfiguredProject(
+            ctx,
+            deploymentSelection.targetProject,
+            cmdOptions.envFile,
+          );
+    if (next === "retry") {
+      accessResult = await checkAccessToSelectedProject(
+        ctx,
+        deploymentSelection.targetProject,
+      );
+      continue;
+    }
     logMessage("You don't have access to the selected project.");
     const result = await handleChooseProject(
       ctx,

@@ -45,6 +45,7 @@ export const CONVEX_DEPLOYMENT_ENV_VAR_NAME = "CONVEX_DEPLOYMENT";
 export const CONVEX_SELF_HOSTED_URL_VAR_NAME = "CONVEX_SELF_HOSTED_URL";
 export const CONVEX_SELF_HOSTED_ADMIN_KEY_VAR_NAME =
   "CONVEX_SELF_HOSTED_ADMIN_KEY";
+export const IGNORED_DEPLOY_KEY = "<ignore_deploy_key>";
 const MAX_RETRIES = 6;
 // After 3 retries, log a progress message that we're retrying the request
 const RETRY_LOG_THRESHOLD = 3;
@@ -69,7 +70,7 @@ export async function processDeployKeyValue(
   }
 
   // Check for <ignore_deploy_key> sentinel
-  if (deployKey === "<ignore_deploy_key>") {
+  if (deployKey === IGNORED_DEPLOY_KEY) {
     return undefined;
   }
 
@@ -96,9 +97,20 @@ export async function processDeployKeyValue(
 export function readDeployKeyFromEnv(
   getEnv: (name: string) => string | undefined | null,
 ): string | undefined {
-  const fromDeployKey = getEnv(CONVEX_DEPLOY_KEY_ENV_VAR_NAME);
-  const fromToken = getEnv(CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME);
-  return fromDeployKey || fromToken || undefined;
+  return readDeployKeyEnvVar(getEnv)?.value;
+}
+
+export function readDeployKeyEnvVar(
+  getEnv: (name: string) => string | undefined | null,
+): { name: string; value: string } | undefined {
+  for (const name of [
+    CONVEX_DEPLOY_KEY_ENV_VAR_NAME,
+    CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME,
+  ]) {
+    const value = getEnv(name);
+    if (value) return { name, value };
+  }
+  return undefined;
 }
 
 // The prefix the backend's `require_operation` checks use when an identity
@@ -108,17 +120,9 @@ const PERMISSION_DENIED_MESSAGE_PREFIX =
   "You do not have permission to perform this operation";
 
 function deployKeyPermissionAdvice(): string | null {
-  // Name whichever env var is actually set. `CONVEX_DEPLOY_KEY` takes
-  // precedence over `CONVEX_DEPLOYMENT_TOKEN` when both are present.
-  const envVarName = process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
-    ? CONVEX_DEPLOY_KEY_ENV_VAR_NAME
-    : process.env[CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME]
-      ? CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME
-      : null;
-  if (envVarName === null) {
-    return null;
-  }
-  return `This is determined by the permissions granted to ${envVarName}.`;
+  const envVar = readDeployKeyEnvVar((name) => process.env[name]);
+  if (envVar === undefined || envVar.value === IGNORED_DEPLOY_KEY) return null;
+  return `This is determined by the permissions granted to ${envVar.name}.`;
 }
 
 /**
