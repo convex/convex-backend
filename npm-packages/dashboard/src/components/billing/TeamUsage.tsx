@@ -221,13 +221,13 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
 
   const prices = useTeamPrices(team.id, billingPeriodRange);
   const pricing = getUsagePricing(prices, billingPeriodRange);
-  const spendApplicable =
-    !query.projectSlug && projectId === null && !componentPrefix;
+  const isFiltered =
+    !!query.projectSlug || projectId !== null || !!componentPrefix;
   const { dashboardShowCashUsage } = useLaunchDarkly();
   const pricedUsage = useUsageByPricingPeriod({
     teamId: team.id,
     pricing,
-    enabled: dashboardShowCashUsage && spendApplicable,
+    enabled: dashboardShowCashUsage && !isFiltered,
   });
 
   const { data: aiGatewayCostByDay, error: aiGatewayCostError } =
@@ -258,14 +258,15 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
 
   const hasOrbSubscription = useHasSubscription(team?.id);
 
+  // Included limits are team-wide, so they only describe unfiltered usage.
   const hasSubscription =
     isCurrentBillingPeriod &&
     (hasOrbSubscription || hasOrbSubscription === undefined) &&
-    projectId === null &&
+    !isFiltered &&
     !isBusinessPlanType;
 
   const showEntitlements =
-    isCurrentBillingPeriod && projectId === null && !isBusinessPlanType;
+    isCurrentBillingPeriod && !isFiltered && !isBusinessPlanType;
 
   return (
     <div className="flex min-w-160 flex-col gap-2 [--team-usage-toolbar-height:--spacing(32)] md:[--team-usage-toolbar-height:--spacing(28)] lg:[--team-usage-toolbar-height:--spacing(20)]">
@@ -344,7 +345,7 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
                   error={summaryError}
                   pricing={pricing}
                   pricedUsage={pricedUsage}
-                  spendApplicable={spendApplicable}
+                  isFiltered={isFiltered}
                   aiGatewayCost={aiGatewayCost}
                   aiGatewayCostError={aiGatewayCostError}
                   isBusinessPlan={isBusinessPlanType}

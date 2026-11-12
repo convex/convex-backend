@@ -254,7 +254,7 @@ export function BusinessPlanSummary({
   showEntitlements = false,
   isCurrentBillingPeriod = true,
   pricing = { status: "unavailable", reason: "unsupported-period" },
-  spendApplicable = true,
+  isFiltered = false,
   pricedUsage = { status: "loading" },
 }: {
   summary?: UsageSummaryRow[];
@@ -268,7 +268,8 @@ export function BusinessPlanSummary({
   showEntitlements?: boolean;
   isCurrentBillingPeriod?: boolean;
   pricing?: UsagePricing;
-  spendApplicable?: boolean;
+  // Usage is filtered to a project or component.
+  isFiltered?: boolean;
   pricedUsage?: PricedUsageState;
 }) {
   const router = useRouter();
@@ -284,7 +285,7 @@ export function BusinessPlanSummary({
       entitlements?.customAuditLogsInLogStreamsConfigEnabled === true,
   );
   const historicalIncludedUsage =
-    !isCurrentBillingPeriod && spendApplicable && pricing.status === "ready"
+    !isCurrentBillingPeriod && !isFiltered && pricing.status === "ready"
       ? Object.fromEntries(
           visibleSections.map((section) => [
             section.metric,
@@ -485,6 +486,10 @@ export function BusinessPlanSummary({
                 ? includedAmount
                 : metric;
 
+            // Deployment counts are only recorded team-wide, so they have no
+            // value for filtered usage.
+            const unavailableWhenFiltered =
+              isFiltered && section.metric === "deploymentCount";
             const isGauge = isGaugeMetric(section.metric);
             const pricedSummaryFailed =
               !isGauge &&
@@ -496,7 +501,7 @@ export function BusinessPlanSummary({
               pricedUsage.status === "loading";
 
             const spend =
-              showSpend && pricing.status === "ready" && spendApplicable
+              showSpend && pricing.status === "ready" && !isFiltered
                 ? section.metric === "aiGatewayCost"
                   ? aiCostFailed || aiGatewayCost === undefined
                     ? undefined
@@ -543,11 +548,12 @@ export function BusinessPlanSummary({
                   <SectionLabel title={section.title} detail={section.detail} />
                 </div>
                 <div className="animate-fadeInFromLoading">
-                  {showIncluded &&
-                  (section.allOnDemand ||
-                    (showHistoricalIncluded &&
-                      includedAmount === undefined &&
-                      section.metric !== "deploymentCount")) ? (
+                  {unavailableWhenFiltered ||
+                  (showIncluded &&
+                    (section.allOnDemand ||
+                      (showHistoricalIncluded &&
+                        includedAmount === undefined &&
+                        section.metric !== "deploymentCount"))) ? (
                     <EmptyValue />
                   ) : aiCostFailed ? (
                     <span className="text-content-secondary">Unavailable</span>
@@ -566,14 +572,17 @@ export function BusinessPlanSummary({
                         (!showIncludedLimits ? ` ${section.suffix}` : "")}
                     </span>
                   )}
-                  {showIncludedLimits && entitlement !== undefined && (
-                    <span>
-                      {" "}
-                      / {section.format(entitlement)}
-                      {section.suffix ? ` ${section.suffix}` : ""}
-                    </span>
-                  )}
+                  {showIncludedLimits &&
+                    entitlement !== undefined &&
+                    !unavailableWhenFiltered && (
+                      <span>
+                        {" "}
+                        / {section.format(entitlement)}
+                        {section.suffix ? ` ${section.suffix}` : ""}
+                      </span>
+                    )}
                   {section.metric === "deploymentCount" &&
+                    !unavailableWhenFiltered &&
                     isBusinessPlan &&
                     pausedDeploymentCount !== undefined &&
                     idleDeploymentCount !== undefined && (
@@ -620,7 +629,7 @@ export function BusinessPlanSummary({
                 )}
                 {showSpend && (
                   <div className="animate-fadeInFromLoading tabular-nums">
-                    {!spendApplicable || section.noOnDemand ? (
+                    {isFiltered || section.noOnDemand ? (
                       <EmptyValue />
                     ) : aiCostFailed || pricedSummaryFailed ? (
                       <span className="text-content-secondary">
