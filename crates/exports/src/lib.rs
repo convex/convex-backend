@@ -464,6 +464,11 @@ where
             )
             .in_span(root)
             .await?;
+
+            let storage_tablet_id = *system_tables
+                .get(&(namespace, FILE_STORAGE_TABLE.clone()))
+                .context("_file_storage does not exist")?;
+            table_iterator.unregister_table(storage_tablet_id)?;
         }
     }
 
