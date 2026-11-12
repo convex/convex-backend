@@ -51,14 +51,76 @@ npx convex dev
 in a project directory without a set `CONVEX_DEPLOYMENT` to configure a new or
 existing project.
 
+### Log in
+
+```sh
+npx convex@latest login
+```
+
+Log in to your Convex account. Use `npx convex@latest login status` to check
+your login and list accessible teams, or `npx convex@latest login --force` to
+log in again. Logging in again updates the saved credentials without revoking
+previously issued tokens.
+
+### Use multiple accounts
+
+Save accounts under names such as `personal` and `work`. From your personal
+project directory, run:
+
+```sh
+npx convex@latest login --account personal --select
+```
+
+From your work project directory, run:
+
+```sh
+npx convex@latest login --account work --select
+```
+
+Choose the intended account in the browser. The first name reuses your existing
+login if you are already logged in; add `--force` to authenticate a different
+account. Named credentials are stored locally in `~/.convex/accounts/`.
+
+`login --account` saves credentials. Add `--select` to also select the account
+for the current directory and its subdirectories. If no other login is saved,
+the first account becomes the default for directories without a selection.
+
+- Run `npx convex@latest account list` to see saved accounts and directory
+  selections.
+- Run `npx convex@latest account select work` to select a saved account for
+  another directory. The closest directory selection wins. Select again after
+  moving a project.
+- Run `npx convex@latest account default` to see the default, or
+  `npx convex@latest account default personal` to change it.
+- Run `npx convex@latest account deselect` to remove the current directory's
+  selection and inherit its parent or the default. If the selection is inherited
+  from a parent directory, the CLI tells you where to rerun the command to
+  remove that selection.
+
+`CONVEX_ACCOUNT` in the shell or project env file overrides directory
+selections. Deployment and project keys take priority over saved accounts.
+
+After saving accounts, use `npx convex@latest` for login, logout, and account
+commands in every project directory. Older CLIs ignore account selections, and
+their login/logout commands can reset saved selections. Upgrade each project's
+`convex` dependency to use its selected account with `npx convex dev` and
+`npx convex deploy`. See [`npx convex account`](/cli/reference/account.mdx) for
+command details and older-client guidance.
+
 ### Log out
 
 ```sh
-npx convex logout
+npx convex@latest logout
 ```
 
-Remove the existing Convex credentials from your device, so subsequent commands
-like `npx convex dev` can use a different Convex account.
+Remove saved login credentials. If an account is selected and other logins are
+saved, interactive terminals offer to log out of that account or all saved
+logins; scripts log out of the selected account. Use
+`npx convex@latest logout --account work` to log out of one named account, or
+`npx convex@latest logout --all` to remove all saved login credentials.
+Directory and default selections are preserved, so a logged-out account requires
+login before use. See [`npx convex@latest logout`](/cli/reference/logout.mdx)
+for options.
 
 ## Develop
 
