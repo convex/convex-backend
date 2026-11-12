@@ -1,0 +1,867 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 2
+title: Username + passkey
+description: Sign users in with a username and a passkey.
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+The passkey component lets you implement passkey-based login.
+
+A passkey replaces the password with a key pair that stays on the user's device:
+users can store the passkey on their device (protected by a fingerprint, a face
+scan, or PIN), or use an external hardware security key. Your app never handles
+a secret that can be phished or reused.
+
+The `usernamePasskey` method implements an _identifier-first_ flow: your login
+page has a single username field. A free username creates a new account with a
+new passkey; an existing username asks for a passkey of that account.
+
+:::info
+
+Support for email + passkey login is coming soon.
+
+:::
+
+## Setting up username + passkey login in your app
+
+<StepByStep>
+
+<Step title="Follow the “Getting started” guide">
+
+First, install Convex Auth and set up the core as described in the
+[Getting started](../getting-started.mdx) guide.
+
+</Step>
+
+<Step title="Install the components">
+
+Register the passkey component and the username component alongside the core in
+`convex/convex.config.ts`. The username component stores which user each
+username identifies:
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import auth from "@convex-dev/auth/convex.config.js";
+// highlight-next-line
+import authPasskey from "@convex-dev/auth/components/passkey/convex.config.js";
+// highlight-next-line
+import authUsername from "@convex-dev/auth/components/username/convex.config.js";
+
+const app = defineApp();
+
+app.use(auth);
+// highlight-next-line
+app.use(authPasskey);
+// highlight-next-line
+app.use(authUsername);
+
+export default app;
+```
+
+</Step>
+
+<Step title={<>Add a <code>users</code> table to the schema</>}>
+
+Add an empty `users` table to your schema in `convex/schema.ts`. The username
+component keeps the username, so the table does not need a field for it.
+
+Convex Auth will create a row for each account. You can also add
+application-specific fields to this table if necessary.
+
+```ts title="convex/schema.ts"
+import { defineSchema, defineTable } from "convex/server";
+
+export default defineSchema({
+  // highlight-next-line
+  users: defineTable({}),
+});
+```
+
+</Step>
+
+<Step title="Set up user creation">
+
+Write a `createUser` mutation that creates a row in your `users` table and
+returns its id. The method calls it the first time it sees an account.
+
+You can also attach an optional `onSignIn` mutation, called with the resolved
+`userId` on every sign-in, the first one included. Anything you want to happen
+each time someone signs in belongs there, so `createUser` only has to handle
+what is true at creation time. Leave it out if there is nothing to do.
+
+```ts title="convex/users.ts"
+import { internalMutation } from "./_generated/server";
+import { v } from "convex/values";
+
+/**
+ * Create the user row for a new passkey account and return its id. This
+ * example keeps no data in the row, but your app can put a profile here.
+ */
+export const createUser = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("usernamePasskey"),
+      profile: v.object({}),
+    }),
+  },
+  returns: v.id("users"),
+  handler: async (ctx) => {
+    return await ctx.db.insert("users", {});
+  },
+});
+```
+
+</Step>
+
+<Step title="Set up the public backend functions">
+
+Set up the `usernamePasskey` method with `setupUsernamePasskey` and export the
+mutations it hands back once you attach the callback that creates your user
+rows, in `convex/auth.ts`.
+
+`rpId` and `origin` bind the passkeys to your app:
+
+- `rpId` is the _relying party ID_: the domain the passkeys belong to, without a
+  scheme or a port (`localhost` in development, `example.com` in production).
+  Browsers only offer a passkey to a page whose domain is the `rpId` or a
+  subdomain of it.
+- `origin` is the full origin the login page is served from, including the
+  scheme and the port (`http://localhost:5173` for the Vite dev server). The
+  component rejects a passkey sign-in that comes from any other origin.
+
+  To accept several origins, pass a list. A native app that shares the `rpId` of
+  your site reports its own origin: an iOS app reports `https://<rpId>`, and an
+  Android app reports `android:apk-key-hash:<hash>`, where `<hash>` is the
+  unpadded base64url SHA-256 hash of the certificate that signs the app:
+
+  ```ts
+  origin: [
+    "https://app.example.com",
+    "https://example.com",
+    "android:apk-key-hash:<hash>",
+  ],
+  ```
+
+:::warning
+
+Passkeys are permanently bound to their `rpId`: a passkey created with
+`rpId: "localhost"` can never be used on your production domain. Set both values
+to the production domain before you deploy.
+
+:::
+
+```ts title="convex/auth.ts"
+import { components, internal } from "./_generated/api";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+// highlight-next-line
+import { setupUsernamePasskey } from "@convex-dev/auth/methods/username-passkey/server";
+
+const auth = setupConvexAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+export const {
+  // highlight-start
+  startSignInWithUsernamePasskey,
+  startAutofillSignInWithUsernamePasskey,
+  finishSignUpWithUsernamePasskey,
+  finishSignInWithUsernamePasskey,
+} = setupUsernamePasskey(auth, {
+  component: components.authPasskey,
+  usernameComponent: components.authUsername,
+  // The relying party ID and the origin of the Vite dev server. A deployed
+  // app uses its own domain here.
+  rpId: "localhost",
+  origin: "http://localhost:5173",
+}).attachUserCallbacks({ createUser: internal.users.createUser });
+// highlight-end
+```
+
+</Step>
+
+<Step title="Set up the provider on the client">
+
+Wrap your app in `ConvexAuthProvider`, passing it the `refreshSession` and
+`signOut` mutations and the `isAuthenticated` query in `src/main.tsx`:
+
+```tsx title="src/main.tsx"
+// highlight-next-line
+import { ConvexAuthProvider } from "@convex-dev/auth/react";
+import { ConvexReactClient } from "convex/react";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import { api } from "../convex/_generated/api";
+import { App } from "./App";
+
+const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL!);
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    // highlight-start
+    <ConvexAuthProvider
+      client={convex}
+      api={{
+        refreshSession: api.auth.refreshSession,
+        signOut: api.auth.signOut,
+        isAuthenticated: api.auth.isAuthenticated,
+      }}
+    >
+      // highlight-end
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+      // highlight-next-line
+    </ConvexAuthProvider>
+  </StrictMode>,
+);
+```
+
+</Step>
+
+<Step title="Set up the authentication UI">
+
+In your front-end, set up a route for logging in. Because the flow is
+identifier-first, the same page and the same field serve account creation and
+login.
+
+While the hook is mounted, it also lets the browser offer the passkeys it has
+stored in the autocompletion list of the username field. The field must carry
+`autoComplete="username webauthn"` for the browser to do that.
+
+:::warning
+
+The browser allows only one of these autofill requests at a time, so you should
+not mount the `useSignInWithUsernamePasskey` hook multiple times simultaneously.
+
+:::
+
+Copy the following code block inside of your app:
+
+```tsx title="src/routes/logIn.tsx"
+import {
+  UsernamePasskeyAutofillError,
+  SignInWithUsernamePasskeyResult,
+  useSignInWithUsernamePasskey,
+} from "@convex-dev/auth/methods/username-passkey/react";
+import { useEffect, useState } from "react";
+import { api } from "../../convex/_generated/api";
+
+export function LogIn() {
+  // While this hook is mounted, the browser also offers stored passkeys in
+  // the autocompletion list of the username field below (the field carries
+  // autoComplete="username webauthn"). Picking one signs in directly.
+  const { signIn, pending, autofill } = useSignInWithUsernamePasskey(api.auth);
+  const [username, setUsername] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  // Show autofill failures in the same error area as the modal flow. The
+  // most recent failure from either flow wins.
+  const { lastError } = autofill;
+  useEffect(() => {
+    if (lastError !== null) {
+      setError(errorMessage(lastError));
+    }
+  }, [lastError]);
+
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setError(null);
+        const result = await signIn({ username });
+        if (result.status === "complete") {
+          return;
+        }
+        setError(errorMessage(result.userError));
+      }}
+    >
+      <h1>Log in</h1>
+      <p>
+        Enter your username. A free username creates a new account with a
+        passkey; an existing username asks for its passkey.
+      </p>
+      <label>
+        Username
+        <input
+          type="text"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          autoComplete="username webauthn"
+          required
+          disabled={pending}
+        />
+      </label>
+      {error ? (
+        <p role="alert">
+          <strong>{error}</strong>
+        </p>
+      ) : null}
+      <button type="submit" disabled={pending}>
+        {pending ? "Waiting for your passkey…" : "Continue with a passkey"}
+      </button>
+    </form>
+  );
+}
+
+function errorMessage(
+  userError:
+    | Extract<SignInWithUsernamePasskeyResult, { status: "error" }>["userError"]
+    | UsernamePasskeyAutofillError,
+): string | null {
+  switch (userError.error) {
+    case "ALREADY_PENDING":
+      // A second submit while the first attempt still runs. That attempt
+      // keeps its passkey dialog, so there is nothing to tell the user.
+      return null;
+    case "USERNAME_TOO_SHORT":
+      return `The username must be at least ${userError.minimumLength} characters.`;
+    case "USERNAME_TOO_LONG":
+      return `The username must be at most ${userError.maximumLength} characters.`;
+    case "USERNAME_HAS_SURROUNDING_WHITESPACE":
+      return "The username can't start or end with whitespace.";
+    case "USERNAME_HAS_INVALID_CHARACTERS":
+      return "The username contains characters that aren't allowed.";
+    case "USERNAME_TAKEN":
+      // Only returned when someone claimed the username between the two
+      // steps of the ceremony.
+      return "That username was just taken. Try another one.";
+    case "CHALLENGE_EXPIRED":
+      return "The sign-in attempt took too long. Please try again.";
+    case "UNKNOWN_CREDENTIAL":
+      return "This passkey is not registered here.";
+    case "PROTOCOL_ERROR":
+      // The browser sent something that violates the protocol.
+      // This might be caused by a misbehaving client, or by a configuration error.
+      // The Convex logs contain more information about the source of the error.
+      return "This passkey request could not be verified. Please try again, or contact support if the problem persists.";
+    case "PASSKEY_ALREADY_REGISTERED":
+      // The authenticator refused to make a second passkey (usually
+      // because `excludeCredentials` names one it already holds). The
+      // message stays account-neutral: this switch also serves the sign-up
+      // flow, where no account exists yet.
+      return "This device already holds a passkey for this site. Try signing in with it instead.";
+    case "CEREMONY_ABORTED":
+      // The most common failure: the user closed the passkey dialog.
+      return "Sign-in was cancelled. Please try again.";
+    case "WEBAUTHN_UNSUPPORTED":
+      return "This browser does not support passkeys.";
+    case "OTHER_ERROR":
+      // The mutation threw unexpectedly; the original error is available
+      // on `cause` if you want to log or inspect it.
+      console.error("Sign-in failed:", userError.cause);
+      return "Something went wrong. Please try again.";
+    default:
+      userError satisfies never;
+      return `Unknown error: ${JSON.stringify(userError)}`;
+  }
+}
+```
+
+</Step>
+
+</StepByStep>
+
+## Going further
+
+### Allowing users to manage their passkeys
+
+When your app supports passkeys, it is highly recommended to allow users to add
+multiple passkeys. This is especially useful for users who use multiple devices,
+or hardware authenticators.
+
+<StepByStep>
+
+<Step title="Make sure the Convex functions for passkey managements are exposed">
+
+In `convex/auth.ts`, make sure the following functions are exported:
+`listPasskeys`, `renamePasskey`, `startAddPasskey`, `verifyAddPasskey`,
+`finishAddPasskey`, `startRemovePasskey`, and `finishRemovePasskey`.
+
+```ts title="convex/auth.ts"
+import { components, internal } from "./_generated/api";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+import { setupUsernamePasskey } from "@convex-dev/auth/methods/username-passkey/server";
+
+const auth = setupConvexAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+export const {
+  startSignInWithUsernamePasskey,
+  startAutofillSignInWithUsernamePasskey,
+  finishSignUpWithUsernamePasskey,
+  finishSignInWithUsernamePasskey,
+
+  // highlight-start
+  listPasskeys,
+  renamePasskey,
+
+  startAddPasskey,
+  verifyAddPasskey,
+  finishAddPasskey,
+
+  startRemovePasskey,
+  finishRemovePasskey,
+  // highlight-end
+} = setupUsernamePasskey(auth, {
+  component: components.authPasskey,
+  usernameComponent: components.authUsername,
+  // The relying party ID and the origin of the Vite dev server. A deployed
+  // app uses its own domain here.
+  rpId: "localhost",
+  origin: "http://localhost:5173",
+}).attachUserCallbacks({ createUser: internal.users.createUser });
+```
+
+</Step>
+
+<Step title="Build the passkey management page">
+
+In your app’s settings page, add the UI code for adding, renaming, and removing
+passkeys. This code uses the `useAddPasskey` and `useRemovePasskey` hooks
+provided by Convex Auth, and the `renamePasskey` mutation.
+
+We recommend copying the following component into your app, adapting it to your
+app’s design system, and rendering it on your settings page:
+
+```tsx title="src/PasskeySettings.tsx"
+import {
+  AddPasskeyResult,
+  RemovePasskeyResult,
+  RenamePasskeyResult,
+  useAddPasskey,
+  useRemovePasskey,
+} from "@convex-dev/auth/methods/username-passkey/react";
+import { useMutation, useQuery } from "convex/react";
+import { useState } from "react";
+import { api } from "../convex/_generated/api";
+
+export function PasskeySettings() {
+  const query = useQuery(api.auth.listPasskeys, {});
+  const { addPasskey, pending: adding } = useAddPasskey(api.auth);
+  const [error, setError] = useState<string | null>(null);
+
+  if (query !== undefined && !query.success) {
+    query.userError.error satisfies "NOT_LOGGED_IN";
+    return <p role="alert">You are not signed in.</p>;
+  }
+  if (query === undefined) {
+    return <p>Loading your passkeys…</p>;
+  }
+  const passkeys = query.passkeys;
+
+  // A different passkey must authorize each removal, thus a user with one
+  // passkey must add a second one before they can remove either.
+  const canRemove = passkeys.length > 1;
+
+  return (
+    <section>
+      <h2>Your passkeys</h2>
+      <ul>
+        {passkeys.map((passkey) => (
+          <PasskeyRow
+            key={passkey.passkeyId}
+            passkey={passkey}
+            canRemove={canRemove}
+            onError={setError}
+          />
+        ))}
+      </ul>
+      {error ? (
+        <p role="alert">
+          <strong>{error}</strong>
+        </p>
+      ) : null}
+      <button
+        disabled={adding}
+        onClick={async () => {
+          setError(null);
+          const result = await addPasskey();
+          if (!result.success) {
+            setError(errorMessage(result.userError));
+          }
+        }}
+      >
+        Add a passkey
+      </button>
+    </section>
+  );
+}
+
+function PasskeyRow({
+  passkey,
+  canRemove,
+  onError,
+}: {
+  passkey: {
+    name?: string | undefined;
+    passkeyId: string;
+    createdAt: number;
+  };
+  canRemove: boolean;
+  onError: (message: string | null) => void;
+}) {
+  // Each row has its own remove hook, so `pending` drives only the spinner
+  // of this row.
+  const { removePasskey, pending: removing } = useRemovePasskey(api.auth);
+  const renamePasskey = useMutation(api.auth.renamePasskey);
+  return (
+    <li>
+      <em>{passkey.name ?? "Unnamed passkey"}</em>, added{" "}
+      {new Date(passkey.createdAt).toLocaleString()}{" "}
+      <button
+        onClick={async () => {
+          const name = window.prompt("New name for this passkey?");
+          if (name === null) {
+            return;
+          }
+          onError(null);
+          try {
+            const result = await renamePasskey({
+              passkeyId: passkey.passkeyId,
+              name,
+            });
+            if (!result.success) {
+              onError(errorMessage(result.userError));
+            }
+          } catch (cause) {
+            console.error("Passkey rename failed:", cause);
+            onError("Something went wrong. Please try again.");
+          }
+        }}
+      >
+        Rename
+      </button>{" "}
+      <button
+        disabled={removing || !canRemove}
+        onClick={async () => {
+          if (!window.confirm("Remove this passkey?")) {
+            return;
+          }
+          onError(null);
+          const result = await removePasskey(passkey.passkeyId);
+          if (!result.success) {
+            onError(errorMessage(result.userError));
+          }
+        }}
+      >
+        {removing ? "Waiting for your passkey…" : "Remove"}
+      </button>
+    </li>
+  );
+}
+
+function errorMessage(
+  userError:
+    | Extract<AddPasskeyResult, { success: false }>["userError"]
+    | Extract<RemovePasskeyResult, { success: false }>["userError"]
+    | Extract<RenamePasskeyResult, { success: false }>["userError"],
+): string | null {
+  switch (userError.error) {
+    case "CEREMONY_ABORTED":
+      return "The passkey dialog was closed.";
+    case "ALREADY_PENDING":
+      // A second submit while the first attempt still runs. That attempt
+      // keeps its passkey dialog, so there is nothing to tell the user.
+      return null;
+    case "PASSKEY_ALREADY_REGISTERED":
+      return "This device already has a passkey for your account.";
+    case "PROTOCOL_ERROR":
+      // The browser sent something that violates the protocol.
+      // This might be caused by a misbehaving client, or by a configuration error.
+      // The Convex logs contain more information about the source of the error.
+      return "This passkey request could not be verified. Please try again, or contact support if the problem persists.";
+    case "LAST_PASSKEY":
+      return "You can’t remove your only passkey. Add another one first.";
+    case "TOO_MANY_PASSKEYS":
+      return "You have too many passkeys. Remove one before you add another.";
+    case "PASSKEY_NOT_FOUND":
+      return "This passkey no longer exists.";
+    case "INVALID_NAME":
+      return "A passkey name must be 1 to 50 characters on one line.";
+    case "CHALLENGE_EXPIRED":
+      return "The passkey dialog stayed open for too long. Please try again.";
+    case "UNKNOWN_CREDENTIAL":
+      return "This passkey is not registered here.";
+    case "NOT_LOGGED_IN":
+      return "Your session has ended. Please log in again.";
+    case "WEBAUTHN_UNSUPPORTED":
+      return "This browser does not support passkeys.";
+    case "OTHER_ERROR":
+      // The mutation threw unexpectedly; the original error is available
+      // on `cause` if you want to log or inspect it.
+      console.error("Passkey management failed:", userError.cause);
+      return "Something went wrong. Please try again.";
+    default:
+      userError satisfies never;
+      return `Unknown error: ${JSON.stringify(userError)}`;
+  }
+}
+```
+
+</Step>
+
+</StepByStep>
+
+### Using passkeys in a React Native app
+
+The passkey hooks also run in a React Native app, on a native passkey layer that
+your app provides: a React Native passkey library, or your own native module.
+`createUsernamePasskeyHooks` from
+`@convex-dev/auth/methods/username-passkey/react-custom` makes the hooks on top
+of it. The hooks take the same arguments and return the same results as the ones
+of `@convex-dev/auth/methods/username-passkey/react`, and the backend stays the
+same.
+
+:::info
+
+Convex Auth doesn't have a fully bundled passkey solution for React Native yet.
+However, you can adapt the example integration below to the third-party library
+of your choice.
+
+:::
+
+<StepByStep>
+
+<Step title="Set up the native passkey layer">
+
+This example uses the third-party
+[`react-native-passkey`](https://www.npmjs.com/package/react-native-passkey)
+library. It is a native module, so in an Expo app it runs in a development
+build, not in Expo Go.
+
+```sh
+npm install react-native-passkey
+```
+
+</Step>
+
+<Step title="Add the origins of your app">
+
+Add the origins of your app to the `origin` list in `convex/auth.ts`, next to
+the origin of your site: `https://<rpId>` for iOS, and
+`android:apk-key-hash:<hash>` for Android, as the “Set up the public backend
+functions” step shows.
+
+```ts title="convex/auth.ts"
+origin: [
+  "https://app.example.com",
+  "https://example.com",
+  "android:apk-key-hash:<hash>",
+],
+```
+
+</Step>
+
+<Step title="Implement the ceremonies">
+
+The hooks run every passkey ceremony through a `PasskeyCeremonies` object:
+
+- `isSupported()` tells whether the device can run passkey ceremonies. When it
+  returns `false`, the hooks return `WEBAUTHN_UNSUPPORTED`.
+- `register(options)` makes a new passkey, and `authenticate(options)` signs in
+  with an existing one. `options` is the
+  `PublicKeyCredentialCreationOptionsJSON` or
+  `PublicKeyCredentialRequestOptionsJSON` of the WebAuthn specification. Both
+  resolve with `{ success: true, response }`, where `response` is the
+  registration or authentication response in the same JSON encoding, with
+  `type: "public-key"` and a `rawId`. The hooks keep only the fields that the
+  server accepts, so the response may have more.
+- For a failure they recognize, `register` and `authenticate` resolve with
+  `{ success: false, userError }`: `CEREMONY_ABORTED` when the user dismissed
+  the dialog or has no passkey for the app, `PASSKEY_ALREADY_REGISTERED` when
+  the device already holds a passkey for the account, and
+  `WEBAUTHN_UNSUPPORTED`. Any other failure can throw: the hooks return
+  `OTHER_ERROR`, with the thrown value on `cause`.
+
+Make the hooks once, in a module of your app:
+
+```ts title="src/passkeys.ts"
+import {
+  createUsernamePasskeyHooks,
+  type PasskeyCeremonies,
+  type PasskeyClientError,
+} from "@convex-dev/auth/methods/username-passkey/react-custom";
+import {
+  Passkey,
+  type PasskeyCreateRequest,
+  type PasskeyGetRequest,
+} from "react-native-passkey";
+
+// The library throws `{ error, message }` objects, where `error` is one of
+// its error codes.
+function toUserError(cause: unknown): PasskeyClientError | null {
+  switch ((cause as { error?: unknown } | null)?.error) {
+    case "UserCancelled":
+    case "NoCredentials":
+      return { error: "CEREMONY_ABORTED" };
+    case "NotSupported":
+      return { error: "WEBAUTHN_UNSUPPORTED" };
+    case "CredentialAlreadyExists":
+      return { error: "PASSKEY_ALREADY_REGISTERED" };
+    default:
+      return null;
+  }
+}
+
+const ceremonies: PasskeyCeremonies = {
+  isSupported: () => Passkey.isSupported(),
+  register: async (options) => {
+    try {
+      // The cast narrows the transports, which the library types as an enum.
+      const response = await Passkey.create(options as PasskeyCreateRequest);
+      return { success: true, response: { ...response, type: "public-key" } };
+    } catch (cause) {
+      const userError = toUserError(cause);
+      if (userError === null) throw cause;
+      return { success: false, userError };
+    }
+  },
+  authenticate: async (options) => {
+    try {
+      const response = await Passkey.get(options as PasskeyGetRequest);
+      return {
+        success: true,
+        response: {
+          ...response,
+          // In the JSON encoding, `rawId` is the same string as `id`.
+          rawId: response.rawId ?? response.id,
+          type: "public-key",
+        },
+      };
+    } catch (cause) {
+      const userError = toUserError(cause);
+      if (userError === null) throw cause;
+      return { success: false, userError };
+    }
+  },
+};
+
+export const { useSignInWithUsernamePasskey, useAddPasskey, useRemovePasskey } =
+  createUsernamePasskeyHooks(ceremonies);
+```
+
+</Step>
+
+<Step title="Serve the association files">
+
+iOS and Android only offer the passkeys of an `rpId` to an app that the `rpId`
+lists, in `https://<rpId>/.well-known/apple-app-site-association` and
+`https://<rpId>/.well-known/assetlinks.json`. Serve both with a `200`, no
+redirect, and the `application/json` content type.
+
+The files go on the domain of the `rpId`, which is usually your web host, not
+your deployment's `convex.site` domain. To serve them from Convex HTTP actions
+instead, have the web host rewrite (not redirect) `/.well-known/*` to them.
+
+On iOS, also add `webcredentials:<rpId>` to the app's Associated Domains
+(`ios.associatedDomains` in an Expo `app.json`). Apple caches the file, so a
+change can take a while to reach devices.
+
+On Android, list the SHA-256 fingerprints of every certificate that signs the
+app (debug, upload, and Play app signing), the same certificates as the
+`android:apk-key-hash:<hash>` origins.
+
+<Tabs>
+  <TabItem value="ios" label="iOS">
+
+```json title="public/.well-known/apple-app-site-association"
+{
+  "webcredentials": {
+    "apps": ["<TeamID>.<BundleID>"]
+  }
+}
+```
+
+  </TabItem>
+  <TabItem value="android" label="Android">
+
+```json title="public/.well-known/assetlinks.json"
+[
+  {
+    "relation": ["delegate_permission/common.get_login_creds"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.example.app",
+      "sha256_cert_fingerprints": ["AB:CD:...:EF"]
+    }
+  }
+]
+```
+
+  </TabItem>
+  <TabItem value="convex" label="Convex HTTP actions">
+
+```ts title="convex/http.ts"
+// Only serve the association files from your Convex deployment
+// if you're hosting a mobile-only app or if you plan to rewrite
+// or proxy requests to endpoints like these from your web front-end.
+import { httpRouter } from "convex/server";
+import { httpAction } from "./_generated/server";
+
+const http = httpRouter();
+
+function json(body: unknown) {
+  return httpAction(
+    async () =>
+      new Response(JSON.stringify(body), {
+        headers: { "Content-Type": "application/json" },
+      }),
+  );
+}
+
+http.route({
+  path: "/.well-known/apple-app-site-association",
+  method: "GET",
+  handler: json({ webcredentials: { apps: ["<TeamID>.<BundleID>"] } }),
+});
+
+http.route({
+  path: "/.well-known/assetlinks.json",
+  method: "GET",
+  handler: json([
+    {
+      relation: ["delegate_permission/common.get_login_creds"],
+      target: {
+        namespace: "android_app",
+        package_name: "com.example.app",
+        sha256_cert_fingerprints: ["AB:CD:...:EF"],
+      },
+    },
+  ]),
+});
+
+export default http;
+```
+
+  </TabItem>
+</Tabs>
+
+</Step>
+
+<Step title="Use the hooks">
+
+Import the hooks from the module you created above instead of
+`@convex-dev/auth/methods/username-passkey/react`.
+
+`PasskeyCeremonies` has an optional `autofill` member for passkey autofill.
+Without it, the `autofill` field of `useSignInWithUsernamePasskey` reports
+`available: false`.
+
+```tsx
+import { useSignInWithUsernamePasskey } from "./passkeys";
+
+const { signIn, pending } = useSignInWithUsernamePasskey(api.auth);
+// ...
+const result = await signIn({ username });
+```
+
+</Step>
+
+</StepByStep>

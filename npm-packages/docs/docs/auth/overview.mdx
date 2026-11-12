@@ -4,7 +4,7 @@ sidebar_position: 0
 description: Add authentication to your Convex app.
 hide_table_of_contents: true
 sidebar_label: Overview
-pagination_next: auth/convex-auth
+pagination_next: auth/convex-auth/index
 ---
 
 Convex deployment endpoints are exposed to the open internet and the claims
@@ -16,6 +16,15 @@ Connect (based on OAuth) ID tokens in the form of JWTs to authenticate WebSocket
 connections or RPCs. These JWTs can be provided by any service (including your
 own Convex backend) that implement the appropriate OAuth endpoints to verify
 them.
+
+## First-party authentication with Convex Auth
+
+Use [Convex Auth](/auth/convex-auth/index.mdx) to add authentication directly to
+your Convex application. It's the best way to get started with auth on Convex.
+
+It doesn't support as many features as third-party solutions, but it is fully
+configurable in code, has end-to-end type-safety and runs transactionally within
+your application.
 
 ## Third-party authentication platforms
 
@@ -34,24 +43,6 @@ and more on top of the authentication basics.
 After you integrate one of these, learn more about accessing authentication
 information in [Functions](/auth/functions-auth.mdx) and storing user
 information in the [Database](/auth/database-auth.mdx).
-
-## The Convex Auth Library
-
-For client-side React and React Native mobile apps you can implement auth
-directly in Convex with the [Convex Auth](/auth/convex-auth.mdx) library. This
-[npm package](https://github.com/convex/convex-auth) runs on your Convex
-deployment and helps you build a custom sign-up/sign-in flow via social identity
-providers, one-time email or SMS access codes, or via passwords.
-
-Convex Auth is in beta (it isn't complete and may change in
-backward-incompatible ways) and doesn't provide as many features as third party
-auth integrations. Since it doesn't require signing up for another service it's
-the quickest way to get auth up and running.
-
-<BetaAdmonition feature="Convex Auth" verb="is" />
-
-Support for Next.js is under active development. If you'd like to help test this
-experimental support please [give it a try](https://labs.convex.dev/auth)!
 
 ## Debugging
 

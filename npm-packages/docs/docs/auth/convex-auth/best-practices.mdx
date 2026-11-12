@@ -1,0 +1,198 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 5
+title: Best practices
+description: Recommended patterns for apps that use Convex Auth.
+---
+
+Unlike the guides that are specific to sign-in methods, the following advice
+applies more broadly to using Convex Auth in your application.
+
+## Store user data in your own tables
+
+When a new user signs into your app via Convex Auth, a `createUser` function
+that you define will be called. This is where you can initialize a new user
+record and write data to any associated tables in your application.
+
+```ts title="convex/users.ts"
+import { internalMutation } from "./_generated/server";
+import { v } from "convex/values";
+
+export const createUser = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("emailPassword"),
+      profile: v.object({}),
+    }),
+  },
+  returns: v.id("users"),
+  handler: async (ctx) => {
+    // highlight-next-line
+    return await ctx.db.insert("users", {});
+  },
+});
+```
+
+As users interact with your app, you can write data to any tables that you like.
+If you add an index on the user ID you'll be able to do fast lookups of the data
+later. You can also use the user ID to quickly reference back to your main
+`users` table (or whatever your application calls it).
+
+## Use components as the source of truth for data they manage
+
+The Convex Auth components should be treated as the authoritative source for
+authentication data, including username and verified email.
+
+Instead of copying those values into other tables, make lightweight component
+calls passing the current user ID (see `getAuthUserId`) as the argument.
+
+```ts title="convex/currentUser.ts"
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { query } from "./_generated/server";
+import { components } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
+
+/**
+ * The signed-in user with their primary email address, or null.
+ *
+ * The users table holds no address: the query reads the primary address
+ * from the authEmail component.
+ */
+export const loggedInUser = query({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{ id: Id<"users">; email: string | null } | null> => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return null;
+    }
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      return null;
+    }
+
+    // highlight-start
+    const email = await ctx.runQuery(
+      components.authEmail.verifiedEmails.getPrimaryEmail,
+      { userId },
+    );
+    // highlight-end
+    return { id: user._id, email };
+  },
+});
+```
+
+Not only will you avoid data duplication, but you'll avoid drift (e.g. if a
+username is eventually updated or a verified email changes status).
+
+## Handle auth method errors in your client code
+
+All of the Convex Auth client hooks have functions that return typed error
+values when something goes wrong. These should be wired up to provide helpful
+information to a user in your sign-in UI.
+
+You can perform an exhaustive switch over the type to ensure that you're
+handling all possible error values. With `satisfies never` in the `default`
+case, TypeScript reports an error if a new error value is added that your code
+doesn't handle.
+
+```tsx title="src/routes/logIn.tsx"
+import { useSignInWithUsernamePassword } from "@convex-dev/auth/methods/username-password/react";
+import { useState } from "react";
+import { api } from "../../convex/_generated/api";
+
+export function LogIn() {
+  const { signIn, pending } = useSignInWithUsernamePassword(api.auth);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <>
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setError(null);
+          const result = await signIn({ username, password });
+          if (result.status === "complete") {
+            return;
+          }
+          // highlight-start
+          setError(() => {
+            switch (result.userError.error) {
+              case "USER_NOT_FOUND":
+                return "No account exists with that username.";
+              case "INVALID_CREDENTIALS":
+                return "Incorrect username or password.";
+              case "PASSWORD_TOO_SHORT":
+                return `Password must be at least ${result.userError.minimumLength} characters.`;
+              case "PASSWORD_TOO_LONG":
+                return `Password must be at most ${result.userError.maximumLength} characters.`;
+              case "PASSWORD_HAS_SURROUNDING_WHITESPACE":
+                return "Password can't start or end with whitespace.";
+              case "RATE_LIMITED":
+                return `Too many attempts. Try again in ${Math.ceil(result.userError.retryAfterMs / 1000)} seconds.`;
+              case "OTHER_ERROR":
+                // The mutation threw unexpectedly; the original error is
+                // available on `cause` if you want to log or inspect it.
+                console.error("Sign-in failed:", result.userError.cause);
+                return "Something went wrong. Please try again.";
+              default:
+                result.userError satisfies never;
+                console.error("Sign-in failed:", result.userError);
+                return "Something went wrong. Please try again.";
+            }
+          });
+          // highlight-end
+        }}
+      >
+        <h1>Log in</h1>
+        <label htmlFor="username">
+          Username
+          <input
+            // Using a static id to help password managers behave correctly
+            id="username"
+            name="username"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            required
+            disabled={pending}
+          />
+        </label>
+        <label htmlFor="password">
+          Password
+          <input
+            // Using a static id to help password managers behave correctly
+            id="password"
+            name="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+            disabled={pending}
+          />
+        </label>
+        {error ? (
+          <p role="alert">
+            <strong>{error}</strong>
+          </p>
+        ) : null}
+        <button type="submit" disabled={pending}>
+          {pending ? "Logging in…" : "Log in"}
+        </button>
+      </form>
+      <p>
+        Don't have an account? <a href="/auth/convex-auth/signup">Sign up</a>
+      </p>
+    </>
+  );
+}
+```

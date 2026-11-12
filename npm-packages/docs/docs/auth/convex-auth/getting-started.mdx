@@ -1,0 +1,135 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 2
+title: Getting started
+description: Set up Convex Auth in your project.
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+Every project using Convex Auth starts with these steps.
+
+<StepByStep>
+
+<Step title="Install Convex Auth">
+
+Add the Convex Auth package to your project.
+
+{/* prettier-ignore-start */}
+
+<Tabs groupId="package-manager">
+  <TabItem value="npm" label="npm">
+    ```sh
+    npm i @convex-dev/auth
+    ```
+  </TabItem>
+  <TabItem value="pnpm" label="pnpm">
+    ```sh
+    pnpm add @convex-dev/auth
+    ```
+  </TabItem>
+  <TabItem value="yarn" label="yarn">
+    ```sh
+    yarn add @convex-dev/auth
+    ```
+  </TabItem>
+  <TabItem value="bun" label="bun">
+    ```sh
+    bun add @convex-dev/auth
+    ```
+  </TabItem>
+</Tabs>
+
+{/* prettier-ignore-end */}
+
+</Step>
+
+<Step title="Install the core component">
+
+Register the Convex Auth component in `convex/convex.config.ts`. The guide of
+each sign-in method adds more components to this file.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import auth from "@convex-dev/auth/convex.config.js";
+
+const app = defineApp();
+
+app.use(auth);
+
+export default app;
+```
+
+</Step>
+
+<Step title="Configure the authentication provider">
+
+Create `convex/auth.config.ts`. This file tells your deployment to accept the
+access tokens of Convex Auth. Your deployment signs the access tokens with its
+own key, thus you do not have secrets to configure.
+
+```ts title="convex/auth.config.ts"
+import type { AuthConfig } from "convex/server";
+import { convexAuthProvider } from "@convex-dev/auth/server";
+
+export default {
+  providers: [convexAuthProvider()],
+} satisfies AuthConfig;
+```
+
+</Step>
+
+<Step title="Set up Convex Auth">
+
+Create `convex/auth.ts`, and export the functions of the core from it. The guide
+of each sign-in method adds its functions to this file.
+
+```ts title="convex/auth.ts"
+import { components } from "./_generated/api";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+
+const auth = setupConvexAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+```
+
+</Step>
+
+</StepByStep>
+
+## Install a sign-in method
+
+Pick a sign-in method and follow its guide to wire it up:
+
+<DocCardList
+  items={[
+    {
+      type: "link",
+      href: "/auth/convex-auth/methods/username-password",
+      docId: "auth/convex-auth/methods/username-password",
+      label: "Username + Password",
+    },
+    {
+      type: "link",
+      href: "/auth/convex-auth/methods/username-passkey",
+      docId: "auth/convex-auth/methods/username-passkey",
+      label: "Username + Passkey",
+    },
+    {
+      type: "link",
+      href: "/auth/convex-auth/methods/email-password",
+      docId: "auth/convex-auth/methods/email-password",
+      label: "Email + Password",
+    },
+    {
+      type: "link",
+      href: "/auth/convex-auth/methods/oauth",
+      docId: "auth/convex-auth/methods/oauth",
+      label: "OAuth",
+    },
+  ]}
+/>

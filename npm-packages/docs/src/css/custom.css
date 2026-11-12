@@ -1170,6 +1170,10 @@ everywhere else in the sidebar, so fade them further. */
   --convex-icon: url(heroicons/24/outline/book-open.svg);
 }
 
+.convex-sidebar-convex-auth-api {
+  --convex-icon: url(heroicons/24/outline/book-open.svg);
+}
+
 .convex-sidebar-generated-code {
   --convex-icon: url(heroicons/24/outline/book-open.svg);
 }

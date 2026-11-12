@@ -1,0 +1,1072 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 4
+title: OAuth (Apple, Google, and GitHub)
+description: Allow users to sign-in with an account on a supported provider.
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+The OAuth components and their sign-in methods (set up with `setupApple`,
+`setupGoogle`, and `setupGithub`) allow your users to login via their existing
+Apple, Google, or GitHub accounts.
+
+The steps below will guide you through configuring Apple, Google, and/or GitHub
+login. In the end, your Convex deployment will host HTTP routes for handling the
+OAuth callbacks and redirect back to your application for handling the result.
+
+:::info
+
+Support for using other OAuth identity providers is coming soon.
+
+:::
+
+## Common setup
+
+These steps are the same whichever provider you use. Each identity provider gets
+its own component, so an app offering both Google and GitHub login repeats the
+provider-specific steps below for each of them.
+
+<StepByStep>
+
+<Step title="Follow the “Getting started” guide">
+
+First, install Convex Auth and set up the core as described in the
+[Getting started](../getting-started.mdx) guide.
+
+</Step>
+
+<Step title={<>Add a <code>users</code> table to the schema</>}>
+
+Add an empty `users` table to your schema in `convex/schema.ts`.
+
+Convex Auth will create a row for each account. You can also add
+application-specific fields to this table if necessary.
+
+```ts title="convex/schema.ts"
+import { defineSchema, defineTable } from "convex/server";
+
+export default defineSchema({
+  // highlight-next-line
+  users: defineTable({}),
+});
+```
+
+</Step>
+
+<Step title="Set up the provider on the client">
+
+Wrap your app in `ConvexAuthProvider`, passing it the `refreshSession` and
+`signOut` mutations and the `isAuthenticated` query in `src/main.tsx`:
+
+```tsx title="src/main.tsx"
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { ConvexReactClient } from "convex/react";
+// highlight-next-line
+import { ConvexAuthProvider } from "@convex-dev/auth/react";
+import { api } from "../convex/_generated/api";
+import App from "./App";
+import "./index.css";
+
+const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL);
+
+const rootElement = document.getElementById("root");
+if (rootElement === null) {
+  throw new Error("Root element #root not found");
+}
+
+createRoot(rootElement).render(
+  <StrictMode>
+    // highlight-start
+    <ConvexAuthProvider
+      client={convex}
+      api={{
+        refreshSession: api.auth.refreshSession,
+        signOut: api.auth.signOut,
+        isAuthenticated: api.auth.isAuthenticated,
+      }}
+    >
+      // highlight-end
+      <App />
+      // highlight-next-line
+    </ConvexAuthProvider>
+  </StrictMode>,
+);
+```
+
+</Step>
+
+</StepByStep>
+
+## Provider setup
+
+Pick the provider you want to wire up:
+
+{/* prettier-ignore-start */}
+
+<Tabs>
+
+<TabItem value="Apple" label="Apple">
+
+<StepByStep>
+
+<Step title="Register the Services ID and the key">
+
+Sign in with Apple is set up in [Certificates, Identifiers &
+Profiles](https://developer.apple.com/account/resources/), and needs a paid
+Apple Developer Program membership.
+
+:::info
+
+The callback lives on your deployment's `convex.site` host rather than on your
+app frontend, so a cloud deployment works as it is and your app frontend can
+stay on `localhost`. Apple never sees where the flow returns to.
+
+Apple does reject `localhost` and IP addresses as return URLs, so a deployment
+that is not publicly reachable, meaning a local backend or self-hosting on
+localhost, needs a public HTTPS hostname before Apple will accept its callback.
+
+:::
+
+1. **Register an App ID with Sign in with Apple enabled**, as a primary App
+   ID. Websites attach to an App ID, so you need one even with no native app.
+2. **Register a Services ID.** Its identifier (something like
+   `com.example.app.web`) is your client ID. Select Sign in with Apple, click
+   Configure, choose the App ID from step 1, and under Website URLs enter your
+   deployment's site host (`happy-animal-123.convex.site`) as the domain and
+   `https://happy-animal-123.convex.site/oauth/apple/callback` as the return
+   URL. Nothing has to be uploaded to your server. Individual accounts can
+   register 10 website URLs, organizations 100.
+3. **Create a key** with Sign in with Apple enabled, choosing the App ID from
+   step 1 as its primary App ID, and download its `AuthKey_XXXXXXXXXX.p8`
+   file. Apple only lets you download it once. The 10-character `XXXXXXXXXX`
+   is your key ID.
+4. **Note your team id**, the 10-character value in the top right of the
+   developer account page.
+
+You can get the site host the return URL is built from with:
+
+```sh
+npx convex env get CONVEX_SITE_URL
+```
+
+</Step>
+
+<Step title="Set the environment variables">
+
+Store all four values as [environment
+variables](https://docs.convex.dev/production/environment-variables#declaring)
+on your Convex deployment. The private key is multi-line, so read it from the
+file rather than passing it as an argument.
+
+Apple issues no static client secret. The component signs a short-lived one
+for each token exchange out of the team id, key id, and private key, which is
+why it takes four values where the other providers take two.
+
+```sh
+npx convex env set AUTH_APPLE_CLIENT_ID YOUR_SERVICES_ID
+npx convex env set AUTH_APPLE_TEAM_ID YOUR_TEAM_ID
+npx convex env set AUTH_APPLE_KEY_ID YOUR_KEY_ID
+npx convex env set AUTH_APPLE_PRIVATE_KEY < AuthKey_XXXXXXXXXX.p8
+```
+
+</Step>
+
+<Step title="Install the component">
+
+Register the Apple OAuth component alongside the core in
+`convex/convex.config.ts`. You will declare the environment variables that you
+created above as part of your application's `env` and then pass those values to
+the component.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+import auth from "@convex-dev/auth/convex.config.js";
+// highlight-next-line
+import authApple from "@convex-dev/auth/components/apple/convex.config.js";
+
+const app = defineApp({
+  env: {
+    // highlight-start
+    AUTH_APPLE_CLIENT_ID: v.string(),
+    AUTH_APPLE_TEAM_ID: v.string(),
+    AUTH_APPLE_KEY_ID: v.string(),
+    AUTH_APPLE_PRIVATE_KEY: v.string(),
+    // highlight-end
+  },
+});
+
+app.use(auth);
+
+// The `httpPrefix` below controls where the component's `callback` route is
+// mounted. That gets combined with the `CONVEX_SITE_URL` to form the full
+// return URL that needs to be registered on the Services ID in your Apple
+// Developer Account.
+//
+// The full return URL will be something like:
+//
+// https://happy-animal-123.convex.site/oauth/apple/callback
+//
+// Apple rejects localhost and IP addresses as return URLs, so this deployment
+// needs a publicly reachable host like the convex.site url above. Local or
+// self-hosted deployments may need to take extra steps for this, e.g., using a
+// tunnel.
+// The app frontend can stay on localhost, since Apple never sees where the
+// flow returns to.
+// highlight-start
+app.use(authApple, {
+  httpPrefix: "/oauth/apple",
+  env: {
+    CLIENT_ID: app.env.AUTH_APPLE_CLIENT_ID,
+    TEAM_ID: app.env.AUTH_APPLE_TEAM_ID,
+    KEY_ID: app.env.AUTH_APPLE_KEY_ID,
+    PRIVATE_KEY: app.env.AUTH_APPLE_PRIVATE_KEY,
+  },
+});
+// highlight-end
+
+export default app;
+```
+
+</Step>
+
+<Step title="Set up user creation">
+
+Write a `createUser` mutation that creates a row in your `users` table and
+returns its id. The method calls it the first time it sees an account.
+
+Apple is different from the other providers here. It sends the user's name
+only on the very first authorization and never again, so store it when it
+arrives and leave the stored one alone on later sign-ins. The `onSignIn`
+mutation below does exactly that. The name is also the one part of the profile
+that reaches you through the browser rather than from Apple directly, so treat
+it as untrusted text entered by a user.
+
+```ts title="convex/users.ts"
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { v } from "convex/values";
+import { internalMutation, query } from "./_generated/server";
+import { vAppleProfile } from "@convex-dev/auth/methods/apple/server";
+
+/**
+ * Create the user row for a new Apple account and return its id.
+ *
+ * This is the one sign-in where Apple sends a name, so it is stored now.
+ * Treat it as untrusted text the user typed: it reached us through the
+ * browser rather than from Apple directly.
+ */
+export const createUser = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("apple"),
+      profile: vAppleProfile,
+    }),
+  },
+  returns: v.id("users"),
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("users", {
+      name: args.method.profile.name,
+      email: args.method.profile.email,
+    });
+  },
+});
+
+/**
+ * Runs on every sign-in, the first one included.
+ *
+ * Apple sends the name with the first authorization only, and `createUser`
+ * stores it there. This fills in a name for an account created without one,
+ * which happens when the user removes the app from their Apple Account and
+ * authorizes again.
+ */
+export const onSignIn = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("apple"),
+      profile: vAppleProfile,
+    }),
+    userId: v.id("users"),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { name } = args.method.profile;
+    if (name === undefined) {
+      return null;
+    }
+    const user = await ctx.db.get("users", args.userId);
+    if (user !== null && user.name === undefined) {
+      await ctx.db.patch("users", args.userId, { name });
+    }
+    return null;
+  },
+});
+
+export const getCurrentUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return null;
+    }
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      return null;
+    }
+    return { id: user._id, name: user.name, email: user.email };
+  },
+});
+```
+
+</Step>
+
+<Step title="Set up the public backend functions">
+
+Set up the `apple` method with `setupApple` and export the mutations for
+starting and completing OAuth login that it hands back once you attach the
+callbacks, in `convex/auth.ts`:
+
+```ts title="convex/auth.ts"
+import { components, internal } from "./_generated/api";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+// highlight-next-line
+import { setupApple } from "@convex-dev/auth/methods/apple/server";
+
+const auth = setupConvexAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+// highlight-start
+export const { startSignInWithApple, completeSignInWithApple } = setupApple(
+  auth,
+  {
+    component: components.authApple,
+    allowedRedirectOrigins: ["http://localhost:5173"],
+  },
+).attachUserCallbacks({
+  createUser: internal.users.createUser,
+  onSignIn: internal.users.onSignIn,
+});
+// highlight-end
+```
+
+</Step>
+
+<Step title="Set up the authentication UI">
+
+In your front-end, install hooks and attach listeners for initiating OAuth login.
+
+Include an `App.tsx` like the following in your application:
+
+```tsx title="src/App.tsx"
+import { type ReactNode, useState } from "react";
+import { useConvexAuth, useQuery } from "convex/react";
+import { useAuthActions } from "@convex-dev/auth/react";
+import {
+  useOauth,
+  useSignInWithApple,
+} from "@convex-dev/auth/methods/apple/react";
+import { api } from "../convex/_generated/api";
+
+/**
+ * A failure to start comes back from the sign-in call, and a failure after the
+ * redirect back shows up in `useOauth`'s `flowError`. Each is handled with an
+ * exhaustive switch on its code.
+ */
+function SignedOut(): ReactNode {
+  const { signIn } = useSignInWithApple(api.auth);
+  const { flowError } = useOauth();
+  const [startError, setStartError] = useState<string | null>(null);
+  return (
+    <>
+      <h1>Sign in</h1>
+      <p>Continue with your Apple Account</p>
+      {flowError !== null && (
+        <p role="alert">
+          <strong>
+            {(() => {
+              switch (flowError.error) {
+                case "ACCESS_DENIED":
+                  return "Sign-in was cancelled.";
+                case "EXPIRED":
+                  return "That sign-in took too long. Please try again.";
+                case "INVALID_FLOW":
+                  return "This sign-in can't be completed here. Please try again.";
+                case "OTHER_ERROR":
+                  // The details are on `cause` if you want to log them.
+                  return "Something went wrong during sign-in. Please try again.";
+                default:
+                  flowError satisfies never;
+                  return `Unknown error: ${JSON.stringify(flowError)}`;
+              }
+            })()}
+          </strong>
+        </p>
+      )}
+      {startError !== null && (
+        <p role="alert">
+          <strong>{startError}</strong>
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={async () => {
+          setStartError(null);
+          const result = await signIn();
+          if (result.status === "redirect") return;
+          switch (result.userError.error) {
+            case "OTHER_ERROR":
+              // The flow couldn't start, e.g. the deployment was
+              // unreachable. The original error is on `cause` if you want
+              // to log or inspect it.
+              console.error(
+                "Apple sign-in failed to start:",
+                result.userError.cause,
+              );
+              setStartError("Couldn't start Apple sign-in. Please try again.");
+              return;
+            default:
+              result.userError.error satisfies never;
+              console.error("Apple sign-in failed to start:", result.userError);
+              setStartError("Couldn't start Apple sign-in. Please try again.");
+          }
+        }}
+      >
+        Continue with Apple
+      </button>
+    </>
+  );
+}
+
+function SignedIn(): ReactNode {
+  const { signOut } = useAuthActions();
+  const user = useQuery(api.users.getCurrentUser);
+  return (
+    <>
+      <h1>Signed in</h1>
+      {/* Apple sends the name with the first authorization and never after,
+          so an account created without one has none to show. */}
+      <p>{user?.name ?? "No name on file"}</p>
+      <p>{user?.email}</p>
+      <p>{user?.id ?? "…"}</p>
+      <button type="button" onClick={() => void signOut()}>
+        Sign out
+      </button>
+    </>
+  );
+}
+
+export default function App(): ReactNode {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  return (
+    <main>
+      {isLoading && <p>Signing you in…</p>}
+      {!isLoading && isAuthenticated && <SignedIn />}
+      {!isLoading && !isAuthenticated && <SignedOut />}
+    </main>
+  );
+}
+```
+
+</Step>
+
+</StepByStep>
+
+</TabItem>
+
+<TabItem value="Google" label="Google">
+
+<StepByStep>
+
+<Step title="Register the OAuth app">
+
+To allow users to login to your app via Google, you'll need to register an
+OAuth application with Google.
+
+:::info
+
+Follow the [Google OIDC
+instructions](https://developers.google.com/identity/openid-connect/openid-connect#appsetup)
+before proceeding.
+
+Google will require you to provide a redirect URI when registering your
+application.
+
+:::
+
+The redirect URI will be based on your `CONVEX_SITE_URL`; something like
+`https://happy-animal-123.convex.site/oauth/google/callback`. You can get your actual `CONVEX_SITE_URL` with this command:
+
+```sh
+npx convex env get CONVEX_SITE_URL
+```
+
+</Step>
+
+<Step title="Set the environment variables">
+
+Google will assign a unique client ID and client secret to your application.
+You will store those values as [environment
+variables](https://docs.convex.dev/production/environment-variables#declaring)
+on your Convex deployment.
+
+Here are the Convex CLI commands to do that (you'll need to substitute your
+actual client ID and client secret values):
+
+```sh
+npx convex env set AUTH_GOOGLE_CLIENT_ID YOUR_GOOGLE_OAUTH_CLIENT_ID
+npx convex env set AUTH_GOOGLE_CLIENT_SECRET YOUR_GOOGLE_OAUTH_CLIENT_SECRET
+```
+
+</Step>
+
+<Step title="Install the component">
+
+Register the Google oauth component alongside the core in
+`convex/convex.config.ts`. You will declare the environment variables that you
+created above as part of your application's `env` and then pass those values to
+the component.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+import auth from "@convex-dev/auth/convex.config.js";
+// highlight-next-line
+import authGoogle from "@convex-dev/auth/components/google/convex.config.js";
+
+const app = defineApp({
+  env: {
+    // highlight-next-line
+    AUTH_GOOGLE_CLIENT_ID: v.string(),
+    // highlight-next-line
+    AUTH_GOOGLE_CLIENT_SECRET: v.string(),
+  },
+});
+
+app.use(auth);
+
+// The `httpPrefix` below controls where the component's `callback` route is
+// mounted. That gets combined with the `CONVEX_SITE_URL` to form the full
+// redirect URI that needs to be set on the remote identity provider config.
+//
+// The full redirect URI will be something like:
+//
+// https://happy-animal-123.convex.site/oauth/google/callback
+// highlight-start
+app.use(authGoogle, {
+  httpPrefix: "/oauth/google",
+  env: {
+    CLIENT_ID: app.env.AUTH_GOOGLE_CLIENT_ID,
+    CLIENT_SECRET: app.env.AUTH_GOOGLE_CLIENT_SECRET,
+  },
+});
+// highlight-end
+
+export default app;
+```
+
+</Step>
+
+<Step title="Set up user creation">
+
+Write a `createUser` mutation that creates a row in your `users` table and
+returns its id. The method calls it the first time it sees an account.
+
+```ts title="convex/users.ts"
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { v } from "convex/values";
+import { internalMutation, query } from "./_generated/server";
+import { vGoogleProfile } from "@convex-dev/auth/methods/google/server";
+
+/**
+ * Create the user row for a new Google account and return its id. This example
+ * keeps no data in the row, but your app can put a profile here.
+ */
+export const createUser = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("google"),
+      profile: vGoogleProfile,
+    }),
+  },
+  returns: v.id("users"),
+  handler: async (ctx) => {
+    return await ctx.db.insert("users", {});
+  },
+});
+
+export const getCurrentUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return null;
+    }
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      return null;
+    }
+    return { id: user._id };
+  },
+});
+```
+
+</Step>
+
+<Step title="Set up the public backend functions">
+
+Set up the `google` method with `setupGoogle` and export the mutations for
+starting and completing OAuth login that it hands back once you attach the
+callback that creates your user rows, in `convex/auth.ts`.
+
+Just like `createUser` is attached below, you can also attach an optional
+`onSignIn` mutation, called with the resolved `userId` on every sign-in, the
+first one included. Anything you want to happen each time someone signs in
+belongs there, so `createUser` only has to handle what is true at creation
+time. This example doesn't use it, but it's available if you need it.
+
+```ts title="convex/auth.ts"
+import { components, internal } from "./_generated/api";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+// highlight-next-line
+import { setupGoogle } from "@convex-dev/auth/methods/google/server";
+
+const auth = setupConvexAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+// highlight-start
+export const { startSignInWithGoogle, completeSignInWithGoogle } = setupGoogle(
+  auth,
+  {
+    component: components.authGoogle,
+    allowedRedirectOrigins: ["http://localhost:5173"],
+  },
+).attachUserCallbacks({ createUser: internal.users.createUser });
+// highlight-end
+```
+
+</Step>
+
+<Step title="Set up the authentication UI">
+
+In your front-end, install hooks and attach listeners for initiating OAuth login.
+
+Include an `App.tsx` like the following in your application:
+
+```tsx title="src/App.tsx"
+import { type ReactNode, useState } from "react";
+import { useConvexAuth, useQuery } from "convex/react";
+import { useAuthActions } from "@convex-dev/auth/react";
+import {
+  useOauth,
+  useSignInWithGoogle,
+} from "@convex-dev/auth/methods/google/react";
+import { api } from "../convex/_generated/api";
+
+/**
+ * A failure to start comes back from the sign-in call, and a failure after the
+ * redirect back shows up in `useOauth`'s `flowError`. Each is handled with an
+ * exhaustive switch on its code.
+ */
+function SignedOut(): ReactNode {
+  const { signIn } = useSignInWithGoogle(api.auth);
+  const { flowError } = useOauth();
+  const [startError, setStartError] = useState<string | null>(null);
+  return (
+    <>
+      <h1>Sign in</h1>
+      <p>Continue with your Google account</p>
+      {flowError !== null && (
+        <p role="alert">
+          <strong>
+            {(() => {
+              switch (flowError.error) {
+                case "ACCESS_DENIED":
+                  return "Sign-in was cancelled.";
+                case "EXPIRED":
+                  return "That sign-in took too long. Please try again.";
+                case "INVALID_FLOW":
+                  return "This sign-in can't be completed here. Please try again.";
+                case "OTHER_ERROR":
+                  // The details are on `cause` if you want to log them.
+                  return "Something went wrong during sign-in. Please try again.";
+                default:
+                  flowError satisfies never;
+                  return `Unknown error: ${JSON.stringify(flowError)}`;
+              }
+            })()}
+          </strong>
+        </p>
+      )}
+      {startError !== null && (
+        <p role="alert">
+          <strong>{startError}</strong>
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={async () => {
+          setStartError(null);
+          const result = await signIn();
+          if (result.status === "redirect") return;
+          switch (result.userError.error) {
+            case "OTHER_ERROR":
+              // The flow couldn't start, e.g. the deployment was
+              // unreachable. The original error is on `cause` if you want
+              // to log or inspect it.
+              console.error(
+                "Google sign-in failed to start:",
+                result.userError.cause,
+              );
+              setStartError("Couldn't start Google sign-in. Please try again.");
+              return;
+            default:
+              result.userError.error satisfies never;
+              console.error(
+                "Google sign-in failed to start:",
+                result.userError,
+              );
+              setStartError("Couldn't start Google sign-in. Please try again.");
+          }
+        }}
+      >
+        Continue with Google
+      </button>
+    </>
+  );
+}
+
+function SignedIn(): ReactNode {
+  const { signOut } = useAuthActions();
+  const user = useQuery(api.users.getCurrentUser);
+  return (
+    <>
+      <h1>Signed in</h1>
+      <p>{user?.id ?? "…"}</p>
+      <button type="button" onClick={() => void signOut()}>
+        Sign out
+      </button>
+    </>
+  );
+}
+
+export default function App(): ReactNode {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  return (
+    <main>
+      {isLoading && <p>Signing you in…</p>}
+      {!isLoading && isAuthenticated && <SignedIn />}
+      {!isLoading && !isAuthenticated && <SignedOut />}
+    </main>
+  );
+}
+```
+
+</Step>
+
+</StepByStep>
+
+</TabItem>
+
+<TabItem value="GitHub" label="GitHub">
+
+<StepByStep>
+
+<Step title="Register the OAuth app">
+
+To allow users to login to your app via GitHub, you'll need to register an
+OAuth application with GitHub.
+
+:::info
+
+Follow the [GitHub OAuth registration
+instructions](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authenticating-to-the-rest-api-with-an-oauth-app#registering-your-app)
+before proceeding.
+
+GitHub will require you to provide a redirect URI when registering your
+application.
+
+:::
+
+The redirect URI will be based on your `CONVEX_SITE_URL`; something like
+`https://happy-animal-123.convex.site/oauth/github/callback`. You can get your actual `CONVEX_SITE_URL` with this command:
+
+```sh
+npx convex env get CONVEX_SITE_URL
+```
+
+</Step>
+
+<Step title="Set the environment variables">
+
+GitHub will assign a unique client ID and client secret to your application.
+You will store those values as [environment
+variables](https://docs.convex.dev/production/environment-variables#declaring)
+on your Convex deployment.
+
+Here are the Convex CLI commands to do that (you'll need to substitute your
+actual client ID and client secret values):
+
+```sh
+npx convex env set AUTH_GITHUB_CLIENT_ID YOUR_GITHUB_OAUTH_CLIENT_ID
+npx convex env set AUTH_GITHUB_CLIENT_SECRET YOUR_GITHUB_OAUTH_CLIENT_SECRET
+```
+
+</Step>
+
+<Step title="Install the component">
+
+Register the GitHub oauth component alongside the core in
+`convex/convex.config.ts`. You will declare the environment variables that you
+created above as part of your application's `env` and then pass those values to
+the component.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+import auth from "@convex-dev/auth/convex.config.js";
+// highlight-next-line
+import authGithub from "@convex-dev/auth/components/github/convex.config.js";
+
+const app = defineApp({
+  env: {
+    // highlight-next-line
+    AUTH_GITHUB_CLIENT_ID: v.string(),
+    // highlight-next-line
+    AUTH_GITHUB_CLIENT_SECRET: v.string(),
+  },
+});
+
+app.use(auth);
+
+// The `httpPrefix` below controls where the component's `callback` route is
+// mounted. That gets combined with the `CONVEX_SITE_URL` to form the full
+// redirect URI that needs to be set on the remote identity provider config.
+//
+// The full redirect URI will be something like:
+//
+// https://happy-animal-123.convex.site/oauth/github/callback
+// highlight-start
+app.use(authGithub, {
+  httpPrefix: "/oauth/github",
+  env: {
+    CLIENT_ID: app.env.AUTH_GITHUB_CLIENT_ID,
+    CLIENT_SECRET: app.env.AUTH_GITHUB_CLIENT_SECRET,
+  },
+});
+// highlight-end
+
+export default app;
+```
+
+</Step>
+
+<Step title="Set up user creation">
+
+Write a `createUser` mutation that creates a row in your `users` table and
+returns its id. The method calls it the first time it sees an account.
+
+```ts title="convex/users.ts"
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { v } from "convex/values";
+import { internalMutation, query } from "./_generated/server";
+import { vGithubProfile } from "@convex-dev/auth/methods/github/server";
+
+/**
+ * Create the user row for a new GitHub account and return its id. This example
+ * keeps no data in the row, but your app can put a profile here.
+ */
+export const createUser = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("github"),
+      profile: vGithubProfile,
+    }),
+  },
+  returns: v.id("users"),
+  handler: async (ctx) => {
+    return await ctx.db.insert("users", {});
+  },
+});
+
+export const getCurrentUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return null;
+    }
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      return null;
+    }
+    return { id: user._id };
+  },
+});
+```
+
+</Step>
+
+<Step title="Set up the public backend functions">
+
+Set up the `github` method with `setupGithub` and export the mutations for
+starting and completing OAuth login that it hands back once you attach the
+callback that creates your user rows, in `convex/auth.ts`.
+
+Just like `createUser` is attached below, you can also attach an optional
+`onSignIn` mutation, called with the resolved `userId` on every sign-in, the
+first one included. Anything you want to happen each time someone signs in
+belongs there, so `createUser` only has to handle what is true at creation
+time. This example doesn't use it, but it's available if you need it.
+
+```ts title="convex/auth.ts"
+import { components, internal } from "./_generated/api";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+// highlight-next-line
+import { setupGithub } from "@convex-dev/auth/methods/github/server";
+
+const auth = setupConvexAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+// highlight-start
+export const { startSignInWithGithub, completeSignInWithGithub } = setupGithub(
+  auth,
+  {
+    component: components.authGithub,
+    allowedRedirectOrigins: ["http://localhost:5173"],
+  },
+).attachUserCallbacks({ createUser: internal.users.createUser });
+// highlight-end
+```
+
+</Step>
+
+<Step title="Set up the authentication UI">
+
+In your front-end, install hooks and attach listeners for initiating OAuth login.
+
+Include an `App.tsx` like the following in your application:
+
+```tsx title="src/App.tsx"
+import { type ReactNode, useState } from "react";
+import { useConvexAuth, useQuery } from "convex/react";
+import { useAuthActions } from "@convex-dev/auth/react";
+import {
+  useOauth,
+  useSignInWithGithub,
+} from "@convex-dev/auth/methods/github/react";
+import { api } from "../convex/_generated/api";
+
+/**
+ * A failure to start comes back from the sign-in call, and a failure after the
+ * redirect back shows up in `useOauth`'s `flowError`. Each is handled with an
+ * exhaustive switch on its code.
+ */
+function SignedOut(): ReactNode {
+  const { signIn } = useSignInWithGithub(api.auth);
+  const { flowError } = useOauth();
+  const [startError, setStartError] = useState<string | null>(null);
+  return (
+    <>
+      <h1>Sign in</h1>
+      <p>Continue with your GitHub account</p>
+      {flowError !== null && (
+        <p role="alert">
+          <strong>
+            {(() => {
+              switch (flowError.error) {
+                case "ACCESS_DENIED":
+                  return "Sign-in was cancelled.";
+                case "EXPIRED":
+                  return "That sign-in took too long. Please try again.";
+                case "INVALID_FLOW":
+                  return "This sign-in can't be completed here. Please try again.";
+                case "OTHER_ERROR":
+                  // The details are on `cause` if you want to log them.
+                  return "Something went wrong during sign-in. Please try again.";
+                default:
+                  flowError satisfies never;
+                  return `Unknown error: ${JSON.stringify(flowError)}`;
+              }
+            })()}
+          </strong>
+        </p>
+      )}
+      {startError !== null && (
+        <p role="alert">
+          <strong>{startError}</strong>
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={async () => {
+          setStartError(null);
+          const result = await signIn();
+          if (result.status === "redirect") return;
+          switch (result.userError.error) {
+            case "OTHER_ERROR":
+              // The flow couldn't start, e.g. the deployment was
+              // unreachable. The original error is on `cause` if you want
+              // to log or inspect it.
+              console.error(
+                "GitHub sign-in failed to start:",
+                result.userError.cause,
+              );
+              setStartError("Couldn't start GitHub sign-in. Please try again.");
+              return;
+            default:
+              result.userError.error satisfies never;
+              console.error(
+                "GitHub sign-in failed to start:",
+                result.userError,
+              );
+              setStartError("Couldn't start GitHub sign-in. Please try again.");
+          }
+        }}
+      >
+        Continue with GitHub
+      </button>
+    </>
+  );
+}
+
+function SignedIn(): ReactNode {
+  const { signOut } = useAuthActions();
+  const user = useQuery(api.users.getCurrentUser);
+  return (
+    <>
+      <h1>Signed in</h1>
+      <p>{user?.id ?? "…"}</p>
+      <button type="button" onClick={() => void signOut()}>
+        Sign out
+      </button>
+    </>
+  );
+}
+
+export default function App(): ReactNode {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  return (
+    <main>
+      {isLoading && <p>Signing you in…</p>}
+      {!isLoading && isAuthenticated && <SignedIn />}
+      {!isLoading && !isAuthenticated && <SignedOut />}
+    </main>
+  );
+}
+```
+
+</Step>
+
+</StepByStep>
+
+</TabItem>
+
+</Tabs>
+
+{/* prettier-ignore-end */}

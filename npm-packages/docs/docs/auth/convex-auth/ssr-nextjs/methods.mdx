@@ -1,0 +1,280 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 2
+title: Sign-in methods with Next.js
+description: How the sign-in method guides apply to a Next.js app.
+---
+
+Most of each [sign-in method guide](../methods/username-password.mdx) applies to
+a Next.js app without changes. This page lists what is different. It assumes you
+have already followed [Setting up Next.js](./setup.mdx).
+
+## What stays the same
+
+- **The backend.** Installing the components, the `users` table, the user
+  creation callbacks, and the functions you export from `convex/auth.ts` are the
+  same. Also export `isAuthenticated` from the core (see the “Set up the backend
+  for your sign-in methods” step of [Setting up Next.js](./setup.mdx)).
+- **The hooks of the methods.** Your sign-in and sign-up pages call the same
+  hooks as in a single-page app, like `useSignInWithUsernamePassword` from
+  `@convex-dev/auth/methods/username-password/react` or `useSignInWithGithub`
+  from `@convex-dev/auth/methods/github/react`. There are no Next.js versions of
+  these hooks. Inside `ConvexAuthNextjsProvider`, the hooks send their sign-in
+  calls to your `/auth/signin` route. The route calls your deployment and moves
+  the refresh token into the `httpOnly` cookie before it returns the result.
+- **Errors.** The hooks return the same typed `userError` values, so you can
+  handle errors the same way as in the sign-in method guides.
+
+## What is different
+
+### Skip “Set up the provider on the client”
+
+Don't wrap your app in `ConvexAuthProvider`. Use
+`ConvexAuthNextjsServerProvider` in your root layout instead (see the “Set up
+the provider” step of [Setting up Next.js](./setup.mdx)).
+
+### Add the sign-in functions to the `signIn` list
+
+The `/auth/signin` route only forwards the functions listed in `signIn` in
+`setupConvexAuthServer`. If a function the hooks need isn't listed, the route
+refuses the call with a `403` error. Add these functions for each sign-in
+method:
+
+| Method           | Functions to list in `signIn`                                                            |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| Password         | `signUpWithUsernamePassword`, `signInWithUsernamePassword`                               |
+| Passkey          | `finishSignUpWithUsernamePasskey`, `finishSignInWithUsernamePasskey`                     |
+| Email + password | `signInWithEmailPassword`, `completeSignUpWithEmailPassword`, `completePasswordRecovery` |
+| OAuth            | `completeSignInWith<Provider>`, like `completeSignInWithGithub`                          |
+
+Only list functions that create a session. The other functions a method exports,
+like `changePassword`, passkey `startSignInWithUsernamePasskey`, OAuth
+`startSignInWithGithub`, or `startChangeEmail`, are called through the Convex
+client as usual and don't need to be listed.
+
+### Adapt the authentication UI to Next.js
+
+The UI code in the sign-in method guides comes from Vite single-page apps. To
+use it in a Next.js app:
+
+- Add `"use client"` to the components that call the hook of a method. Only the
+  form needs it: the page around it can stay a Server Component that renders the
+  form. (The example below marks the whole page for brevity.)
+- Put the pages in `app/` (for example, `app/signin/page.tsx`), and navigate
+  with `useRouter` from `next/navigation` and `Link` from `next/link`.
+- Import `useAuthActions` from `@convex-dev/auth/react`. Import `useConvexAuth`,
+  `Authenticated`, and `Unauthenticated` from `convex/react`.
+
+For example, this sign-in page from the Next.js example uses the password and
+GitHub hooks unchanged:
+
+```tsx title="app/signin/page.tsx"
+"use client";
+
+import { useConvexAuth } from "convex/react";
+import {
+  useOauth,
+  useSignInWithGithub,
+} from "@convex-dev/auth/methods/github/react";
+import { useSignInWithUsernamePassword } from "@convex-dev/auth/methods/username-password/react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { api } from "@/convex/_generated/api";
+
+export default function SignIn() {
+  // The method's own hook, with no SSR-specific variant. The surrounding
+  // ConvexAuthNextjsProvider routes this call through the sign-in route, which
+  // moves the minted refresh token into an httpOnly cookie so it never reaches
+  // JS. Its function is listed in `signIn` in src/lib/serverAuth.ts.
+  const { signIn, pending } = useSignInWithUsernamePassword(api.auth);
+  // GitHub sends the user back to this page, where the hook redeems the
+  // callback code through the sign-in route. A failure to start comes back
+  // from `signInWithGithub`, and a failure after the redirect shows up in
+  // `flowError`.
+  const { signIn: signInWithGithub } = useSignInWithGithub(api.auth);
+  const { flowError } = useOauth();
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  const router = useRouter();
+  // The GitHub sign-in finishes on this page with no submit handler to
+  // navigate, so go home once the session is in place.
+  useEffect(() => {
+    if (isAuthenticated) router.replace("/");
+  }, [isAuthenticated, router]);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [githubError, setGithubError] = useState<string | null>(null);
+
+  return (
+    <main style={{ padding: 24, maxWidth: 640 }}>
+      <h1>Sign in</h1>
+      <form
+        style={{ display: "grid", gap: 12, maxWidth: 320 }}
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setError(null);
+          const result = await signIn({ username, password });
+          if (result.status === "complete") {
+            router.push("/");
+            return;
+          }
+          setError(() => {
+            switch (result.userError.error) {
+              case "USER_NOT_FOUND":
+                return "No account exists with that username.";
+              case "INVALID_CREDENTIALS":
+                return "Incorrect username or password.";
+              case "PASSWORD_TOO_SHORT":
+                return `Password must be at least ${result.userError.minimumLength} characters.`;
+              case "PASSWORD_TOO_LONG":
+                return `Password must be at most ${result.userError.maximumLength} characters.`;
+              case "PASSWORD_HAS_SURROUNDING_WHITESPACE":
+                return "Password can't start or end with whitespace.";
+              case "RATE_LIMITED":
+                return `Too many attempts. Try again in ${Math.ceil(result.userError.retryAfterMs / 1000)} seconds.`;
+              case "OTHER_ERROR":
+                // The call failed unexpectedly; the original error is
+                // available on `cause` if you want to log or inspect it.
+                console.error("Sign-in failed:", result.userError.cause);
+                return "Something went wrong. Please try again.";
+              default:
+                result.userError satisfies never;
+                return `Unknown error: ` + result.userError;
+            }
+          });
+        }}
+      >
+        <label htmlFor="username">
+          Username
+          <input
+            // Using a static id to help password managers behave correctly
+            id="username"
+            name="username"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            required
+            disabled={pending}
+          />
+        </label>
+        <label htmlFor="password">
+          Password
+          <input
+            // Using a static id to help password managers behave correctly
+            id="password"
+            name="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+            disabled={pending}
+          />
+        </label>
+        {error ? (
+          <p role="alert">
+            <strong>{error}</strong>
+          </p>
+        ) : null}
+        <button type="submit" disabled={pending || isLoading}>
+          {pending ? "Signing in…" : "Sign in"}
+        </button>
+      </form>
+      <p>
+        Don't have an account?{" "}
+        <Link href="/auth/convex-auth/signup">Sign up</Link>
+      </p>
+      {flowError !== null && (
+        <p role="alert">
+          <strong>
+            {(() => {
+              switch (flowError.error) {
+                case "ACCESS_DENIED":
+                  return "Sign-in was cancelled.";
+                case "EXPIRED":
+                  return "That sign-in took too long. Please try again.";
+                case "INVALID_FLOW":
+                  return "This sign-in can't be completed here. Please try again.";
+                case "OTHER_ERROR":
+                  // The details are on `cause` if you want to log them.
+                  return "Something went wrong during sign-in. Please try again.";
+                default:
+                  flowError satisfies never;
+                  return `Unknown error: ${JSON.stringify(flowError)}`;
+              }
+            })()}
+          </strong>
+        </p>
+      )}
+      {githubError !== null && (
+        <p role="alert">
+          <strong>{githubError}</strong>
+        </p>
+      )}
+      <p>
+        <button
+          type="button"
+          disabled={pending || isLoading}
+          onClick={async () => {
+            setGithubError(null);
+            const result = await signInWithGithub();
+            if (result.status === "redirect") return;
+            switch (result.userError.error) {
+              case "OTHER_ERROR":
+                // The flow couldn't start, e.g. the deployment was
+                // unreachable. The original error is on `cause` if you want
+                // to log or inspect it.
+                console.error(
+                  "GitHub sign-in failed to start:",
+                  result.userError.cause,
+                );
+                setGithubError(
+                  "Couldn't start GitHub sign-in. Please try again.",
+                );
+                return;
+              default:
+                result.userError.error satisfies never;
+                setGithubError(`Unknown error: ` + result.userError.error);
+            }
+          }}
+        >
+          Continue with GitHub
+        </button>
+      </p>
+    </main>
+  );
+}
+```
+
+### Let signed-out users reach your auth pages
+
+Your proxy decides which pages need a signed-in user. Make sure it lets
+signed-out users reach every page they need to sign in. That includes the
+sign-in and sign-up pages, and also the pages that emailed links open, like
+`/validate-email` and `/reset-password` in the email + password guide. For
+OAuth, that includes the page the provider redirects back to: the hook redeems
+the callback code there, and a redirect away from it drops the code.
+
+### Use your Next.js origin in the method config
+
+Some sign-in methods need the URL of your frontend. The guides use the Vite dev
+server (`http://localhost:5173`). `next dev` serves on `http://localhost:3000`
+by default:
+
+- **Passkey:** set `origin` in `setupUsernamePasskey` to your Next.js origin
+  (`http://localhost:3000` in development). `rpId` stays `localhost`.
+- **Email + password:** set the `SITE_URL` environment variable on your
+  deployment to your Next.js origin, so the emailed links open your Next.js app:
+
+  ```sh
+  npx convex env set SITE_URL http://localhost:3000
+  ```
+
+- **OAuth:** set `allowedRedirectOrigins` in `setupApple`, `setupGoogle`, or
+  `setupGithub` to your Next.js origin (`http://localhost:3000` in development).
