@@ -465,6 +465,7 @@ async function startComponentsPushAndCodegen(
     componentDefinitions,
     nodeDependencies: appImplementation.externalNodeDependencies,
     nodeVersion: projectConfig.node.nodeVersion,
+    nodeDefaultMemoryMb: projectConfig.node.defaultMemoryMb,
     forCodegen: !!options.codegenOnlyThisComponent,
   };
   if (options.writePushRequest) {

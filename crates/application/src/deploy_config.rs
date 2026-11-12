@@ -131,6 +131,7 @@ use model::{
     },
     source_packages::{
         types::{
+            check_node_default_memory_mb_for_push,
             NodeVersion,
             NodeVersionDiff,
             SourcePackage,
@@ -1008,7 +1009,7 @@ impl<RT: Runtime> Application<RT> {
             .unwrap_or_default();
 
         let source_package = self
-            .upload_package(&modules, external_deps_id_and_pkg, node_version)
+            .upload_package(&modules, external_deps_id_and_pkg, node_version, None)
             .await?;
         let end_upload_source_package = Instant::now();
         // Verify that we have not exceeded the max unzipped file size
@@ -1128,6 +1129,9 @@ pub struct StartPushRequest {
     pub node_version: Option<String>,
 
     #[serde(default)]
+    pub node_default_memory_mb: Option<u32>,
+
+    #[serde(default)]
     pub dry_run: bool,
 
     /// Indicates that this request is only for codegen and isn't initiating a
@@ -1141,6 +1145,9 @@ impl StartPushRequest {
         let node_version: Option<NodeVersion> = self.node_version.map(|v| v.parse()).transpose()?;
         if let Some(node_version) = node_version {
             node_version.check_supported_for_push()?;
+        }
+        if let Some(memory_mb) = self.node_default_memory_mb {
+            check_node_default_memory_mb_for_push(memory_mb)?;
         }
 
         Ok(ProjectConfig {
@@ -1160,6 +1167,7 @@ impl StartPushRequest {
                 .map(NodeDependency::from)
                 .collect(),
             node_version,
+            node_default_memory_mb: self.node_default_memory_mb,
             dry_run: self.dry_run,
             for_codegen: self.for_codegen,
         })

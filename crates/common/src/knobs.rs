@@ -1614,6 +1614,12 @@ pub static AWS_LAMBDA_CLIENT_MAX_CONCURRENT_REQUESTS: LazyLock<usize> =
 pub static AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB: LazyLock<i32> =
     LazyLock::new(|| env_config("AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB", 512));
 
+/// Whether a push may set `node.defaultMemoryMb` in `convex.json` to a size
+/// other than the smallest. Only cloud deployments size their Lambda from it,
+/// so enable this per partition during rollout.
+pub static NODE_ACTION_MEMORY_MB_ENABLED: LazyLock<bool> =
+    LazyLock::new(|| env_config("NODE_ACTION_MEMORY_MB_ENABLED", false));
+
 /// Disk size limit in MB for the static AWS Lambda.
 pub static AWS_STATIC_LAMBDA_DISK_SIZE_MB: LazyLock<i32> =
     LazyLock::new(|| env_config("AWS_STATIC_LAMBDA_DISK_SIZE_MB", 512));

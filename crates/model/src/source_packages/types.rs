@@ -3,7 +3,10 @@ use std::{
     str::FromStr,
 };
 
-use common::types::ObjectKey;
+use common::{
+    knobs::NODE_ACTION_MEMORY_MB_ENABLED,
+    types::ObjectKey,
+};
 use errors::ErrorMetadata;
 use humansize::{
     FormatSize,
@@ -22,6 +25,39 @@ use value::{
 };
 
 use crate::external_packages::types::ExternalDepsPackageId;
+
+/// Memory sizes, in MB, that a deployment may set for its Node actions. Each
+/// size must be a valid AWS Lambda memory size.
+pub const NODE_MEMORY_MB_OPTIONS: [u32; 2] = [512, 2048];
+
+/// Rejects a `node.defaultMemoryMb` from `convex.json` that the deployment
+/// can't run.
+pub fn check_node_default_memory_mb_for_push(memory_mb: u32) -> anyhow::Result<()> {
+    check_node_default_memory_mb(memory_mb, *NODE_ACTION_MEMORY_MB_ENABLED)
+}
+
+/// `larger_sizes_enabled` is `NODE_ACTION_MEMORY_MB_ENABLED`, passed in so
+/// tests can cover both states of the process-wide knob.
+fn check_node_default_memory_mb(memory_mb: u32, larger_sizes_enabled: bool) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        NODE_MEMORY_MB_OPTIONS.contains(&memory_mb),
+        ErrorMetadata::bad_request(
+            "InvalidNodeMemory",
+            format!(
+                "node.defaultMemoryMb must be one of {} (got {memory_mb}).",
+                NODE_MEMORY_MB_OPTIONS.map(|mb| mb.to_string()).join(", ")
+            ),
+        )
+    );
+    anyhow::ensure!(
+        memory_mb == NODE_MEMORY_MB_OPTIONS[0] || larger_sizes_enabled,
+        ErrorMetadata::bad_request(
+            "NodeMemoryNotAvailable",
+            format!("node.defaultMemoryMb {memory_mb} is not available on this deployment yet."),
+        )
+    );
+    Ok(())
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum NodeVersion {
@@ -131,6 +167,13 @@ pub struct SourcePackage {
     pub external_deps_package_id: Option<ExternalDepsPackageId>,
     pub package_size: PackageSize,
     pub node_version: Option<NodeVersion>,
+    /// Memory size of the Lambda that runs this package's Node actions. `None`
+    /// means the static Lambda's default size.
+    ///
+    /// TODO(andy): Store this in deployment-level config. It is a deployment
+    /// setting and not part of the code, so `upload_package` should not
+    /// take it.
+    pub node_default_memory_mb: Option<u32>,
 }
 
 impl SourcePackage {
@@ -138,6 +181,7 @@ impl SourcePackage {
         // We explicitly do not compare the sha256 because it also includes creation
         // time in the hash
         self.node_version == other.node_version
+            && self.node_default_memory_mb == other.node_default_memory_mb
             && self.external_deps_package_id == other.external_deps_package_id
     }
 }
@@ -271,6 +315,8 @@ pub struct SerializedSourcePackage {
     external_package_id: Option<String>,
     package_size: Option<SerializedPackageSize>,
     node_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    node_default_memory_mb: Option<u32>,
 }
 
 impl TryFrom<SourcePackage> for SerializedSourcePackage {
@@ -285,6 +331,7 @@ impl TryFrom<SourcePackage> for SerializedSourcePackage {
                 .map(|id| DeveloperDocumentId::from(id).encode()),
             package_size: Some(value.package_size.try_into()?),
             node_version: value.node_version.map(String::from),
+            node_default_memory_mb: value.node_default_memory_mb,
         })
     }
 }
@@ -313,6 +360,7 @@ impl TryFrom<SerializedSourcePackage> for SourcePackage {
             external_deps_package_id: external_package_id,
             package_size,
             node_version,
+            node_default_memory_mb: value.node_default_memory_mb,
         })
     }
 }

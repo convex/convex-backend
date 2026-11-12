@@ -51,6 +51,9 @@ pub struct ProjectConfig {
     // Version of Node.js to use in the node executor.
     pub node_version: Option<NodeVersion>,
 
+    /// Override for amount of memory to allocate for node actions.
+    pub node_default_memory_mb: Option<u32>,
+
     pub dry_run: bool,
 
     /// When true, relax typechecks that don't affect the codegen output. The
