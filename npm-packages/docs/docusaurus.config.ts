@@ -1,6 +1,7 @@
 import { themes } from "prism-react-renderer";
 const lightCodeTheme = themes.github;
 import darkCodeTheme from "./src/theme/prism-theme/oneDark.js";
+import { dualModePrismTheme } from "./src/plugins/prismThemeCss";
 import * as dotenv from "dotenv";
 import { execSync } from "child_process";
 import { mkdirSync, writeFileSync } from "fs";
@@ -147,7 +148,7 @@ const config: Config = {
     },
     prism: {
       // The colors come from CSS, see src/plugins/prismThemeCss.js
-      theme: { plain: {}, styles: [] },
+      theme: dualModePrismTheme(lightCodeTheme, darkCodeTheme),
       additionalLanguages: ["rust", "kotlin", "swift", "bash", "shell-session"],
     },
     image: "img/social.png",
