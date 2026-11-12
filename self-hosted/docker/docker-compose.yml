@@ -61,6 +61,8 @@ services:
     environment:
       - NEXT_PUBLIC_DEPLOYMENT_URL=${NEXT_PUBLIC_DEPLOYMENT_URL:-http://127.0.0.1:${PORT:-3210}}
       - NEXT_PUBLIC_LOAD_MONACO_INTERNALLY
+      - NEXT_PUBLIC_ADMIN_KEY
+      - NEXT_PUBLIC_SKIP_LOGIN
     depends_on:
       backend:
         condition: service_healthy
