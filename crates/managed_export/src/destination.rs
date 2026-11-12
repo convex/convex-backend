@@ -52,6 +52,7 @@ use crate::iceberg::{
 
 const EXPORT_ID_PARAMETER: &str = "convex.export-id";
 const PAGE_PARAMETER: &str = "convex.page";
+const MAX_LISTED_TABLES: usize = 20_000;
 
 /// Largest size for an object that Porter can read whole from the bucket.
 /// This is to prevent a malicious bucket owner from replacing the object with
@@ -304,6 +305,17 @@ impl ExportStore {
             for table in page.table_list() {
                 published.insert(table.name().to_owned(), table.clone());
             }
+            anyhow::ensure!(
+                published.len() <= MAX_LISTED_TABLES,
+                ErrorMetadata::bad_request(
+                    "S3ExportGlueDatabaseTooLarge",
+                    format!(
+                        "The export's Glue database {} holds too many tables (over \
+                         {MAX_LISTED_TABLES})",
+                        self.database
+                    ),
+                )
+            );
         }
         for (name, table) in &state.tables {
             let location = &table.metadata;
