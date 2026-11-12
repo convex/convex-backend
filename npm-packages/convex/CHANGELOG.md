@@ -1,12 +1,40 @@
 # Changelog
 
-## 1.50.0 (unreleased)
+## 1.50.0
 
-- The types of `ctx.auth.signJwt` now match what deployments accept. `claims`
-  is required and must include an `aud` claim: a non-empty string or a
-  non-empty array of non-empty strings identifying the intended audiences. The
-  `jti` claim is typed as a string, and the docs note that Convex sets a random
-  one when you don't pass your own.
+- The CLI can now quickly switch between multiple Convex accounts with aliases
+  like `work` and `personal`. Log into additional accounts and associate it with
+  the current directory with `npx convex login --account work --select`, then
+  select an account for another directory with `npx convex account select work`.
+  Supports setting a default (initialized to your current login). See
+  `npx convex@latest account --help` for more details. `CONVEX_ACCOUNT`
+  overrides the directory selection. Upgrade each project's `convex` dependency
+  to use these selections with project commands, and use `npx convex@latest` for
+  account management in projects that still have an older CLI installed.
+- CLI credential files now restrict access to their owner on macOS and Linux,
+  including existing `~/.convex/config.json` files and account credentials in
+  `~/.convex/accounts/`.
+- `npx convex export` can create an export without downloading it. Omit `--path`
+  to download it later from the dashboard link, or pass `--path` to download it
+  immediately. Canceled exports are now reported as failures.
+- Fixed `npx convex dev --once --start` returning success when the command
+  passed to `--start` failed.
+- Fixed `npx convex dev --once --skip-push` leaving a local backend running
+  after the command exited.
+- Fixed child component import paths in a component's `_generated/api.ts`
+  pointing to the wrong directory.
+- The types of `ctx.auth.signJwt` now match what deployments accept. `claims` is
+  required and must include an `aud` claim: a non-empty string or a non-empty
+  array of non-empty strings identifying the intended audiences. The `jti` claim
+  is typed as a string, and the docs note that Convex sets a random one when you
+  don't pass your own.
+- Starting with `convex` 1.50.0, a scheduled mutation that calls
+  `ctx.scheduler.cancel` on its own scheduled function ID throws
+  `ScheduledFunctionCancelingItself`. If the error is not caught, the mutation
+  rolls back and its scheduled function is marked as failed. Older versions
+  keep the previous behavior: the cancellation does nothing and logs a
+  deprecation warning. Remove self-cancellation calls; return from the mutation
+  to finish it instead.
 
 ## 1.49.0
 
@@ -33,8 +61,8 @@
 ## 1.48.0
 
 - Convex deployments can now sign their own JWTs with an internally managed
-  key-pair. The `ctx.auth.signJwt` API is available in mutations. The JWTs
-  can be verified with the public key in the JWKS hosted at
+  key-pair. The `ctx.auth.signJwt` API is available in mutations. The JWTs can
+  be verified with the public key in the JWKS hosted at
   `${CONVEX_CLOUD_URL}/.well-known/jwks.json`.
 - `npx convex dev --verbose` and `npx convex deploy --verbose` no longer print
   environment variable values. The logged list of environment variables shows
@@ -47,8 +75,8 @@
   `--include-values` to print the values.
 
 - Fixed `npx convex ai-files install` and `npx convex ai-files update` reporting
-  success and exiting 0 when the guidelines download or the agent skills
-  install failed. They now exit with code 1.
+  success and exiting 0 when the guidelines download or the agent skills install
+  failed. They now exit with code 1.
 
 - `ctx.storage.store()` and `ctx.storage.get()` are now available in mutations,
   not just actions. Files stored and read in a mutation count toward its
