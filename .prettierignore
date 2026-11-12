@@ -66,8 +66,6 @@ npm-packages/private-demos/react-native
 npm-packages/private-demos/quickstarts/sveltekit
 # Nuxt might be too
 npm-packages/private-demos/quickstarts/nuxt
-# Should match Remix quickstart
-npm-packages/private-demos/quickstarts/remix
 # Should match Vue quickstart
 npm-packages/private-demos/quickstarts/vue
 # Formatting quickstarts generally just isn't a good idea

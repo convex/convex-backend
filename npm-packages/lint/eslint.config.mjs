@@ -707,7 +707,6 @@ const config = [
     "private-demos/nextjs-15-app", // should match Next.js quickstart
     "private-demos/nextjs-15-app-clerk", // should match Next.js quickstart
     "private-demos/quickstarts/sveltekit", // sveltekit linting is annoying to set up
-    "private-demos/quickstarts/remix", // won't have these deps installed
     "private-demos/quickstarts/vue", // won't have these deps installed
     "private-demos/snippets", // has its own config
     "private-demos/tanstack-start", // has its own config
