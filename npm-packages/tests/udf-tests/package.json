@@ -8,7 +8,7 @@
     "chai": "~6.2.0",
     "chai-as-promised": "~8.0.0",
     "effect3": "npm:effect@3.21.2",
-    "effect4": "npm:effect@4.0.0-beta.74",
+    "effect4": "npm:effect@4.0.0-beta.103",
     "@types/chai-as-promised": "~8.0.0",
     "udf-syscall-ffi": "workspace:*",
     "fast-check": "3.23.2"
