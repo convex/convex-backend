@@ -115,17 +115,13 @@ impl FromStr for HttpMountPath {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ComponentDefinitionType {
     App,
-    ChildComponent {
-        name: ComponentName,
-        args: BTreeMap<Identifier, ComponentArgumentValidator>,
-    },
+    ChildComponent { name: ComponentName },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ComponentInstantiation {
     pub name: ComponentName,
     pub path: ComponentDefinitionPath,
-    pub args: Option<BTreeMap<Identifier, ComponentArgument>>,
     pub env: BTreeMap<Identifier, EnvBinding>,
 }
 
@@ -133,11 +129,6 @@ pub struct ComponentInstantiation {
 pub enum ComponentExport {
     Branch(BTreeMap<PathComponent, ComponentExport>),
     Leaf(Reference),
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum ComponentArgumentValidator {
-    Value(Validator),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -168,11 +159,6 @@ impl EnvVarValidator {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum ComponentArgument {
-    Value(ConvexValue),
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum EnvBinding {
     Value(
         String,
@@ -199,14 +185,10 @@ pub enum SerializedComponentDefinitionType {
     App {},
     ChildComponent {
         name: String,
-        args: Vec<(String, SerializedComponentArgumentValidator)>,
+        #[serde(default)]
+        #[deprecated]
+        args: Vec<(String, JsonValue)>,
     },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum SerializedComponentArgumentValidator {
-    Value { value: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -221,12 +203,6 @@ pub enum SerializedEnvVarValidator {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum SerializedComponentArgument {
-    Value { value: String },
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
 pub enum SerializedEnvBinding {
     Value { value: String },
     EnvVar { name: String },
@@ -237,7 +213,6 @@ pub enum SerializedEnvBinding {
 struct SerializedComponentInstantiation {
     name: String,
     path: String,
-    args: Option<Vec<(String, SerializedComponentArgument)>>,
     #[serde(default)]
     env: Vec<(String, SerializedEnvBinding)>,
 }
@@ -328,12 +303,10 @@ impl TryFrom<ComponentDefinitionType> for SerializedComponentDefinitionType {
     fn try_from(t: ComponentDefinitionType) -> anyhow::Result<Self> {
         Ok(match t {
             ComponentDefinitionType::App => Self::App {},
-            ComponentDefinitionType::ChildComponent { name, args } => Self::ChildComponent {
+            ComponentDefinitionType::ChildComponent { name } => Self::ChildComponent {
                 name: name.to_string(),
-                args: args
-                    .into_iter()
-                    .map(|(k, v)| anyhow::Ok((String::from(k), v.try_into()?)))
-                    .try_collect()?,
+                #[allow(deprecated)]
+                args: vec![],
             },
         })
     }
@@ -345,13 +318,9 @@ impl TryFrom<SerializedComponentDefinitionType> for ComponentDefinitionType {
     fn try_from(t: SerializedComponentDefinitionType) -> anyhow::Result<Self> {
         Ok(match t {
             SerializedComponentDefinitionType::App {} => Self::App,
-            SerializedComponentDefinitionType::ChildComponent { name, args } => {
+            SerializedComponentDefinitionType::ChildComponent { name, .. } => {
                 Self::ChildComponent {
                     name: name.parse()?,
-                    args: args
-                        .into_iter()
-                        .map(|(k, v)| anyhow::Ok((k.parse()?, v.try_into()?)))
-                        .try_collect()?,
                 }
             },
         })
@@ -365,14 +334,6 @@ impl TryFrom<ComponentInstantiation> for SerializedComponentInstantiation {
         Ok(Self {
             name: String::from(i.name),
             path: String::from(i.path),
-            args: i
-                .args
-                .map(|args| {
-                    args.into_iter()
-                        .map(|(k, v)| anyhow::Ok((String::from(k), v.try_into()?)))
-                        .try_collect()
-                })
-                .transpose()?,
             env: i
                 .env
                 .into_iter()
@@ -389,43 +350,11 @@ impl TryFrom<SerializedComponentInstantiation> for ComponentInstantiation {
         Ok(Self {
             name: i.name.parse()?,
             path: i.path.parse()?,
-            args: i
-                .args
-                .map(|args| {
-                    args.into_iter()
-                        .map(|(k, v)| anyhow::Ok((k.parse()?, v.try_into()?)))
-                        .try_collect()
-                })
-                .transpose()?,
             env: i
                 .env
                 .into_iter()
                 .map(|(k, v)| anyhow::Ok((k.parse()?, v.try_into()?)))
                 .try_collect()?,
-        })
-    }
-}
-
-impl TryFrom<ComponentArgumentValidator> for SerializedComponentArgumentValidator {
-    type Error = anyhow::Error;
-
-    fn try_from(r: ComponentArgumentValidator) -> anyhow::Result<Self> {
-        Ok(match r {
-            ComponentArgumentValidator::Value(v) => SerializedComponentArgumentValidator::Value {
-                value: v.json_serialize()?,
-            },
-        })
-    }
-}
-
-impl TryFrom<SerializedComponentArgumentValidator> for ComponentArgumentValidator {
-    type Error = anyhow::Error;
-
-    fn try_from(r: SerializedComponentArgumentValidator) -> anyhow::Result<Self> {
-        Ok(match r {
-            SerializedComponentArgumentValidator::Value { value: v } => {
-                ComponentArgumentValidator::Value(Validator::json_deserialize(&v)?)
-            },
         })
     }
 }
@@ -449,30 +378,6 @@ impl TryFrom<SerializedEnvVarValidator> for EnvVarValidator {
         Ok(Self {
             validator: Validator::json_deserialize(&value)?,
             optional: optional.unwrap_or(false),
-        })
-    }
-}
-
-impl TryFrom<ComponentArgument> for SerializedComponentArgument {
-    type Error = anyhow::Error;
-
-    fn try_from(r: ComponentArgument) -> anyhow::Result<Self> {
-        Ok(match r {
-            ComponentArgument::Value(v) => SerializedComponentArgument::Value {
-                value: v.json_serialize()?,
-            },
-        })
-    }
-}
-
-impl TryFrom<SerializedComponentArgument> for ComponentArgument {
-    type Error = anyhow::Error;
-
-    fn try_from(r: SerializedComponentArgument) -> anyhow::Result<Self> {
-        Ok(match r {
-            SerializedComponentArgument::Value { value: v } => ComponentArgument::Value(
-                ConvexValue::try_from(serde_json::from_str::<JsonValue>(&v)?)?,
-            ),
         })
     }
 }

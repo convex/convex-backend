@@ -61,10 +61,7 @@ use udf::environment::{
     parse_system_env_var_overrides,
     CONVEX_SITE,
 };
-use value::{
-    identifier::Identifier,
-    ConvexValue,
-};
+use value::identifier::Identifier;
 
 use crate::{
     environment::{
@@ -124,7 +121,6 @@ enum ActionPreloaded<RT: Runtime> {
             (Arc<ParsedDocument<ModuleMetadata>>, Arc<V8ModuleSource>),
         >,
         env_vars: BTreeMap<EnvVarName, EnvVarValue>,
-        component_arguments: Option<BTreeMap<Identifier, ConvexValue>>,
         component_env: Option<ComponentEnvCtx>,
         rng: Option<ChaCha12Rng>,
         import_time_unix_timestamp: Option<UnixTimestamp>,
@@ -268,21 +264,10 @@ impl<RT: Runtime> ActionPhase<RT> {
                     })
                 };
 
-                let component_arguments = if self.component.is_root() {
-                    None
-                } else {
-                    Some(
-                        BootstrapComponentsModel::new(&mut tx)
-                            .load_component_args(component_id)
-                            .await?,
-                    )
-                };
-
                 Ok(ActionPreloaded::Ready {
                     module_loader,
                     modules,
                     env_vars,
-                    component_arguments,
                     component_env,
                     rng,
                     import_time_unix_timestamp,
@@ -375,29 +360,6 @@ impl<RT: Runtime> ActionPhase<RT> {
             }
         }
         Ok(env_vars.get(&name).cloned())
-    }
-
-    pub fn component_arguments(&self) -> anyhow::Result<&BTreeMap<Identifier, ConvexValue>> {
-        let ActionPreloaded::Ready {
-            ref component_arguments,
-            ..
-        } = self.preloaded
-        else {
-            anyhow::bail!("Phase not initialized");
-        };
-        let Some(component_arguments) = component_arguments else {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "NoComponentArgs",
-                "Component arguments are not available within the app",
-            ));
-        };
-        if self.phase != Phase::Executing {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "NoComponentArgsDuringImport",
-                "Can't use `componentArg` at import time",
-            ));
-        }
-        Ok(component_arguments)
     }
 
     pub fn rng(&mut self) -> anyhow::Result<&mut ChaCha12Rng> {

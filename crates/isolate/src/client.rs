@@ -27,7 +27,6 @@ use async_trait::async_trait;
 use common::{
     auth::AuthConfig,
     backoff::Backoff,
-    bootstrap_model::components::definition::ComponentDefinitionMetadata,
     codel_queue::{
         CoDelQueue,
         CoDelQueueReceiver,
@@ -37,8 +36,6 @@ use common::{
     components::{
         CanonicalizedComponentModulePath,
         ComponentDefinitionPath,
-        ComponentName,
-        Resource,
     },
     errors::{
         recapture_stacktrace,
@@ -162,7 +159,6 @@ use udf::{
     HttpActionResponseStreamer,
     NestedUdfOutcome,
 };
-use value::identifier::Identifier;
 
 use crate::{
     concurrency_limiter::ConcurrencyLimiter,
@@ -288,8 +284,7 @@ impl<RT: Runtime> Request<RT> {
             RequestType::Analyze { .. }
             | RequestType::EvaluateSchema { .. }
             | RequestType::EvaluateAuthConfig { .. }
-            | RequestType::EvaluateAppDefinitions { .. }
-            | RequestType::EvaluateComponentInitializer { .. } => return None,
+            | RequestType::EvaluateAppDefinitions { .. } => return None,
         };
         Some(CanonicalizedComponentModulePath {
             component: function_path.component,
@@ -354,14 +349,6 @@ pub enum RequestType<RT: Runtime> {
         user_environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
         system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         response: oneshot::Sender<anyhow::Result<EvaluateAppDefinitionsResult>>,
-    },
-    EvaluateComponentInitializer {
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-        path: ComponentDefinitionPath,
-        definition: ModuleConfig,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-        response: oneshot::Sender<anyhow::Result<BTreeMap<Identifier, Resource>>>,
     },
 }
 
@@ -440,9 +427,6 @@ impl<RT: Runtime> Request<RT> {
             RequestType::EvaluateAppDefinitions { response, .. } => {
                 let _ = response.send(Err(error));
             },
-            RequestType::EvaluateComponentInitializer { response, .. } => {
-                let _ = response.send(Err(error));
-            },
         }
     }
 
@@ -455,7 +439,6 @@ impl<RT: Runtime> Request<RT> {
             RequestType::EvaluateSchema { response, .. } => response.is_closed(),
             RequestType::EvaluateAuthConfig { response, .. } => response.is_closed(),
             RequestType::EvaluateAppDefinitions { response, .. } => response.is_closed(),
-            RequestType::EvaluateComponentInitializer { response, .. } => response.is_closed(),
         }
     }
 }
@@ -894,53 +877,6 @@ impl<RT: Runtime> IsolateClient<RT> {
                         && (e.is_rejected_before_execution() || e.is_overloaded()) =>
                 {
                     tracing::warn!("Retrying evaluate_app_definitions after system error: {e:?}");
-                    let wait = backoff.fail(&mut self.rt.rng());
-                    self.rt.wait(wait).await;
-                    attempt += 1;
-                    continue;
-                },
-                Err(e) => return Err(recapture_stacktrace(e).await),
-            }
-        }
-    }
-
-    #[fastrace::trace]
-    pub async fn evaluate_component_initializer(
-        &self,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-        path: ComponentDefinitionPath,
-        definition: ModuleConfig,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-        instance_name: String,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
-        let mut backoff = Backoff::new(Duration::from_millis(500), Duration::from_secs(2));
-        let mut attempt = 1;
-        const MAX_ATTEMPTS: u32 = 3;
-        loop {
-            let (tx, rx) = oneshot::channel();
-            let request = RequestType::EvaluateComponentInitializer {
-                evaluated_definitions: evaluated_definitions.clone(),
-                path: path.clone(),
-                definition: definition.clone(),
-                args: args.clone(),
-                name: name.clone(),
-                response: tx,
-            };
-            self.send_request(Request::new(
-                instance_name.clone(),
-                request,
-                EncodedSpan::from_parent(),
-            ))?;
-            match IsolateClient::<RT>::receive_response(rx).await? {
-                Ok(outcome) => return Ok(outcome),
-                Err(e)
-                    if attempt < MAX_ATTEMPTS
-                        && (e.is_rejected_before_execution() || e.is_overloaded()) =>
-                {
-                    tracing::warn!(
-                        "Retrying evaluate_component_initializer after system error: {e:?}"
-                    );
                     let wait = backoff.fail(&mut self.rt.rng());
                     self.rt.wait(wait).await;
                     attempt += 1;

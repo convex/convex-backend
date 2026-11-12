@@ -616,6 +616,7 @@ function serializeChildComponents(
     return {
       name: name!,
       path: path!,
+      // This is needed for compatibility for older backends from before the legacy args validator code path was removed
       args: [],
       env,
     };

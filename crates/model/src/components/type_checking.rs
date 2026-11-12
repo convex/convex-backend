@@ -4,13 +4,9 @@ use std::collections::{
 };
 
 use async_recursion::async_recursion;
-use async_trait::async_trait;
 use common::{
     bootstrap_model::components::{
         definition::{
-            ComponentArgument,
-            ComponentArgumentValidator,
-            ComponentDefinitionType,
             ComponentExport,
             EnvVarValidator,
             HttpMountPath,
@@ -29,20 +25,13 @@ use common::{
 };
 use errors::ErrorMetadata;
 use sync_types::path::PathComponent;
-use value::{
-    identifier::Identifier,
-    TableMapping,
-    TableNamespace,
-};
+use value::identifier::Identifier;
 
 use super::{
     file_based_routing::file_based_exports,
     types::EvaluatedComponentDefinition,
 };
-use crate::{
-    modules::HTTP_MODULE_PATH,
-    virtual_system_mapping,
-};
+use crate::modules::HTTP_MODULE_PATH;
 
 #[derive(Clone, Debug)]
 pub struct CheckedComponent {
@@ -56,7 +45,6 @@ pub struct CheckedComponent {
     /// prefix.
     pub http_prefix: Option<String>,
 
-    pub args: BTreeMap<Identifier, Resource>,
     pub env: BTreeMap<Identifier, EnvBinding>,
     pub child_components: BTreeMap<ComponentName, CheckedComponent>,
     pub http_routes: CheckedHttpRoutes,
@@ -69,41 +57,26 @@ pub enum ResourceTree {
     Leaf(Resource),
 }
 
-#[async_trait]
-pub trait InitializerEvaluator: Send + Sync {
-    async fn evaluate(
-        &self,
-        path: ComponentDefinitionPath,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>>;
-}
-
 pub struct TypecheckContext<'a> {
     evaluated_definitions: &'a BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
-    initializer_evaluator: &'a dyn InitializerEvaluator,
     validate_env_vars: bool,
 }
 
 impl<'a> TypecheckContext<'a> {
     pub fn new(
         definitions: &'a BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
-        initializer_evaluator: &'a dyn InitializerEvaluator,
     ) -> Self {
         Self {
             evaluated_definitions: definitions,
-            initializer_evaluator,
             validate_env_vars: true,
         }
     }
 
     pub fn new_for_codegen(
         definitions: &'a BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
-        initializer_evaluator: &'a dyn InitializerEvaluator,
     ) -> Self {
         Self {
             evaluated_definitions: definitions,
-            initializer_evaluator,
             // When doing isolate codegen for a component, a shell root component is used which
             // doesn't have env vars defined.
             validate_env_vars: false,
@@ -114,7 +87,6 @@ impl<'a> TypecheckContext<'a> {
     pub async fn instantiate_root(&self) -> anyhow::Result<CheckedComponent> {
         let definition_path = ComponentDefinitionPath::root();
         let component_path = ComponentPath::root();
-        let args = BTreeMap::new();
         let env = BTreeMap::new();
         let evaluated = self
             .evaluated_definitions
@@ -127,7 +99,7 @@ impl<'a> TypecheckContext<'a> {
             .http_prefix
             .as_ref()
             .map(|p| p.to_string());
-        self.instantiate(definition_path, component_path, args, env, http_prefix)
+        self.instantiate(definition_path, component_path, env, http_prefix)
             .await
     }
 
@@ -136,7 +108,6 @@ impl<'a> TypecheckContext<'a> {
         &self,
         definition_path: ComponentDefinitionPath,
         component_path: ComponentPath,
-        args: BTreeMap<Identifier, Resource>,
         env: BTreeMap<Identifier, EnvBinding>,
         http_prefix: Option<String>,
     ) -> anyhow::Result<CheckedComponent> {
@@ -150,11 +121,10 @@ impl<'a> TypecheckContext<'a> {
                 )
             })?;
 
-        let mut builder = CheckedComponentBuilder::check_args(
+        let mut builder = CheckedComponentBuilder::check_env(
             &definition_path,
             &component_path,
             evaluated,
-            args,
             env,
             self.validate_env_vars,
         )?;
@@ -183,24 +153,6 @@ impl<'a> TypecheckContext<'a> {
         // instantiation depending on another (e.g. passing a function reference
         // from one component as an argument to another).
         for instantiation in &evaluated.definition.child_components {
-            let resolved_args = match instantiation.args {
-                Some(ref args) => args
-                    .iter()
-                    .map(|(name, ComponentArgument::Value(value))| {
-                        (name.clone(), Resource::Value(value.clone()))
-                    })
-                    .collect(),
-                None => {
-                    self.initializer_evaluator
-                        .evaluate(
-                            definition_path.clone(),
-                            builder.args.clone(),
-                            instantiation.name.clone(),
-                        )
-                        .await?
-                },
-            };
-
             let resolved_env: BTreeMap<Identifier, EnvBinding> = instantiation.env.clone();
 
             let child_component_path = component_path.push(instantiation.name.clone());
@@ -267,7 +219,6 @@ impl<'a> TypecheckContext<'a> {
                 .instantiate(
                     instantiation.path.clone(),
                     child_component_path,
-                    resolved_args,
                     resolved_env,
                     child_http_prefix,
                 )
@@ -285,47 +236,6 @@ impl<'a> TypecheckContext<'a> {
 
         Ok(component)
     }
-}
-
-pub fn validate_component_args(
-    component_path: &ComponentPath,
-    arg_validators: &BTreeMap<Identifier, ComponentArgumentValidator>,
-    args: &BTreeMap<Identifier, Resource>,
-) -> anyhow::Result<()> {
-    for (arg_name, arg_value) in args {
-        let validator = arg_validators.get(arg_name).ok_or_else(|| {
-            ErrorMetadata::bad_request(
-                "TypecheckError",
-                format!("Component {component_path:?} has no argument named {arg_name:?}"),
-            )
-        })?;
-        match (arg_value, validator) {
-            (Resource::Value(value), ComponentArgumentValidator::Value(validator)) => {
-                // TODO(CX-6540): Remove hack where we pass in empty mappings.
-                let table_mapping =
-                    TableMapping::new().namespace(TableNamespace::by_component_TODO());
-                let virtual_system_mapping = virtual_system_mapping();
-                validator
-                    .check_value(value, &table_mapping, virtual_system_mapping)
-                    .map_err(|validator_error| {
-                        ErrorMetadata::bad_request(
-                            "TypecheckError",
-                            format!(
-                                "Component {component_path:?} has an invalid value for argument \
-                                 {arg_name:?}: {validator_error:?}"
-                            ),
-                        )
-                    })?;
-            },
-            (Resource::Function { .. } | Resource::ResolvedSystemUdf { .. }, _) => {
-                anyhow::bail!(ErrorMetadata::bad_request(
-                    "TypecheckError",
-                    "Function references are not supported"
-                ));
-            },
-        }
-    }
-    Ok(())
 }
 
 pub fn validate_component_env(
@@ -408,46 +318,28 @@ struct CheckedComponentBuilder<'a> {
     component_path: &'a ComponentPath,
     evaluated: &'a EvaluatedComponentDefinition,
 
-    // Phase 1: Arguments are checked immediately at construction time.
-    args: BTreeMap<Identifier, Resource>,
+    // Phase 1: Env bindings are checked immediately at construction time.
     env: BTreeMap<Identifier, EnvBinding>,
 
     // Phase 2: The layer above adds in child components one at a time, and instantiating a child
-    // component may depend on arguments or previous child components.
+    // component may depend on previous child components.
     child_components: BTreeMap<ComponentName, CheckedComponent>,
 
     // Phase 3: The layer above mounts child component HTTP routes.
     http_routes: CheckedHttpRoutes,
     //
-    // Phase 4: The layer above finalizes via `build`, passing in exports, which may depend on args
-    // or any child component.
+    // Phase 4: The layer above finalizes via `build`, passing in exports, which may depend on any
+    // child component.
 }
 
 impl<'a> CheckedComponentBuilder<'a> {
-    pub fn check_args(
+    pub fn check_env(
         definition_path: &'a ComponentDefinitionPath,
         component_path: &'a ComponentPath,
         evaluated: &'a EvaluatedComponentDefinition,
-        args: BTreeMap<Identifier, Resource>,
         env: BTreeMap<Identifier, EnvBinding>,
         validate_env_vars: bool,
     ) -> anyhow::Result<Self> {
-        match &evaluated.definition.definition_type {
-            ComponentDefinitionType::App => {
-                if !args.is_empty() {
-                    anyhow::bail!(ErrorMetadata::bad_request(
-                        "TypecheckError",
-                        "Can't have arguments for the root app"
-                    ));
-                }
-            },
-            ComponentDefinitionType::ChildComponent {
-                args: arg_validators,
-                ..
-            } => {
-                validate_component_args(component_path, arg_validators, &args)?;
-            },
-        }
         // Check env bindings against declared env vars.
         let env_validators = &evaluated.definition.env_vars;
         for env_name in env.keys() {
@@ -475,7 +367,6 @@ impl<'a> CheckedComponentBuilder<'a> {
             component_path,
             evaluated,
 
-            args,
             env,
             child_components: BTreeMap::new(),
             http_routes: CheckedHttpRoutes::new(evaluated),
@@ -561,7 +452,6 @@ impl<'a> CheckedComponentBuilder<'a> {
             definition_path: self.definition_path.clone(),
             component_path: self.component_path.clone(),
             http_prefix,
-            args: self.args,
             env: self.env,
             http_routes: self.http_routes,
             child_components: self.child_components,
@@ -597,20 +487,6 @@ impl<'a> CheckedComponentBuilder<'a> {
             )
         };
         let result = match reference {
-            Reference::ComponentArgument { attributes } => {
-                if attributes.len() != 1 {
-                    anyhow::bail!(ErrorMetadata::bad_request(
-                        "TypecheckError",
-                        "Nested argument references currently unsupported",
-                    ));
-                }
-                let resource = self
-                    .args
-                    .get(&attributes[0])
-                    .ok_or_else(unresolved_err)?
-                    .clone();
-                ResourceTree::Leaf(resource)
-            },
             Reference::Function(path) => {
                 let canonicalized = path.clone();
                 let module = self
@@ -760,6 +636,9 @@ mod json {
         component_path: String,
         http_prefix: Option<String>,
 
+        /// Always empty. CLIs that predate the removal of component arguments
+        /// require it in the `start_push` response.
+        #[serde(default)]
         args: BTreeMap<String, SerializedResource>,
         #[serde(default)]
         env: BTreeMap<String, SerializedEnvBinding>,
@@ -776,11 +655,7 @@ mod json {
                 definition_path: String::from(value.definition_path),
                 component_path: String::from(value.component_path),
                 http_prefix: value.http_prefix,
-                args: value
-                    .args
-                    .into_iter()
-                    .map(|(k, v)| Ok((String::from(k), v.try_into()?)))
-                    .collect::<anyhow::Result<_>>()?,
+                args: BTreeMap::new(),
                 env: value
                     .env
                     .into_iter()
@@ -809,11 +684,6 @@ mod json {
                 definition_path: value.definition_path.parse()?,
                 component_path: value.component_path.parse()?,
                 http_prefix: value.http_prefix,
-                args: value
-                    .args
-                    .into_iter()
-                    .map(|(k, v)| Ok((k.parse()?, v.try_into()?)))
-                    .collect::<anyhow::Result<_>>()?,
                 env: value
                     .env
                     .into_iter()

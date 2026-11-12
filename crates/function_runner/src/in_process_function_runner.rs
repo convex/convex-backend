@@ -14,12 +14,9 @@ use anyhow::Context;
 use async_trait::async_trait;
 use common::{
     auth::AuthConfig,
-    bootstrap_model::components::definition::ComponentDefinitionMetadata,
     components::{
         ComponentDefinitionPath,
-        ComponentName,
         ResolvedComponentFunctionPath,
-        Resource,
     },
     errors::JsError,
     execution_context::ExecutionContext,
@@ -98,7 +95,6 @@ use udf::{
     HttpActionResponseStreamer,
 };
 use usage_tracking::FunctionUsageStats;
-use value::identifier::Identifier;
 
 use super::FunctionRunner;
 use crate::{
@@ -431,27 +427,6 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 dependency_graph,
                 user_environment_variables,
                 system_env_vars,
-                self.deployment.name.clone(),
-            )
-            .await
-    }
-
-    #[fastrace::trace]
-    async fn evaluate_component_initializer(
-        &self,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-        path: ComponentDefinitionPath,
-        definition: ModuleConfig,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
-        self.server
-            .evaluate_component_initializer(
-                evaluated_definitions,
-                path,
-                definition,
-                args,
-                name,
                 self.deployment.name.clone(),
             )
             .await

@@ -92,7 +92,6 @@ async fn create_unmounted_component<RT: Runtime>(
         path: format!("{}", parent_path.join(component_name.clone())).parse()?,
         definition_type: ComponentDefinitionType::ChildComponent {
             name: component_name.clone(),
-            args: btreemap! {},
         },
         child_components: vec![],
         http_mounts: btreemap! {},
@@ -113,7 +112,6 @@ async fn create_unmounted_component<RT: Runtime>(
                 ))?
                 .developer_id(),
             name: component_name,
-            args: btreemap! {},
             env: btreemap! {},
         },
         state: ComponentState::Unmounted,

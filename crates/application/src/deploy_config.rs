@@ -12,7 +12,6 @@ use std::{
 };
 
 use anyhow::Context;
-use async_trait::async_trait;
 use common::{
     auth::AuthInfo,
     bootstrap_model::{
@@ -28,9 +27,7 @@ use common::{
     components::{
         ComponentDefinitionPath,
         ComponentId,
-        ComponentName,
         ComponentPath,
-        Resource,
     },
     errors::JsError,
     execution_context::RequestMetadata,
@@ -101,7 +98,6 @@ use model::{
         file_based_routing::file_based_exports,
         type_checking::{
             CheckedComponent,
-            InitializerEvaluator,
             TypecheckContext,
         },
         types::{
@@ -159,7 +155,6 @@ use udf::{
 };
 use usage_tracking::FunctionUsageTracker;
 use value::{
-    identifier::Identifier,
     sha256::Sha256Digest,
     DeveloperDocumentId,
     ResolvedDocumentId,
@@ -329,18 +324,10 @@ impl<RT: Runtime> Application<RT> {
         // Build and typecheck the component tree. We don't strictly need to do this
         // before `/finish_push`, but it's better to fail fast here on errors before
         // waiting for schema backfills to complete.
-        let initializer_evaluator = ApplicationInitializerEvaluator::new(
-            self,
-            config,
-            evaluated_components
-                .iter()
-                .map(|(k, v)| (k.clone(), v.definition.clone()))
-                .collect(),
-        )?;
         let ctx = if config.for_codegen {
-            TypecheckContext::new_for_codegen(&evaluated_components, &initializer_evaluator)
+            TypecheckContext::new_for_codegen(&evaluated_components)
         } else {
-            TypecheckContext::new(&evaluated_components, &initializer_evaluator)
+            TypecheckContext::new(&evaluated_components)
         };
         let app = ctx.instantiate_root().await?;
 
@@ -1090,61 +1077,6 @@ impl<RT: Runtime> Application<RT> {
                 occ_stats,
             },
         ))
-    }
-}
-
-struct ApplicationInitializerEvaluator<'a, RT: Runtime> {
-    application: &'a Application<RT>,
-    component_definitions: BTreeMap<ComponentDefinitionPath, ModuleConfig>,
-    evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-}
-
-impl<'a, RT: Runtime> ApplicationInitializerEvaluator<'a, RT> {
-    fn new(
-        application: &'a Application<RT>,
-        config: &'a ProjectConfig,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-    ) -> anyhow::Result<Self> {
-        let mut component_definitions = BTreeMap::new();
-        for component_definition in &config.component_definitions {
-            anyhow::ensure!(component_definitions
-                .insert(
-                    component_definition.definition_path.clone(),
-                    component_definition.definition.clone(),
-                )
-                .is_none());
-        }
-        Ok(Self {
-            application,
-            component_definitions,
-            evaluated_definitions,
-        })
-    }
-}
-
-#[async_trait]
-impl<RT: Runtime> InitializerEvaluator for ApplicationInitializerEvaluator<'_, RT> {
-    async fn evaluate(
-        &self,
-        path: ComponentDefinitionPath,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
-        let component_definition = self
-            .component_definitions
-            .get(&path)
-            .context(format!("Missing component definition for {path:?}"))?
-            .clone();
-        self.application
-            .runner
-            .evaluate_component_initializer(
-                self.evaluated_definitions.clone(),
-                path,
-                component_definition,
-                args,
-                name,
-            )
-            .await
     }
 }
 

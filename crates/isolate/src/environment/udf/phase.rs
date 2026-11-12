@@ -23,7 +23,6 @@ use common::{
 };
 use database::{
     BiggestDocumentWrites,
-    BootstrapComponentsModel,
     FunctionExecutionSize,
     SnoopedTransaction,
     Transaction,
@@ -49,10 +48,6 @@ use rand::{
 use rand_chacha::ChaCha12Rng;
 use sync_types::ModulePath;
 use udf::environment::PreloadedEnvVars;
-use value::{
-    identifier::Identifier,
-    ConvexValue,
-};
 
 use crate::{
     environment::{
@@ -111,7 +106,6 @@ enum UdfPreloaded {
         default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         env_vars: PreloadedEnvVars,
         component: ComponentId,
-        component_arguments: Option<BTreeMap<Identifier, ConvexValue>>,
         source_package: Option<Arc<ParsedDocument<SourcePackage>>>,
     },
 }
@@ -173,16 +167,6 @@ impl<RT: Runtime> UdfPhase<RT> {
         let component = self.component;
         self.preloaded = timeout
             .with_release_permit(PauseReason::UdfInitialize, async {
-                let component_args = if !component.is_root() {
-                    Some(
-                        BootstrapComponentsModel::new(self.tx_mut()?)
-                            .load_component_args(component)
-                            .await?,
-                    )
-                } else {
-                    None
-                };
-
                 // UdfConfig might not be defined for super old modules or system modules.
                 let udf_config = UdfConfigModel::new(self.tx_mut()?, component.into())
                     .get()
@@ -229,7 +213,6 @@ impl<RT: Runtime> UdfPhase<RT> {
                     default_system_env_vars,
                     env_vars,
                     component,
-                    component_arguments: component_args,
                     source_package,
                 })
             })
@@ -255,29 +238,6 @@ impl<RT: Runtime> UdfPhase<RT> {
             anyhow::bail!("Phase not initialized");
         };
         Ok(*component)
-    }
-
-    pub fn component_arguments(&self) -> anyhow::Result<&BTreeMap<Identifier, ConvexValue>> {
-        let UdfPreloaded::Ready {
-            component_arguments: component_args,
-            ..
-        } = &self.preloaded
-        else {
-            anyhow::bail!("Phase not initialized");
-        };
-        let Some(component_args) = component_args else {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "NoComponentArgs",
-                "Component arguments are not available within the app",
-            ));
-        };
-        if self.phase != Phase::Executing {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "NoComponentArgsDuringImport",
-                "Can't use `componentArg` at import time",
-            ));
-        }
-        Ok(component_args)
     }
 
     #[fastrace::trace]

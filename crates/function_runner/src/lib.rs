@@ -12,12 +12,9 @@ use std::{
 use async_trait::async_trait;
 use common::{
     auth::AuthConfig,
-    bootstrap_model::components::definition::ComponentDefinitionMetadata,
     components::{
         ComponentDefinitionPath,
-        ComponentName,
         ResolvedComponentFunctionPath,
-        Resource,
     },
     document::PendingDocumentUpdate,
     errors::JsError,
@@ -74,7 +71,6 @@ use udf::{
 };
 use usage_tracking::FunctionUsageStats;
 use value::{
-    identifier::Identifier,
     ResolvedDocumentId,
     TabletId,
 };
@@ -136,15 +132,6 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
         user_environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
         system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
     ) -> anyhow::Result<EvaluateAppDefinitionsResult>;
-
-    async fn evaluate_component_initializer(
-        &self,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-        path: ComponentDefinitionPath,
-        definition: ModuleConfig,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>>;
 
     async fn evaluate_schema(
         &self,

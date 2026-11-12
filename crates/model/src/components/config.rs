@@ -466,14 +466,12 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                         .context("Missing definition ID for component")?;
                     let component_type = match parent_and_name {
                         None => {
-                            anyhow::ensure!(new_node.args.is_empty());
                             anyhow::ensure!(new_node.env.is_empty());
                             ComponentType::App
                         },
                         Some((parent, name)) => ComponentType::ChildComponent {
                             parent,
                             name,
-                            args: new_node.args.clone(),
                             env: new_node.env.clone(),
                         },
                     };

@@ -19,18 +19,13 @@ use common::{
     audit_log_lines::AuditLogVars,
     auth::AuthConfig,
     backoff::Backoff,
-    bootstrap_model::components::{
-        definition::ComponentDefinitionMetadata,
-        handles::FunctionHandle,
-    },
+    bootstrap_model::components::handles::FunctionHandle,
     components::{
         CanonicalizedComponentFunctionPath,
         ComponentDefinitionPath,
         ComponentId,
-        ComponentName,
         ComponentPath,
         PublicFunctionPath,
-        Resource,
     },
     errors::JsError,
     execution_context::{
@@ -201,7 +196,6 @@ use usage_tracking::{
 };
 use value::{
     id_v6::DeveloperDocumentId,
-    identifier::Identifier,
     serialized_args_ext::SerializedArgsExt,
     JsonPackedValue,
     Size as _,
@@ -1813,21 +1807,6 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 user_environment_variables,
                 system_env_vars,
             )
-            .await
-    }
-
-    #[fastrace::trace]
-    pub async fn evaluate_component_initializer(
-        &self,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-        path: ComponentDefinitionPath,
-        definition: ModuleConfig,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
-        self.isolate_functions
-            .function_runner
-            .evaluate_component_initializer(evaluated_definitions, path, definition, args, name)
             .await
     }
 

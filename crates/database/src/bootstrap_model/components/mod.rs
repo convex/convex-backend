@@ -27,7 +27,6 @@ use common::{
         ComponentId,
         ComponentName,
         ComponentPath,
-        Resource,
     },
     document::{
         ParseDocument,
@@ -38,7 +37,6 @@ use common::{
 use errors::ErrorMetadata;
 use value::{
     identifier::Identifier,
-    ConvexValue,
     DeveloperDocumentId,
     FieldPath,
     ResolvedDocumentId,
@@ -231,35 +229,6 @@ impl<'a, RT: Runtime> BootstrapComponentsModel<'a, RT> {
             },
             Some(component) => Ok(component.into_value().component_type),
         }
-    }
-
-    pub async fn load_component_args(
-        &mut self,
-        id: ComponentId,
-    ) -> anyhow::Result<BTreeMap<Identifier, ConvexValue>> {
-        let component = self
-            .load_component(id)
-            .await?
-            .context(format!(
-                "Component not found for ComponentId {:?}",
-                id.serialize_to_string()
-            ))?
-            .into_value();
-        let args = match component.component_type {
-            ComponentType::App => anyhow::bail!(ErrorMetadata::bad_request(
-                "InvalidComponentType",
-                "Can't load component args within the app",
-            )),
-            ComponentType::ChildComponent { args, .. } => args,
-        };
-        let mut result = BTreeMap::new();
-        for (name, value) in args {
-            let Resource::Value(value) = value else {
-                anyhow::bail!("Non-value resource within component args");
-            };
-            result.insert(name, value);
-        }
-        Ok(result)
     }
 
     /// Returns component environment variable bindings.
