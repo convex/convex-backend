@@ -646,7 +646,7 @@ export function teamTokenResource(creator: number | null): ConcreteResource {
 type ProjectAttributes = {
   id: number;
   slug: string;
-  tags?: string[] | null;
+  tags: string[];
 };
 
 function projectSegment(project: ProjectAttributes): ConcreteSegment {
@@ -654,7 +654,7 @@ function projectSegment(project: ProjectAttributes): ConcreteSegment {
     kind: "project",
     id: project.id,
     slug: project.slug,
-    tags: project.tags ?? [],
+    tags: project.tags,
   };
 }
 

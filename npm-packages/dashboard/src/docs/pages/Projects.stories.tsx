@@ -125,7 +125,7 @@ export const Default: Story = {
         error: undefined,
       }));
       mocked(useTeamProjectTags).mockReturnValue([
-        ...new Set(projects.flatMap((p) => p.tags ?? [])),
+        ...new Set(projects.flatMap((p) => p.tags)),
       ]);
       mocked(useDeploymentByName).mockImplementation((deploymentName) => ({
         deployment:
