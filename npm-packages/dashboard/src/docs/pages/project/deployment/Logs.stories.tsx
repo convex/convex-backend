@@ -10,7 +10,7 @@ import { ConvexProvider } from "convex/react";
 import { GenericId } from "convex/values";
 import { fn, mocked, userEvent, within } from "storybook/test";
 import { LogsView } from "@common/features/logs/components/LogsView";
-import { FunctionsContext } from "@common/lib/functions/FunctionsProvider";
+import { FunctionsProvider } from "@common/lib/functions/FunctionsProvider";
 import { streamFunctionLogs } from "@common/lib/appMetrics";
 import { TeamMemberLink } from "elements/TeamMemberLink";
 import {
@@ -215,6 +215,7 @@ const mockAuditLogEvents = [
 
 const mockClient = mockConvexReactClient()
   .registerQueryFake(udfs.components.list, () => [])
+  .registerQueryFake(udfs.modules.listForAllComponents, () => [])
   .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
   .registerQueryFake(udfs.deploymentState.deploymentState, () => ({
     _id: "" as GenericId<"_backend_state">,
@@ -312,9 +313,9 @@ const meta = {
             isSelfHosted: false,
           }}
         >
-          <FunctionsContext.Provider value={new Map()}>
+          <FunctionsProvider>
             <LogsView />
-          </FunctionsContext.Provider>
+          </FunctionsProvider>
         </DeploymentInfoContext.Provider>
       </ConvexProvider>
     </ConnectedDeploymentContext.Provider>
