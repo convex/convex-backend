@@ -5,10 +5,10 @@ on:
     outputs:
       backend_x64_digest:
         description: "x64 image digest"
-        value: ${{ fromJson(jobs.read.outputs.result).digest.backend-x64 }}
+        value: ${{ jobs.build.outputs.x64_digest }}
       backend_arm64_digest:
         description: "arm64 image digest"
-        value: ${{ fromJson(jobs.read.outputs.result).digest.backend-arm64 }}
+        value: ${{ jobs.build.outputs.arm64_digest }}
 
 permissions:
   contents: read
@@ -22,6 +22,10 @@ jobs:
       matrix:
         arch: [x64, arm64]
     runs-on: [self-hosted, aws, "${{ matrix.arch }}", xlarge]
+    # Each leg sets only its own arch's key, and GitHub merges the legs' outputs.
+    outputs:
+      x64_digest: ${{ steps.digest.outputs.x64_digest }}
+      arm64_digest: ${{ steps.digest.outputs.arm64_digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -66,21 +70,7 @@ jobs:
             VERGEN_GIT_COMMIT_TIMESTAMP=${{ env.COMMIT_TIMESTAMP }}
 
       - name: Write digest
-        uses: cloudposse/github-action-matrix-outputs-write@ed06cf3a6bf23b8dce36d1cf0d63123885bb8375 # v1
         id: digest
-        with:
-          matrix-step-name: ${{ github.job }}
-          matrix-key: backend-${{ matrix.arch }}
-          outputs: |-
-            digest: ${{ steps.build-image.outputs.digest }}
-
-  read:
-    runs-on: ubuntu-latest
-    needs: [build]
-    steps:
-      - uses: cloudposse/github-action-matrix-outputs-read@33cac12fa9282a7230a418d859b93fdbc4f27b5a # v1
-        id: read
-        with:
-          matrix-step-name: build
-    outputs:
-      result: "${{ steps.read.outputs.result }}"
+        env:
+          DIGEST: ${{ steps.build-image.outputs.digest }}
+        run: echo "${{ matrix.arch }}_digest=$DIGEST" >> "$GITHUB_OUTPUT"
