@@ -317,9 +317,15 @@ impl<RT: Runtime> ScheduledJobExecutor<RT> {
         }
         let next_job_future = if let Some(next_job_ts) = next_job_ready_time {
             let wait_time = next_job_ts.duration_since(now).unwrap_or_else(|_| {
-                // If we're behind, re-run this loop every 5 seconds to log the gauge above and
-                // track how far we're behind in our metrics.
-                Duration::from_secs(5)
+                if self.running_job_ids.len() < *SCHEDULED_JOB_EXECUTION_PARALLELISM {
+                    // The job became due after `query_and_start_jobs` read the clock, and
+                    // we have room to run it, so query again right away.
+                    Duration::ZERO
+                } else {
+                    // If we're behind, re-run this loop every 5 seconds to log the gauge above and
+                    // track how far we're behind in our metrics.
+                    Duration::from_secs(5)
+                }
             });
             Either::Left(self.context.rt.wait(wait_time))
         } else {
