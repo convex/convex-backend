@@ -171,6 +171,7 @@ export function modulesToModuleFunctions(
 ) {
   const moduleFunctions: ModuleFunction[] = [];
   for (const [componentId, componentModules] of modules.entries()) {
+    const componentPath = nents.find((n) => n.id === componentId)?.path ?? null;
     for (const [filePath, { functions }] of componentModules.entries()) {
       for (const moduleFunction of functions) {
         moduleFunctions.push(
@@ -178,7 +179,7 @@ export function modulesToModuleFunctions(
             moduleFunction,
             filePath,
             componentId,
-            nents.find((n) => n.id === componentId)?.path ?? null,
+            componentPath,
           ),
         );
       }
