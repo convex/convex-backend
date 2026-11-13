@@ -25,6 +25,7 @@ pub use self::{
         StoreFileAuthorization,
         SystemKey,
         UserIdentity,
+        UNATTRIBUTED_ADMIN_KEY_MEMBER_ID,
     },
     deployment_jwt::{
         deployment_jwt_issuer,
@@ -39,6 +40,7 @@ pub use self::{
     legacy_encryptor::LegacyEncryptor,
     operations::{
         bad_admin_key_error,
+        legacy_admin_key_disabled_error,
         operations_for_deploy_key,
         read_only_operations,
         DeploymentOp,

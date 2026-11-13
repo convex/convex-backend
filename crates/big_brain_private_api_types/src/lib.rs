@@ -134,6 +134,16 @@ pub struct AccessTokenDeploymentAuthResponse {
     pub token_id: Option<AccessTokenId>,
     #[serde(default)]
     pub app_client_id: Option<String>,
+    #[serde(default)]
+    pub legacy_admin_key: Option<LegacyAdminKeyOutcome>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LegacyAdminKeyOutcome {
+    Accepted,
+    /// The deployment's team opted out of legacy admin keys.
+    DisabledForTeam,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]

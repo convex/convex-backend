@@ -115,6 +115,15 @@ impl From<ProtoDeploymentOperation> for DeploymentOp {
     }
 }
 
+pub fn legacy_admin_key_disabled_error() -> ErrorMetadata {
+    ErrorMetadata::unauthenticated(
+        "LegacyAdminKeyDisabled",
+        "This admin key is a legacy admin key, which this deployment's team has disabled. \
+         Generate a deploy key in the deployment's settings in the Convex dashboard and use it \
+         instead.",
+    )
+}
+
 pub fn bad_admin_key_error(instance_name: Option<String>) -> ErrorMetadata {
     let msg = match instance_name {
         Some(name) => format!(

@@ -3,14 +3,22 @@ use anyhow::Context;
 use common::runtime::Runtime;
 use errors::ErrorMetadata;
 use keybroker::{
+    legacy_admin_key_disabled_error,
+    AdminIdentityPrincipal,
     Identity,
     KeyBroker,
+    UNATTRIBUTED_ADMIN_KEY_MEMBER_ID,
 };
 use crate::{
-    access_token_auth::AccessTokenAuth,
+    access_token_auth::{
+        AccessTokenAuth,
+        LegacyAdminKeyVerdict,
+    },
     metrics::{
         log_deploy_key_use,
+        log_legacy_admin_key_check,
         DeployKeyType,
+        LegacyAdminKeyCheckOutcome,
     },
 };
 
@@ -58,6 +66,31 @@ impl<RT: Runtime> ApplicationAuth<RT> {
                 _ => {
                     log_deploy_key_use(DeployKeyType::Unknown);
                 },
+            }
+            if let Ok(Identity::DeploymentAdmin(identity)) = &result
+                && let AdminIdentityPrincipal::Member(member_id) = identity.principal()
+                && *member_id != UNATTRIBUTED_ADMIN_KEY_MEMBER_ID
+            {
+                // Big brain enforces team opt-outs of legacy admin keys and
+                // records their use, so its answer takes precedence.
+                return match self
+                    .access_token_auth
+                    .check_legacy_admin_key(&admin_key_or_access_token)
+                    .await?
+                {
+                    LegacyAdminKeyVerdict::Accepted(identity) => {
+                        log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::Accepted);
+                        Ok(identity)
+                    },
+                    LegacyAdminKeyVerdict::DisabledForTeam => {
+                        log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::DisabledForTeam);
+                        Err(anyhow::anyhow!(legacy_admin_key_disabled_error()))
+                    },
+                    LegacyAdminKeyVerdict::CheckLocally => {
+                        log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::CheckedLocally);
+                        result
+                    },
+                };
             }
             result
         } else {

@@ -125,6 +125,9 @@ const EXPORT_DOWNLOAD_KEY_VERSION: u8 = 1;
 const STORE_FILE_AUTHZ_VERSION: u8 = 1;
 const QUERY_JOURNAL_VERSION: u8 = 7;
 
+/// Admin keys issued to this member ID aren't bound to a team member.
+pub const UNATTRIBUTED_ADMIN_KEY_MEMBER_ID: MemberId = MemberId(0);
+
 // Max delay from transaction start time -> key being issued that is tolerable.
 const MAX_TS_DELAY: Duration = Duration::from_secs(15);
 
