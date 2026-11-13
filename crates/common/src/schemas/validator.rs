@@ -193,15 +193,26 @@ impl Validator {
                 }
             },
             (Validator::Object(object_validator), ConvexValue::Object(object)) => {
+                let mut errors = Vec::new();
                 for (field_name, field_type) in &object_validator.0 {
                     let maybe_value = object.get::<str>(field_name.borrow());
                     if let Some(value) = maybe_value {
-                        field_type
+                        if let Err(error) = field_type
                             .validator
                             .check_value_internal(value, all_tables_number_to_name)
-                            .map_err(|e| e.with_context(format!(".{field_name}")))?
+                        {
+                            // A nested object already lists every field. Flatten
+                            // those into this object so each one keeps its path.
+                            let error = error.with_context(format!(".{field_name}"));
+                            match error {
+                                ValidationError::Multiple { errors: nested, .. } => {
+                                    errors.extend(nested)
+                                },
+                                other => errors.push(other),
+                            }
+                        }
                     } else if !field_type.optional {
-                        return Err(ValidationError::MissingRequiredField {
+                        errors.push(ValidationError::MissingRequiredField {
                             object: object.clone(),
                             field_name: field_name.clone(),
                             object_validator: object_validator.clone(),
@@ -211,13 +222,25 @@ impl Validator {
                 }
                 for field in object.keys() {
                     if !object_validator.0.contains_key::<str>(field.borrow()) {
-                        return Err(ValidationError::ExtraField {
+                        errors.push(ValidationError::ExtraField {
                             object: object.clone(),
                             field_name: field.clone(),
                             object_validator: object_validator.clone(),
                             context: ValidationContext::new(),
                         });
                     }
+                }
+                match errors.len() {
+                    0 => (),
+                    1 => return Err(errors.remove(0)),
+                    _ => {
+                        return Err(ValidationError::Multiple {
+                            errors,
+                            object: object.clone(),
+                            object_validator: object_validator.clone(),
+                            context: ValidationContext::new(),
+                        });
+                    },
                 }
             },
             (Validator::Union(validators), value) => {
@@ -822,9 +845,7 @@ impl TryFrom<ConvexValue> for LiteralValidator {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ObjectValidator(
-    pub BTreeMap<IdentifierFieldName, FieldValidator>,
-);
+pub struct ObjectValidator(pub BTreeMap<IdentifierFieldName, FieldValidator>);
 
 #[macro_export]
 macro_rules! object_validator {
@@ -1014,6 +1035,18 @@ Validator: {validator}"
         validator: Validator,
         context: ValidationContext,
     },
+    /// Every invalid field of one object. A single problem keeps its original
+    /// variant so that message stays unchanged.
+    #[display(
+        "{}",
+        format_multiple_validation_errors(errors, object, object_validator, context)
+    )]
+    Multiple {
+        errors: Vec<ValidationError>,
+        object: ConvexObject,
+        object_validator: ObjectValidator,
+        context: ValidationContext,
+    },
 }
 
 impl ValidationError {
@@ -1024,12 +1057,459 @@ impl ValidationError {
             | ValidationError::LiteralValuesDoNotMatch { context, .. }
             | ValidationError::MissingRequiredField { context, .. }
             | ValidationError::ExtraField { context, .. }
-            | ValidationError::NoMatch { context, .. } => context,
+            | ValidationError::NoMatch { context, .. }
+            | ValidationError::Multiple { context, .. } => context,
+        }
+    }
+
+    fn context_ref(&self) -> &ValidationContext {
+        match self {
+            ValidationError::TableNamesDoNotMatch { context, .. }
+            | ValidationError::SystemTableReference { context, .. }
+            | ValidationError::LiteralValuesDoNotMatch { context, .. }
+            | ValidationError::MissingRequiredField { context, .. }
+            | ValidationError::ExtraField { context, .. }
+            | ValidationError::NoMatch { context, .. }
+            | ValidationError::Multiple { context, .. } => context,
         }
     }
 
     fn with_context(mut self, context: String) -> Self {
-        self.context().reversed_path.push(context);
+        // `Multiple` reports each child at its own path, so a segment from an
+        // array element or parent field has to land on every child.
+        fn push(error: &mut ValidationError, context: &str) {
+            if let ValidationError::Multiple { errors, .. } = error {
+                for child in errors.iter_mut() {
+                    push(child, context);
+                }
+            }
+            error.context().reversed_path.push(context.to_string());
+        }
+        push(&mut self, &context);
         self
+    }
+}
+
+struct MultipleValidationErrorsDisplay<'a> {
+    errors: &'a [ValidationError],
+    object: &'a ConvexObject,
+    object_validator: &'a ObjectValidator,
+}
+
+impl Display for MultipleValidationErrorsDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Object has multiple validation errors:")?;
+        for error in self.errors {
+            write_validation_error_bullet(f, error)?;
+        }
+        write!(
+            f,
+            "Object: {object}\nValidator: {validator}",
+            object = self.object,
+            validator = self.object_validator,
+        )
+    }
+}
+
+fn format_multiple_validation_errors<'a>(
+    errors: &'a [ValidationError],
+    object: &'a ConvexObject,
+    object_validator: &'a ObjectValidator,
+    _context: &'a ValidationContext,
+) -> MultipleValidationErrorsDisplay<'a> {
+    MultipleValidationErrorsDisplay {
+        errors,
+        object,
+        object_validator,
+    }
+}
+
+fn write_validation_error_bullet(
+    f: &mut fmt::Formatter<'_>,
+    error: &ValidationError,
+) -> fmt::Result {
+    if let ValidationError::Multiple { errors, .. } = error {
+        for child in errors {
+            write_validation_error_bullet(f, child)?;
+        }
+        return Ok(());
+    }
+    write!(f, "- ")?;
+    write_validation_error_reason(f, error)?;
+    // A missing or extra field's context points at its parent object, so add
+    // the field itself to keep nested bullets from naming only the parent.
+    let mut context = error.context_ref().clone();
+    match error {
+        ValidationError::MissingRequiredField { field_name, .. } => {
+            context.reversed_path.insert(0, format!(".{field_name}"));
+        },
+        ValidationError::ExtraField { field_name, .. } => {
+            context.reversed_path.insert(0, format!(".{field_name}"));
+        },
+        _ => {},
+    }
+    let path = context.to_string();
+    if !path.is_empty() {
+        write!(f, " {path}")?;
+    }
+    writeln!(f)
+}
+
+fn write_validation_error_reason(
+    f: &mut fmt::Formatter<'_>,
+    error: &ValidationError,
+) -> fmt::Result {
+    match error {
+        ValidationError::NoMatch {
+            value, validator, ..
+        } => write!(f, "`{value}` does not match validator `{validator}`"),
+        ValidationError::LiteralValuesDoNotMatch {
+            value,
+            literal_validator,
+            ..
+        } => write!(
+            f,
+            "`{value}` does not match literal validator `v.literal({literal_validator})`."
+        ),
+        ValidationError::MissingRequiredField { field_name, .. } => {
+            write!(f, "missing required field `{field_name}`")
+        },
+        ValidationError::ExtraField { field_name, .. } => {
+            write!(f, "extra field `{field_name}` that is not in the validator")
+        },
+        ValidationError::TableNamesDoNotMatch {
+            id,
+            found_table_name,
+            validator_table,
+            ..
+        } => write!(
+            f,
+            "Found ID \"{id}\" from table `{found_table_name}`, which does not match the table \
+             name in validator `v.id(\"{validator_table}\")`."
+        ),
+        ValidationError::SystemTableReference {
+            id,
+            validator_table,
+            ..
+        } => write!(
+            f,
+            "Found ID \"{id}\" from a system table, which does not match the table name in \
+             validator `v.id(\"{validator_table}\")`."
+        ),
+        ValidationError::Multiple { .. } => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use value::{
+        val,
+        ConvexValue,
+        TableMapping,
+        TableNamespace,
+    };
+
+    use super::{
+        FieldValidator,
+        ObjectValidator,
+        ValidationError,
+        Validator,
+    };
+    use crate::virtual_system_mapping::VirtualSystemMapping;
+
+    fn object_validator(fields: Vec<(&str, FieldValidator)>) -> anyhow::Result<Validator> {
+        let mut map = BTreeMap::new();
+        for (name, field) in fields {
+            map.insert(name.parse()?, field);
+        }
+        Ok(Validator::Object(ObjectValidator(map)))
+    }
+
+    fn check(validator: &Validator, value: &ConvexValue) -> Result<(), ValidationError> {
+        let table_mapping = TableMapping::new().namespace(TableNamespace::Global);
+        validator.check_value(value, &table_mapping, &VirtualSystemMapping::default())
+    }
+
+    #[test]
+    fn valid_object_and_absent_optional_pass() -> anyhow::Result<()> {
+        let validator = object_validator(vec![
+            (
+                "name",
+                FieldValidator::required_field_type(Validator::String),
+            ),
+            (
+                "count",
+                FieldValidator::required_field_type(Validator::Float64),
+            ),
+        ])?;
+        let value = val!({"name" => "a", "count" => 1.0});
+        assert!(check(&validator, &value).is_ok());
+
+        let validator = object_validator(vec![
+            (
+                "name",
+                FieldValidator::required_field_type(Validator::String),
+            ),
+            (
+                "nickname",
+                FieldValidator::optional_field_type(Validator::String),
+            ),
+        ])?;
+        let value = val!({"name" => "a"});
+        assert!(check(&validator, &value).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn one_missing_required_field_keeps_single_error() -> anyhow::Result<()> {
+        let validator = object_validator(vec![
+            (
+                "name",
+                FieldValidator::required_field_type(Validator::String),
+            ),
+            (
+                "count",
+                FieldValidator::required_field_type(Validator::Float64),
+            ),
+        ])?;
+        let value = val!({"name" => "a"});
+        let error = check(&validator, &value).expect_err("missing count");
+        assert!(matches!(
+            error,
+            ValidationError::MissingRequiredField { .. }
+        ));
+        let message = error.to_string();
+        assert!(message.contains("Object is missing the required field"));
+        assert!(message.contains("Consider wrapping the field validator in `v.optional(...)`"));
+        assert!(message.contains("Object:"));
+        assert!(message.contains("Validator:"));
+        assert!(!message.contains("multiple validation errors"));
+        Ok(())
+    }
+
+    #[test]
+    fn one_extra_field_keeps_single_error() -> anyhow::Result<()> {
+        let validator = object_validator(vec![
+            (
+                "name",
+                FieldValidator::required_field_type(Validator::String),
+            ),
+            (
+                "count",
+                FieldValidator::required_field_type(Validator::Float64),
+            ),
+        ])?;
+        let value = val!({"name" => "a", "count" => 1.0, "extra" => true});
+        let error = check(&validator, &value).expect_err("extra field");
+        assert!(matches!(error, ValidationError::ExtraField { .. }));
+        let message = error.to_string();
+        assert!(message.contains("Object contains extra field"));
+        assert!(message.contains("Object:"));
+        assert!(message.contains("Validator:"));
+        assert!(!message.contains("multiple validation errors"));
+        Ok(())
+    }
+
+    #[test]
+    fn one_wrong_type_keeps_single_error() -> anyhow::Result<()> {
+        let validator = object_validator(vec![
+            (
+                "name",
+                FieldValidator::required_field_type(Validator::String),
+            ),
+            (
+                "count",
+                FieldValidator::required_field_type(Validator::Float64),
+            ),
+        ])?;
+        let value = val!({"name" => 1.0, "count" => 1.0});
+        let error = check(&validator, &value).expect_err("wrong type");
+        assert!(matches!(error, ValidationError::NoMatch { .. }));
+        let message = error.to_string();
+        assert!(message.contains("Path: .name"));
+        assert!(message.contains("does not match validator"));
+        assert!(!message.contains("multiple validation errors"));
+        Ok(())
+    }
+
+    #[test]
+    fn several_problems_are_one_error() -> anyhow::Result<()> {
+        let validator = object_validator(vec![
+            (
+                "name",
+                FieldValidator::required_field_type(Validator::String),
+            ),
+            (
+                "count",
+                FieldValidator::required_field_type(Validator::Float64),
+            ),
+        ])?;
+        let value = val!({"name" => 1.0, "extra" => true});
+        let error = check(&validator, &value).expect_err("several problems");
+        assert!(matches!(error, ValidationError::Multiple { .. }));
+        let message = error.to_string();
+        assert!(message.contains("Object has multiple validation errors:"));
+        assert!(message.contains("`1.0` does not match validator `v.string()`"));
+        assert!(message.contains("Path: .name"));
+        assert!(message.contains("missing required field `count`"));
+        assert!(message.contains("extra field `extra` that is not in the validator"));
+        assert_eq!(message.matches("Object:").count(), 1);
+        assert_eq!(message.matches("Validator:").count(), 1);
+        let count_at = message
+            .find("missing required field `count`")
+            .expect("count bullet");
+        let name_at = message.find("Path: .name").expect("name bullet");
+        let extra_at = message
+            .find("extra field `extra` that is not in the validator")
+            .expect("extra bullet");
+        assert!(count_at < name_at);
+        assert!(name_at < extra_at);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_object_failures_are_flattened() -> anyhow::Result<()> {
+        let payload = object_validator(vec![
+            ("a", FieldValidator::required_field_type(Validator::String)),
+            ("b", FieldValidator::required_field_type(Validator::Float64)),
+        ])?;
+        let validator = object_validator(vec![(
+            "payload",
+            FieldValidator::required_field_type(payload),
+        )])?;
+        let value = val!({
+            "payload" => {"a" => 1.0, "b" => "no"},
+            "extra" => true,
+        });
+        let error = check(&validator, &value).expect_err("nested failures");
+        assert!(matches!(error, ValidationError::Multiple { .. }));
+        let message = error.to_string();
+        assert!(message.contains("Object has multiple validation errors:"));
+        assert!(message.contains(".payload.a"));
+        assert!(message.contains(".payload.b"));
+        assert!(message.contains("extra field `extra` that is not in the validator"));
+        assert_eq!(message.matches("Object:").count(), 1);
+        assert_eq!(message.matches("Validator:").count(), 1);
+        let a_at = message.find(".payload.a").expect("payload.a");
+        let b_at = message.find(".payload.b").expect("payload.b");
+        let extra_at = message.find("extra field `extra`").expect("extra bullet");
+        assert!(a_at < b_at);
+        assert!(b_at < extra_at);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_missing_and_extra_fields_name_the_field() -> anyhow::Result<()> {
+        let payload = object_validator(vec![
+            ("a", FieldValidator::required_field_type(Validator::String)),
+            ("b", FieldValidator::required_field_type(Validator::Float64)),
+        ])?;
+        let validator = object_validator(vec![(
+            "payload",
+            FieldValidator::required_field_type(payload),
+        )])?;
+        let value = val!({"payload" => {"a" => "ok", "z" => true}});
+        let error = check(&validator, &value).expect_err("nested missing and extra");
+        assert!(matches!(error, ValidationError::Multiple { .. }));
+        let message = error.to_string();
+        assert!(message.contains("missing required field `b` Path: .payload.b"));
+        assert!(message.contains("extra field `z` that is not in the validator Path: .payload.z"));
+        Ok(())
+    }
+
+    #[test]
+    fn array_reports_only_the_first_bad_element() -> anyhow::Result<()> {
+        let validator = object_validator(vec![(
+            "items",
+            FieldValidator::required_field_type(Validator::Array(Box::new(Validator::String))),
+        )])?;
+        let value = val!({"items" => [1.0, 2.0]});
+        let error = check(&validator, &value).expect_err("bad array");
+        assert!(matches!(error, ValidationError::NoMatch { .. }));
+        let message = error.to_string();
+        assert!(message.contains("Path: .items[0]"));
+        assert!(!message.contains("[1]"));
+        assert!(!message.contains("multiple validation errors"));
+        Ok(())
+    }
+
+    #[test]
+    fn array_element_and_sibling_are_listed_together() -> anyhow::Result<()> {
+        let validator = object_validator(vec![
+            (
+                "items",
+                FieldValidator::required_field_type(Validator::Array(Box::new(Validator::String))),
+            ),
+            (
+                "name",
+                FieldValidator::required_field_type(Validator::String),
+            ),
+        ])?;
+        let value = val!({"items" => [1.0, 2.0], "name" => 1.0});
+        let error = check(&validator, &value).expect_err("array and sibling");
+        assert!(matches!(error, ValidationError::Multiple { .. }));
+        let message = error.to_string();
+        assert!(message.contains("Object has multiple validation errors:"));
+        assert!(message.contains("Path: .items[0]"));
+        assert!(message.contains("Path: .name"));
+        assert!(!message.contains("[1]"));
+        let items_at = message.find("Path: .items[0]").expect("items");
+        let name_at = message.find("Path: .name").expect("name");
+        assert!(items_at < name_at);
+        Ok(())
+    }
+
+    #[test]
+    fn union_field_is_one_line_beside_a_sibling() -> anyhow::Result<()> {
+        let validator = object_validator(vec![
+            (
+                "kind",
+                FieldValidator::required_field_type(Validator::Union(vec![
+                    Validator::String,
+                    Validator::Float64,
+                ])),
+            ),
+            (
+                "name",
+                FieldValidator::required_field_type(Validator::String),
+            ),
+        ])?;
+        let value = val!({"kind" => true});
+        let error = check(&validator, &value).expect_err("union and missing sibling");
+        assert!(matches!(error, ValidationError::Multiple { .. }));
+        let message = error.to_string();
+        assert!(
+            message.contains("`true` does not match validator `v.union(v.string(), v.float64())`")
+        );
+        assert!(message.contains("missing required field `name`"));
+        assert_eq!(
+            message
+                .matches("`true` does not match validator `v.union(v.string(), v.float64())`")
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn union_of_object_shapes_stays_a_single_nomatch() -> anyhow::Result<()> {
+        let shape_a = object_validator(vec![
+            ("a", FieldValidator::required_field_type(Validator::String)),
+            ("b", FieldValidator::required_field_type(Validator::Float64)),
+        ])?;
+        let shape_b = object_validator(vec![(
+            "c",
+            FieldValidator::required_field_type(Validator::String),
+        )])?;
+        let validator = Validator::Union(vec![shape_a, shape_b]);
+        let value = val!({"a" => 1.0, "b" => "no", "extra" => true});
+        let error = check(&validator, &value).expect_err("union of objects");
+        assert!(matches!(error, ValidationError::NoMatch { .. }));
+        let message = error.to_string();
+        assert!(message.contains("does not match validator"));
+        assert!(!message.contains("multiple validation errors"));
+        Ok(())
     }
 }
