@@ -1055,6 +1055,7 @@ impl FunctionEventSource {
         let runtime = match self.module_environment {
             ModuleEnvironment::Isolate => Some("convex"),
             ModuleEnvironment::Node => Some("node"),
+            ModuleEnvironment::Rust => Some("rust"),
             ModuleEnvironment::Invalid => None,
         };
         let JsonValue::Object(mut fields) = json!({

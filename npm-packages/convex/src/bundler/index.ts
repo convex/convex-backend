@@ -15,6 +15,7 @@ import {
   createExternalPlugin,
   findExactVersionAndDependencies,
 } from "./external.js";
+import { isRustCrateDir } from "../cli/lib/rust.js";
 import { innerEsbuild, isEsbuildBuildError } from "./debugBundle.js";
 export { nodeFs, RecordingFs } from "./fs.js";
 export type { Filesystem } from "./fs.js";
@@ -46,7 +47,7 @@ export function* walkDir(
 }
 
 // Convex specific module environment.
-type ModuleEnvironment = "node" | "isolate";
+export type ModuleEnvironment = "node" | "isolate" | "rust";
 
 export interface Bundle {
   path: string;
@@ -411,6 +412,7 @@ export async function entryPoints(
   // Don't deploy directories in convex/ that define components
   // as this leads to double-deploying.
   const looksLikeNestedComponent = (dirPath: string): boolean => {
+    if (isRustCrateDir(ctx, dir, dirPath)) return true;
     const config = path.join(dirPath, "convex.config.ts");
     const isComponentDefinition = ctx.fs.exists(config);
     if (isComponentDefinition) {

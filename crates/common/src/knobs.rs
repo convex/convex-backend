@@ -460,6 +460,144 @@ pub static FUNCTION_MAX_RESULT_SIZE: LazyLock<usize> = LazyLock::new(|| {
     env_config("FUNCTION_MAX_RESULT_SIZE", 1 << 24) // 16 MiB
 });
 
+/// Maximum size in bytes of a task request (`task_submit`) a `"use rust"` guest
+/// may hand to the host. Larger requests are rejected (the import returns -1)
+/// before any guest memory is read.
+pub static RUST_MAX_TASK_REQUEST_BYTES: LazyLock<usize> =
+    LazyLock::new(|| env_config("RUST_MAX_TASK_REQUEST_BYTES", 64 << 20)); // 64 MiB
+
+/// Maximum number of unfinished tasks (`ctx.runQuery`, `fetch`, ...) one
+/// `"use rust"` action may have at a time. Further `task_submit` calls return
+/// -1 until some task completes.
+pub static RUST_MAX_OUTSTANDING_TASKS: LazyLock<usize> =
+    LazyLock::new(|| env_config("RUST_MAX_OUTSTANDING_TASKS", 1000));
+
+/// Maximum number of `"use rust"` actions executing at the same time in this
+/// process. Mirrors MAX_ISOLATE_WORKERS, the bound on concurrent V8 actions.
+pub static RUST_MAX_CONCURRENT_ACTIONS: LazyLock<usize> = LazyLock::new(|| {
+    env_config(
+        "RUST_MAX_CONCURRENT_ACTIONS",
+        *MAX_ISOLATE_WORKERS,
+    )
+});
+
+/// Persist compiled `"use rust"` modules (`Module::serialize`) so a backend
+/// restart does not recompile them.
+pub static RUST_WASM_DISK_CACHE: LazyLock<bool> =
+    LazyLock::new(|| env_config("RUST_WASM_DISK_CACHE", true));
+
+/// Directory of the on-disk compiled-module cache.
+pub static RUST_WASM_CACHE_DIR: LazyLock<String> = LazyLock::new(|| {
+    env_config(
+        "RUST_WASM_CACHE_DIR",
+        "convex_local_storage/rust-wasm-cache".to_string(),
+    )
+});
+
+// ---- rust-native mode (contracts/NATIVE.md §5.6) ----
+
+/// `off` or `worker`: whether `"use rust"` modules pushed as native cdylibs
+/// run in worker processes.
+pub static RUST_NATIVE_MODE: LazyLock<String> =
+    LazyLock::new(|| env_config("RUST_NATIVE_MODE", "off".to_string()));
+/// `strict`, `best-effort` or `off`; empty means the platform default.
+pub static RUST_NATIVE_SANDBOX: LazyLock<String> =
+    LazyLock::new(|| env_config("RUST_NATIVE_SANDBOX", String::new()));
+/// Required to run native workers with no sandbox (`RUST_NATIVE_SANDBOX=off`,
+/// or the default on a platform without one, i.e. anywhere but Linux): user
+/// code then has the backend's full filesystem, network and process access.
+pub static RUST_NATIVE_ALLOW_UNSANDBOXED: LazyLock<bool> =
+    LazyLock::new(|| env_config("RUST_NATIVE_ALLOW_UNSANDBOXED", false));
+/// Allows the socket syscalls inside workers.
+pub static RUST_NATIVE_ALLOW_NETWORK: LazyLock<bool> =
+    LazyLock::new(|| env_config("RUST_NATIVE_ALLOW_NETWORK", false));
+/// Where native artifacts and worker tmp dirs live.
+pub static RUST_NATIVE_DIR: LazyLock<String> = LazyLock::new(|| {
+    env_config(
+        "RUST_NATIVE_DIR",
+        "convex_local_storage/rust-native".to_string(),
+    )
+});
+/// Memory limit per worker.
+pub static RUST_NATIVE_MEMORY_BYTES: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_MEMORY_BYTES", 512 << 20));
+/// Watchdog slack above the memory limit.
+pub static RUST_NATIVE_RSS_SLACK_BYTES: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_RSS_SLACK_BYTES", 64 << 20));
+/// Stack size of the worker's call thread.
+pub static RUST_NATIVE_STACK_BYTES: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_STACK_BYTES", 8 << 20));
+/// Idle workers kept per pool.
+pub static RUST_NATIVE_MIN_IDLE: LazyLock<usize> =
+    LazyLock::new(|| env_config("RUST_NATIVE_MIN_IDLE", 1));
+/// Idle workers over all pools. Defaults to the CPU count (at least 16): a
+/// burst of N concurrent calls leaves N workers behind, and a cap below the
+/// usual concurrency makes every burst respawn workers (~10 MB RSS each while
+/// idle; the idle reaper returns them after `RUST_NATIVE_IDLE_TIMEOUT_SECS`).
+/// The runtime also clamps it to `RUST_MAX_CONCURRENT_ACTIONS`.
+pub static RUST_NATIVE_MAX_IDLE: LazyLock<usize> = LazyLock::new(|| {
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    env_config("RUST_NATIVE_MAX_IDLE", cpus.max(16))
+});
+/// Upper bound on threads that spawn worker processes in parallel. Spawn
+/// threads are started on demand and idle ones stay parked. Defaults to
+/// min(CPU count, 8).
+pub static RUST_NATIVE_SPAWN_THREADS: LazyLock<usize> = LazyLock::new(|| {
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
+    env_config("RUST_NATIVE_SPAWN_THREADS", cpus.clamp(1, 8))
+});
+/// Start a worker in the background when a native artifact is first resolved,
+/// so the dlopen of a freshly written library (hundreds of ms on macOS) does
+/// not land on the first call. Never blocks the caller.
+pub static RUST_NATIVE_PREWARM: LazyLock<bool> =
+    LazyLock::new(|| env_config("RUST_NATIVE_PREWARM", true));
+/// The RSS probe runs on every Nth call of a worker (the first call always,
+/// and any call slower than `RUST_NATIVE_PROBE_SLOW_CALL_MS`). 1 probes every
+/// call. RSS above `RUST_NATIVE_RECYCLE_RSS_BYTES` is then noticed up to N - 1
+/// calls late; the worker memory limit still applies. The runaway-thread
+/// check is not sampled: it runs at every release.
+pub static RUST_NATIVE_PROBE_EVERY: LazyLock<u32> =
+    LazyLock::new(|| env_config("RUST_NATIVE_PROBE_EVERY", 8));
+/// Calls at least this long (ms) are always probed.
+pub static RUST_NATIVE_PROBE_SLOW_CALL_MS: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_PROBE_SLOW_CALL_MS", 20));
+/// Idle workers older than this are reaped.
+pub static RUST_NATIVE_IDLE_TIMEOUT_SECS: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_IDLE_TIMEOUT_SECS", 300));
+/// A worker is recycled after this many calls (1 for strict parity with wasm).
+pub static RUST_NATIVE_MAX_CALLS_PER_WORKER: LazyLock<u32> =
+    LazyLock::new(|| env_config("RUST_NATIVE_MAX_CALLS_PER_WORKER", 1000));
+/// A worker whose RSS is above this at release is recycled.
+pub static RUST_NATIVE_RECYCLE_RSS_BYTES: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_RECYCLE_RSS_BYTES", 256 << 20));
+/// The reaper recycles an idle native worker whose RSS is above this many
+/// bytes, but only while the same function set has another idle worker
+/// (0 disables). Backstop for freed memory the allocator does not return.
+pub static RUST_NATIVE_IDLE_RECYCLE_RSS_BYTES: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_IDLE_RECYCLE_RSS_BYTES", 24 << 20));
+/// How long a spawn waits for the worker's `Ready`.
+pub static RUST_NATIVE_SPAWN_TIMEOUT_MS: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_SPAWN_TIMEOUT_MS", 5000));
+/// Push-time size limit of a native artifact.
+pub static RUST_NATIVE_MAX_ARTIFACT_BYTES: LazyLock<u64> =
+    LazyLock::new(|| env_config("RUST_NATIVE_MAX_ARTIFACT_BYTES", 180 << 20));
+/// Privilege drop for workers; both must be set. Empty means no drop.
+pub static RUST_NATIVE_UID: LazyLock<String> =
+    LazyLock::new(|| env_config("RUST_NATIVE_UID", String::new()));
+/// See `RUST_NATIVE_UID`.
+pub static RUST_NATIVE_GID: LazyLock<String> =
+    LazyLock::new(|| env_config("RUST_NATIVE_GID", String::new()));
+/// Delegated cgroup subtree for worker memory limits. Empty means none.
+pub static RUST_NATIVE_CGROUP: LazyLock<String> =
+    LazyLock::new(|| env_config("RUST_NATIVE_CGROUP", String::new()));
+/// Comma separated extension of the shared-library allowlist (library names
+/// at push time; absolute entries are also readable by the sandbox).
+pub static RUST_NATIVE_EXTRA_LIBS: LazyLock<String> =
+    LazyLock::new(|| env_config("RUST_NATIVE_EXTRA_LIBS", String::new()));
+/// Use an embedded wasm when native is unavailable.
+pub static RUST_NATIVE_FALLBACK_WASM: LazyLock<bool> =
+    LazyLock::new(|| env_config("RUST_NATIVE_FALLBACK_WASM", true));
+
 /// Maximum size in bytes of the result of a system function.
 /// Larger than FUNCTION_MAX_RESULT_SIZE but smaller than
 /// MAX_BACKEND_RPC_RESPONSE_SIZE
