@@ -302,8 +302,8 @@ impl ExportStore {
             .send();
         while let Some(page) = pages.next().await {
             let page = page.map_err(|e| aws_error(e, "list the Glue tables"))?;
-            for table in page.table_list() {
-                published.insert(table.name().to_owned(), table.clone());
+            for table in page.table_list.unwrap_or_default() {
+                published.insert(table.name().to_owned(), table);
             }
             anyhow::ensure!(
                 published.len() <= MAX_LISTED_TABLES,
