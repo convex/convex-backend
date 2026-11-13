@@ -303,6 +303,23 @@ function metricSpend(
     : undefined;
 }
 
+// Whether any metric in the periods draws on an included allowance. Without
+// one, filtered usage is priced directly and needs no team-wide usage.
+export function hasIncludedUsage(periods: PricesPeriod[]): boolean {
+  return periods.some((period) =>
+    Object.values(period.metrics).some(
+      (price) =>
+        parseNonNegativeNumber(price.includedUnits) !== 0 ||
+        priceAmounts(price).some(
+          ({ consumedUnits }) =>
+            consumedUnits !== undefined &&
+            consumedUnits !== null &&
+            consumedUnits !== 0,
+        ),
+    ),
+  );
+}
+
 export function getUsageSpend(
   summary: UsageSummaryRow[] | undefined,
   sectionMetric: string,
@@ -350,6 +367,9 @@ export function getUsageSpend(
 export type PricedUsageSummary = {
   period: PricesPeriod;
   summary: UsageSummaryRow[];
+  // Team-wide usage for the period, present when `summary` is filtered and
+  // the team has included usage to share out.
+  teamSummary?: UsageSummaryRow[];
 };
 
 export function getMultiPeriodUsageSpend(

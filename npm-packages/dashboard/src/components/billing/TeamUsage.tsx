@@ -228,6 +228,8 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
     teamId: team.id,
     pricing,
     enabled: dashboardShowCashUsage && !isFiltered,
+    projectId,
+    componentPrefix,
   });
 
   const { data: aiGatewayCostByDay, error: aiGatewayCostError } =
