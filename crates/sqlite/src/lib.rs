@@ -49,7 +49,6 @@ use common::{
     },
     query::Order,
     runtime::CoopStreamExt as _,
-    try_anyhow,
     types::{
         IndexId,
         IndexRef,
@@ -429,47 +428,108 @@ impl Persistence for SqlitePersistence {
 impl SqlitePersistence {
     /// Read the document log in `range`, restricted to `tablet_id` if given.
     ///
-    /// Rows are collected eagerly, so restricting in SQL keeps the untargeted
-    /// ones out of memory entirely.
+    /// Rows are fetched in pages of `page_size`, using keyset pagination over
+    /// the (ts, table_id, id) primary key, so a single page is held in memory
+    /// at a time and the connection lock is released between pages.
+    #[allow(clippy::needless_lifetimes)]
+    #[try_stream(ok = DocumentLogEntry, error = anyhow::Error)]
+    async fn stream_document_log_pages(
+        &self,
+        tablet_id: Option<TabletId>,
+        range: TimestampRange,
+        order: Order,
+        page_size: u32,
+        retention_validator: Arc<dyn RetentionValidator>,
+    ) {
+        // A zero page size would make the termination check below never
+        // trigger while SQL still returns rows under LIMIT 0.
+        let page_size = page_size.max(1) as usize;
+        let min_ts = range.min_timestamp_inclusive();
+        let mut cursor: Option<DocumentLogCursor> = None;
+        loop {
+            let page = {
+                let connection = &self.inner.lock().connection;
+                let query = load_docs(
+                    range,
+                    order,
+                    tablet_id.is_some(),
+                    cursor.is_some(),
+                    page_size,
+                );
+                let mut stmt = connection.prepare_cached(&query)?;
+
+                let mut params: Vec<Box<dyn ToSql>> = vec![];
+                if let Some(tablet_id) = tablet_id {
+                    params.push(Box::new(tablet_id.0.to_vec()));
+                }
+                if let Some(cursor) = &cursor {
+                    params.push(Box::new(cursor.ts));
+                    params.push(Box::new(cursor.table_id.clone()));
+                    params.push(Box::new(cursor.id.clone()));
+                }
+
+                let mut page = vec![];
+                for row in
+                    stmt.query_map(rusqlite::params_from_iter(params.iter()), load_document_row)?
+                {
+                    page.push(row_to_document(row)?);
+                }
+                page
+            };
+
+            // The connection was released and re-acquired between pages, so
+            // retention may have advanced; re-validate the snapshot to report
+            // an out-of-retention error rather than silently omitting rows.
+            retention_validator
+                .validate_document_snapshot(min_ts)
+                .await?;
+
+            let page_len = page.len();
+            cursor = page.last().map(|(document_id, ts, ..)| DocumentLogCursor {
+                ts: i64::from(*ts),
+                table_id: document_id.table().0.to_vec(),
+                id: document_id.internal_id().to_vec(),
+            });
+            for (document_id, ts, document, prev_ts) in page {
+                yield DocumentLogEntry {
+                    ts,
+                    id: document_id,
+                    value: document,
+                    prev_ts,
+                };
+            }
+            if page_len < page_size {
+                break;
+            }
+        }
+    }
+
     fn stream_document_log(
         &self,
         tablet_id: Option<TabletId>,
         range: TimestampRange,
         order: Order,
+        page_size: u32,
         retention_validator: Arc<dyn RetentionValidator>,
     ) -> DocumentStream<'_> {
-        let entries = try_anyhow!({
-            let connection = &self.inner.lock().connection;
-            let load_docs_query = load_docs(range, order, tablet_id.is_some());
-            let mut stmt = connection.prepare(load_docs_query.as_str())?;
-
-            let tablet_id_bytes = tablet_id.map(|tablet_id| tablet_id.0);
-            let tablet_id_slice = tablet_id_bytes.as_ref().map(|tablet_id| &tablet_id[..]);
-            let params: Vec<&dyn ToSql> = match tablet_id_slice {
-                Some(ref tablet_id) => vec![tablet_id],
-                None => vec![],
-            };
-
-            let mut entries = vec![];
-            for row in stmt.query_map(params.as_slice(), load_document_row)? {
-                let (document_id, ts, document, prev_ts) = row_to_document(row)?;
-                entries.push(Ok(DocumentLogEntry {
-                    ts,
-                    id: document_id,
-                    value: document,
-                    prev_ts,
-                }));
-            }
-            entries
-        });
         // The caller isn't async so we have to validate snapshot as part of the
         // stream.
-        let validate =
-            self.validate_document_snapshot(range.min_timestamp_inclusive(), retention_validator);
-        match entries {
-            Ok(s) => validate.chain(stream::iter(s).cooperative()).boxed(),
-            Err(e) => stream::once(async { Err(e) }).boxed(),
-        }
+        let validate = self.validate_document_snapshot(
+            range.min_timestamp_inclusive(),
+            retention_validator.clone(),
+        );
+        validate
+            .chain(
+                self.stream_document_log_pages(
+                    tablet_id,
+                    range,
+                    order,
+                    page_size,
+                    retention_validator,
+                )
+                .cooperative(),
+            )
+            .boxed()
     }
 }
 
@@ -479,10 +539,10 @@ impl PersistenceReader for SqlitePersistence {
         &self,
         range: TimestampRange,
         order: Order,
-        _page_size: u32,
+        page_size: u32,
         retention_validator: Arc<dyn RetentionValidator>,
     ) -> DocumentStream<'_> {
-        self.stream_document_log(None, range, order, retention_validator)
+        self.stream_document_log(None, range, order, page_size, retention_validator)
     }
 
     fn load_documents_from_table(
@@ -490,10 +550,16 @@ impl PersistenceReader for SqlitePersistence {
         tablet_id: TabletId,
         range: TimestampRange,
         order: Order,
-        _page_size: u32,
+        page_size: u32,
         retention_validator: Arc<dyn RetentionValidator>,
     ) -> DocumentStream<'_> {
-        self.stream_document_log(Some(tablet_id), range, order, retention_validator)
+        self.stream_document_log(
+            Some(tablet_id),
+            range,
+            order,
+            page_size,
+            retention_validator,
+        )
     }
 
     async fn previous_revisions(
@@ -673,27 +739,68 @@ fn row_to_document(
     Ok((document_id, prev_ts, document, prev_prev_ts))
 }
 
-fn load_docs(range: TimestampRange, order: Order, tablet_filter: bool) -> String {
-    let order_str = match order {
-        Order::Asc => " ORDER BY ts ASC, table_id ASC, id ASC ",
-        Order::Desc => " ORDER BY ts DESC, table_id DESC, id DESC ",
+/// Position in the `(ts, table_id, id)` ordering to resume the next page from.
+struct DocumentLogCursor {
+    ts: i64,
+    table_id: Vec<u8>,
+    id: Vec<u8>,
+}
+
+fn load_docs(
+    range: TimestampRange,
+    order: Order,
+    tablet_filter: bool,
+    has_cursor: bool,
+    page_size: usize,
+) -> String {
+    let direction = match order {
+        Order::Asc => "ASC",
+        Order::Desc => "DESC",
     };
+    let mut where_clause = String::new();
+    // With a cursor, the (ts, table_id, id) comparison bounds the scan on the
+    // ordering side already. Keeping the redundant range bound on that side
+    // would make SQLite re-scan all preceding rows on every page.
+    if !(has_cursor && order == Order::Asc) {
+        where_clause += &format!("AND ts >= {} ", range.min_timestamp_inclusive());
+    }
+    if !(has_cursor && order == Order::Desc) {
+        where_clause += &format!("AND ts < {} ", range.max_timestamp_exclusive());
+    }
+    if tablet_filter {
+        // With a cursor, force the primary-key index so the keyset comparison
+        // seeks directly; the (table_id, id, ts) index would otherwise sort the
+        // whole table on every page.
+        where_clause += if has_cursor {
+            "AND +table_id = ?1 "
+        } else {
+            "AND table_id = ?1 "
+        };
+    }
+    if has_cursor {
+        // Params ?1..?3 (or ?2..?4 with a tablet filter) hold the previous
+        // page's last (ts, table_id, id).
+        let first = if tablet_filter { 2 } else { 1 };
+        let cmp = match order {
+            Order::Asc => ">",
+            Order::Desc => "<",
+        };
+        where_clause += &format!(
+            "AND (ts, table_id, id) {cmp} (?{first}, ?{second}, ?{third}) ",
+            second = first + 1,
+            third = first + 2,
+        );
+    }
     format!(
         r#"
 SELECT id, ts, table_id, json_value, deleted, prev_ts
 FROM documents
-WHERE ts >= {} AND ts < {}
+WHERE TRUE
 {}
-{}
+ORDER BY ts {}, table_id {}, id {}
+LIMIT {}
 "#,
-        range.min_timestamp_inclusive(),
-        range.max_timestamp_exclusive(),
-        if tablet_filter {
-            "AND table_id = $1"
-        } else {
-            ""
-        },
-        order_str,
+        where_clause, direction, direction, direction, page_size,
     )
 }
 
