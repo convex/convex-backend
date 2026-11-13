@@ -1,6 +1,13 @@
 import { useBBQueries } from "api/api";
 import { USAGE_REFRESH_INTERVAL_MS, usageQueryParams } from "api/usage";
-import { parseUsageSummary, USAGE_SUMMARY_QUERY_ID } from "hooks/usageMetrics";
+import {
+  parseDailyUsageSummary,
+  parseUsageSummary,
+  summarizeDailyUsage,
+  USAGE_SUMMARY_BY_DAY_QUERY_ID,
+  USAGE_SUMMARY_QUERY_ID,
+} from "hooks/usageMetrics";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import type { UsagePricing } from "components/billing/lib/usagePrices";
 import {
   hasIncludedUsage,
@@ -20,6 +27,7 @@ export function useUsageByPricingPeriod({
   projectId: number | null;
   componentPrefix: string | null;
 }): PricedUsageState {
+  const { dailyUsageSummaries } = useLaunchDarkly();
   const active = enabled && pricing.status === "ready";
   const periods = pricing.status === "ready" ? pricing.periods : [];
   // An empty prefix filters nothing, as in `usageQueryParams`.
@@ -35,7 +43,9 @@ export function useUsageByPricingPeriod({
     periods.map(({ range }) => ({
       pathParams: { team_id: active ? teamId.toString() : "" },
       queryParams: usageQueryParams({
-        queryId: USAGE_SUMMARY_QUERY_ID,
+        queryId: dailyUsageSummaries
+          ? USAGE_SUMMARY_BY_DAY_QUERY_ID
+          : USAGE_SUMMARY_QUERY_ID,
         teamId,
         period: range,
         ...filter,
@@ -57,8 +67,12 @@ export function useUsageByPricingPeriod({
   if (!active) return { status: "loading" };
   if (error !== undefined) return { status: "error", error };
   if (!data) return { status: "loading" };
-  const parse = (index: number) =>
-    parseUsageSummary(data[index].map((row) => row.map((cell) => cell ?? "")));
+  const parse = (index: number) => {
+    const rows = data[index].map((row) => row.map((cell) => cell ?? ""));
+    return dailyUsageSummaries
+      ? summarizeDailyUsage(parseDailyUsageSummary(rows))
+      : parseUsageSummary(rows);
+  };
   return {
     status: "ready",
     summaries: periods.map(({ period }, index) => ({

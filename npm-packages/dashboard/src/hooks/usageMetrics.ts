@@ -1,5 +1,6 @@
 import { DatabricksQueryId, DateRange, useUsageQuery } from "api/usage";
 import { DeploymentType } from "generatedApi";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 
 export const USAGE_SUMMARY_QUERY_ID = "b63fe48d-320c-401a-8682-0a0b36b50e2b";
 export const USAGE_SUMMARY_BY_DAY_QUERY_ID =
@@ -176,18 +177,32 @@ export function useUsageTeamSummary(
   period: DateRange | null,
   projectId: number | null,
   componentPrefix: string | null,
-  options: { deploymentName?: string; skip?: boolean } = {},
+  options: { skip?: boolean } = {},
 ) {
-  const { data, error } = useUsageQuery({
+  const { dailyUsageSummaries } = useLaunchDarkly();
+  const summary = useUsageQuery({
     queryId: QUERY_IDS_.summary,
     teamId,
     projectId,
     period,
     componentPrefix,
-    deploymentName: options.deploymentName,
-    skip: options.skip,
+    skip: options.skip || dailyUsageSummaries,
   });
+  const daily = useUsageTeamSummaryByDay(
+    teamId,
+    period,
+    projectId,
+    componentPrefix,
+    { skip: options.skip || !dailyUsageSummaries },
+  );
 
+  if (dailyUsageSummaries) {
+    return daily.data
+      ? { data: summarizeDailyUsage(daily.data), error: undefined }
+      : daily;
+  }
+
+  const { data, error } = summary;
   if (error) {
     return { data: undefined, error };
   }
@@ -241,6 +256,95 @@ export function parseDailyUsageSummary(
     // SQL NULL arrives as "" (see useUsageQuery).
     projectId: projectId === "" ? null : Number(projectId),
   }));
+}
+
+type UsageSummaryField = Exclude<
+  keyof UsageSummaryRow,
+  "deploymentClass" | "region"
+>;
+
+// How the Summary query totals each field over its period, per deployment
+// class and region: "sum" adds up every day, and a snapshot name takes the
+// latest day with that snapshot. Deployment counts share one snapshot.
+const SUMMARY_FIELD_TOTALS: Record<
+  UsageSummaryField,
+  "sum" | "databaseStorage" | "fileStorage" | "searchStorage" | "deployments"
+> = {
+  databaseStorage: "databaseStorage",
+  databaseIO: "sum",
+  functionCalls: "sum",
+  queryMutationCompute: "sum",
+  actionComputeConvex: "sum",
+  actionComputeNode: "sum",
+  fileStorage: "fileStorage",
+  searchStorage: "searchStorage",
+  dataEgress: "sum",
+  searchQueries: "sum",
+  actionComputeUser: "sum",
+  auditLogBandwidth: "sum",
+  deploymentCount: "deployments",
+  pausedDeploymentCount: "deployments",
+  idleDeploymentCount: "deployments",
+};
+
+// Totals by-day documents into the Summary query's documents, one per
+// deployment class and region. A day has a snapshot when any of the
+// snapshot's fields is nonzero, since the by-day query reports a day without
+// one as zero.
+export function summarizeDailyUsage(
+  documents: DailyUsageSummaryRow[],
+): UsageSummaryRow[] {
+  const byDimension = new Map<string, DailyUsageSummaryRow[]>();
+  for (const document of documents) {
+    const key = JSON.stringify([document.deploymentClass, document.region]);
+    const dimension = byDimension.get(key);
+    if (dimension) {
+      dimension.push(document);
+    } else {
+      byDimension.set(key, [document]);
+    }
+  }
+  const fields = Object.keys(SUMMARY_FIELD_TOTALS) as UsageSummaryField[];
+  return [...byDimension.values()]
+    .map((dimension) => {
+      const latestSnapshot = new Map<string, string>();
+      for (const document of dimension) {
+        for (const field of fields) {
+          const total = SUMMARY_FIELD_TOTALS[field];
+          const latest = latestSnapshot.get(total);
+          if (
+            total !== "sum" &&
+            document[field] !== 0 &&
+            (latest === undefined || document.ds > latest)
+          ) {
+            latestSnapshot.set(total, document.ds);
+          }
+        }
+      }
+      const { deploymentClass, region } = dimension[0];
+      const summary: UsageSummaryRow = {
+        deploymentClass,
+        region,
+        ...(Object.fromEntries(fields.map((field) => [field, 0])) as Record<
+          UsageSummaryField,
+          number
+        >),
+      };
+      for (const document of dimension) {
+        for (const field of fields) {
+          const total = SUMMARY_FIELD_TOTALS[field];
+          if (total === "sum" || document.ds === latestSnapshot.get(total)) {
+            summary[field] += document[field];
+          }
+        }
+      }
+      return summary;
+    })
+    .sort(
+      (a, b) =>
+        a.deploymentClass.localeCompare(b.deploymentClass) ||
+        a.region.localeCompare(b.region),
+    );
 }
 
 function parseUsageSummaryRow(row: string[]): UsageSummaryRow {

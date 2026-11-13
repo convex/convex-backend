@@ -19,6 +19,7 @@ export const flagDefaults: {
   preAuthorizePaymentMethodChange: boolean;
   tagEditUi: boolean;
   estimateUsageLimitsCost: boolean;
+  dailyUsageSummaries: boolean;
 } = {
   allowDefaultEnvRollout: false,
   commandPaletteDeleteProjects: false,
@@ -37,6 +38,7 @@ export const flagDefaults: {
   preAuthorizePaymentMethodChange: false,
   tagEditUi: false,
   estimateUsageLimitsCost: false,
+  dailyUsageSummaries: false,
 };
 
 export const flagDefaultsKebabCase = Object.entries(flagDefaults).reduce(
