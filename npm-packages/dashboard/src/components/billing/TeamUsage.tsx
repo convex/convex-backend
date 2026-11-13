@@ -263,13 +263,12 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
 
   const hasOrbSubscription = useHasSubscription(team?.id);
 
-  // Included limits are team-wide, so they only describe unfiltered usage.
   const hasSubscription =
     isCurrentBillingPeriod &&
     (hasOrbSubscription || hasOrbSubscription === undefined) &&
-    !isFiltered &&
     !isBusinessPlanType;
 
+  // Included limits are team-wide, so they only describe unfiltered usage.
   const showEntitlements =
     isCurrentBillingPeriod && !isFiltered && !isBusinessPlanType;
 

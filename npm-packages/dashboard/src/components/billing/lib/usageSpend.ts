@@ -156,7 +156,11 @@ function priceAmounts(price: MetricPrice | undefined): PriceAmount[] {
 }
 
 export function getIncludedUsage(
-  periods: PricesPeriod[],
+  periods: {
+    period: PricesPeriod;
+    summary?: UsageSummaryRow[];
+    teamSummary?: UsageSummaryRow[];
+  }[],
   sectionMetric: string,
 ): number | undefined {
   if (!Object.hasOwn(sections, sectionMetric)) return undefined;
@@ -164,9 +168,15 @@ export function getIncludedUsage(
   const metrics = Array.isArray(section) ? section : [section];
   let total = 0;
   let hasConsumedUnits = false;
-  for (const period of periods) {
+  for (const { period, summary, teamSummary } of periods) {
     for (const metric of metrics) {
-      for (const rate of priceAmounts(period.metrics[metric.name])) {
+      const price = period.metrics[metric.name];
+      const shares =
+        summary && teamSummary
+          ? rateShares(summary, teamSummary, metric, price)
+          : { share: () => 1 };
+      if (shares === undefined) return undefined;
+      for (const rate of priceAmounts(price)) {
         const discount = rate.percentageDiscount ?? 0;
         if (!Number.isFinite(discount) || discount < 0 || discount > 1) {
           return undefined;
@@ -181,7 +191,10 @@ export function getIncludedUsage(
         }
         // The consumed count is post-discount, so we need to un-apply the
         // discount to get the actual included usage.
-        total += (consumed / (1 - discount)) * (metric.divisor ?? 1);
+        total +=
+          (consumed / (1 - discount)) *
+          (metric.divisor ?? 1) *
+          shares.share(rate);
       }
     }
   }
