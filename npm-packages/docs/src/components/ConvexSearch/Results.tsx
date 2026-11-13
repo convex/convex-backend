@@ -1,9 +1,8 @@
-import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import { DotsHorizontalIcon } from "@radix-ui/react-icons";
 import algoliasearch from "algoliasearch/lite";
 import React, { useEffect, useState } from "react";
 import ResultList from "./ResultList";
-import { AlgoliaResponse, AlgoliaResult, KapaResponse, Result } from "./types";
+import { AlgoliaResult, Result } from "./types";
 
 // Search-only API key, safe to use in frontend code. See:
 // https://www.algolia.com/doc/guides/security/api-keys/#search-only-api-key
@@ -12,124 +11,93 @@ const searchClient = algoliasearch(
   "07096f4c927e372785f8453f177afb16",
 );
 
+const SEARCH_INDEXES = ["docs", "stack", "discord"] as const;
+const DISCORD_GUILD_ID = "1019350475847499849";
+
 interface ResultsProps {
   query: string;
 }
 
 export default function Results({ query }: ResultsProps) {
-  const [algoliaResults, setAlgoliaResults] = useState<Result[]>([]);
-  const [kapaResults, setKapaResults] = useState<Result[]>([]);
+  const [results, setResults] = useState<Result[]>([]);
   const [loading, setLoading] = useState(false);
-  const { siteConfig } = useDocusaurusContext();
-
-  const combinedResults = [...algoliaResults, ...kapaResults].reduce<Result[]>(
-    (acc, result) => {
-      if (
-        result.title &&
-        !acc.some((existingResult) => existingResult.url === result.url)
-      ) {
-        acc.push(result);
-      }
-      return acc;
-    },
-    [],
-  );
+  const [error, setError] = useState(false);
 
   useEffect(() => {
-    if (query) {
-      // Clear existing results.
-      setAlgoliaResults([]);
-      setKapaResults([]);
+    let active = true;
+    const trimmedQuery = query.trim();
+    setResults([]);
+    setError(false);
+    setLoading(trimmedQuery !== "");
 
-      // Show the loading indicator.
-      setLoading(true);
+    if (trimmedQuery === "") {
+      return;
+    }
 
-      const algoliaSearch = searchClient
-        .search<AlgoliaResult>([
-          {
-            indexName: "docs",
-            query,
-            params: {
-              hitsPerPage: 3,
-            },
+    void searchClient
+      .search<AlgoliaResult>(
+        SEARCH_INDEXES.map((indexName) => ({
+          indexName,
+          query: trimmedQuery,
+          params: {
+            hitsPerPage: 10,
+            attributesToRetrieve: ["title", "objectID"],
+            attributesToHighlight: [],
+            attributesToSnippet: [],
           },
-        ])
-        .then((response) => {
-          const hits = (response.results as AlgoliaResponse)[0].hits;
-          setAlgoliaResults(
-            hits.map((hit) => ({
-              // Unclear why, but some pages are indexed with an empty title.
-              title: hit.title === "" ? "Convex Docs" : hit.title,
-              url: toRelativeUrl(hit.objectID),
-              snippet: hit.contents,
-            })),
-          );
+        })),
+      )
+      .then((response) => {
+        if (!active) {
+          return;
+        }
+
+        const combinedResults = response.results.flatMap((result, index) => {
+          if (!("hits" in result)) {
+            return [];
+          }
+
+          const indexName = SEARCH_INDEXES[index];
+          return result.hits.map((hit) => {
+            // Legacy Discord identifiers include a channel prefix; their last
+            // segment is the thread ID. Docs use full URLs and Stack uses slugs.
+            const url =
+              indexName === "docs"
+                ? toRelativeUrl(hit.objectID)
+                : indexName === "stack"
+                  ? `https://stack.convex.dev/${hit.objectID}`
+                  : `https://discord.com/channels/${DISCORD_GUILD_ID}/${hit.objectID.split("/").pop()}`;
+
+            return { title: hit.title || "Convex Docs", url };
+          });
         });
 
-      // Search Kapa
-      const kapaProject = siteConfig.customFields.KAPA_AI_PROJECT;
-      const kapaKey = siteConfig.customFields.KAPA_AI_KEY;
-      let kapaSearch: Promise<unknown> | null = null;
-      if (!kapaProject || !kapaKey) {
-        // Skip Kapa search if the required env vars are missing to avoid crashes in dev
-        console.warn(
-          "Kapa API key or project ID is missing; skipping Kapa search results.",
+        const seenUrls = new Set<string>();
+        setResults(
+          combinedResults.filter(({ url }) => {
+            if (seenUrls.has(url)) return false;
+            seenUrls.add(url);
+            return true;
+          }),
         );
-      } else {
-        kapaSearch = fetch(
-          `https://api.kapa.ai/query/v1/projects/${kapaProject}/search/`,
-          {
-            method: "POST",
-            headers: {
-              "X-API-KEY": kapaKey as string,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              query: query,
-            }),
-          },
-        )
-          .then((response) => {
-            if (!response.ok) {
-              throw new Error(
-                `Kapa search request failed with status ${response.status}`,
-              );
-            }
-            return response.json();
-          })
-          .then((data: KapaResponse) => {
-            setKapaResults(
-              data.search_results.map((hit) => {
-                // The API returns titles in the format "page|heading", where
-                // heading may be blank.
-                let [page, heading] = hit.title.split("|");
-
-                // Remove prefix before Discord results.
-                page = page.replace("Discord support thread: ", "");
-
-                // Clear heading if it matches the page exactly.
-                if (heading === page) {
-                  heading = "";
-                }
-
-                return {
-                  title: heading !== "" ? heading : page,
-                  url: toRelativeUrl(hit.source_url),
-                  ...(heading !== "" && { subtext: page }),
-                };
-              }),
-            );
-          })
-          .catch((error) => {
-            console.warn("Skipping Kapa search results:", error);
-          });
-      }
-
-      Promise.all([algoliaSearch, kapaSearch]).finally(() => {
-        setLoading(false);
+      })
+      .catch((error) => {
+        if (active) {
+          console.warn("Search request failed:", error);
+          setError(true);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
       });
-    }
-  }, [query, siteConfig]);
+
+    // A slower response for an earlier query must not replace newer results.
+    return () => {
+      active = false;
+    };
+  }, [query]);
 
   return (
     <div className="flex flex-col overflow-hidden gap-3 grow">
@@ -140,7 +108,12 @@ export default function Results({ query }: ResultsProps) {
           colorScheme: "light",
         }}
       >
-        <ResultList results={combinedResults} />
+        <ResultList results={results} />
+        {error && (
+          <p role="status" className="px-2 text-neutral-n9">
+            Search is unavailable. Try another search or use Ask AI above.
+          </p>
+        )}
         {loading && (
           <div className="flex justify-center items-center">
             <DotsHorizontalIcon className="w-8 h-8 text-neutral-n8 animate-pulse" />
@@ -158,7 +131,7 @@ function toRelativeUrl(url: string): string {
       return parsed.pathname + parsed.search + parsed.hash;
     }
   } catch {
-    // invalid URL — fall through
+    // Relative links already point to the current deployment.
   }
   return url;
 }

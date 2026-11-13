@@ -11,9 +11,7 @@
         "docs/deployment-api/**",
         "docs/public-deployment-api/**",
         ".openapi-filtered/**"
-      ],
-      // Baked into the build by docusaurus.config.ts customFields.
-      "env": ["KAPA_AI_PROJECT", "KAPA_AI_KEY"]
+      ]
     }
   }
 }

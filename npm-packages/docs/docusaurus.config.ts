@@ -48,11 +48,6 @@ const config: Config = {
     defaultLocale: "en",
     locales: ["en"],
   },
-  customFields: {
-    // Make these environment variables available to the docs site.
-    KAPA_AI_PROJECT: process.env.KAPA_AI_PROJECT,
-    KAPA_AI_KEY: process.env.KAPA_AI_KEY,
-  },
   themeConfig: {
     colorMode: {
       respectPrefersColorScheme: true,
