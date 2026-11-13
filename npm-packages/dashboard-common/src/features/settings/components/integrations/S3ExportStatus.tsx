@@ -95,8 +95,8 @@ function S3ExportDetails({ existing }: { existing: S3Export }) {
         <SyncProgress status={status} />
       ) : needsRoleArn(existing) ? (
         <p className="font-medium">
-          Waiting for the role ARN. Edit the export to launch the CloudFormation
-          stack and paste it.
+          Waiting for AWS access. Configure the export to finish Connect AWS and
+          enter your AWS account ID.
         </p>
       ) : isStarting(existing) ? (
         <div className="flex items-center gap-1.5">
