@@ -2,6 +2,9 @@
   "words": [
     "oxlint",
     "oxlintrc",
+    "jsonencode",
+    "timestamptz",
+    "workpools",
     "agentic",
     "airbyte",
     "Airbyte",

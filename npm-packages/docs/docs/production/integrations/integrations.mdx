@@ -7,13 +7,15 @@ sidebar_position: 1
 import { ComponentCardList } from "@site/src/components/ComponentCard";
 
 Convex integrates with a variety of supported third party tools for log
-streaming and exception reporting.
+streaming, exception reporting, and exporting your data.
 
 - [Log Streams](/production/integrations/log-streams) enable streaming of log
   events from your Convex deployment to supported destinations, such as Axiom,
   Datadog, PostHog, or a custom webhook.
 - [Exception Reporting](/production/integrations/exception-reporting) gives
   visibility into errors in your Convex function executions.
+- [S3 Export](/production/integrations/s3-export) (beta) continuously streams
+  changes to your tables into Apache Iceberg tables in your own S3 bucket.
 
 ## Configuring an Integration
 
@@ -33,8 +35,8 @@ the card and follow the setup directions.
 
 To remove an integration and stop further events from being piped out to the
 configured destination, select the menu icon in the upper-right corner of a
-configured panel and select "Delete integration". After confirming, the
-integration will stop running within a few seconds.
+configured panel and select "Delete". After confirming, the integration will
+stop running within a few seconds.
 
 ## Feedback
 
@@ -43,9 +45,8 @@ Please reach out with any questions, comments, or suggestions
 
 ## Integration Components
 
-Beyond integrations for logs and exceptions,
-[Convex Components](/components/overview) make it easier to work with third
-party services. See the full list of components on the
+Beyond these integrations, [Convex Components](/components/overview) make it
+easier to work with third party services. See the full list of components on the
 [Convex Components Directory](https://convex.dev/components).
 
 <ComponentCardList

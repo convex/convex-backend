@@ -1160,19 +1160,6 @@ export const screenshots = [
     }
   },
   {
-    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Configure S 3 Export",
-    "light": {
-      "filename": "pages_project_deployment_settings_integrations_configure_s_3_export_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_project_deployment_settings_integrations_configure_s_3_export_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
     "storyTitle": "docs/pages/project/deployment/settings/Integrations#Custom Audit Topic",
     "light": {
       "filename": "pages_project_deployment_settings_integrations_custom_audit_topic_light.webp",
@@ -1222,6 +1209,71 @@ export const screenshots = [
       "filename": "pages_project_review_default_environment_variable_changes_dark.webp",
       "width": 2200,
       "height": 842
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Configure S3 Export",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s3_export_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s3_export_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Configure S3 Export Connect AWS",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s3_export_connect_aws_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s3_export_connect_aws_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Configure S3 Export Terraform",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s3_export_terraform_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s3_export_terraform_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Configure S3 Export Sync Settings",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s3_export_sync_settings_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_configure_s3_export_sync_settings_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#S3 Export Active",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_s3_export_active_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_s3_export_active_dark.webp",
+      "width": 2048,
+      "height": 1400
     }
   }
 ] as const;
