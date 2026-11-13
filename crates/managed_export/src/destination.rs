@@ -35,6 +35,10 @@ use aws_sdk_s3::{
     primitives::ByteStream,
 };
 use errors::ErrorMetadata;
+use fastrace::{
+    future::FutureExt as _,
+    Span,
+};
 use iceberg::spec::{
     PrimitiveType,
     Schema,
@@ -227,6 +231,7 @@ impl ExportStore {
     /// Returns the state and its ETag, or `None` when no page has committed.
     /// The customer can write this object, so only bytes `encryptor` opens
     /// get parsed.
+    #[fastrace::trace]
     pub async fn read(&self, encryptor: &RandomEncryptor) -> Result<Option<(ExportState, String)>> {
         let output = match self
             .s3
@@ -251,6 +256,7 @@ impl ExportStore {
     /// Replaces the state only if it still has `etag`, or creates it only if
     /// it does not exist when `etag` is `None`. Another writer's commit fails
     /// this with a conflict error.
+    #[fastrace::trace]
     pub async fn commit(
         &self,
         state: &ExportState,
@@ -291,6 +297,7 @@ impl ExportStore {
     /// database is left alone. Requires one writer per
     /// database: a table already at this export's page or later is left
     /// alone, so a slow mirror cannot move Glue backward.
+    #[fastrace::trace]
     pub async fn publish(&self, state: &ExportState) -> Result<()> {
         self.ensure_database().await?;
         let mut published = BTreeMap::new();
@@ -333,6 +340,7 @@ impl ExportStore {
                         state,
                     )?)
                     .send()
+                    .in_span(Span::enter_with_local_parent("glue::create_table"))
                     .await
                     .map_err(|e| aws_error(e, "create a Glue table"))?;
                 continue;
@@ -374,6 +382,7 @@ impl ExportStore {
             }
             update
                 .send()
+                .in_span(Span::enter_with_local_parent("glue::update_table"))
                 .await
                 .map_err(|e| aws_error(e, "update a Glue table"))?;
         }
@@ -395,6 +404,7 @@ impl ExportStore {
     /// The Glue columns for the table whose current metadata file is at
     /// `metadata_location`. Athena reads the Iceberg schema itself, but the
     /// Glue console, crawlers and Lake Formation show the Glue columns.
+    #[fastrace::trace]
     async fn read_glue_columns(&self, metadata_location: &str) -> Result<Vec<Column>> {
         let key = metadata_location
             .strip_prefix(&format!("s3://{}/", self.bucket))
@@ -415,6 +425,7 @@ impl ExportStore {
         glue_columns(metadata.current_schema())
     }
 
+    #[fastrace::trace]
     async fn ensure_database(&self) -> Result<()> {
         let result = self
             .glue

@@ -287,6 +287,7 @@ fn target<'a>(schema: &'a Schema, name: &str, value: &ConvexValue) -> Result<Tar
 
 /// Adds the columns `changes` need to `table` and returns the table that has
 /// them.
+#[fastrace::trace]
 pub(crate) async fn add_columns(
     catalog: &dyn Catalog,
     table: &Table,
