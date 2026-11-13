@@ -44,6 +44,7 @@ use futures::{
 use iceberg::spec::{
     PrimitiveType,
     Schema,
+    SchemaRef,
     TableMetadata,
     Type,
 };
@@ -299,8 +300,17 @@ impl ExportStore {
     /// database is left alone. Requires one writer per
     /// database: a table already at this export's page or later is left
     /// alone, so a slow mirror cannot move Glue backward.
+    ///
+    /// `schemas` holds the schemas of the tables this page's writer changed,
+    /// by metadata file. It is empty for the mirror that finishes a crashed
+    /// page, which runs before the writer exists; a table absent from it has
+    /// its metadata file read from S3.
     #[fastrace::trace]
-    pub async fn publish(&self, state: &ExportState) -> Result<()> {
+    pub async fn publish(
+        &self,
+        state: &ExportState,
+        schemas: &HashMap<String, SchemaRef>,
+    ) -> Result<()> {
         self.ensure_database().await?;
         let mut published = BTreeMap::new();
         let mut pages = self
@@ -363,7 +373,9 @@ impl ExportStore {
         }
         // Each write touches one Glue table, so the writes are independent.
         stream::iter(writes)
-            .map(|(name, location, current)| self.write_table(state, name, location, current))
+            .map(|(name, location, current)| {
+                self.write_table(state, schemas, name, location, current)
+            })
             .buffer_unordered(*S3_EXPORT_GLUE_CONCURRENCY)
             .try_collect::<()>()
             .await?;
@@ -388,11 +400,15 @@ impl ExportStore {
     async fn write_table(
         &self,
         state: &ExportState,
+        schemas: &HashMap<String, SchemaRef>,
         name: String,
         location: String,
         current: Option<(Option<String>, Option<String>)>,
     ) -> Result<()> {
-        let columns = self.read_glue_columns(&location).await?;
+        let columns = match schemas.get(&location) {
+            Some(schema) => glue_columns(schema)?,
+            None => self.read_glue_columns(&location).await?,
+        };
         let Some((previous, version_id)) = current else {
             self.glue
                 .create_table()

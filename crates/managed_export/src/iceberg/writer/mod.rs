@@ -32,6 +32,7 @@ use iceberg::{
         MemoryCatalogBuilder,
         MEMORY_CATALOG_WAREHOUSE,
     },
+    spec::SchemaRef,
     table::Table,
     transaction::{
         ApplyTransactionAction,
@@ -251,6 +252,18 @@ impl IcebergChangeWriter {
 
     pub fn bytes_written(&self) -> u64 {
         self.bytes_written
+    }
+
+    /// The schema of each table this writer holds, by its current metadata
+    /// file. The Glue mirror builds a table's columns from it.
+    pub fn schemas(&self) -> HashMap<String, SchemaRef> {
+        self.tables
+            .values()
+            .filter_map(|table| {
+                let location = table.metadata_location()?.to_owned();
+                Some((location, table.metadata().current_schema().clone()))
+            })
+            .collect()
     }
 
     /// A tablet keeps its first name for the life of the export, even if the
