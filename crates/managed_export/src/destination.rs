@@ -34,10 +34,12 @@ use aws_sdk_s3::{
     operation::get_object::GetObjectOutput,
     primitives::ByteStream,
 };
+use common::knobs::S3_EXPORT_GLUE_CONCURRENCY;
 use errors::ErrorMetadata;
-use fastrace::{
-    future::FutureExt as _,
-    Span,
+use futures::{
+    stream,
+    StreamExt,
+    TryStreamExt,
 };
 use iceberg::spec::{
     PrimitiveType,
@@ -324,25 +326,13 @@ impl ExportStore {
                 )
             );
         }
+        // Every table is checked before any write, so a foreign table stops
+        // the mirror with Glue untouched.
+        let mut writes = Vec::new();
         for (name, table) in &state.tables {
             let location = &table.metadata;
             let Some(current) = published.remove(name) else {
-                let columns = self.read_glue_columns(location).await?;
-                self.glue
-                    .create_table()
-                    .database_name(&self.database)
-                    .table_input(table_input(
-                        name,
-                        location,
-                        None,
-                        columns,
-                        &self.export_id,
-                        state,
-                    )?)
-                    .send()
-                    .in_span(Span::enter_with_local_parent("glue::create_table"))
-                    .await
-                    .map_err(|e| aws_error(e, "create a Glue table"))?;
+                writes.push((name.clone(), location.clone(), None));
                 continue;
             };
             let parameters = current.parameters.unwrap_or_default();
@@ -358,34 +348,25 @@ impl ExportStore {
                     ),
                 )
             );
-            let previous = parameters.get("metadata_location").map(String::as_str);
+            let previous = parameters.get("metadata_location").cloned();
             // Most pages change few tables.
-            if previous == Some(location) || state.published(&self.export_id, &parameters) {
+            if previous.as_deref() == Some(location.as_str())
+                || state.published(&self.export_id, &parameters)
+            {
                 continue;
             }
-            let columns = self.read_glue_columns(location).await?;
-            let mut update = self
-                .glue
-                .update_table()
-                .database_name(&self.database)
-                .table_input(table_input(
-                    name,
-                    location,
-                    previous,
-                    columns,
-                    &self.export_id,
-                    state,
-                )?)
-                .skip_archive(true);
-            if let Some(version_id) = current.version_id {
-                update = update.version_id(version_id);
-            }
-            update
-                .send()
-                .in_span(Span::enter_with_local_parent("glue::update_table"))
-                .await
-                .map_err(|e| aws_error(e, "update a Glue table"))?;
+            writes.push((
+                name.clone(),
+                location.clone(),
+                Some((previous, current.version_id)),
+            ));
         }
+        // Each write touches one Glue table, so the writes are independent.
+        stream::iter(writes)
+            .map(|(name, location, current)| self.write_table(state, name, location, current))
+            .buffer_unordered(*S3_EXPORT_GLUE_CONCURRENCY)
+            .try_collect::<()>()
+            .await?;
         for (name, table) in published {
             if !state.is_stale(&self.export_id, table.parameters()) {
                 continue;
@@ -398,6 +379,57 @@ impl ExportStore {
                 .await
                 .map_err(|e| aws_error(e, "drop a Glue table"))?;
         }
+        Ok(())
+    }
+
+    /// Creates `name` in Glue at `location`, or updates it when `current`
+    /// holds its previous metadata location and Glue version.
+    #[fastrace::trace]
+    async fn write_table(
+        &self,
+        state: &ExportState,
+        name: String,
+        location: String,
+        current: Option<(Option<String>, Option<String>)>,
+    ) -> Result<()> {
+        let columns = self.read_glue_columns(&location).await?;
+        let Some((previous, version_id)) = current else {
+            self.glue
+                .create_table()
+                .database_name(&self.database)
+                .table_input(table_input(
+                    &name,
+                    &location,
+                    None,
+                    columns,
+                    &self.export_id,
+                    state,
+                )?)
+                .send()
+                .await
+                .map_err(|e| aws_error(e, "create a Glue table"))?;
+            return Ok(());
+        };
+        let mut update = self
+            .glue
+            .update_table()
+            .database_name(&self.database)
+            .table_input(table_input(
+                &name,
+                &location,
+                previous.as_deref(),
+                columns,
+                &self.export_id,
+                state,
+            )?)
+            .skip_archive(true);
+        if let Some(version_id) = version_id {
+            update = update.version_id(version_id);
+        }
+        update
+            .send()
+            .await
+            .map_err(|e| aws_error(e, "update a Glue table"))?;
         Ok(())
     }
 

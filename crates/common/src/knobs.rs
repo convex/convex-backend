@@ -2291,6 +2291,10 @@ pub static MAX_LOG_LINES_NODE_ACTIONS: LazyLock<usize> =
 pub static MAX_LOG_LINES_DATABASE_UDFS: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_LOG_LINES_DATABASE_UDFS", 256).max(1));
 
+/// Number of parallel Glue table writes in one S3 export page.
+pub static S3_EXPORT_GLUE_CONCURRENCY: LazyLock<usize> =
+    LazyLock::new(|| env_config("S3_EXPORT_GLUE_CONCURRENCY", 8).max(1));
+
 /// Snapshots an S3 export table keeps. Each page commits one snapshot per
 /// changed table, and each commit rewrites the whole snapshot list, so the
 /// list is bounded. Readers need only the current snapshot, which holds every
