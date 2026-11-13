@@ -188,10 +188,6 @@ export function getIncludedUsage(
   return hasConsumedUnits && Number.isFinite(total) ? total : undefined;
 }
 
-// Sums a metric's usage per rate, which is per dimension the price varies by:
-// global, region, or deployment class and region. Rates are keyed by identity,
-// so lookups must use rates from the same `price`. Usage in a dimension without
-// a rate is reported in `missingDimensions` instead.
 function usageByRate(
   summary: UsageSummaryRow[],
   metric: Metric,
@@ -233,6 +229,34 @@ function usageByRate(
   return { usage, missingDimensions };
 }
 
+// The included allowance is shared by the whole team and the ledger records
+// how much of it each rate consumed, but not which project's usage consumed it.
+// Filtered usage gets the share of each rate's consumption that it makes up of
+// the team's usage at that rate.
+function rateShares(
+  summary: UsageSummaryRow[],
+  teamSummary: UsageSummaryRow[],
+  metric: Metric,
+  price: MetricPrice | undefined,
+):
+  | { share: (rate: PriceAmount) => number; missingDimensions: Set<string> }
+  | undefined {
+  const own = usageByRate(summary, metric, price);
+  const team = usageByRate(teamSummary, metric, price);
+  if (own === undefined || team === undefined) return undefined;
+  return {
+    share: (rate) => {
+      const teamQuantity = team.usage.get(rate) ?? 0;
+      // The two summaries come from separate queries, so cap the share in
+      // case they were read at different times.
+      return teamQuantity > 0
+        ? Math.min((own.usage.get(rate) ?? 0) / teamQuantity, 1)
+        : 0;
+    },
+    missingDimensions: own.missingDimensions,
+  };
+}
+
 // Gauge metrics bill monthly on a snapshot rather than on accumulated usage, so
 // their spend is a monthly estimate from the most recent snapshot.
 export function isGaugeMetric(sectionMetric: string): boolean {
@@ -244,11 +268,13 @@ export function isGaugeMetric(sectionMetric: string): boolean {
   );
 }
 
+// With `share`, each rate's spend and included amount are scaled by it.
 function metricSpend(
   summary: UsageSummaryRow[],
   metric: Metric,
   price: MetricPrice | undefined,
   estimateMonthly: boolean,
+  share: (rate: PriceAmount) => number = () => 1,
 ): UsageSpend | undefined {
   let gross = 0;
   let estimatedUnits = 0;
@@ -270,7 +296,8 @@ function metricSpend(
     }
     // consumedUnits is already post-discount application, so multiply by the
     // undiscounted rate here.
-    coveredSpend += amount.consumedUnits * Number(amount.amount);
+    coveredSpend +=
+      amount.consumedUnits * Number(amount.amount) * share(amount);
   }
   const byRate = usageByRate(summary, metric, price);
   if (byRate === undefined) return undefined;
@@ -279,7 +306,8 @@ function metricSpend(
     const rate = discountedRate(amount);
     if (rate === undefined) return undefined;
     const roundedQuantity = Math.ceil(quantity);
-    gross += roundedQuantity * rate;
+    gross += roundedQuantity * rate * share(amount);
+    // The allowance applies to the team's total, so units aren't scaled.
     estimatedUnits += roundedQuantity;
   }
   if (estimateMonthly) {
@@ -303,6 +331,47 @@ function metricSpend(
     : undefined;
 }
 
+// Filtered usage can't be priced on its own because the included allowance is
+// shared by the whole team. Its spend is the team's spend with each rate scaled
+// by the filtered usage's part of the team's usage at that rate, so each rate's
+// rounding and included consumption stay with the usage that incurred them.
+function metricSpendShare(
+  summary: UsageSummaryRow[],
+  teamSummary: UsageSummaryRow[],
+  metric: Metric,
+  price: MetricPrice | undefined,
+  estimateMonthly: boolean,
+): UsageSpend | undefined {
+  const shares = rateShares(summary, teamSummary, metric, price);
+  if (shares === undefined) return undefined;
+  const teamSpend = metricSpend(
+    teamSummary,
+    metric,
+    price,
+    estimateMonthly,
+    shares.share,
+  );
+  if (teamSpend === undefined) return undefined;
+  return {
+    amount: teamSpend.amount,
+    includedAmount: teamSpend.includedAmount,
+    missingDimensions: mergeMissingDimensions(
+      { missingDimensions: [...shares.missingDimensions] },
+      teamSpend,
+    ),
+  };
+}
+
+// Usage the team can't price makes the team's spend, and so the share,
+// incomplete even when the filtered usage has none of it.
+function mergeMissingDimensions(
+  ...spends: Pick<UsageSpend, "missingDimensions">[]
+): string[] {
+  return [
+    ...new Set(spends.flatMap(({ missingDimensions }) => missingDimensions)),
+  ].sort();
+}
+
 // Whether any metric in the periods draws on an included allowance. Without
 // one, filtered usage is priced directly and needs no team-wide usage.
 export function hasIncludedUsage(periods: PricesPeriod[]): boolean {
@@ -320,10 +389,13 @@ export function hasIncludedUsage(periods: PricesPeriod[]): boolean {
   );
 }
 
+// With `teamSummary`, `summary` is filtered usage and its spend is a share of
+// the team's spend.
 export function getUsageSpend(
   summary: UsageSummaryRow[] | undefined,
   sectionMetric: string,
   pricesPeriod: PricesPeriod | undefined,
+  teamSummary?: UsageSummaryRow[],
 ): UsageSpend | undefined {
   if (!summary || !pricesPeriod) return undefined;
   if (!Object.hasOwn(sections, sectionMetric)) {
@@ -342,12 +414,11 @@ export function getUsageSpend(
   let includedAmount = 0;
   const missingDimensions = new Set<string>();
   for (const metric of metrics) {
-    const spend = metricSpend(
-      summary,
-      metric,
-      pricesPeriod.metrics[metric.name],
-      isGaugeMetric(sectionMetric),
-    );
+    const price = pricesPeriod.metrics[metric.name];
+    const estimateMonthly = isGaugeMetric(sectionMetric);
+    const spend = teamSummary
+      ? metricSpendShare(summary, teamSummary, metric, price, estimateMonthly)
+      : metricSpend(summary, metric, price, estimateMonthly);
     if (spend === undefined) return undefined;
     total += spend.amount;
     includedAmount += spend.includedAmount;
@@ -381,8 +452,8 @@ export function getMultiPeriodUsageSpend(
   let total = 0;
   let includedAmount = 0;
   const missingDimensions = new Set<string>();
-  for (const { period, summary } of pricedSummaries) {
-    const spend = getUsageSpend(summary, sectionMetric, period);
+  for (const { period, summary, teamSummary } of pricedSummaries) {
+    const spend = getUsageSpend(summary, sectionMetric, period, teamSummary);
     if (spend === undefined) return undefined;
     total += spend.amount;
     includedAmount += spend.includedAmount;

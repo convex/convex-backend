@@ -24,6 +24,7 @@ import {
   getMultiPeriodUsageSpend,
   getUsageSpend,
   getIncludedUsage,
+  hasIncludedUsage,
   isGaugeMetric,
   formatSpend,
 } from "./lib/usageSpend";
@@ -284,6 +285,10 @@ export function BusinessPlanSummary({
       section.metric !== "auditLogBandwidth" ||
       entitlements?.customAuditLogsInLogStreamsConfigEnabled === true,
   );
+  const sharesTeamSpend =
+    isFiltered &&
+    pricing.status === "ready" &&
+    hasIncludedUsage(pricing.periods.map(({ period }) => period));
   const historicalIncludedUsage =
     !isCurrentBillingPeriod && !isFiltered && pricing.status === "ready"
       ? Object.fromEntries(
@@ -427,7 +432,11 @@ export function BusinessPlanSummary({
             <div className="flex items-center gap-1">
               Spend
               <Tooltip
-                tip="Usage is rounded up to the nearest whole unit before calculating spend. Storage and deployment metrics show estimated monthly prices based on the most recent usage in the selected period."
+                tip={
+                  sharesTeamSpend
+                    ? "Included usage is shared across the team, so filtered usage is credited with a share of it in proportion to its usage in each deployment class and region. Storage metrics show estimated monthly prices based on the most recent usage in the selected period."
+                    : "Usage is rounded up to the nearest whole unit before calculating spend. Storage and deployment metrics show estimated monthly prices based on the most recent usage in the selected period."
+                }
                 side="right"
               >
                 <QuestionMarkCircledIcon />
@@ -491,17 +500,24 @@ export function BusinessPlanSummary({
             const unavailableWhenFiltered =
               isFiltered && section.metric === "deploymentCount";
             const isGauge = isGaugeMetric(section.metric);
+            // Unfiltered gauges price the whole-range summary at the latest
+            // prices. Filtered gauges price the latest period's usage instead,
+            // which comes with the team-wide usage their share is taken of.
+            const usesPricedUsage =
+              section.metric !== "aiGatewayCost" && (!isGauge || isFiltered);
             const pricedSummaryFailed =
-              !isGauge &&
-              section.metric !== "aiGatewayCost" &&
-              pricedUsage.status === "error";
+              usesPricedUsage && pricedUsage.status === "error";
             const pricedSummaryPending =
-              !isGauge &&
-              section.metric !== "aiGatewayCost" &&
-              pricedUsage.status === "loading";
+              usesPricedUsage && pricedUsage.status === "loading";
+            const latestPricedUsage =
+              pricedUsage.status === "ready"
+                ? pricedUsage.summaries.at(-1)
+                : undefined;
 
             const spend =
-              showSpend && pricing.status === "ready" && !isFiltered
+              showSpend &&
+              pricing.status === "ready" &&
+              !unavailableWhenFiltered
                 ? section.metric === "aiGatewayCost"
                   ? aiCostFailed || aiGatewayCost === undefined
                     ? undefined
@@ -510,18 +526,25 @@ export function BusinessPlanSummary({
                         includedAmount: 0,
                         missingDimensions: [],
                       }
-                  : isGauge
+                  : isGauge && !isFiltered
                     ? getUsageSpend(
                         summary,
                         section.metric,
                         pricing.periods.at(-1)?.period,
                       )
-                    : pricedUsage.status === "ready"
-                      ? getMultiPeriodUsageSpend(
-                          pricedUsage.summaries,
+                    : isGauge
+                      ? getUsageSpend(
+                          latestPricedUsage?.summary,
                           section.metric,
+                          latestPricedUsage?.period,
+                          latestPricedUsage?.teamSummary,
                         )
-                      : undefined
+                      : pricedUsage.status === "ready"
+                        ? getMultiPeriodUsageSpend(
+                            pricedUsage.summaries,
+                            section.metric,
+                          )
+                        : undefined
                 : undefined;
 
             return (
@@ -629,7 +652,7 @@ export function BusinessPlanSummary({
                 )}
                 {showSpend && (
                   <div className="animate-fadeInFromLoading tabular-nums">
-                    {isFiltered || section.noOnDemand ? (
+                    {unavailableWhenFiltered || section.noOnDemand ? (
                       <EmptyValue />
                     ) : aiCostFailed || pricedSummaryFailed ? (
                       <span className="text-content-secondary">
