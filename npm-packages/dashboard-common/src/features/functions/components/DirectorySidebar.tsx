@@ -7,6 +7,23 @@ import {
 import { FileTree } from "@common/features/functions/components/FileTree";
 import { NentSwitcher } from "@common/elements/NentSwitcher";
 import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
+import type { FileOrFolder } from "@common/lib/functions/types";
+
+// Opening every root-level entry mounts a row per function of each root file,
+// which deployments with a flat directory of thousands of functions can't
+// render. Above this many rows, root entries start collapsed.
+export const MAX_AUTO_EXPANDED_ROWS = 200;
+
+// Rows the sidebar mounts when root entries start open: each open folder shows
+// its direct children, and each open file shows its functions.
+function expandedRowCount(rootEntries: FileOrFolder[]) {
+  let rows = 0;
+  for (const entry of rootEntries) {
+    rows +=
+      1 + (entry.type === "folder" ? entry.children : entry.functions).length;
+  }
+  return rows;
+}
 
 export function DirectorySidebar({
   onChangeFunction,
@@ -50,7 +67,7 @@ export function DirectorySidebar({
         <FileTree
           tree={rootEntries}
           onChangeFunction={onChangeFunction}
-          defaultOpen
+          defaultOpen={expandedRowCount(rootEntries) <= MAX_AUTO_EXPANDED_ROWS}
           nestingLevel={0}
         />
       </div>
