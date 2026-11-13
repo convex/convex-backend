@@ -12,7 +12,13 @@ use anyhow::{
     Context,
     Result,
 };
+use common::knobs::S3_EXPORT_APPEND_CONCURRENCY;
 use errors::ErrorMetadata;
+use futures::{
+    stream,
+    StreamExt,
+    TryStreamExt,
+};
 use iceberg::{
     io::{
         S3_ACCESS_KEY_ID,
@@ -461,26 +467,35 @@ impl IcebergChangeWriter {
         for (source, change) in changes {
             by_table.entry(source).or_default().push(change);
         }
-        for (source, changes) in by_table {
-            if !self.tables.contains_key(&source) {
-                let name = self.name(&source);
-                match self.load_existing(&source, &name).await? {
+        for source in by_table.keys() {
+            if !self.tables.contains_key(source) {
+                let name = self.name(source);
+                match self.load_existing(source, &name).await? {
                     Some(table) => {
                         self.tables.insert(source.clone(), table);
                     },
                     None => {
-                        self.create(&source, seeds.remove(&source).unwrap_or_default())
+                        self.create(source, seeds.remove(source).unwrap_or_default())
                             .await?;
                     },
                 }
             }
-            let (table, bytes_written) = append(
-                &*self.catalog,
-                &self.tables[&source],
-                &changes,
-                &self.snapshot_properties,
-            )
+        }
+        // Each table commits on its own, so appends to different tables are
+        // independent. A page that fails partway is retried whole, and readers
+        // dedupe the rows a retry repeats.
+        let (catalog, tables, snapshot_properties) =
+            (&*self.catalog, &self.tables, &self.snapshot_properties);
+        let appended: Vec<(SourceTable, Table, u64)> = stream::iter(by_table)
+            .map(|(source, changes)| async move {
+                let (table, bytes_written) =
+                    append(catalog, &tables[&source], &changes, snapshot_properties).await?;
+                anyhow::Ok((source, table, bytes_written))
+            })
+            .buffer_unordered(*S3_EXPORT_APPEND_CONCURRENCY)
+            .try_collect()
             .await?;
+        for (source, table, bytes_written) in appended {
             self.bytes_written += bytes_written;
             self.record(&table)?;
             self.tables.insert(source, table);

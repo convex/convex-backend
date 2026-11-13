@@ -2297,3 +2297,7 @@ pub static MAX_LOG_LINES_DATABASE_UDFS: LazyLock<usize> =
 /// data file; `_ts` serves incremental reads.
 pub static S3_EXPORT_RETAINED_SNAPSHOTS: LazyLock<usize> =
     LazyLock::new(|| env_config("S3_EXPORT_RETAINED_SNAPSHOTS", 10).max(1));
+
+/// Number of parallel appends to S3 in one S3 export page.
+pub static S3_EXPORT_APPEND_CONCURRENCY: LazyLock<usize> =
+    LazyLock::new(|| env_config("S3_EXPORT_APPEND_CONCURRENCY", 8).max(1));
