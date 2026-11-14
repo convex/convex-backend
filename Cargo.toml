@@ -71,7 +71,6 @@ data-url = "0.3.1"
 database = { path = "crates/database" }
 db_connection = { path = "crates/db_connection" }
 deno_core = "0.402.0"
-deno_core_icudata = "0.77.0"
 derive_more = { version = "2", features = [ "full" ] }
 divan = "0.1.14"
 dotenvy = "0.15.7"
@@ -109,6 +108,7 @@ http_client = { path = "crates/http_client" }
 humansize = { version = "2.1.3", features = [ "impl_style" ] }
 hyper = "1.10"
 hyper-util = { version = "0.1.5", features = [ "server-graceful", "tokio" ] }
+icudtl = "0.77.1"
 imbl = "7.0.0"
 imbl_slab = { path = "crates/imbl_slab" }
 indexing = { path = "crates/indexing" }

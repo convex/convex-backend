@@ -3640,12 +3640,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deno_core_icudata"
-version = "0.77.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9efff8990a82c1ae664292507e1a5c6749ddd2312898cdf9cd7cb1fd4bc64c6"
-
-[[package]]
 name = "deno_error"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5799,6 +5793,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "icudtl"
+version = "0.77.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca4e9768b93b4f7ff398ace3394f5300814a4aca898d6802bc0499a871eab5ca"
+
+[[package]]
 name = "id-arena"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6089,7 +6089,6 @@ dependencies = [
  "convex_sync_types",
  "database",
  "deno_core",
- "deno_core_icudata",
  "derive_more",
  "divan",
  "encoding_rs",
@@ -6100,6 +6099,7 @@ dependencies = [
  "headers",
  "http 1.5.0",
  "humansize",
+ "icudtl",
  "indexmap 2.14.0",
  "itertools 0.14.0",
  "js_build",

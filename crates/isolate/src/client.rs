@@ -463,8 +463,9 @@ pub fn initialize_v8() {
     V8_INIT.call_once(|| {
         let _s = static_span!("initialize_v8");
 
-        // `deno_core_icudata` internally loads this with proper 16-byte alignment.
-        assert!(v8::icu::set_common_data_77(deno_core_icudata::ICU_DATA).is_ok());
+        // `icudtl` is ICU 77 data with current IANA tzdata, 16-byte aligned as
+        // V8 requires. Its major/minor version must match V8's ICU major.
+        assert!(v8::icu::set_common_data_77(icudtl::ICU_DATA).is_ok());
 
         // Calls into `v8::platform::v8__Platform__NewUnprotectedDefaultPlatform`
         // Can configure with...
