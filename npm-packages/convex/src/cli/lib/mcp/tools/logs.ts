@@ -88,6 +88,7 @@ export const LogsTool: ConvexTool<typeof inputSchema, typeof outputSchema> = {
       ctx,
       deploymentSelection,
     );
+    await ctx.checkResolvedDeploymentReadOnly(credentials);
 
     const fetch = deploymentFetch(ctx, {
       deploymentUrl: credentials.url,
