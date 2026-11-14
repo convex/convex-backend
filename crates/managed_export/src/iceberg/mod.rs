@@ -4,7 +4,6 @@ use anyhow::Result;
 use common::knobs::S3_EXPORT_RETAINED_SNAPSHOTS;
 use fastrace::{
     future::FutureExt as _,
-    local::LocalSpan,
     Span,
 };
 use iceberg::{
@@ -63,10 +62,7 @@ pub(crate) async fn append(
     snapshot_properties: &HashMap<String, String>,
 ) -> Result<(Table, u64)> {
     let table = &columns::add_columns(catalog, table, changes).await?;
-    let batch = {
-        let _span = LocalSpan::enter_with_local_parent("append::encode");
-        columns::batch(table.metadata().current_schema(), changes)?
-    };
+    let batch = columns::batch(table.metadata().current_schema(), changes)?;
     let schema = table.metadata().current_schema().clone();
     let mut writer =
         DataFileWriterBuilder::new(RollingFileWriterBuilder::new_with_default_file_size(
