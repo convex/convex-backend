@@ -689,12 +689,19 @@ impl BaseConvexClient {
                     self.observe_timestamp(ts);
                 }
                 let request_id = RequestId::new(request_id);
-                self.request_manager.update_request(
+                let completed = self.request_manager.update_request(
                     &request_id,
                     RequestType::Mutation,
                     result.into(),
                     ts,
                 )?;
+                // A successful mutation may commit at a timestamp the client
+                // has already seen a transition for, since the server doesn't
+                // order responses before transitions.
+                if !completed {
+                    self.request_manager
+                        .remove_and_notify_completed(self.remote_query_set.version.ts);
+                }
             },
             ServerMessage::AuthError {
                 error_message,
