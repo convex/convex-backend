@@ -2997,7 +2997,8 @@
           "storage_api_bandwidth",
           "ai_gateway_usage",
           "log_stream_egress",
-          "custom_audit"
+          "custom_audit",
+          "s3_export_stats"
         ]
       },
       "MemberId": {

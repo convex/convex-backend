@@ -5,6 +5,7 @@
     "jsonencode",
     "timestamptz",
     "workpools",
+    "snapshotting",
     "agentic",
     "airbyte",
     "Airbyte",

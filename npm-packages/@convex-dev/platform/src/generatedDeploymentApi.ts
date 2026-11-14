@@ -1152,7 +1152,7 @@ export interface components {
             type: "deleting";
         };
         /** @enum {string} */
-        LogTopic: "verification" | "console" | "function_execution" | "exception" | "audit_log" | "scheduler_stats" | "scheduled_job_lag" | "current_storage_usage" | "concurrency_stats" | "storage_api_bandwidth" | "ai_gateway_usage" | "log_stream_egress" | "custom_audit";
+        LogTopic: "verification" | "console" | "function_execution" | "exception" | "audit_log" | "scheduler_stats" | "scheduled_job_lag" | "current_storage_usage" | "concurrency_stats" | "storage_api_bandwidth" | "ai_gateway_usage" | "log_stream_egress" | "custom_audit" | "s3_export_stats";
         /** Format: int64 */
         MemberId: number;
         /**

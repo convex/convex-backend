@@ -200,6 +200,7 @@ export const logTopic = v.union(
   v.literal("ai_gateway_usage"),
   v.literal("log_stream_egress"),
   v.literal("custom_audit"),
+  v.literal("s3_export_stats"),
 );
 
 // The topics a log stream is subscribed to. Absent means subscribed to all

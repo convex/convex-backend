@@ -419,6 +419,10 @@ The integration card on the Integrations tab shows the export's status:
 - **Failed**: Convex can't write to your bucket, or the last ten syncs failed.
   The card shows the reason.
 
+To get alerted when an export fails or falls behind, subscribe a
+[log stream](/production/integrations/log-streams/log-streams.mdx#s3_export_stats-events)
+to the `s3_export_stats` topic.
+
 Common reasons an export fails:
 
 - The CloudFormation stack is still being created, or failed to create.
