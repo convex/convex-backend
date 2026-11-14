@@ -381,24 +381,10 @@ impl IcebergChangeWriter {
 
     /// Loads `name` if the catalog has it. A table under this name written by
     /// another tablet means a stale state, so that is an error.
-    async fn load_existing(&mut self, source: &SourceTable, name: &str) -> Result<Option<Table>> {
-        let unregistered = self.unregistered.remove(name);
-        self.load(source, name, unregistered).await
-    }
-
-    /// [`Self::load_existing`] for a table already taken out of
-    /// `unregistered`, whose metadata file is `unregistered` if it had one.
     #[fastrace::trace]
-    async fn load(
-        &self,
-        source: &SourceTable,
-        name: &str,
-        unregistered: Option<String>,
-    ) -> Result<Option<Table>> {
+    async fn load_existing(&mut self, source: &SourceTable, name: &str) -> Result<Option<Table>> {
+        self.register(name).await?;
         let ident = TableIdent::new(self.namespace.clone(), name.to_owned());
-        if let Some(location) = unregistered {
-            self.catalog.register_table(&ident, location).await?;
-        }
         if !self.catalog.table_exists(&ident).await? {
             return Ok(None);
         }
@@ -494,32 +480,18 @@ impl IcebergChangeWriter {
         for (source, change) in changes {
             by_table.entry(source).or_default().push(change);
         }
-        let mut missing = Vec::new();
         for source in by_table.keys() {
             if !self.tables.contains_key(source) {
                 let name = self.name(source);
-                let unregistered = self.unregistered.remove(&name);
-                missing.push((source.clone(), name, unregistered));
-            }
-        }
-        let this = &*self;
-        let loaded: Vec<(SourceTable, Option<Table>)> = stream::iter(missing)
-            .map(|(source, name, unregistered)| async move {
-                let table = this.load(&source, &name, unregistered).await?;
-                anyhow::Ok((source, table))
-            })
-            .buffer_unordered(*S3_EXPORT_TABLE_CONCURRENCY)
-            .try_collect()
-            .await?;
-        for (source, table) in loaded {
-            match table {
-                Some(table) => {
-                    self.tables.insert(source, table);
-                },
-                None => {
-                    self.create(&source, seeds.remove(&source).unwrap_or_default())
-                        .await?;
-                },
+                match self.load_existing(source, &name).await? {
+                    Some(table) => {
+                        self.tables.insert(source.clone(), table);
+                    },
+                    None => {
+                        self.create(source, seeds.remove(source).unwrap_or_default())
+                            .await?;
+                    },
+                }
             }
         }
         // Each table commits on its own, so appends to different tables are

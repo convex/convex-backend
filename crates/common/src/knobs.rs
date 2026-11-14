@@ -2302,6 +2302,6 @@ pub static S3_EXPORT_GLUE_CONCURRENCY: LazyLock<usize> =
 pub static S3_EXPORT_RETAINED_SNAPSHOTS: LazyLock<usize> =
     LazyLock::new(|| env_config("S3_EXPORT_RETAINED_SNAPSHOTS", 10).max(1));
 
-/// Number of tables one S3 export page loads, then appends to, in parallel.
+/// Number of tables one S3 export page appends to in parallel.
 pub static S3_EXPORT_TABLE_CONCURRENCY: LazyLock<usize> =
     LazyLock::new(|| env_config("S3_EXPORT_TABLE_CONCURRENCY", 8).max(1));
