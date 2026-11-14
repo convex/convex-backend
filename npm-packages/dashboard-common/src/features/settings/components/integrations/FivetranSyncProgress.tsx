@@ -192,7 +192,7 @@ export function SyncProgress({
       )}
       {status.type === "snapshotting" ? (
         <p className="text-xs text-content-secondary">
-          {snapshotDetail(status)}
+          <SnapshotDetail status={status} />
         </p>
       ) : (
         status.totalTables !== undefined &&
@@ -231,7 +231,7 @@ function SnapshotProgressBar({
   );
 }
 
-function snapshotDetail(status: ActiveDataSyncSnapshotting): string {
+function SnapshotDetail({ status }: { status: ActiveDataSyncSnapshotting }) {
   const table = status.currentComponent
     ? `${status.currentComponent}/${status.currentTable}`
     : status.currentTable;
@@ -242,7 +242,37 @@ function snapshotDetail(status: ActiveDataSyncSnapshotting): string {
     status.totalDocuments === 0
       ? `${formatNumber(status.numDocumentsSynced)} documents synced`
       : `${formatNumberCompact(status.numDocumentsSynced)} of ${formatNumberCompact(status.totalDocuments)} documents`;
-  return `${table} · table ${formatNumber(tableIndex)} of ${formatNumber(status.totalTables)} · ${documents}`;
+  const tableProgress =
+    status.totalDocumentsInCurrentTable === 0
+      ? `${formatNumberCompact(status.numDocumentsInCurrentTable)} documents synced`
+      : `${formatNumberCompact(status.numDocumentsInCurrentTable)} of ${formatNumberCompact(status.totalDocumentsInCurrentTable)} documents`;
+  return (
+    <>
+      <Tooltip
+        tip={
+          <div className="flex w-56 flex-col gap-1 p-1 text-left">
+            <ProgressBar
+              fraction={
+                status.totalDocumentsInCurrentTable === 0
+                  ? undefined
+                  : Math.min(
+                      0.99,
+                      status.numDocumentsInCurrentTable /
+                        status.totalDocumentsInCurrentTable,
+                    )
+              }
+              ariaLabel="Table sync progress"
+              className="h-1.5"
+            />
+            <span className="text-content-secondary">{tableProgress}</span>
+          </div>
+        }
+      >
+        <span className="underline decoration-dotted">{table}</span>
+      </Tooltip>
+      {` · table ${formatNumber(tableIndex)} of ${formatNumber(status.totalTables)} · ${documents}`}
+    </>
+  );
 }
 
 /**

@@ -242,7 +242,17 @@ export const FivetranSyncDetailModal: Story = {
   play: async ({ canvasElement }) => {
     const dialog = await openSyncDetails(canvasElement);
     await dialog.findByText("Syncing");
-    await dialog.findByText(/^messages · table 3 of 12/);
+    await dialog.findByText(/· table 3 of 12/);
+    await userEvent.hover(dialog.getByRole("button", { name: "messages" }));
+    await screen.findAllByText("143K of 890K documents");
+    const tableBar = (
+      await screen.findAllByRole("progressbar", {
+        name: "Table sync progress",
+      })
+    )[0];
+    if (Math.round(Number(tableBar.getAttribute("aria-valuenow"))) !== 16) {
+      throw new Error("reported progress for a different table");
+    }
     // An initial snapshot has no consistent timestamp to report yet.
     if (dialog.queryByText(/ ago$/)) {
       throw new Error("timestamped a sync that has no snapshot yet");
@@ -279,6 +289,16 @@ export const FivetranSyncDetailModalWithoutTotals: Story = {
     });
     if (bar.getAttribute("aria-valuenow") !== null) {
       throw new Error("reported a percentage without knowing the total");
+    }
+    await userEvent.hover(dialog.getByRole("button", { name: "messages" }));
+    await screen.findAllByText("143K documents synced");
+    const tableBar = (
+      await screen.findAllByRole("progressbar", {
+        name: "Table sync progress",
+      })
+    )[0];
+    if (tableBar.getAttribute("aria-valuenow") !== null) {
+      throw new Error("reported table progress without knowing the total");
     }
   },
 };
