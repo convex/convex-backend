@@ -75,6 +75,13 @@ export type CollectedBundle = {
   convexVersion: string;
   includeSourcesContent: boolean;
   builds: BuildRecord[];
+  /**
+   * Package names `node.externalPackages` can externalize, with the
+   * project-relative real path of the copy the CLI would externalize, in the
+   * form of `InputAttribution.packageDir`. Absent when the bundling run
+   * didn't record them.
+   */
+  externalizablePackages?: Map<string, string>;
 };
 
 export type AnalyzedInput = {

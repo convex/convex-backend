@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { AnalyzedBuild, ownerLabel } from "./model.js";
+import { AnalyzedBuild, CollectedBundle, ownerLabel } from "./model.js";
 import {
   bold,
   colored,
@@ -175,13 +175,12 @@ const MAX_LISTED_ROWS = 10;
  * Suggestions for shrinking the bundle, largest `savedBytes` first. Every
  * size counts code and source maps, matching the package rankings.
  * `devDependencies` are the names in the project's package.json. With
- * `projectRoot`, external package suggestions give each package's installed
- * size.
+ * `project`, external package suggestions give each package's installed size.
  */
 export function findInsights(
   builds: AnalyzedBuild[],
   devDependencies: ReadonlySet<string> = new Set(),
-  projectRoot?: string,
+  project?: Pick<CollectedBundle, "projectRoot" | "externalizablePackages">,
 ): Insight[] {
   const graphs = new BuildGraphs();
   const found = [
@@ -189,7 +188,7 @@ export function findInsights(
     ...alternateImplementationInsights(builds, graphs),
     ...nodeFileInsights(builds, graphs),
     ...bothRuntimesInsights(builds, graphs),
-    ...externalPackageInsights(builds, projectRoot),
+    ...externalPackageInsights(builds, project, graphs),
     ...devCodeInsights(builds, devDependencies, graphs),
     ...sharedPackageInsights(builds),
   ];
@@ -651,17 +650,38 @@ function bothRuntimesInsights(
 }
 
 /**
- * Large packages only Node bundles include. Marking one external installs it
- * on the server instead of bundling it, which shrinks uploaded code but not
- * the deployment's size, so `savedBytes` is 0.
+ * Large direct dependencies only Node bundles include. Marking one external
+ * installs it on the server instead of bundling it, which shrinks uploaded
+ * code but not the deployment's size, so `savedBytes` is 0.
+ *
+ * Candidates are the package copies `externalizablePackages` records, since
+ * the CLI externalizes only those, and an external package's own imports go
+ * unbundled with it, so each copy is charged for the packages that only it
+ * brings into the build. When the bundle doesn't record them, copies your
+ * code imports count as direct dependencies.
  */
 function externalPackageInsights(
   builds: AnalyzedBuild[],
-  projectRoot: string | undefined,
+  project:
+    | Pick<CollectedBundle, "projectRoot" | "externalizablePackages">
+    | undefined,
+  graphs: BuildGraphs,
 ): Insight[] {
-  const byPackage = new Map<
+  const projectRoot = project?.projectRoot;
+  let declared: Map<string, string> | null = null;
+  if (project?.externalizablePackages) {
+    declared = new Map();
+    for (const [name, dir] of project.externalizablePackages)
+      if (!declared.has(dir)) declared.set(dir, name);
+  }
+  const byDir = new Map<
     string,
-    { builds: Map<string, Sizes>; dirs: Set<string> }
+    {
+      label: string;
+      name: string;
+      builds: Map<string, Sizes>;
+      dependencies: Map<string, Sizes>;
+    }
   >();
   for (const node of builds) {
     if (node.kind !== "node") continue;
@@ -670,48 +690,104 @@ function externalPackageInsights(
         b.kind === "convex" &&
         b.component.definitionPath === node.component.definitionPath,
     );
-    const convexCode = convex ? npmSizes(convex) : new Map<string, Sizes>();
-    const dirs = new Map<string, Set<string>>();
-    for (const o of node.outputs) {
-      for (const i of o.inputs) {
-        if (i.origin !== "npm" || !i.packageDir) continue;
-        const key = ownerLabel(i);
-        dirs.set(key, (dirs.get(key) ?? new Set()).add(i.packageDir));
+    const convexDirs = new Set(
+      (convex?.outputs ?? []).flatMap((o) =>
+        o.inputs.flatMap((i) =>
+          i.origin === "npm" && i.packageDir && i.bytesInOutput > 0
+            ? [i.packageDir]
+            : [],
+        ),
+      ),
+    );
+    const { graph, roots, bytes } = graphs.get(node);
+    const npmInput = (p: string) => {
+      const a = node.attribution.get(p);
+      return a?.origin === "npm" && a.packageDir
+        ? { ...a, packageDir: a.packageDir }
+        : null;
+    };
+    const inputsOf = new Map<string, Set<string>>();
+    const labels = new Map<string, string>();
+    for (const p of graph.keys()) {
+      const a = npmInput(p);
+      if (!a) continue;
+      inputsOf.set(
+        a.packageDir,
+        (inputsOf.get(a.packageDir) ?? new Set()).add(p),
+      );
+      labels.set(a.packageDir, ownerLabel(a));
+    }
+    let candidates = declared;
+    if (!candidates) {
+      candidates = new Map();
+      for (const [from, imports] of graph) {
+        const a = node.attribution.get(from);
+        if (a?.origin === "npm" || a?.origin === "convex") continue;
+        for (const to of imports) {
+          const b = npmInput(to);
+          if (b?.packageName) candidates.set(b.packageDir, b.packageName);
+        }
       }
     }
-    for (const [label, bytes] of npmSizes(node)) {
-      if (bytes.codeBytes === 0 || (convexCode.get(label)?.codeBytes ?? 0) > 0)
-        continue;
-      const entry = byPackage.get(label) ?? {
+    const before = reachable(graph, roots);
+    for (const [dir, name] of candidates) {
+      const removed = inputsOf.get(dir);
+      if (!removed || convexDirs.has(dir)) continue;
+      const own = sumSizes([...removed].map((p) => bytes.get(p) ?? sizes()));
+      if (own.codeBytes === 0) continue;
+      const after = reachable(graph, roots, removed);
+      const dependencies = new Map<string, Sizes>();
+      for (const p of before) {
+        if (after.has(p) || removed.has(p)) continue;
+        const a = npmInput(p);
+        if (!a) continue;
+        const dep = ownerLabel(a);
+        dependencies.set(
+          dep,
+          sumSizes([dependencies.get(dep) ?? sizes(), bytes.get(p) ?? sizes()]),
+        );
+      }
+      const entry = byDir.get(dir) ?? {
+        label: labels.get(dir)!,
+        name,
         builds: new Map(),
-        dirs: new Set(),
+        dependencies: new Map(),
       };
-      entry.builds.set(node.id, bytes);
-      for (const d of dirs.get(label) ?? []) entry.dirs.add(d);
-      byPackage.set(label, entry);
+      entry.builds.set(node.id, sumSizes([own, ...dependencies.values()]));
+      for (const [dep, depBytes] of dependencies)
+        entry.dependencies.set(
+          dep,
+          sumSizes([entry.dependencies.get(dep) ?? sizes(), depBytes]),
+        );
+      byDir.set(dir, entry);
     }
   }
-  return [...byPackage.entries()]
+  return [...byDir.entries()]
     .filter(
       ([, entry]) =>
         sumSizes(entry.builds.values()).bytes >= EXTERNAL_PACKAGE_MIN_BYTES,
     )
-    .map(([label, { builds: byBuild, dirs }]) => {
+    .map(([dir, { label, name, builds: byBuild, dependencies }]) => {
       const bytes = sumSizes(byBuild.values());
       const buildIds = [...byBuild.keys()];
       const installed =
         projectRoot === undefined
           ? 0
-          : [...dirs].reduce(
-              (n, d) => n + directorySize(path.resolve(projectRoot, d)),
-              0,
-            );
+          : directorySize(path.resolve(projectRoot, dir));
+      const bundledDependencies = [...dependencies]
+        .map(([subject, value]) => ({ subject, ...value }))
+        .sort((a, b) => b.bytes - a.bytes);
       return {
         kind: "external-package-candidate" as const,
         level: "info" as const,
         title: `${label} adds ${formatSizes(bytes)} to ${joinAnd(buildIds)}, and only "use node" code uses it`,
         detail: [
-          `Adding ${packageName(label)} to \`node.externalPackages\` in convex.json installs it on the server instead of bundling it.`,
+          `Adding ${name} to \`node.externalPackages\` in convex.json installs it on the server instead of bundling it.`,
+          ...(bundledDependencies.length > 0
+            ? [
+                `Its size includes dependencies that only it brings in: ${listItems(bundledDependencies)}.`,
+              ]
+            : []),
           `That may reduce the size of the code you upload, but may increase your overall bundle size, since the whole installed package counts rather than the code bundling keeps.`,
           ...(installed > 0
             ? [
@@ -728,12 +804,6 @@ function externalPackageInsights(
           .sort((a, b) => b.bytes - a.bytes),
       };
     });
-}
-
-/** `zod` from `zod@3.25.76`, `@scope/pkg` from `@scope/pkg@1.0.0`. */
-function packageName(label: string): string {
-  const at = label.lastIndexOf("@");
-  return at > 0 ? label.slice(0, at) : label;
 }
 
 /** Attributed npm package sizes in a build, by name and version. */

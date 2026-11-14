@@ -12,6 +12,12 @@ export type BundleResult = {
   projectRoot: string;
   includeSourcesContent: boolean;
   builds: Build[];
+  /**
+   * Absolute `node_modules/<name>` path for each package name
+   * `node.externalPackages` can externalize, from the CLI's
+   * `computeExternalPackages`.
+   */
+  externalizablePackages?: Record<string, string>;
 };
 
 export type BuildKind = BuildDebugInfo["kind"];

@@ -18,6 +18,15 @@ export function collectBundle(input: BundleResult): CollectedBundle {
     convexVersion: analyzerConvexVersion,
     includeSourcesContent: input.includeSourcesContent,
     builds: measureBuilds(input.projectRoot, input.builds),
+    ...(input.externalizablePackages && {
+      externalizablePackages: new Map(
+        Object.entries(input.externalizablePackages).map(([name, dir]) => [
+          name,
+          // esbuild follows symlinks, so attributed package dirs are real paths.
+          toPosix(path.relative(input.projectRoot, fs.realpathSync(dir))),
+        ]),
+      ),
+    }),
   };
 }
 
