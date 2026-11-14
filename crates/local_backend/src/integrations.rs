@@ -573,13 +573,16 @@ pub struct CreateS3ExportIntegrationArgs {
     bucket: String,
     /// AWS region the bucket lives in, e.g. `us-east-1`.
     region: String,
-    /// Key prefix within the bucket. Omit to write at the bucket root.
+    /// Folder in the bucket to put the export under. Convex writes to
+    /// `<prefix>/<deployment-name>/data-lake/`, or to
+    /// `<deployment-name>/data-lake/` if you omit it.
     #[serde(default)]
     prefix: Option<String>,
-    /// ARN of a role in the bucket's account that Convex assumes to write.
-    /// Omit it to create the export first: the response carries the
-    /// `roleExternalId` the role's trust policy needs, and the export waits
-    /// until an update supplies the ARN.
+    /// ARN of the IAM role Convex assumes to write. The role must be named
+    /// `ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Omit it to
+    /// create the export first: the response carries the `roleExternalId` the
+    /// role's name and trust policy need, and the export waits until an update
+    /// sets the ARN.
     #[serde(default)]
     role_arn: String,
     /// The components and tables to export. Defaults to everything. Each table
@@ -690,7 +693,7 @@ async fn ensure_integration_does_not_exist(
     {
         return Err(anyhow::anyhow!(ErrorMetadata::conflict(
             "LogStreamAlreadyExists",
-            format!("{integration_type:?} log stream already exists for this deployment",)
+            "This deployment already has this integration. Delete the existing one first."
         ))
         .into());
     }
@@ -1100,11 +1103,11 @@ pub struct S3ExportIntegrationConfig {
     pub bucket: String,
     /// AWS region the bucket lives in.
     pub region: String,
-    /// Key prefix within the bucket.
+    /// Folder in the bucket the export is under, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
-    /// ARN of the role Convex assumes to write. Empty until the admin pastes
-    /// it.
+    /// ARN of the role Convex assumes to write. Empty if it hasn't been set
+    /// yet, and the export doesn't sync while it's empty.
     pub role_arn: String,
     /// Value the role's trust policy must require as `sts:ExternalId`.
     pub role_external_id: String,
@@ -1372,8 +1375,9 @@ pub struct UpdatePostHogErrorTrackingIntegrationArgs {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(as = UpdateS3ExportSinkArgs)]
 pub struct UpdateS3ExportIntegrationArgs {
-    /// The role ARN from the customer's stack. Role exports only; sets or
-    /// replaces the ARN, within the same AWS account.
+    /// ARN of the IAM role Convex assumes to write. The role must be named
+    /// `ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Set it to
+    /// finish a pending export, or to switch to a role in another account.
     #[serde(default)]
     role_arn: Option<String>,
     /// The components and tables to export. Each table exports whole
@@ -1405,7 +1409,8 @@ pub enum UpdateIntegrationArgs {
 /// Update integration
 ///
 /// Update an existing integration for the deployment. Omit a field to keep the
-/// existing value, and use `null` to unset a field.
+/// existing value, and use `null` to unset a field. For S3 exports, `null`
+/// keeps the existing value too.
 #[utoipa::path(
     patch,
     path = "/integrations/{id}",

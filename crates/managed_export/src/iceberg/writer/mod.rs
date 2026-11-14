@@ -608,8 +608,8 @@ fn source_of(table: &Table) -> Result<SourceTable> {
         ErrorMetadata::bad_request(
             "S3ExportForeignTable",
             format!(
-                "Glue table {} was not written by a Convex export. Remove it from the export's \
-                 Glue database or recreate the export.",
+                "Glue table {} wasn't created by Convex, but the export needs its name. Delete it \
+                 and the export will pick back up on its own.",
                 table.identifier().name()
             ),
         )
@@ -619,8 +619,8 @@ fn source_of(table: &Table) -> Result<SourceTable> {
         ErrorMetadata::bad_request(
             "S3ExportTableModified",
             format!(
-                "Glue table {} is in the {encoding} format, which this export no longer writes. \
-                 Recreate the export to start over in {ENCODING}.",
+                "Glue table {} is in the {encoding} format, which this export doesn't write \
+                 anymore. Delete this export and create a new one to start fresh in {ENCODING}.",
                 table.identifier().name()
             ),
         )
@@ -641,7 +641,8 @@ fn modified(table: &Table, what: &str) -> ErrorMetadata {
     ErrorMetadata::bad_request(
         "S3ExportTableModified",
         format!(
-            "Glue table {} was modified outside Convex: {what}. Recreate the export to start over.",
+            "Glue table {} was changed outside Convex ({what}). Delete this export and create a \
+             new one to start fresh.",
             table.identifier().name()
         ),
     )

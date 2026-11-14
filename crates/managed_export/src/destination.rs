@@ -353,8 +353,8 @@ impl ExportStore {
                 ErrorMetadata::bad_request(
                     "S3ExportForeignTable",
                     format!(
-                        "Glue table {name} was not written by a Convex export. Remove it from the \
-                         export's Glue database or recreate the export."
+                        "Glue table {name} wasn't created by Convex, but the export needs its \
+                         name. Delete it and the export will pick back up on its own."
                     ),
                 )
             );
@@ -507,15 +507,16 @@ const DESTINATION_ERROR_CODES: &[&str] = &[
 
 /// Opens and parses the state. Only Porter can have sealed it, and only for
 /// this `key` (it holds the export ID), so a state copied from a deleted or
-/// sibling export does not open. Anything else means: recreate the export.
+/// sibling export does not open. Anything else means: delete the export and
+/// create a new one.
 fn unseal_state(encryptor: &RandomEncryptor, key: &str, bytes: Vec<u8>) -> Result<ExportState> {
     let plain = encryptor
         .decrypt_bytes(key.as_bytes(), bytes)
         .map_err(|error| {
             error.context(ErrorMetadata::bad_request(
                 "S3ExportStateModified",
-                "The export state in the bucket was not written by Convex or was modified. \
-                 Recreate the export to start it again.",
+                "The export's state file in your bucket was changed, or wasn't written by Convex. \
+                 Delete this export and create a new one to start fresh.",
             ))
         })?;
     pb_state::ExportState::decode(&*plain)
