@@ -416,6 +416,13 @@ impl Persistence for SqlitePersistence {
     }
 }
 
+/// The last row of a document-log page. The next page starts strictly after
+/// it in `(ts, table_id, id)` order.
+struct DocumentLogCursor {
+    ts: Timestamp,
+    id: InternalDocumentId,
+}
+
 impl SqlitePersistence {
     /// Read bounded pages in primary-key order without retaining the history.
     /// Release the connection before validation or yielding: validation can
@@ -431,7 +438,7 @@ impl SqlitePersistence {
         retention_validator: Arc<dyn RetentionValidator>,
     ) {
         let page_size = page_size.clamp(1, 1000);
-        let mut cursor: Option<(i64, TabletId, InternalId)> = None;
+        let mut cursor: Option<DocumentLogCursor> = None;
         loop {
             let entries = {
                 let inner = self.inner.lock();
@@ -439,15 +446,17 @@ impl SqlitePersistence {
                     range,
                     order,
                     tablet_id.is_some(),
-                    cursor.is_some(),
+                    cursor.as_ref(),
                     page_size,
                 );
                 let mut stmt = inner.connection.prepare_cached(&query)?;
                 let tablet_bytes = tablet_id.map(|tablet| tablet.0);
                 let tablet_slice = tablet_bytes.as_ref().map(|tablet| &tablet[..]);
-                let cursor_ts = cursor.as_ref().map(|(ts, ..)| *ts);
-                let cursor_table = cursor.as_ref().map(|(_, tablet, _)| &tablet.0[..]);
-                let cursor_id = cursor.as_ref().map(|(_, _, id)| &id[..]);
+                let cursor_ts = cursor.as_ref().map(|cursor| i64::from(cursor.ts));
+                let cursor_table = cursor.as_ref().map(|cursor| cursor.id.table().0);
+                let cursor_table = cursor_table.as_ref().map(|table| &table[..]);
+                let cursor_id = cursor.as_ref().map(|cursor| cursor.id.internal_id());
+                let cursor_id = cursor_id.as_ref().map(|id| &id[..]);
                 let mut parameters: Vec<&dyn ToSql> = vec![];
                 if let Some(ref tablet) = tablet_slice {
                     parameters.push(tablet);
@@ -476,7 +485,10 @@ impl SqlitePersistence {
                 .await?;
             let done = entries.len() < page_size as usize;
             if let Some(last) = entries.last() {
-                cursor = Some((i64::from(last.ts), last.id.table(), last.id.internal_id()));
+                cursor = Some(DocumentLogCursor {
+                    ts: last.ts,
+                    id: last.id,
+                });
             }
             for entry in entries {
                 yield entry;
@@ -728,7 +740,7 @@ fn load_docs(
     range: TimestampRange,
     order: Order,
     tablet_filter: bool,
-    has_cursor: bool,
+    cursor: Option<&DocumentLogCursor>,
     page_size: u32,
 ) -> String {
     let columns = if tablet_filter {
@@ -744,10 +756,10 @@ fn load_docs(
     };
     let lower = range.min_timestamp_inclusive();
     let upper = range.max_timestamp_exclusive();
-    let bounds = match (has_cursor, order) {
-        (true, Order::Asc) => format!("({columns}) > ({parameters}) AND ts < {upper}"),
-        (true, Order::Desc) => format!("ts >= {lower} AND ({columns}) < ({parameters})"),
-        (false, _) => format!("ts >= {lower} AND ts < {upper}"),
+    let bounds = match (cursor, order) {
+        (Some(_), Order::Asc) => format!("({columns}) > ({parameters}) AND ts < {upper}"),
+        (Some(_), Order::Desc) => format!("ts >= {lower} AND ({columns}) < ({parameters})"),
+        (None, _) => format!("ts >= {lower} AND ts < {upper}"),
     };
     let direction = match order {
         Order::Asc => "ASC",
