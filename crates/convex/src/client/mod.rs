@@ -143,7 +143,7 @@ impl ConvexClient {
         let ws_url = deployment_to_ws_url(builder.deployment_url.as_str().try_into()?)?;
 
         // Channels for the `listen` background thread
-        let (response_sender, response_receiver) = mpsc::channel(1);
+        let (response_sender, response_receiver) = mpsc::unbounded_channel();
         let (request_sender, request_receiver) = mpsc::unbounded_channel();
 
         // Listener for when each transaction completes
