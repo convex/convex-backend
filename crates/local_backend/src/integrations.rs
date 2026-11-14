@@ -8,7 +8,10 @@ use std::{
 
 use anyhow::Context;
 use application::{
-    integrations::IntegrationWithId,
+    integrations::{
+        IntegrationStartState,
+        IntegrationWithId,
+    },
     Application,
 };
 use axum::{
@@ -67,6 +70,7 @@ use model::integrations::types::{
         WebhookFormat,
     },
     IntegrationConfig,
+    IntegrationState,
     IntegrationType,
 };
 use roles::RequireDeploymentOp;
@@ -930,12 +934,16 @@ pub async fn rotate_integration_webhook_secret(
 
     let IntegrationWithId {
         config: integration_config,
+        status: integration_status,
         ..
     } = st.application.must_get_integration_by_id(&id).await?;
 
     match integration_config {
         IntegrationConfig::Webhook(existing_webhook_integration) => {
             let hmac_secret = generate_webhook_hmac_secret(st.application.runtime());
+            // Restart the integration if it is currently active
+            let status = matches!(integration_status, IntegrationState::Active)
+                .then_some(IntegrationStartState::Restarting);
 
             let config = WebhookConfig {
                 url: existing_webhook_integration.url,
@@ -944,11 +952,12 @@ pub async fn rotate_integration_webhook_secret(
                 topics: existing_webhook_integration.topics,
             };
             st.application
-                .patch_integration_config(
+                .patch_integration_config_and_status(
                     identity,
                     request_metadata,
                     &id,
                     IntegrationConfig::Webhook(config),
+                    status,
                 )
                 .await?;
 
@@ -1717,7 +1726,7 @@ pub async fn update_integration(
                     request_metadata.clone(),
                     &id,
                     IntegrationConfig::S3Export(config),
-                    credentials_changed,
+                    credentials_changed.then_some(IntegrationStartState::Pending),
                 )
                 .await?;
             return Ok(StatusCode::OK);
