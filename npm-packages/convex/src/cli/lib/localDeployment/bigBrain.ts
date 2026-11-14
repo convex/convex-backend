@@ -1,5 +1,5 @@
 import { Context } from "../../../bundler/context.js";
-import { bigBrainAPI } from "../utils/utils.js";
+import { bigBrainAPI, bigBrainAPIMaybeThrows } from "../utils/utils.js";
 
 export async function bigBrainStart(
   ctx: Context,
@@ -46,7 +46,8 @@ export async function bigBrainRecordActivity(
     adminKey: string;
   },
 ) {
-  return bigBrainAPI({
+  // Throws instead of crashing so callers can treat failed pings as best-effort.
+  return bigBrainAPIMaybeThrows({
     ctx,
     method: "POST",
     path: "local_deployment/record_activity",
