@@ -67,7 +67,10 @@ export const deploymentCreate = new Command("create")
     new Option("--type <type>", "Deployment type").choices(SUPPORTED_TYPES),
   )
   .option("--region <region>", "Deployment region")
-  .addOption(new Option("--class <class>", "Deployment class").hideHelp())
+  .option(
+    "--class <class>",
+    "Deployment class (e.g. `s16`, `s256`, `d1024`). Defaults to your team's default class.",
+  )
   .option(
     "--select",
     "Select the new deployment. This will update the Convex environment variables in .env.local. Subsequent `npx convex` commands will run against this deployment.",
