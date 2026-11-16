@@ -33,6 +33,8 @@ pub struct BackendInfoPersisted {
     pub send_logs_to_client: Option<bool>,
     pub custom_audit_logs_in_log_streams_config_enabled: Option<bool>,
     pub ai_gateway_disabled: Option<bool>,
+    pub periodic_backups_enabled: Option<bool>,
+    pub max_cloud_backups: Option<u64>,
 }
 
 impl From<BackendInfoPersisted> for BackendInfo {
@@ -54,6 +56,8 @@ impl From<BackendInfoPersisted> for BackendInfo {
             custom_audit_logs_in_log_streams_config_enabled: bi
                 .custom_audit_logs_in_log_streams_config_enabled,
             ai_gateway_disabled: bi.ai_gateway_disabled,
+            periodic_backups_enabled: bi.periodic_backups_enabled,
+            max_cloud_backups: bi.max_cloud_backups,
         }
     }
 }
@@ -79,6 +83,8 @@ impl From<BackendInfo> for BackendInfoPersisted {
             custom_audit_logs_in_log_streams_config_enabled: bi
                 .custom_audit_logs_in_log_streams_config_enabled,
             ai_gateway_disabled: bi.ai_gateway_disabled,
+            periodic_backups_enabled: bi.periodic_backups_enabled,
+            max_cloud_backups: bi.max_cloud_backups,
         }
     }
 }
@@ -108,6 +114,10 @@ pub struct SerializedBackendInfo {
     custom_audit_logs_in_log_streams_config_enabled: Option<bool>,
     #[serde(default)]
     ai_gateway_disabled: Option<bool>,
+    #[serde(default)]
+    periodic_backups_enabled: Option<bool>,
+    #[serde(default)]
+    max_cloud_backups: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     default_udf_runtime: Option<String>,
 }
@@ -135,6 +145,8 @@ impl From<BackendInfoPersisted> for SerializedBackendInfo {
             custom_audit_logs_in_log_streams_config_enabled: b
                 .custom_audit_logs_in_log_streams_config_enabled,
             ai_gateway_disabled: b.ai_gateway_disabled,
+            periodic_backups_enabled: b.periodic_backups_enabled,
+            max_cloud_backups: b.max_cloud_backups.map(|n| n as i64),
             default_udf_runtime: b.default_udf_runtime.map(|runtime| runtime.to_string()),
         }
     }
@@ -161,6 +173,8 @@ impl TryFrom<SerializedBackendInfo> for BackendInfoPersisted {
         let custom_audit_logs_in_log_streams_config_enabled =
             o.custom_audit_logs_in_log_streams_config_enabled;
         let ai_gateway_disabled = o.ai_gateway_disabled;
+        let periodic_backups_enabled = o.periodic_backups_enabled;
+        let max_cloud_backups = o.max_cloud_backups.map(|n| n as u64);
 
         Ok(Self {
             team,
@@ -177,6 +191,8 @@ impl TryFrom<SerializedBackendInfo> for BackendInfoPersisted {
             send_logs_to_client,
             custom_audit_logs_in_log_streams_config_enabled,
             ai_gateway_disabled,
+            periodic_backups_enabled,
+            max_cloud_backups,
             default_udf_runtime: o.default_udf_runtime.map(|s| s.parse()).transpose()?,
         })
     }
