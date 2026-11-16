@@ -166,16 +166,6 @@ minimumReleaseAgeExclude:
   - "@ai-sdk/gateway@4.0.85"
   - "@ai-sdk/provider@4.0.17"
   - "@ai-sdk/provider-utils@5.0.43"
-  - next@16.4.2
-  - "@next/env@16.4.2"
-  - "@next/swc-darwin-arm64@16.4.2"
-  - "@next/swc-darwin-x64@16.4.2"
-  - "@next/swc-linux-arm64-gnu@16.4.2"
-  - "@next/swc-linux-arm64-musl@16.4.2"
-  - "@next/swc-linux-x64-gnu@16.4.2"
-  - "@next/swc-linux-x64-musl@16.4.2"
-  - "@next/swc-win32-arm64-msvc@16.4.2"
-  - "@next/swc-win32-x64-msvc@16.4.2"
   - next@15.5.27
   - "@next/env@15.5.27"
   - "@next/swc-darwin-arm64@15.5.27"
@@ -398,7 +388,7 @@ overrides:
   "morgan@>=1.0.0 <1.12.1": ^1.12.1
   "nanoid@>=3.0.0 <3.3.18": ^3.3.18
   "next@>=15.0.0 <15.5.28": ^15.5.28
-  "next@>=16.0.0 <16.4.1": ^16.4.1
+  "next@>=16.0.0 <16.4.6": ^16.4.6
   "nitropack@>=2.0.0 <2.13.4": 2.13.4
   "node-forge@<1.4.3": ^1.4.3
   "nuxt@>=4.0.0 <4.6.3": ^4.6.3

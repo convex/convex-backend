@@ -51,7 +51,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/testing-library__jest-dom": "~5.14.5",
     "@storybook/nextjs": "^10.6.2",
-    "next": "^16.4.1",
+    "next": "^16.4.6",
     "jest": "^30.0.0",
     "jest-environment-jsdom": "^30.0.0",
     "jsdom-testing-mocks": "^1.16.0",
