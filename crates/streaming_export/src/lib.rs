@@ -703,7 +703,6 @@ impl<'a, RT: Runtime> DataSync<'a, RT> {
                         .next()
                         .context("an empty selection is always caught up")?,
                     num_documents_in_current_table: 0,
-                    num_documents_synced: page.cursor.num_docs_synced(),
                 },
             };
         }
@@ -727,7 +726,7 @@ impl<'a, RT: Runtime> DataSync<'a, RT> {
                 // Same counts as `total_documents`, over the tables selected now:
                 // the cursor's lifetime count keeps deselected tables' documents.
                 let num_documents_synced = snapshot.table_counts.as_ref().map_or(
-                    progress.num_documents_synced,
+                    page.cursor.num_docs_synced(),
                     |counts| {
                         let synced: u64 = page
                             .cursor
