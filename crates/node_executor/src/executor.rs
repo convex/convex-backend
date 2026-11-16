@@ -587,7 +587,7 @@ impl TryFrom<ExecutorRequest> for JsonValue {
                     .environment_variables
                     .into_iter()
                     .map(|(name, value)| {
-                        ConvexObject::try_from(PersistedEnvironmentVariable(
+                        ConvexObject::try_from(PersistedEnvironmentVariable::new(
                             EnvironmentVariable::new(name, value),
                         ))
                         .map(JsonValue::from)
@@ -631,7 +631,7 @@ impl TryFrom<ExecutorRequest> for JsonValue {
                     .environment_variables
                     .into_iter()
                     .map(|(name, value)| {
-                        ConvexObject::try_from(PersistedEnvironmentVariable(
+                        ConvexObject::try_from(PersistedEnvironmentVariable::new(
                             EnvironmentVariable::new(name, value),
                         ))
                         .map(JsonValue::from)

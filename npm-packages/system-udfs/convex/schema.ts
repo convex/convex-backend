@@ -454,6 +454,10 @@ export default defineSchema({
   _environment_variables: defineTable({
     name: v.string(),
     value: v.string(),
+    // `true` for secrets, which are write-only: functions read them, admins
+    // can't. `false` for variables explicitly made config variables, absent
+    // while that is undecided.
+    secret: v.optional(v.boolean()),
   }).index("by_name", ["name"]),
   _exports: defineTable(
     v.union(
