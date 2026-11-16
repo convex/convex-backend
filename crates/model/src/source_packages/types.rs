@@ -3,10 +3,7 @@ use std::{
     str::FromStr,
 };
 
-use common::{
-    knobs::NODE_ACTION_MEMORY_MB_ENABLED,
-    types::ObjectKey,
-};
+use common::types::ObjectKey;
 use errors::ErrorMetadata;
 use humansize::{
     FormatSize,
@@ -30,15 +27,9 @@ use crate::external_packages::types::ExternalDepsPackageId;
 /// size must be a valid AWS Lambda memory size.
 pub const NODE_MEMORY_MB_OPTIONS: [u32; 2] = [512, 2048];
 
-/// Rejects a `node.defaultMemoryMb` from `convex.json` that the deployment
-/// can't run.
+/// Rejects a `node.defaultMemoryMb` from `convex.json` that isn't a size we
+/// offer.
 pub fn check_node_default_memory_mb_for_push(memory_mb: u32) -> anyhow::Result<()> {
-    check_node_default_memory_mb(memory_mb, *NODE_ACTION_MEMORY_MB_ENABLED)
-}
-
-/// `larger_sizes_enabled` is `NODE_ACTION_MEMORY_MB_ENABLED`, passed in so
-/// tests can cover both states of the process-wide knob.
-fn check_node_default_memory_mb(memory_mb: u32, larger_sizes_enabled: bool) -> anyhow::Result<()> {
     anyhow::ensure!(
         NODE_MEMORY_MB_OPTIONS.contains(&memory_mb),
         ErrorMetadata::bad_request(
@@ -49,11 +40,28 @@ fn check_node_default_memory_mb(memory_mb: u32, larger_sizes_enabled: bool) -> a
             ),
         )
     );
+    Ok(())
+}
+
+/// Rejects a `node.defaultMemoryMb` that this backend's Node executor can't
+/// run. Only the AWS Lambda executor supports sizes above the smallest.
+pub fn check_node_default_memory_mb_supported(
+    memory_mb: u32,
+    supported_memory_mb: &[u32],
+) -> anyhow::Result<()> {
     anyhow::ensure!(
-        memory_mb == NODE_MEMORY_MB_OPTIONS[0] || larger_sizes_enabled,
+        supported_memory_mb.contains(&memory_mb),
         ErrorMetadata::bad_request(
             "NodeMemoryNotAvailable",
-            format!("node.defaultMemoryMb {memory_mb} is not available on this deployment yet."),
+            format!(
+                "node.defaultMemoryMb {memory_mb} is not supported by this backend. It supports \
+                 {}.",
+                supported_memory_mb
+                    .iter()
+                    .map(|mb| mb.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         )
     );
     Ok(())

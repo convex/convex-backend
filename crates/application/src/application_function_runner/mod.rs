@@ -833,6 +833,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         Ok(())
     }
 
+    pub fn supported_node_memory_mb(&self) -> &'static [u32] {
+        self.node_actions.supported_memory_mb()
+    }
+
     // Only used for running queries from REPLs.
     pub async fn run_query_without_caching(
         &self,
