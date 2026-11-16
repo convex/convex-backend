@@ -7,7 +7,8 @@
   "scripts": {
     "build": "rm -rf dist && tsc",
     "clean": "rm -rf dist",
-    "test": "vitest run --pass-with-no-tests"
+    "test": "vitest run --pass-with-no-tests",
+    "generate-system-schema": "vitest run schema.test.ts || vitest run schema.test.ts"
   },
   "dependencies": {
     "object-inspect": "^1.12.0",
