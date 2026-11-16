@@ -334,6 +334,7 @@ export const cronJobState = v.union(
 export default defineSchema({
   _tables: defineTable({
     name: v.string(),
+    number: v.int64(),
     state: v.union(
       v.literal("active"),
       v.literal("deleting"),
