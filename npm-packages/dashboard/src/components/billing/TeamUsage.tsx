@@ -223,11 +223,16 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
   const pricing = getUsagePricing(prices, billingPeriodRange);
   const isFiltered =
     !!query.projectSlug || projectId !== null || !!componentPrefix;
+  // A project slug resolves to its ID asynchronously; until then, usage
+  // queries would read the whole team's usage.
+  const projectPending = !!query.projectSlug && projectId === null;
   const { dashboardShowCashUsage } = useLaunchDarkly();
   const pricedUsage = useUsageByPricingPeriod({
     teamId: team.id,
     pricing,
-    enabled: dashboardShowCashUsage && !isFiltered,
+    enabled: dashboardShowCashUsage && !projectPending,
+    projectId,
+    componentPrefix,
   });
 
   const { data: aiGatewayCostByDay, error: aiGatewayCostError } =
@@ -242,10 +247,10 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
   // already returns. Adding the column to the Summary query in
   // databricks-workbooks (like Function Breakdown gained one in #35) would let
   // this card read AI cost like every other metric and delete this reduce.
-  const aiGatewayCost = aiGatewayCostByDay?.reduce(
-    (sum, row) => sum + row.value,
-    0,
-  );
+  // Until the project slug resolves, the query reads the whole team's cost.
+  const aiGatewayCost = projectPending
+    ? undefined
+    : aiGatewayCostByDay?.reduce((sum, row) => sum + row.value, 0);
 
   const { data: summary, error: summaryError } = useUsageTeamSummary(
     team?.id,
@@ -258,13 +263,12 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
 
   const hasOrbSubscription = useHasSubscription(team?.id);
 
-  // Included limits are team-wide, so they only describe unfiltered usage.
   const hasSubscription =
     isCurrentBillingPeriod &&
     (hasOrbSubscription || hasOrbSubscription === undefined) &&
-    !isFiltered &&
     !isBusinessPlanType;
 
+  // Included limits are team-wide, so they only describe unfiltered usage.
   const showEntitlements =
     isCurrentBillingPeriod && !isFiltered && !isBusinessPlanType;
 
@@ -347,7 +351,9 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
                   pricedUsage={pricedUsage}
                   isFiltered={isFiltered}
                   aiGatewayCost={aiGatewayCost}
-                  aiGatewayCostError={aiGatewayCostError}
+                  aiGatewayCostError={
+                    projectPending ? undefined : aiGatewayCostError
+                  }
                   isBusinessPlan={isBusinessPlanType}
                   entitlements={entitlements}
                   hasSubscription={hasSubscription}

@@ -634,7 +634,7 @@
           "Integrations"
         ],
         "summary": "Update integration",
-        "description": "Update an existing integration for the deployment. Omit a field to keep the\nexisting value, and use `null` to unset a field.",
+        "description": "Update an existing integration for the deployment. Omit a field to keep the\nexisting value, and use `null` to unset a field. For S3 exports, `null`\nkeeps the existing value too.",
         "operationId": "update_integration",
         "parameters": [
           {
@@ -2109,11 +2109,11 @@
               "string",
               "null"
             ],
-            "description": "Key prefix within the bucket. Omit to write at the bucket root."
+            "description": "Folder in the bucket to put the export under. Convex writes to\n`<prefix>/<deployment-name>/data-lake/`, or to\n`<deployment-name>/data-lake/` if you omit it."
           },
           "roleArn": {
             "type": "string",
-            "description": "ARN of a role in the bucket's account that Convex assumes to write.\nOmit it to create the export first: the response carries the\n`roleExternalId` the role's trust policy needs, and the export waits\nuntil an update supplies the ARN."
+            "description": "ARN of the IAM role Convex assumes to write. The role must be named\n`ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Omit it to\ncreate the export first: the response carries the `roleExternalId` the\nrole's name and trust policy need, and the export waits until an update\nsets the ARN."
           },
           "selection": {
             "oneOf": [
@@ -2997,7 +2997,8 @@
           "storage_api_bandwidth",
           "ai_gateway_usage",
           "log_stream_egress",
-          "custom_audit"
+          "custom_audit",
+          "s3_export_stats"
         ]
       },
       "MemberId": {
@@ -3183,11 +3184,11 @@
               "string",
               "null"
             ],
-            "description": "Key prefix within the bucket."
+            "description": "Folder in the bucket the export is under, if any."
           },
           "roleArn": {
             "type": "string",
-            "description": "ARN of the role Convex assumes to write. Empty until the admin pastes\nit."
+            "description": "ARN of the role Convex assumes to write. Empty if it hasn't been set\nyet, and the export doesn't sync while it's empty."
           },
           "roleExternalId": {
             "type": "string",
@@ -3675,7 +3676,7 @@
               "string",
               "null"
             ],
-            "description": "The role ARN from the customer's stack. Role exports only; sets or\nreplaces the ARN, within the same AWS account."
+            "description": "ARN of the IAM role Convex assumes to write. The role must be named\n`ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Set it to\nfinish a pending export, or to switch to a role in another account."
           },
           "selection": {
             "oneOf": [

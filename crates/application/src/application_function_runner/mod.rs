@@ -41,6 +41,7 @@ use common::{
         APPLICATION_MAX_CONCURRENT_NODE_ACTIONS,
         APPLICATION_MAX_CONCURRENT_QUERIES,
         APPLICATION_MAX_CONCURRENT_V8_ACTIONS,
+        AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB,
         DEFAULT_APPLICATION_MAX_FUNCTION_CONCURRENCY,
         ISOLATE_MAX_USER_HEAP_SIZE,
         UDF_EXECUTOR_OCC_INITIAL_BACKOFF,
@@ -1585,6 +1586,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     .get_latest()
                     .await?
                     .context("no source package?")?;
+                let memory_mb: u32 = match source_package.node_default_memory_mb {
+                    Some(memory_mb) => memory_mb,
+                    None => (*AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB).try_into()?,
+                };
                 let source_maps_callback = async {
                     let mut source_maps = BTreeMap::new();
                     if let Some(source_map) = self
@@ -1653,6 +1658,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         external_deps: external_deps_package,
                     },
                     source_package_id: source_package.developer_id().into(),
+                    memory_mb,
                     user_identity: tx.user_identity(),
                     auth_header: token_to_authorization_header(tx.authentication_token())?,
                     environment_variables,
@@ -1716,7 +1722,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         outcome,
                         execution_time: start.elapsed(),
                         environment: ModuleEnvironment::Node,
-                        memory_in_mb: node_outcome.memory_used_in_mb,
+                        memory_in_mb: memory_mb.into(),
                         context: context.clone(),
                         unix_timestamp,
                         caller: caller.clone(),

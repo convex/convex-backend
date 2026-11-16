@@ -8,6 +8,7 @@ async function sleep(ms: number) {
 
 const MAX_RETRIES = 3;
 const MAX_RETRIES_DELAY_MS = 500;
+const REQUEST_TIMEOUT_MS = 10_000;
 
 export type CheckDeploymentResult = {
   allowedOps: string[];
@@ -30,6 +31,10 @@ export async function checkDeploymentInfo(
             Authorization: `Convex ${adminKey}`,
             "Convex-Client": "dashboard-0.0.0",
           },
+          // A backend that never responds would otherwise leave the
+          // dashboard waiting on a blank screen instead of falling back to
+          // the login form.
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         },
       );
       if (resp.ok) {

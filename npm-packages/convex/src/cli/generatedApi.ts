@@ -411,7 +411,7 @@ export interface components {
             devDeploymentName?: string | null;
             prodDeploymentReference?: string | null;
             devDeploymentReference?: string | null;
-            tags?: string[] | null;
+            tags: string[];
         };
         /** @description Summary of a project WorkOS environment for list responses - slimmer than
          *     full environment details, uses workos_ prefix for consistency with

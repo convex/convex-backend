@@ -12,7 +12,13 @@ use anyhow::{
     Context,
     Result,
 };
+use common::knobs::S3_EXPORT_TABLE_CONCURRENCY;
 use errors::ErrorMetadata;
+use futures::{
+    stream,
+    StreamExt,
+    TryStreamExt,
+};
 use iceberg::{
     io::{
         S3_ACCESS_KEY_ID,
@@ -26,6 +32,7 @@ use iceberg::{
         MemoryCatalogBuilder,
         MEMORY_CATALOG_WAREHOUSE,
     },
+    spec::SchemaRef,
     table::Table,
     transaction::{
         ApplyTransactionAction,
@@ -247,6 +254,18 @@ impl IcebergChangeWriter {
         self.bytes_written
     }
 
+    /// The schema of each table this writer holds, by its current metadata
+    /// file. The Glue mirror builds a table's columns from it.
+    pub fn schemas(&self) -> HashMap<String, SchemaRef> {
+        self.tables
+            .values()
+            .filter_map(|table| {
+                let location = table.metadata_location()?.to_owned();
+                Some((location, table.metadata().current_schema().clone()))
+            })
+            .collect()
+    }
+
     /// A tablet keeps its first name for the life of the export, even if the
     /// component path changes. Only an unseen tablet gets a fresh name.
     fn name(&self, source: &SourceTable) -> String {
@@ -461,26 +480,35 @@ impl IcebergChangeWriter {
         for (source, change) in changes {
             by_table.entry(source).or_default().push(change);
         }
-        for (source, changes) in by_table {
-            if !self.tables.contains_key(&source) {
-                let name = self.name(&source);
-                match self.load_existing(&source, &name).await? {
+        for source in by_table.keys() {
+            if !self.tables.contains_key(source) {
+                let name = self.name(source);
+                match self.load_existing(source, &name).await? {
                     Some(table) => {
                         self.tables.insert(source.clone(), table);
                     },
                     None => {
-                        self.create(&source, seeds.remove(&source).unwrap_or_default())
+                        self.create(source, seeds.remove(source).unwrap_or_default())
                             .await?;
                     },
                 }
             }
-            let (table, bytes_written) = append(
-                &*self.catalog,
-                &self.tables[&source],
-                &changes,
-                &self.snapshot_properties,
-            )
+        }
+        // Each table commits on its own, so appends to different tables are
+        // independent. A page that fails partway is retried whole, and readers
+        // dedupe the rows a retry repeats.
+        let (catalog, tables, snapshot_properties) =
+            (&*self.catalog, &self.tables, &self.snapshot_properties);
+        let appended: Vec<(SourceTable, Table, u64)> = stream::iter(by_table)
+            .map(|(source, changes)| async move {
+                let (table, bytes_written) =
+                    append(catalog, &tables[&source], &changes, snapshot_properties).await?;
+                anyhow::Ok((source, table, bytes_written))
+            })
+            .buffer_unordered(*S3_EXPORT_TABLE_CONCURRENCY)
+            .try_collect()
             .await?;
+        for (source, table, bytes_written) in appended {
             self.bytes_written += bytes_written;
             self.record(&table)?;
             self.tables.insert(source, table);
@@ -552,8 +580,8 @@ fn source_of(table: &Table) -> Result<SourceTable> {
         ErrorMetadata::bad_request(
             "S3ExportForeignTable",
             format!(
-                "Glue table {} was not written by a Convex export. Remove it from the export's \
-                 Glue database or recreate the export.",
+                "Glue table {} wasn't created by Convex, but the export needs its name. Delete it \
+                 and the export will pick back up on its own.",
                 table.identifier().name()
             ),
         )
@@ -563,8 +591,8 @@ fn source_of(table: &Table) -> Result<SourceTable> {
         ErrorMetadata::bad_request(
             "S3ExportTableModified",
             format!(
-                "Glue table {} is in the {encoding} format, which this export no longer writes. \
-                 Recreate the export to start over in {ENCODING}.",
+                "Glue table {} is in the {encoding} format, which this export doesn't write \
+                 anymore. Delete this export and create a new one to start fresh in {ENCODING}.",
                 table.identifier().name()
             ),
         )
@@ -585,7 +613,8 @@ fn modified(table: &Table, what: &str) -> ErrorMetadata {
     ErrorMetadata::bad_request(
         "S3ExportTableModified",
         format!(
-            "Glue table {} was modified outside Convex: {what}. Recreate the export to start over.",
+            "Glue table {} was changed outside Convex ({what}). Delete this export and create a \
+             new one to start fresh.",
             table.identifier().name()
         ),
     )

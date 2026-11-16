@@ -33,6 +33,7 @@ headers = { workspace = true }
 maplit = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
+rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -56,7 +57,6 @@ fivetran_common = { workspace = true, features = ["testing"] }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
-rand = { workspace = true }
 uuid = { workspace = true }
 value = { workspace = true, features = ["testing"] }
 

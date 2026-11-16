@@ -246,6 +246,17 @@ export function accountNotLoggedInMessage(account: AccountSelection): string {
   return `Account "${account.name}" selected by ${account.source} is not logged in. Run \`npx convex login --account ${account.name}\`.`;
 }
 
+/**
+ * Account credential files are written with mode 0600, but a copied or
+ * restored file can be readable by other users. Like ~/.convex/config.json,
+ * remove group and other access from the file and the accounts directory
+ * whenever a credential is read.
+ */
+function restrictAccountPermissions(ctx: Context, configPath: string) {
+  restrictConfigPermissions(ctx, path.dirname(configPath));
+  restrictConfigPermissions(ctx, configPath);
+}
+
 /** Credentials saved for a valid account name, or why there are none to use. */
 export function loadAccountCredentials(
   ctx: Context,
@@ -253,6 +264,7 @@ export function loadAccountCredentials(
 ): AccountCredentials | "missing" | "unreadable" {
   const configPath = accountConfigPath(name);
   if (!ctx.fs.exists(configPath)) return "missing";
+  restrictAccountPermissions(ctx, configPath);
   try {
     return credentialsSchema.parse(JSON.parse(ctx.fs.readUtf8File(configPath)));
   } catch {
@@ -287,9 +299,10 @@ export async function readAccountCredentials(
 
 export function readAccountToken(ctx: Context, name: string): string | null {
   try {
-    const token = JSON.parse(
-      ctx.fs.readUtf8File(accountConfigPath(name)),
-    ).accessToken;
+    const configPath = accountConfigPath(name);
+    const contents = ctx.fs.readUtf8File(configPath);
+    restrictAccountPermissions(ctx, configPath);
+    const token = JSON.parse(contents).accessToken;
     return typeof token === "string" && token.length > 0 ? token : null;
   } catch {
     return null;
@@ -312,6 +325,8 @@ function writeCredentialsFile(
     if (!ctx.fs.lstat(directory).isDirectory()) {
       return `Cannot save account credentials through a symlink or non-directory: ${directory}.`;
     }
+    // mkdir creates the directory with the umask's mode, usually 0755.
+    restrictConfigPermissions(ctx, directory);
     ctx.fs.writeUtf8File(
       temporary,
       JSON.stringify(credentials, null, 2),

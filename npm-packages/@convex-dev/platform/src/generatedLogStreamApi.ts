@@ -185,7 +185,20 @@ export interface components {
         }) | (components["schemas"]["CustomAuditEvent"] & {
             /** @enum {string} */
             topic: "custom_audit";
+        }) | (components["schemas"]["S3ExportStatsEvent"] & {
+            /** @enum {string} */
+            topic: "s3_export_stats";
         });
+        S3ExportStatsEvent: {
+            /** Format: int64 */
+            timestamp: number;
+            status: components["schemas"]["S3ExportStatus"];
+            /** Format: int64 */
+            lag_seconds: number | null;
+            last_error: string | null;
+        };
+        /** @enum {string} */
+        S3ExportStatus: "snapshotting" | "catching_up" | "up_to_date" | "failed";
         ScheduledJobLagEvent: {
             /** Format: int64 */
             timestamp: number;
@@ -249,6 +262,8 @@ export type CustomAuditEvent = components['schemas']['CustomAuditEvent'];
 export type DeploymentAuditLogEvent = components['schemas']['DeploymentAuditLogEvent'];
 export type FunctionExecutionEvent = components['schemas']['FunctionExecutionEvent'];
 export type LogStreamEvent = components['schemas']['LogStreamEvent'];
+export type S3ExportStatsEvent = components['schemas']['S3ExportStatsEvent'];
+export type S3ExportStatus = components['schemas']['S3ExportStatus'];
 export type ScheduledJobLagEvent = components['schemas']['ScheduledJobLagEvent'];
 export type SchedulerStatsEvent = components['schemas']['SchedulerStatsEvent'];
 export type StorageApiBandwidthEvent = components['schemas']['StorageApiBandwidthEvent'];

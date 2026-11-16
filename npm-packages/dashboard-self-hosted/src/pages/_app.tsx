@@ -86,6 +86,7 @@ function App({
     deploymentUrl,
     adminKey,
     defaultListDeploymentsApiUrl,
+    skipLogin,
     ...pageProps
   },
 }: AppProps & {
@@ -93,6 +94,7 @@ function App({
     deploymentUrl: string | null;
     adminKey: string | null;
     defaultListDeploymentsApiUrl: string | null;
+    skipLogin: boolean;
   };
 }) {
   return (
@@ -111,6 +113,7 @@ function App({
               deploymentUrl={deploymentUrl}
               adminKey={adminKey}
               defaultListDeploymentsApiUrl={defaultListDeploymentsApiUrl}
+              skipLogin={skipLogin}
             >
               <DeploymentApiProvider deploymentOverride="local">
                 <WaitForDeploymentApi>
@@ -162,6 +165,8 @@ App.getInitialProps = async ({ ctx }: { ctx: { req?: any } }) => {
     if (process.env.NEXT_PUBLIC_ADMIN_KEY) {
       adminKey = process.env.NEXT_PUBLIC_ADMIN_KEY;
     }
+    // Log in with the configured credentials without showing the login form.
+    const skipLogin = process.env.NEXT_PUBLIC_SKIP_LOGIN === "true";
 
     const listDeploymentsApiPort =
       process.env.NEXT_PUBLIC_DEFAULT_LIST_DEPLOYMENTS_API_PORT;
@@ -178,6 +183,7 @@ App.getInitialProps = async ({ ctx }: { ctx: { req?: any } }) => {
         deploymentUrl,
         adminKey,
         defaultListDeploymentsApiUrl: listDeploymentsApiUrl,
+        skipLogin,
       },
     };
   }
@@ -189,6 +195,8 @@ App.getInitialProps = async ({ ctx }: { ctx: { req?: any } }) => {
     window.__NEXT_DATA__?.props?.pageProps?.adminKey ?? null;
   const clientSideListDeploymentsApiUrl =
     window.__NEXT_DATA__?.props?.pageProps?.listDeploymentsApiUrl ?? null;
+  const clientSideSkipLogin =
+    window.__NEXT_DATA__?.props?.pageProps?.skipLogin ?? false;
   const clientSideSelectedDeploymentName =
     window.__NEXT_DATA__?.props?.pageProps?.selectedDeploymentName ?? null;
   return {
@@ -197,6 +205,7 @@ App.getInitialProps = async ({ ctx }: { ctx: { req?: any } }) => {
       adminKey: clientSideAdminKey ?? null,
       defaultListDeploymentsApiUrl: clientSideListDeploymentsApiUrl ?? null,
       selectedDeploymentName: clientSideSelectedDeploymentName ?? null,
+      skipLogin: clientSideSkipLogin === true,
     },
   };
 };
@@ -345,11 +354,13 @@ function DeploymentInfoProvider({
   deploymentUrl,
   adminKey,
   defaultListDeploymentsApiUrl,
+  skipLogin,
 }: {
   children: React.ReactNode;
   deploymentUrl: string | null;
   adminKey: string | null;
   defaultListDeploymentsApiUrl: string | null;
+  skipLogin: boolean;
 }) {
   const [listDeploymentsApiUrl, setListDeploymentsApiUrl] = useState<
     string | null
@@ -411,6 +422,19 @@ function DeploymentInfoProvider({
   );
 
   useEmbeddedDashboardCredentials(attemptLogin);
+
+  // Log in with the credentials configured on the server, skipping the form.
+  const shouldSkipLogin = skipLogin && !!deploymentUrl && !!adminKey;
+  useEffect(() => {
+    if (!shouldSkipLogin || !deploymentUrl || !adminKey) {
+      return;
+    }
+    void attemptLogin({
+      submittedAdminKey: adminKey,
+      submittedDeploymentUrl: deploymentUrl,
+      submittedDeploymentName: "",
+    });
+  }, [shouldSkipLogin, deploymentUrl, adminKey, attemptLogin]);
 
   // `undefined` while the request to /api/current_deployment is in flight,
   // `null` once it has failed (e.g. 404 → fall back to the other mechanisms).
@@ -494,7 +518,10 @@ function DeploymentInfoProvider({
     // it returns) before falling back, so the deployment list doesn’t flash
     // while the requests are in flight. If the credentials turn out to be
     // invalid (isValidDeploymentInfo === false), show the fallback UI.
-    if (currentDeployment !== null && isValidDeploymentInfo === null) {
+    if (
+      (currentDeployment !== null || shouldSkipLogin) &&
+      isValidDeploymentInfo === null
+    ) {
       return null;
     }
     return (
@@ -528,11 +555,16 @@ function DeploymentInfoProvider({
   return (
     <>
       <Header
-        onLogout={() => {
-          setStoredAdminKey("");
-          setStoredDeploymentUrl("");
-          setStoredDeploymentName("");
-        }}
+        // The configured credentials would log the user straight back in.
+        onLogout={
+          shouldSkipLogin
+            ? undefined
+            : () => {
+                setStoredAdminKey("");
+                setStoredDeploymentUrl("");
+                setStoredDeploymentName("");
+              }
+        }
       />
       <DeploymentInfoContext.Provider value={finalValue}>
         <SelfHostedSettingsContext.Provider value={settingsContextValue}>
@@ -543,7 +575,7 @@ function DeploymentInfoProvider({
   );
 }
 
-function Header({ onLogout }: { onLogout: () => void }) {
+function Header({ onLogout }: { onLogout?: () => void }) {
   if (process.env.NEXT_PUBLIC_HIDE_HEADER) {
     return null;
   }
@@ -562,12 +594,14 @@ function Header({ onLogout }: { onLogout: () => void }) {
         placement="bottom-end"
       >
         <ToggleTheme />
-        <MenuItem action={onLogout}>
-          <div className="flex w-full items-center justify-between">
-            Log Out
-            <ExitIcon className="text-content-secondary" />
-          </div>
-        </MenuItem>
+        {onLogout ? (
+          <MenuItem action={onLogout}>
+            <div className="flex w-full items-center justify-between">
+              Log Out
+              <ExitIcon className="text-content-secondary" />
+            </div>
+          </MenuItem>
+        ) : null}
       </Menu>
     </header>
   );

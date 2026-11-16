@@ -650,13 +650,15 @@ impl<RT: Runtime> LogManager<RT> {
                         .await?;
 
                     // Save locally
-                    integrations
+                    let replaced = integrations
                         .write()
                         .insert(integration_type, integration_client);
-                    // Ordering::Relaxed is okay here since logs don't need to be
-                    // picked up immediately by an active integration and they can start
-                    // a little earlier as well. Reordering isn't a big deal.
-                    active_integrations_count.fetch_add(1, Ordering::Relaxed);
+                    if replaced.is_none() {
+                        // Ordering::Relaxed is okay here since logs don't need to be
+                        // picked up immediately by an active integration and they can
+                        // start a little earlier as well. Reordering isn't a big deal.
+                        active_integrations_count.fetch_add(1, Ordering::Relaxed);
+                    }
                 },
             }
         }

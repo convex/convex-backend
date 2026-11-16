@@ -5,6 +5,7 @@ import {
   type ErrorType,
   type Filesystem,
   bundleForAnalyzer,
+  computeExternalPackages,
   convexVersion,
   nodeFs,
   showSpinner,
@@ -92,9 +93,13 @@ export async function bundle(): Promise<BundleResult> {
         cmd: "analyze bundles",
       },
     );
+    const externalizable = await computeExternalPackages(ctx, ["*"]);
     const labels = uniqueComponentLabels(builds);
     return {
       projectRoot: absWorkingDir,
+      externalizablePackages: Object.fromEntries(
+        [...externalizable].map(([name, { path }]) => [name, path]),
+      ),
       includeSourcesContent:
         projectConfig.bundler?.includeSourcesContent ?? false,
       builds: builds.flatMap((b) => {

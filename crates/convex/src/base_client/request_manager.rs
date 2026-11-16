@@ -80,20 +80,36 @@ impl RequestManager {
         }
     }
 
+    /// Record the server's response to a request.
+    ///
+    /// Returns whether the request completed immediately (actions and failed
+    /// mutations) rather than waiting for a transition past its timestamp.
+    ///
+    /// Responses to requests that are no longer tracked or already completed
+    /// are ignored. They happen when a mutation is resent after a reconnect:
+    /// the first response is kept, as in the JS client's `request_manager.ts`.
     pub fn update_request(
         &mut self,
         request_id: &RequestId,
         request_type: RequestType,
         value: FunctionResult,
         ts: Option<Timestamp>,
-    ) -> Result<(), ReconnectProtocolReason> {
+    ) -> Result<bool, ReconnectProtocolReason> {
         let Some((request, _)) = self.ongoing_requests.get_mut(request_id) else {
-            return Err("Invalid request id from server".to_string());
+            tracing::debug!("Ignoring response to request {request_id:?}, which already completed");
+            return Ok(false);
         };
         if request.typ != request_type {
             return Err("Mismatched request type from server".to_string());
         };
-        let errored = matches!(value, FunctionResult::ErrorMessage(_));
+        if request.status == RequestStatus::Completed {
+            tracing::debug!("Ignoring duplicate response to request {request_id:?}");
+            return Ok(false);
+        }
+        let errored = matches!(
+            value,
+            FunctionResult::ErrorMessage(_) | FunctionResult::ConvexError(_)
+        );
         request.update_value(value);
         request.update_timestamp(ts);
         request.status = RequestStatus::Completed;
@@ -101,22 +117,21 @@ impl RequestManager {
         // Actions and errored mutations are ok to complete immediately
         if request_type == RequestType::Action || errored {
             self._remove_and_notify_completed(request_id);
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
+    /// Removes and notifies every completed request whose result is visible
+    /// at `ts`, the timestamp of the latest query results the client has
+    /// received from the server. Returns the IDs of the removed requests.
     pub fn remove_and_notify_completed(&mut self, ts: Timestamp) -> BTreeSet<RequestId> {
         let mut completed_requests = BTreeSet::new();
         for (id, (request, _)) in self.ongoing_requests.iter() {
-            let mut is_completed = false;
-            if request.status == RequestStatus::Completed {
-                is_completed = true;
-            }
-            if let Some(request_ts) = request.ts {
-                if request_ts <= ts {
-                    is_completed = true;
-                }
-            }
+            // A mutation's result is only visible in query results once a
+            // transition reaches the timestamp it committed at.
+            let is_completed = request.status == RequestStatus::Completed
+                && request.ts.is_none_or(|request_ts| request_ts <= ts);
             if is_completed {
                 completed_requests.insert(*id);
             }

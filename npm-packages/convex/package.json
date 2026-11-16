@@ -1,7 +1,7 @@
 {
   "name": "convex",
   "description": "Client for the Convex Cloud",
-  "version": "1.49.0",
+  "version": "1.50.0",
   "author": "Convex, Inc. <no-reply@convex.dev>",
   "homepage": "https://convex.dev",
   "repository": {

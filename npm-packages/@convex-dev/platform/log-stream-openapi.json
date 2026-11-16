@@ -821,7 +821,70 @@
                 }
               }
             ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/S3ExportStatsEvent"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "topic"
+                ],
+                "properties": {
+                  "topic": {
+                    "type": "string",
+                    "enum": [
+                      "s3_export_stats"
+                    ]
+                  }
+                }
+              }
+            ]
           }
+        ]
+      },
+      "S3ExportStatsEvent": {
+        "type": "object",
+        "required": [
+          "timestamp",
+          "status",
+          "lag_seconds",
+          "last_error"
+        ],
+        "properties": {
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/S3ExportStatus"
+          },
+          "lag_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "S3ExportStatus": {
+        "type": "string",
+        "enum": [
+          "snapshotting",
+          "catching_up",
+          "up_to_date",
+          "failed"
         ]
       },
       "ScheduledJobLagEvent": {

@@ -25,7 +25,7 @@ import {
 import { useTableShapes } from "@common/lib/deploymentApi";
 import { Shape } from "shapes";
 import { DataView } from "@common/features/data/components/DataView";
-import { FunctionsContext } from "@common/lib/functions/FunctionsProvider";
+import { FunctionsProvider } from "@common/lib/functions/FunctionsProvider";
 import { api } from "system-udfs/convex/_generated/api";
 
 // Fixed "now" so timestamps are stable.
@@ -191,6 +191,7 @@ const mockDocuments: Record<string, GenericDocument[]> = {
 
 const mockConvexClient = mockConvexReactClient()
   .registerQueryFake(udfs.components.list, () => [])
+  .registerQueryFake(udfs.modules.listForAllComponents, () => [])
   .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
   .registerQueryFake(udfs.getSchemas.default, () => ({
     active: undefined,
@@ -315,9 +316,9 @@ function renderDataPage() {
             isSelfHosted: false,
           }}
         >
-          <FunctionsContext.Provider value={new Map()}>
+          <FunctionsProvider>
             <DataView />
-          </FunctionsContext.Provider>
+          </FunctionsProvider>
         </DeploymentInfoContext.Provider>
       </ConvexProvider>
     </ConnectedDeploymentContext.Provider>
@@ -634,6 +635,7 @@ const mockComponents = [
 
 const mockConvexClientWithComponents = mockConvexReactClient()
   .registerQueryFake(udfs.components.list, () => mockComponents)
+  .registerQueryFake(udfs.modules.listForAllComponents, () => [])
   .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
   .registerQueryFake(udfs.getSchemas.default, () => ({
     active: undefined,
@@ -728,9 +730,9 @@ export const ComponentDropdown: Story = {
           }}
         >
           <PermissionsProvider>
-            <FunctionsContext.Provider value={new Map()}>
+            <FunctionsProvider>
               <DataView />
-            </FunctionsContext.Provider>
+            </FunctionsProvider>
           </PermissionsProvider>
         </DeploymentInfoContext.Provider>
       </ConvexProvider>

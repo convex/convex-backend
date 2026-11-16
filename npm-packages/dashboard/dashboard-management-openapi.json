@@ -1474,6 +1474,81 @@
         }
       }
     },
+    "/teams/{team_id}/legacy_admin_key_usage": {
+      "get": {
+        "summary": "Legacy admin key settings and usage for a team",
+        "operationId": "get_team_legacy_admin_key_usage",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamLegacyAdminKeyUsageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/disable_legacy_admin_keys": {
+      "post": {
+        "summary": "Disable legacy admin keys for a team's deployments",
+        "description": "Deployments start rejecting legacy admin keys once their cached\nauthorization results expire, within a minute.",
+        "operationId": "disable_team_legacy_admin_keys",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/deployments/{deployment_name}/legacy_admin_key_usage": {
+      "get": {
+        "summary": "When a deployment last used a legacy admin key",
+        "operationId": "get_deployment_legacy_admin_key_usage",
+        "parameters": [
+          {
+            "name": "deployment_name",
+            "in": "path",
+            "description": "Deployment name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentLegacyAdminKeyUsageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/teams/{team_id}/cancel_orb_subscription": {
       "post": {
         "operationId": "cancel_orb_subscription",
@@ -4417,6 +4492,19 @@
         "format": "int64",
         "minimum": 0
       },
+      "DeploymentLegacyAdminKeyUsageResponse": {
+        "type": "object",
+        "properties": {
+          "lastUsedTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the deployment last accepted a legacy admin key, in milliseconds\nsince the epoch, or `null` if it never has. Recorded at most once a\nminute."
+          }
+        }
+      },
       "DeploymentReference": {
         "type": "string",
         "description": "An identifier that uniquely identifies this deployment within the project."
@@ -5222,6 +5310,23 @@
           },
           "teamSlug": {
             "type": "string"
+          }
+        }
+      },
+      "LegacyAdminKeyDeploymentUsage": {
+        "type": "object",
+        "required": [
+          "deploymentName",
+          "lastUsedTime"
+        ],
+        "properties": {
+          "deploymentName": {
+            "type": "string"
+          },
+          "lastUsedTime": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds since the epoch. Recorded at most once a minute."
           }
         }
       },
@@ -6120,7 +6225,8 @@
           "name",
           "slug",
           "teamId",
-          "createTime"
+          "createTime",
+          "tags"
         ],
         "properties": {
           "id": {
@@ -6164,10 +6270,7 @@
             ]
           },
           "tags": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             }
@@ -7156,6 +7259,29 @@
         "type": "integer",
         "format": "int64",
         "minimum": 0
+      },
+      "TeamLegacyAdminKeyUsageResponse": {
+        "type": "object",
+        "required": [
+          "deployments"
+        ],
+        "properties": {
+          "disabledTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the team disabled legacy admin keys, in milliseconds since the\nepoch, or `null` if they are allowed."
+          },
+          "deployments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegacyAdminKeyDeploymentUsage"
+            },
+            "description": "The deployments that most recently used a legacy admin key while owned\nby this team, most recent first, up to 100."
+          }
+        }
       },
       "TeamMemberCustomRole": {
         "type": "object",

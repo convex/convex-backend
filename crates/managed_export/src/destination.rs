@@ -34,10 +34,17 @@ use aws_sdk_s3::{
     operation::get_object::GetObjectOutput,
     primitives::ByteStream,
 };
+use common::knobs::S3_EXPORT_GLUE_CONCURRENCY;
 use errors::ErrorMetadata;
+use futures::{
+    stream,
+    StreamExt,
+    TryStreamExt,
+};
 use iceberg::spec::{
     PrimitiveType,
     Schema,
+    SchemaRef,
     TableMetadata,
     Type,
 };
@@ -52,6 +59,7 @@ use crate::iceberg::{
 
 const EXPORT_ID_PARAMETER: &str = "convex.export-id";
 const PAGE_PARAMETER: &str = "convex.page";
+const MAX_LISTED_TABLES: usize = 20_000;
 
 /// Largest size for an object that Porter can read whole from the bucket.
 /// This is to prevent a malicious bucket owner from replacing the object with
@@ -226,6 +234,7 @@ impl ExportStore {
     /// Returns the state and its ETag, or `None` when no page has committed.
     /// The customer can write this object, so only bytes `encryptor` opens
     /// get parsed.
+    #[fastrace::trace]
     pub async fn read(&self, encryptor: &RandomEncryptor) -> Result<Option<(ExportState, String)>> {
         let output = match self
             .s3
@@ -250,6 +259,7 @@ impl ExportStore {
     /// Replaces the state only if it still has `etag`, or creates it only if
     /// it does not exist when `etag` is `None`. Another writer's commit fails
     /// this with a conflict error.
+    #[fastrace::trace]
     pub async fn commit(
         &self,
         state: &ExportState,
@@ -290,7 +300,17 @@ impl ExportStore {
     /// database is left alone. Requires one writer per
     /// database: a table already at this export's page or later is left
     /// alone, so a slow mirror cannot move Glue backward.
-    pub async fn publish(&self, state: &ExportState) -> Result<()> {
+    ///
+    /// `schemas` holds the schemas of the tables this page's writer changed,
+    /// by metadata file. It is empty for the mirror that finishes a crashed
+    /// page, which runs before the writer exists; a table absent from it has
+    /// its metadata file read from S3.
+    #[fastrace::trace]
+    pub async fn publish(
+        &self,
+        state: &ExportState,
+        schemas: &HashMap<String, SchemaRef>,
+    ) -> Result<()> {
         self.ensure_database().await?;
         let mut published = BTreeMap::new();
         let mut pages = self
@@ -301,28 +321,28 @@ impl ExportStore {
             .send();
         while let Some(page) = pages.next().await {
             let page = page.map_err(|e| aws_error(e, "list the Glue tables"))?;
-            for table in page.table_list() {
-                published.insert(table.name().to_owned(), table.clone());
+            for table in page.table_list.unwrap_or_default() {
+                published.insert(table.name().to_owned(), table);
             }
+            anyhow::ensure!(
+                published.len() <= MAX_LISTED_TABLES,
+                ErrorMetadata::bad_request(
+                    "S3ExportGlueDatabaseTooLarge",
+                    format!(
+                        "The export's Glue database {} holds too many tables (over \
+                         {MAX_LISTED_TABLES})",
+                        self.database
+                    ),
+                )
+            );
         }
+        // Every table is checked before any write, so a foreign table stops
+        // the mirror with Glue untouched.
+        let mut writes = Vec::new();
         for (name, table) in &state.tables {
             let location = &table.metadata;
             let Some(current) = published.remove(name) else {
-                let columns = self.read_glue_columns(location).await?;
-                self.glue
-                    .create_table()
-                    .database_name(&self.database)
-                    .table_input(table_input(
-                        name,
-                        location,
-                        None,
-                        columns,
-                        &self.export_id,
-                        state,
-                    )?)
-                    .send()
-                    .await
-                    .map_err(|e| aws_error(e, "create a Glue table"))?;
+                writes.push((name.clone(), location.clone(), None));
                 continue;
             };
             let parameters = current.parameters.unwrap_or_default();
@@ -333,38 +353,32 @@ impl ExportStore {
                 ErrorMetadata::bad_request(
                     "S3ExportForeignTable",
                     format!(
-                        "Glue table {name} was not written by a Convex export. Remove it from the \
-                         export's Glue database or recreate the export."
+                        "Glue table {name} wasn't created by Convex, but the export needs its \
+                         name. Delete it and the export will pick back up on its own."
                     ),
                 )
             );
-            let previous = parameters.get("metadata_location").map(String::as_str);
+            let previous = parameters.get("metadata_location").cloned();
             // Most pages change few tables.
-            if previous == Some(location) || state.published(&self.export_id, &parameters) {
+            if previous.as_deref() == Some(location.as_str())
+                || state.published(&self.export_id, &parameters)
+            {
                 continue;
             }
-            let columns = self.read_glue_columns(location).await?;
-            let mut update = self
-                .glue
-                .update_table()
-                .database_name(&self.database)
-                .table_input(table_input(
-                    name,
-                    location,
-                    previous,
-                    columns,
-                    &self.export_id,
-                    state,
-                )?)
-                .skip_archive(true);
-            if let Some(version_id) = current.version_id {
-                update = update.version_id(version_id);
-            }
-            update
-                .send()
-                .await
-                .map_err(|e| aws_error(e, "update a Glue table"))?;
+            writes.push((
+                name.clone(),
+                location.clone(),
+                Some((previous, current.version_id)),
+            ));
         }
+        // Each write touches one Glue table, so the writes are independent.
+        stream::iter(writes)
+            .map(|(name, location, current)| {
+                self.write_table(state, schemas, name, location, current)
+            })
+            .buffer_unordered(*S3_EXPORT_GLUE_CONCURRENCY)
+            .try_collect::<()>()
+            .await?;
         for (name, table) in published {
             if !state.is_stale(&self.export_id, table.parameters()) {
                 continue;
@@ -380,9 +394,65 @@ impl ExportStore {
         Ok(())
     }
 
+    /// Creates `name` in Glue at `location`, or updates it when `current`
+    /// holds its previous metadata location and Glue version.
+    #[fastrace::trace]
+    async fn write_table(
+        &self,
+        state: &ExportState,
+        schemas: &HashMap<String, SchemaRef>,
+        name: String,
+        location: String,
+        current: Option<(Option<String>, Option<String>)>,
+    ) -> Result<()> {
+        let columns = match schemas.get(&location) {
+            Some(schema) => glue_columns(schema)?,
+            None => self.read_glue_columns(&location).await?,
+        };
+        let Some((previous, version_id)) = current else {
+            self.glue
+                .create_table()
+                .database_name(&self.database)
+                .table_input(table_input(
+                    &name,
+                    &location,
+                    None,
+                    columns,
+                    &self.export_id,
+                    state,
+                )?)
+                .send()
+                .await
+                .map_err(|e| aws_error(e, "create a Glue table"))?;
+            return Ok(());
+        };
+        let mut update = self
+            .glue
+            .update_table()
+            .database_name(&self.database)
+            .table_input(table_input(
+                &name,
+                &location,
+                previous.as_deref(),
+                columns,
+                &self.export_id,
+                state,
+            )?)
+            .skip_archive(true);
+        if let Some(version_id) = version_id {
+            update = update.version_id(version_id);
+        }
+        update
+            .send()
+            .await
+            .map_err(|e| aws_error(e, "update a Glue table"))?;
+        Ok(())
+    }
+
     /// The Glue columns for the table whose current metadata file is at
     /// `metadata_location`. Athena reads the Iceberg schema itself, but the
     /// Glue console, crawlers and Lake Formation show the Glue columns.
+    #[fastrace::trace]
     async fn read_glue_columns(&self, metadata_location: &str) -> Result<Vec<Column>> {
         let key = metadata_location
             .strip_prefix(&format!("s3://{}/", self.bucket))
@@ -403,6 +473,7 @@ impl ExportStore {
         glue_columns(metadata.current_schema())
     }
 
+    #[fastrace::trace]
     async fn ensure_database(&self) -> Result<()> {
         let result = self
             .glue
@@ -436,15 +507,16 @@ const DESTINATION_ERROR_CODES: &[&str] = &[
 
 /// Opens and parses the state. Only Porter can have sealed it, and only for
 /// this `key` (it holds the export ID), so a state copied from a deleted or
-/// sibling export does not open. Anything else means: recreate the export.
+/// sibling export does not open. Anything else means: delete the export and
+/// create a new one.
 fn unseal_state(encryptor: &RandomEncryptor, key: &str, bytes: Vec<u8>) -> Result<ExportState> {
     let plain = encryptor
         .decrypt_bytes(key.as_bytes(), bytes)
         .map_err(|error| {
             error.context(ErrorMetadata::bad_request(
                 "S3ExportStateModified",
-                "The export state in the bucket was not written by Convex or was modified. \
-                 Recreate the export to start it again.",
+                "The export's state file in your bucket was changed, or wasn't written by Convex. \
+                 Delete this export and create a new one to start fresh.",
             ))
         })?;
     pb_state::ExportState::decode(&*plain)

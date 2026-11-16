@@ -50,7 +50,6 @@ common = { workspace = true }
 convex_macro = { workspace = true }
 database = { workspace = true }
 deno_core = { workspace = true }
-deno_core_icudata = { workspace = true }
 derive_more = { workspace = true }
 encoding_rs = { workspace = true }
 errors = { workspace = true }
@@ -60,6 +59,7 @@ futures = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
 humansize = { workspace = true }
+icudtl = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 keybroker = { workspace = true }

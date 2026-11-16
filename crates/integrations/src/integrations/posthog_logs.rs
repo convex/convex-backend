@@ -245,6 +245,7 @@ impl<RT: Runtime> PostHogLogsIntegration<RT> {
             StructuredLogEvent::AiGatewayUsage { .. } => "ai_gateway_usage",
             StructuredLogEvent::LogStreamEgress { .. } => "log_stream_egress",
             StructuredLogEvent::CustomAudit { .. } => "custom_audit",
+            StructuredLogEvent::S3ExportStats { .. } => "s3_export_stats",
         };
         attributes.push(json!({"key": "convex.topic", "value": {"stringValue": topic}}));
 

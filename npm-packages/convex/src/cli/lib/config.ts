@@ -84,6 +84,8 @@ export interface ProjectConfig {
     externalPackages: string[];
     // nodeVersion has no default value, its presence/absence is meaningful
     nodeVersion?: string | undefined;
+    // Absent means the backend's default size.
+    defaultMemoryMb?: number | undefined;
   };
   generateCommonJSApi: boolean;
 
@@ -125,6 +127,7 @@ export interface Config {
   schemaId?: string;
   udfServerVersion?: string;
   nodeVersion?: string | undefined;
+  nodeDefaultMemoryMb?: number | undefined;
 }
 
 export interface ConfigWithModuleHashes {
@@ -275,6 +278,11 @@ const NodeSchema = z.object({
     .string()
     .optional()
     .describe("The Node.js version to use for Node.js functions"),
+  defaultMemoryMb: z
+    .number()
+    .int()
+    .optional()
+    .describe("Memory in MB for every Node.js action in the deployment"),
 });
 
 const CodegenSchema = z.object({
@@ -709,6 +717,7 @@ export async function configFromProjectConfig(
       // if the CLI is installed globally.
       udfServerVersion: version,
       nodeVersion: projectConfig.node.nodeVersion,
+      nodeDefaultMemoryMb: projectConfig.node.defaultMemoryMb,
     },
     bundledModuleInfos,
   };
@@ -815,6 +824,7 @@ export async function pullConfig(
         // The backend sends `null` when unset, and `diffConfig` compares
         // against `undefined` from `convex.json`.
         nodeVersion: data.nodeVersion ?? undefined,
+        defaultMemoryMb: data.nodeDefaultMemoryMb ?? undefined,
       },
       // This field is not stored in the backend, it only affects the client.
       generateCommonJSApi: false,
@@ -908,6 +918,19 @@ export function diffConfig(
     }
     if (newConfig.nodeVersion) {
       diff += `[+] ${newConfig.nodeVersion}\n`;
+    }
+  }
+
+  if (
+    oldConfig.projectConfig.node.defaultMemoryMb !==
+    newConfig.nodeDefaultMemoryMb
+  ) {
+    diff += "Change the memory size for Node.js actions:\n";
+    if (oldConfig.projectConfig.node.defaultMemoryMb) {
+      diff += `[-] ${oldConfig.projectConfig.node.defaultMemoryMb} MB\n`;
+    }
+    if (newConfig.nodeDefaultMemoryMb) {
+      diff += `[+] ${newConfig.nodeDefaultMemoryMb} MB\n`;
     }
   }
 

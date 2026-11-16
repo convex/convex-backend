@@ -859,7 +859,8 @@
           "name",
           "slug",
           "teamId",
-          "createTime"
+          "createTime",
+          "tags"
         ],
         "properties": {
           "id": {
@@ -903,10 +904,7 @@
             ]
           },
           "tags": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": "array",
             "items": {
               "type": "string"
             }

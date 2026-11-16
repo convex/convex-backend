@@ -919,6 +919,7 @@ impl<RT: Runtime> Application<RT> {
             export_provider.clone(),
             usage_counter.clone(),
             key_broker.clone(),
+            Arc::new(log_manager_client.clone()),
         );
         let s3_export_worker = Arc::new(Mutex::new(Some(
             runtime.spawn("s3_export_worker", s3_export_worker.run()),
@@ -2489,6 +2490,7 @@ impl<RT: Runtime> Application<RT> {
                     &app_modules,
                     external_deps_id_and_pkg.clone(),
                     config.node_version,
+                    config.node_default_memory_mb,
                 )
                 .await?;
             drop(permit);
@@ -2501,9 +2503,14 @@ impl<RT: Runtime> Application<RT> {
             let definition_path = component_def.definition_path.clone();
             let component_modules = component_def.modules().cloned().collect();
             let upload_limit = upload_limit.clone();
+            let node_default_memory_mb = config.node_default_memory_mb;
             let component_pkg_future = async move {
                 let permit = upload_limit.acquire().await?;
-                let component_pkg = app.upload_package(&component_modules, None, None).await?;
+                // Components share the deployment's Lambda, so their Node actions
+                // run and bill at the app's size.
+                let component_pkg = app
+                    .upload_package(&component_modules, None, None, node_default_memory_mb)
+                    .await?;
                 drop(permit);
                 anyhow::Ok((definition_path, component_pkg))
             };
@@ -2691,6 +2698,7 @@ impl<RT: Runtime> Application<RT> {
         modules: &Vec<ModuleConfig>,
         external_deps_id_and_pkg: Option<(ExternalDepsPackageId, ExternalDepsPackage)>,
         node_version: Option<NodeVersion>,
+        node_default_memory_mb: Option<u32>,
     ) -> anyhow::Result<SourcePackage> {
         // If there are any node actions, turn on the lambdas.
         if modules
@@ -2739,6 +2747,7 @@ impl<RT: Runtime> Application<RT> {
             external_deps_package_id,
             package_size,
             node_version,
+            node_default_memory_mb,
         })
     }
 
@@ -2793,7 +2802,7 @@ impl<RT: Runtime> Application<RT> {
         // This will become a dangling reference since the _modules entry won't
         // be committed to the database, but we have to deal with those anyway.
         let source_package = self
-            .upload_package(&vec![module.clone()], None, None)
+            .upload_package(&vec![module.clone()], None, None, None)
             .await?;
 
         let mut tx = self.begin(identity.clone()).await?;

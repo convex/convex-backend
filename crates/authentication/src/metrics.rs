@@ -116,3 +116,28 @@ pub fn log_deploy_key_use(key_type: DeployKeyType) {
         vec![StaticMetricLabel::new("key_type", key_type_label)],
     );
 }
+
+#[derive(strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum LegacyAdminKeyCheckOutcome {
+    Accepted,
+    DisabledForTeam,
+    CheckedLocally,
+}
+
+register_convex_counter!(
+    LEGACY_ADMIN_KEY_CHECK_TOTAL,
+    "Count of legacy admin keys for team members checked through big brain",
+    &["outcome"]
+);
+
+pub fn log_legacy_admin_key_check(outcome: LegacyAdminKeyCheckOutcome) {
+    log_counter_with_labels(
+        &LEGACY_ADMIN_KEY_CHECK_TOTAL,
+        1,
+        vec![StaticMetricLabel::new(
+            "outcome",
+            <&'static str>::from(outcome),
+        )],
+    );
+}

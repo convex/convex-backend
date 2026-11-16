@@ -522,7 +522,7 @@ export function S3ExportConfigurationForm({
           destinationFixed
             ? destinationFixedDescription
             : createBucket
-              ? "The CloudFormation stack creates this bucket, private and encrypted. Names are unique across all of AWS."
+              ? "The next step creates this bucket for you, private and encrypted. Bucket names have to be unique across all of AWS."
               : "A bucket that already exists in your AWS account."
         }
       />
@@ -745,10 +745,12 @@ export function S3ExportConfigurationForm({
                   stay in S3 but stop updating.
                 </p>
               )}
-            <p className="max-w-prose text-xs text-content-secondary">
-              The first export starts when you save. After it catches up, Convex
-              continuously syncs changes to S3.
-            </p>
+            {pending && (
+              <p className="max-w-prose text-xs text-content-secondary">
+                The first sync starts when you save. After it catches up, Convex
+                continuously syncs changes to S3.
+              </p>
+            )}
           </Stepper.Step>
         </Stepper>
       </div>

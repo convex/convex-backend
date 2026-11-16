@@ -320,7 +320,6 @@ impl<RT: Runtime> NodeActions<RT> {
         Ok(NodeActionOutcome {
             result,
             syscall_trace,
-            memory_used_in_mb: execute_result.memory_allocated_mb,
             egress_bytes: execute_result.egress_bytes,
         })
     }
@@ -714,6 +713,7 @@ pub struct ExecuteRequest {
 
     pub source_package: SourcePackage,
     pub source_package_id: SourcePackageId,
+    pub memory_mb: u32,
     pub user_identity: Option<UserIdentityAttributes>,
     pub auth_header: Option<String>,
     pub environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
@@ -753,7 +753,6 @@ enum ExecuteResponseResult {
 pub struct NodeActionOutcome {
     pub result: Result<ConvexValue, JsError>,
     pub syscall_trace: SyscallTrace,
-    pub memory_used_in_mb: u64,
     pub egress_bytes: u64,
 }
 

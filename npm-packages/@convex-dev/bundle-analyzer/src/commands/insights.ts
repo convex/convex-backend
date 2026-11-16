@@ -23,7 +23,7 @@ export const insights = new Command("insights")
     const found = findInsights(
       builds,
       readDevDependencies(analysis.bundle.projectRoot),
-      analysis.bundle.projectRoot,
+      analysis.bundle,
     );
     if (options.json) {
       printJson({ insights: found });

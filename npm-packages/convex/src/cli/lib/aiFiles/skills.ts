@@ -4,7 +4,11 @@ import path from "path";
 import { promises as fs } from "fs";
 import { chalkStderr } from "chalk";
 import { logMessage } from "../../../bundler/log.js";
-import { getVersion, fetchAgentSkillsSha } from "../versionApi.js";
+import {
+  getVersion,
+  fetchAgentSkillsSha,
+  fetchAgentSkillsCatalog,
+} from "../versionApi.js";
 import { type AiFilesState } from "./state.js";
 import { exhaustiveCheck } from "./utils.js";
 
@@ -114,6 +118,25 @@ async function removeSkillsLockIfEmpty({
 }
 
 /**
+ * Remove the skills that the Convex catalog marks as deleted from
+ * convex/agent-skills. `npx skills add` only adds and refreshes skills, so
+ * without this a skill that was deleted upstream stays installed forever.
+ *
+ * Best effort: if the catalog cannot be fetched, nothing is removed.
+ */
+async function removeDeletedSkills(projectDir: string): Promise<void> {
+  const catalog = await fetchAgentSkillsCatalog();
+  if (catalog.kind === "error") return;
+
+  const skillNames = catalog.data.skills
+    .filter(({ status }) => status.kind === "deleted")
+    .map(({ skillName }) => skillName);
+  if (skillNames.length === 0) return;
+
+  await runSkillsRemove({ cwd: projectDir, skillNames });
+}
+
+/**
  * Install Convex agent skills and record the SHA into the state.
  * Handles the kill-switch check and all logging internally.
  *
@@ -143,6 +166,8 @@ export async function installSkills({
     );
     return false;
   }
+
+  await removeDeletedSkills(projectDir);
 
   const sha = await fetchAgentSkillsSha();
   if (sha) state.agentSkillsSha = sha;

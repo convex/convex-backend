@@ -73,7 +73,7 @@ struct WebSocketInternal {
 }
 struct WebSocketWorker {
     ws_url: Url,
-    on_response: mpsc::Sender<ProtocolResponse>,
+    on_response: mpsc::UnboundedSender<ProtocolResponse>,
     on_state_change: Option<mpsc::Sender<WebSocketState>>,
     internal_receiver: Fuse<UnboundedReceiverStream<WebSocketRequest>>,
     ping_ticker: Interval,
@@ -96,7 +96,7 @@ impl Drop for WebSocketManager {
 impl SyncProtocol for WebSocketManager {
     async fn open(
         ws_url: Url,
-        on_response: mpsc::Sender<ProtocolResponse>,
+        on_response: mpsc::UnboundedSender<ProtocolResponse>,
         on_state_change: Option<mpsc::Sender<WebSocketState>>,
         client_id: &str,
     ) -> anyhow::Result<Self> {
@@ -138,7 +138,7 @@ impl WebSocketWorker {
 
     async fn run(
         ws_url: Url,
-        on_response: mpsc::Sender<ProtocolResponse>,
+        on_response: mpsc::UnboundedSender<ProtocolResponse>,
         on_state_change: Option<mpsc::Sender<WebSocketState>>,
         internal_receiver: mpsc::UnboundedReceiver<WebSocketRequest>,
         client_id: String,
@@ -179,6 +179,7 @@ impl WebSocketWorker {
                     tracing::debug!("Reconnecting websocket due to {}", reconnect.reason);
                     last_close_reason = reconnect.reason;
                     max_observed_timestamp = reconnect.max_observed_timestamp;
+                    let _ = worker.on_response.send(ProtocolResponse::ReconnectStarted);
                     continue;
                 },
                 Err(e) => e,
@@ -194,7 +195,7 @@ impl WebSocketWorker {
             // The worker will send a Reconnect message and the new query set all together.
             // Drain the input request queue until we get that reconnect message - which
             // will be followed by the refreshed query set.
-            let _ = worker.on_response.send(ProtocolResponse::Failure).await;
+            let _ = worker.on_response.send(ProtocolResponse::Failure);
             tracing::debug!("Waiting for base client to acknowledge reconnect");
             loop {
                 let request = worker.internal_receiver.next().await;
@@ -204,6 +205,7 @@ impl WebSocketWorker {
                 // when we restructure the wider protocol to be a single routine.
                 if let Some(WebSocketRequest::Reconnect(reconnect)) = request {
                     max_observed_timestamp = reconnect.max_observed_timestamp;
+                    let _ = worker.on_response.send(ProtocolResponse::ReconnectStarted);
                     break;
                 }
             }
@@ -267,7 +269,7 @@ impl WebSocketWorker {
                             };
 
                             let resp = ProtocolResponse::ServerMessage(server_message);
-                            let _ = self.on_response.send(resp).await;
+                            let _ = self.on_response.send(resp);
 
                             // TODO: Similar to JS, we should ideally only reset backoff if we get
                             // the client gets into a correct state, where we have Connected and

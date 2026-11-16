@@ -2,6 +2,10 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use common::knobs::S3_EXPORT_RETAINED_SNAPSHOTS;
+use fastrace::{
+    future::FutureExt as _,
+    Span,
+};
 use iceberg::{
     spec::DataFileFormat,
     table::Table,
@@ -75,8 +79,12 @@ pub(crate) async fn append(
         ))
         .build(None)
         .await?;
-    writer.write(batch).await?;
-    let files = writer.close().await?;
+    let files = async {
+        writer.write(batch).await?;
+        writer.close().await
+    }
+    .in_span(Span::enter_with_local_parent("append::write_data_file"))
+    .await?;
     let bytes_written = files.iter().map(|file| file.file_size_in_bytes()).sum();
     let tx = Transaction::new(table);
     // Expire before appending, so the expiry's ref check sees the table as
@@ -95,5 +103,9 @@ pub(crate) async fn append(
         .set_snapshot_properties(snapshot_properties.clone())
         .add_data_files(files)
         .apply(tx)?;
-    Ok((tx.commit(catalog).await?, bytes_written))
+    let table = tx
+        .commit(catalog)
+        .in_span(Span::enter_with_local_parent("append::commit"))
+        .await?;
+    Ok((table, bytes_written))
 }

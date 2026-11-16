@@ -80,7 +80,9 @@ analytics (OLAP) use cases.
 
 For periodic OLAP analyses, [download a backup](/database/backup-restore) as a
 zip file. For advanced use cases, where you need to continuously stream data,
-Convex exposes a
+Convex can
+[stream changes to your tables into your own S3 bucket](/production/integrations/s3-export.mdx)
+(beta) as Apache Iceberg tables, or you can use the
 [Fivetran connector](/production/integrations/streaming-import-export.mdx) to
 export Convex data to external analytics systems.
 

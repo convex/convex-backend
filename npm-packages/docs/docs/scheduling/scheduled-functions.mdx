@@ -144,6 +144,13 @@ What `cancel` does depends on the state of the scheduled function:
 - If it already started, it will continue to run, but any functions it schedules
   will not run.
 
+Starting with `convex` 1.50.0, a scheduled mutation cannot cancel itself.
+Calling `ctx.scheduler.cancel` with its own scheduled function ID throws
+`ScheduledFunctionCancelingItself`. If the error is not caught, the mutation
+rolls back and its scheduled function is marked as failed. Older versions treat
+self-cancellation as a no-op and log a deprecation warning. Remove calls that
+cancel the current mutation; return from it to finish instead.
+
 ## Debugging
 
 You can view logs from previously executed scheduled functions in the Convex

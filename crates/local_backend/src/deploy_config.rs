@@ -81,6 +81,7 @@ pub struct GetConfigHashesResponse {
     pub module_hashes: Vec<ModuleHashJson>,
     pub udf_server_version: Option<String>,
     pub node_version: Option<String>,
+    pub node_default_memory_mb: Option<u32>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -246,10 +247,13 @@ pub async fn get_config_hashes(
     let config = ConvexObject::try_from(config)?;
     let config: JsonValue = config.to_internal_json();
 
-    let node_version = SourcePackageModel::new(&mut tx, TableNamespace::Global)
+    let latest_source_package = SourcePackageModel::new(&mut tx, TableNamespace::Global)
         .get_latest()
-        .await?
+        .await?;
+    let node_version = latest_source_package
+        .as_ref()
         .and_then(|v| v.node_version.map(|v| v.into()));
+    let node_default_memory_mb = latest_source_package.and_then(|v| v.node_default_memory_mb);
 
     let udf_server_version = udf_config.map(|config| format!("{}", config.server_version));
     Ok(Json(GetConfigHashesResponse {
@@ -257,6 +261,7 @@ pub async fn get_config_hashes(
         module_hashes,
         udf_server_version,
         node_version,
+        node_default_memory_mb,
     }))
 }
 

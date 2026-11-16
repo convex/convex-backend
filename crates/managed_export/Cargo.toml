@@ -10,7 +10,6 @@ doctest = false
 [features]
 testing = [
     "common/testing",
-    "dep:futures",
     "errors/testing",
     "iceberg-storage-opendal/opendal-memory",
     "keybroker/testing",
@@ -29,7 +28,7 @@ aws-sdk-s3 = { workspace = true }
 common = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
-futures = { workspace = true, optional = true }
+futures = { workspace = true }
 iceberg = "=0.10.1"
 iceberg-storage-opendal = { version = "=0.10.1", default-features = false, features = ["opendal-s3"] }
 keybroker = { workspace = true }
@@ -43,7 +42,6 @@ value = { workspace = true }
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
-futures = { workspace = true }
 iceberg-storage-opendal = { version = "=0.10.1", default-features = false, features = ["opendal-memory"] }
 keybroker = { workspace = true, features = ["testing"] }
 tokio = { workspace = true }

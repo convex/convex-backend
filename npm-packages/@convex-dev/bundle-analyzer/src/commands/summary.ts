@@ -183,11 +183,7 @@ export function summaryReport(
       ),
     );
 
-  const found = findInsights(
-    builds,
-    options.devDependencies,
-    analysis.bundle.projectRoot,
-  );
+  const found = findInsights(builds, options.devDependencies, analysis.bundle);
   out.push(heading("Insights"));
   if (found.length === 0) {
     out.push(dim("  No insights."));
@@ -258,7 +254,7 @@ export function summaryJson(
     insights: findInsights(
       builds,
       options.devDependencies,
-      analysis.bundle.projectRoot,
+      analysis.bundle,
     ).slice(0, limit),
   };
 }

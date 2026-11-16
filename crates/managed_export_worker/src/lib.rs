@@ -11,8 +11,17 @@ use common::{
     errors::report_error,
     execution_context::ExecutionId,
     fastrace_helpers::get_sampled_span,
+    log_streaming::{
+        LogEvent,
+        LogSender,
+        S3ExportStatus,
+        StructuredLogEvent,
+    },
     runtime::Runtime,
-    types::UdfIdentifier,
+    types::{
+        Timestamp,
+        UdfIdentifier,
+    },
     value::DeveloperDocumentId,
     RequestId,
 };
@@ -68,6 +77,9 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const CONTINUOUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// About five minutes of retries, with the backoff capped at a minute.
 const MAX_CONSECUTIVE_FAILED_SYNCS: u32 = 10;
+/// A caught-up export syncs every few seconds, and customers pay log stream
+/// egress per event.
+const STATS_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct S3ExportWorker<RT: Runtime> {
     runtime: RT,
@@ -76,9 +88,12 @@ pub struct S3ExportWorker<RT: Runtime> {
     export_provider: Arc<dyn ExportProvider<RT>>,
     usage_counter: UsageCounter,
     key_broker: KeyBroker,
+    log_sender: Arc<dyn LogSender>,
     /// Consecutive failed syncs, and the export they belong to, so a
     /// recreated export starts from zero.
     failed_syncs: Option<(DeveloperDocumentId, u32)>,
+    /// The export and status last sent to log streams, and when.
+    last_stats: Option<(DeveloperDocumentId, S3ExportStatus, tokio::time::Instant)>,
 }
 
 impl<RT: Runtime> S3ExportWorker<RT> {
@@ -89,6 +104,7 @@ impl<RT: Runtime> S3ExportWorker<RT> {
         export_provider: Arc<dyn ExportProvider<RT>>,
         usage_counter: UsageCounter,
         key_broker: KeyBroker,
+        log_sender: Arc<dyn LogSender>,
     ) -> Self {
         Self {
             runtime,
@@ -97,7 +113,9 @@ impl<RT: Runtime> S3ExportWorker<RT> {
             export_provider,
             usage_counter,
             key_broker,
+            log_sender,
             failed_syncs: None,
+            last_stats: None,
         }
     }
 
@@ -185,6 +203,14 @@ impl<RT: Runtime> S3ExportWorker<RT> {
                     timer.finish_with(error.metric_status_label_value());
                 },
             }
+            if let Err(error) = &page {
+                self.send_stats(
+                    export.developer_id(),
+                    S3ExportStatus::Failed,
+                    previous_checkpoint.as_ref(),
+                    Some(error.user_facing_message()),
+                );
+            }
             match page {
                 Ok(page) => page,
                 // A user error from the destination is the customer's to fix,
@@ -229,6 +255,9 @@ impl<RT: Runtime> S3ExportWorker<RT> {
         };
         self.failed_syncs = None;
         log_s3_export_progress(&page.status, *self.database.now_ts_for_reads());
+        let checkpoint = S3ExportCheckpoint {
+            progress: export_progress(&page.status)?,
+        };
         // Porter commits the page in the destination before returning it, so
         // a returned page is a billed page. The progress checkpoint below is
         // for the dashboard and can lose an OCC race without unbilling anything.
@@ -244,9 +273,6 @@ impl<RT: Runtime> S3ExportWorker<RT> {
             .await;
         // The page is already committed in the destination, so losing this
         // progress update to a concurrent configuration edit loses no data.
-        let checkpoint = S3ExportCheckpoint {
-            progress: export_progress(&page.status)?,
-        };
         let mut tx = self.database.begin(Identity::system()).await?;
         // A page synced under a configuration that has since changed does not
         // describe the current export.
@@ -256,6 +282,16 @@ impl<RT: Runtime> S3ExportWorker<RT> {
         if !is_same_export(current.as_ref(), &export) {
             return Ok(());
         }
+        self.send_stats(
+            export.developer_id(),
+            match &page.status {
+                SyncStatus::Snapshotting { .. } => S3ExportStatus::Snapshotting,
+                SyncStatus::Stale { .. } => S3ExportStatus::CatchingUp,
+                SyncStatus::UpToDate { .. } => S3ExportStatus::UpToDate,
+            },
+            Some(&checkpoint),
+            None,
+        );
         if !S3ExportStateModel::new(&mut tx)
             .advance(
                 export.developer_id(),
@@ -299,6 +335,44 @@ impl<RT: Runtime> S3ExportWorker<RT> {
             }
         }
         Ok(())
+    }
+
+    /// Sends the export's status to log streams when it changes, and every
+    /// [`STATS_INTERVAL`] while it stays the same. The lag is measured from
+    /// the last consistent snapshot in `checkpoint`.
+    fn send_stats(
+        &mut self,
+        export: DeveloperDocumentId,
+        status: S3ExportStatus,
+        checkpoint: Option<&S3ExportCheckpoint>,
+        last_error: Option<String>,
+    ) {
+        let now = self.runtime.monotonic_now();
+        if let Some((last_export, last_status, sent)) = self.last_stats
+            && last_export == export
+            && last_status == status
+            && now.duration_since(sent) < STATS_INTERVAL
+        {
+            return;
+        }
+        self.last_stats = Some((export, status, now));
+        let synced_ts = match checkpoint.map(|checkpoint| &checkpoint.progress) {
+            Some(S3ExportProgress::Stale { ts } | S3ExportProgress::UpToDate { ts }) => {
+                Timestamp::try_from(*ts).ok()
+            },
+            Some(S3ExportProgress::Snapshotting { .. }) | None => None,
+        };
+        let lag_seconds = synced_ts.map(|ts| {
+            Duration::from_secs_f64(self.database.now_ts_for_reads().secs_since_f64(ts).max(0.0))
+        });
+        self.log_sender.send_logs(vec![LogEvent {
+            timestamp: self.runtime.unix_timestamp(),
+            event: StructuredLogEvent::S3ExportStats {
+                status,
+                lag_seconds,
+                last_error,
+            },
+        }]);
     }
 
     /// Sets the export's status unless it already has it, or the export

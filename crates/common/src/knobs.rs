@@ -1614,6 +1614,12 @@ pub static AWS_LAMBDA_CLIENT_MAX_CONCURRENT_REQUESTS: LazyLock<usize> =
 pub static AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB: LazyLock<i32> =
     LazyLock::new(|| env_config("AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB", 512));
 
+/// Whether a push may set `node.defaultMemoryMb` in `convex.json` to a size
+/// other than the smallest. Only cloud deployments size their Lambda from it,
+/// so enable this per partition during rollout.
+pub static NODE_ACTION_MEMORY_MB_ENABLED: LazyLock<bool> =
+    LazyLock::new(|| env_config("NODE_ACTION_MEMORY_MB_ENABLED", false));
+
 /// Disk size limit in MB for the static AWS Lambda.
 pub static AWS_STATIC_LAMBDA_DISK_SIZE_MB: LazyLock<i32> =
     LazyLock::new(|| env_config("AWS_STATIC_LAMBDA_DISK_SIZE_MB", 512));
@@ -2285,9 +2291,17 @@ pub static MAX_LOG_LINES_NODE_ACTIONS: LazyLock<usize> =
 pub static MAX_LOG_LINES_DATABASE_UDFS: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_LOG_LINES_DATABASE_UDFS", 256).max(1));
 
+/// Number of parallel Glue table writes in one S3 export page.
+pub static S3_EXPORT_GLUE_CONCURRENCY: LazyLock<usize> =
+    LazyLock::new(|| env_config("S3_EXPORT_GLUE_CONCURRENCY", 8).max(1));
+
 /// Snapshots an S3 export table keeps. Each page commits one snapshot per
 /// changed table, and each commit rewrites the whole snapshot list, so the
 /// list is bounded. Readers need only the current snapshot, which holds every
 /// data file; `_ts` serves incremental reads.
 pub static S3_EXPORT_RETAINED_SNAPSHOTS: LazyLock<usize> =
     LazyLock::new(|| env_config("S3_EXPORT_RETAINED_SNAPSHOTS", 10).max(1));
+
+/// Number of tables one S3 export page appends to in parallel.
+pub static S3_EXPORT_TABLE_CONCURRENCY: LazyLock<usize> =
+    LazyLock::new(|| env_config("S3_EXPORT_TABLE_CONCURRENCY", 8).max(1));

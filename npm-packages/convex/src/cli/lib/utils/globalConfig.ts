@@ -56,8 +56,12 @@ export function restrictConfigPermissions(ctx: Context, configPath: string) {
   if (process.platform === "win32") {
     return;
   }
+  // Directories need the owner's execute bit to stay usable.
+  let suggestedMode = "600";
   try {
-    const mode = ctx.fs.stat(configPath).mode & 0o777;
+    const stat = ctx.fs.stat(configPath);
+    if (stat.isDirectory()) suggestedMode = "700";
+    const mode = stat.mode & 0o777;
     if ((mode & 0o077) !== 0) {
       // Only remove group and other bits, so this never grants the owner a
       // permission they didn't already have.
@@ -72,7 +76,7 @@ export function restrictConfigPermissions(ctx: Context, configPath: string) {
     // Refusing to read it wouldn't make the token any less exposed, so warn.
     logWarning(
       chalkStderr.yellow(
-        `Couldn't restrict permissions on ${formatPathForPrinting(configPath)}, which holds your Convex access token and is readable by other users: ${err as any}. Run \`chmod 600 ${formatPathForPrinting(configPath)}\`.`,
+        `Couldn't restrict permissions on ${formatPathForPrinting(configPath)}, which holds your Convex access token and is readable by other users: ${err as any}. Run \`chmod ${suggestedMode} ${formatPathForPrinting(configPath)}\`.`,
       ),
     );
   }

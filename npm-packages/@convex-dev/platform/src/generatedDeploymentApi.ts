@@ -282,7 +282,8 @@ export interface paths {
         /**
          * Update integration
          * @description Update an existing integration for the deployment. Omit a field to keep the
-         *     existing value, and use `null` to unset a field.
+         *     existing value, and use `null` to unset a field. For S3 exports, `null`
+         *     keeps the existing value too.
          */
         patch: operations["update_integration"];
         trace?: never;
@@ -859,12 +860,15 @@ export interface components {
             bucket: string;
             /** @description AWS region the bucket lives in, e.g. `us-east-1`. */
             region: string;
-            /** @description Key prefix within the bucket. Omit to write at the bucket root. */
+            /** @description Folder in the bucket to put the export under. Convex writes to
+             *     `<prefix>/<deployment-name>/data-lake/`, or to
+             *     `<deployment-name>/data-lake/` if you omit it. */
             prefix?: string | null;
-            /** @description ARN of a role in the bucket's account that Convex assumes to write.
-             *     Omit it to create the export first: the response carries the
-             *     `roleExternalId` the role's trust policy needs, and the export waits
-             *     until an update supplies the ARN. */
+            /** @description ARN of the IAM role Convex assumes to write. The role must be named
+             *     `ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Omit it to
+             *     create the export first: the response carries the `roleExternalId` the
+             *     role's name and trust policy need, and the export waits until an update
+             *     sets the ARN. */
             roleArn?: string;
             selection?: null | components["schemas"]["Selection"];
         };
@@ -1148,7 +1152,7 @@ export interface components {
             type: "deleting";
         };
         /** @enum {string} */
-        LogTopic: "verification" | "console" | "function_execution" | "exception" | "audit_log" | "scheduler_stats" | "scheduled_job_lag" | "current_storage_usage" | "concurrency_stats" | "storage_api_bandwidth" | "ai_gateway_usage" | "log_stream_egress" | "custom_audit";
+        LogTopic: "verification" | "console" | "function_execution" | "exception" | "audit_log" | "scheduler_stats" | "scheduled_job_lag" | "current_storage_usage" | "concurrency_stats" | "storage_api_bandwidth" | "ai_gateway_usage" | "log_stream_egress" | "custom_audit" | "s3_export_stats";
         /** Format: int64 */
         MemberId: number;
         /**
@@ -1206,10 +1210,10 @@ export interface components {
             bucket: string;
             /** @description AWS region the bucket lives in. */
             region: string;
-            /** @description Key prefix within the bucket. */
+            /** @description Folder in the bucket the export is under, if any. */
             prefix?: string | null;
-            /** @description ARN of the role Convex assumes to write. Empty until the admin pastes
-             *     it. */
+            /** @description ARN of the role Convex assumes to write. Empty if it hasn't been set
+             *     yet, and the export doesn't sync while it's empty. */
             roleArn: string;
             /** @description Value the role's trust policy must require as `sts:ExternalId`. */
             roleExternalId: string;
@@ -1350,8 +1354,9 @@ export interface components {
         };
         /** @description The destination is fixed at creation. */
         UpdateS3ExportSinkArgs: {
-            /** @description The role ARN from the customer's stack. Role exports only; sets or
-             *     replaces the ARN, within the same AWS account. */
+            /** @description ARN of the IAM role Convex assumes to write. The role must be named
+             *     `ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Set it to
+             *     finish a pending export, or to switch to a role in another account. */
             roleArn?: string | null;
             selection?: null | components["schemas"]["Selection"];
         };

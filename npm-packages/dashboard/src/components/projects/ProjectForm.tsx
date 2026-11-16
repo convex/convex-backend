@@ -3,7 +3,7 @@ import { Tooltip } from "@ui/Tooltip";
 import { Sheet } from "@ui/Sheet";
 import { TextInput } from "@ui/TextInput";
 import { useCopy } from "@common/lib/useCopy";
-import { CopyIcon, LockClosedIcon } from "@radix-ui/react-icons";
+import { CopyIcon } from "@radix-ui/react-icons";
 import { useFormik } from "formik";
 import isEqual from "lodash/isEqual";
 import { useUpdateProject } from "api/projects";
@@ -11,7 +11,6 @@ import { ProjectDetails, TeamResponse } from "generatedApi";
 import * as Yup from "yup";
 import { SLUG_CHARSET } from "lib/slugs";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
-import { useHasCustomRole } from "hooks/useDeploymentPermissions";
 import { useProjectTagSuggestions } from "hooks/useProjectTagSuggestions";
 import { ProjectTagsInput } from "./ProjectTagsInput";
 
@@ -109,26 +108,20 @@ export function ProjectForm({
               />
             </Tooltip>
 
-            {tagEditUi &&
-              (formState.values.tags !== undefined &&
-              formState.values.tags !== null ? (
-                <Tooltip
-                  tip={!hasAdminPermissions ? permissionDeniedTip : undefined}
-                >
-                  <ProjectTagsInput
-                    tags={formState.values.tags}
-                    onChange={(tags) =>
-                      void formState.setFieldValue("tags", tags)
-                    }
-                    suggestions={tagSuggestions}
-                    disabled={!hasAdminPermissions}
-                  />
-                </Tooltip>
-              ) : (
-                // If project tags are undefined, that means
-                // the member is lacking permission to view them.
-                <HiddenProjectTags />
-              ))}
+            {tagEditUi && (
+              <Tooltip
+                tip={!hasAdminPermissions ? permissionDeniedTip : undefined}
+              >
+                <ProjectTagsInput
+                  tags={formState.values.tags}
+                  onChange={(tags) =>
+                    void formState.setFieldValue("tags", tags)
+                  }
+                  suggestions={tagSuggestions}
+                  disabled={!hasAdminPermissions}
+                />
+              </Tooltip>
+            )}
           </div>
 
           <div className="flex justify-end">
@@ -145,26 +138,5 @@ export function ProjectForm({
         </div>
       </form>
     </Sheet>
-  );
-}
-
-function HiddenProjectTags() {
-  const hasCustomRole = useHasCustomRole();
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-left text-sm text-content-primary">Tags</span>
-      <div className="flex cursor-not-allowed items-center gap-1.5 rounded-md border bg-background-tertiary p-2 text-content-secondary">
-        <LockClosedIcon className="size-3.5 shrink-0" />
-        You do not have permission to view this project's tags.
-      </div>
-      {hasCustomRole && (
-        <p className="text-xs text-content-tertiary">
-          Missing permission:{" "}
-          <code className="rounded-sm bg-background-tertiary px-1 py-0.5 font-mono">
-            team:projectTags:view
-          </code>
-        </p>
-      )}
-    </div>
   );
 }

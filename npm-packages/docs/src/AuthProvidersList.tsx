@@ -15,7 +15,7 @@ export function AuthProvidersList() {
         {
           icon: <ConvexLogo height={40} width={40} />,
           href: "/auth/convex-auth",
-          docId: "auth/convex-auth",
+          docId: "auth/convex-auth/index",
           label: "Convex Auth",
         },
         {

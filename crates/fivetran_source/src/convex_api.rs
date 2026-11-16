@@ -2,18 +2,22 @@ use std::{
     collections::BTreeMap,
     fmt::Display,
     sync::LazyLock,
+    time::Duration,
 };
 
 use anyhow::Context;
 use async_trait::async_trait;
-use common::types::streaming_export::{
-    selection::Selection,
-    ActiveDataSync,
-    DataSyncArgs,
-    DataSyncCursorFromDeltasArgs,
-    DataSyncCursorFromDeltasResponse,
-    DataSyncResponse,
-    SyncId,
+use common::{
+    backoff::Backoff,
+    types::streaming_export::{
+        selection::Selection,
+        ActiveDataSync,
+        DataSyncArgs,
+        DataSyncCursorFromDeltasArgs,
+        DataSyncCursorFromDeltasResponse,
+        DataSyncResponse,
+        SyncId,
+    },
 };
 use derive_more::Display;
 use fivetran_common::config::Config;
@@ -36,6 +40,28 @@ static CONVEX_CLIENT_HEADER_VALUE: LazyLock<HeaderValue> = LazyLock::new(|| {
     let connector_version = env!("CARGO_PKG_VERSION");
     HeaderValue::from_str(&format!("fivetran-export-{connector_version}")).unwrap()
 });
+
+const MAX_RETRIES: u32 = 6;
+
+async fn send_with_retries(request: reqwest::RequestBuilder) -> reqwest::Result<reqwest::Response> {
+    let mut backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(30));
+    loop {
+        let result = request
+            .try_clone()
+            .expect("request bodies are JSON, not streams")
+            .send()
+            .await;
+        let retryable = match &result {
+            Ok(resp) => resp.status().is_server_error(),
+            Err(e) => e.is_connect(),
+        };
+        if !retryable || backoff.failures() >= MAX_RETRIES {
+            return result;
+        }
+        let wait = backoff.fail(&mut rand::rng());
+        tokio::time::sleep(wait).await;
+    }
+}
 
 /// The APIs exposed by a Convex backend for streaming export.
 #[async_trait]
@@ -109,15 +135,16 @@ impl ConvexApi {
 
     /// Performs a GET HTTP request to a given endpoint of the Convex API.
     async fn get<T: DeserializeOwned>(&self, endpoint: &str) -> anyhow::Result<T> {
-        match reqwest::Client::new()
-            .get(self.url(endpoint))
-            .header(CONVEX_CLIENT_HEADER, &*CONVEX_CLIENT_HEADER_VALUE)
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Convex {}", self.config.deploy_key),
-            )
-            .send()
-            .await
+        match send_with_retries(
+            reqwest::Client::new()
+                .get(self.url(endpoint))
+                .header(CONVEX_CLIENT_HEADER, &*CONVEX_CLIENT_HEADER_VALUE)
+                .header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Convex {}", self.config.deploy_key),
+                ),
+        )
+        .await
         {
             Ok(resp) if resp.status().is_success() => Ok(resp
                 .json::<T>()
@@ -135,16 +162,17 @@ impl ConvexApi {
         endpoint: &str,
         parameters: P,
     ) -> anyhow::Result<T> {
-        match reqwest::Client::new()
-            .post(self.url(endpoint))
-            .header(CONVEX_CLIENT_HEADER, &*CONVEX_CLIENT_HEADER_VALUE)
-            .header(
-                reqwest::header::AUTHORIZATION,
-                format!("Convex {}", self.config.deploy_key),
-            )
-            .json(&parameters)
-            .send()
-            .await
+        match send_with_retries(
+            reqwest::Client::new()
+                .post(self.url(endpoint))
+                .header(CONVEX_CLIENT_HEADER, &*CONVEX_CLIENT_HEADER_VALUE)
+                .header(
+                    reqwest::header::AUTHORIZATION,
+                    format!("Convex {}", self.config.deploy_key),
+                )
+                .json(&parameters),
+        )
+        .await
         {
             Ok(resp) if resp.status().is_success() => Ok(resp
                 .json::<T>()

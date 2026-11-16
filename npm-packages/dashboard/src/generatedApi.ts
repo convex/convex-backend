@@ -886,6 +886,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/teams/{team_id}/legacy_admin_key_usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Legacy admin key settings and usage for a team */
+        get: operations["get_team_legacy_admin_key_usage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/disable_legacy_admin_keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable legacy admin keys for a team's deployments
+         * @description Deployments start rejecting legacy admin keys once their cached
+         *     authorization results expire, within a minute.
+         */
+        post: operations["disable_team_legacy_admin_keys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/deployments/{deployment_name}/legacy_admin_key_usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** When a deployment last used a legacy admin key */
+        get: operations["get_deployment_legacy_admin_key_usage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/teams/{team_id}/cancel_orb_subscription": {
         parameters: {
             query?: never;
@@ -2157,6 +2212,15 @@ export interface components {
         };
         /** Format: int64 */
         DeploymentId: number;
+        DeploymentLegacyAdminKeyUsageResponse: {
+            /**
+             * Format: int64
+             * @description When the deployment last accepted a legacy admin key, in milliseconds
+             *     since the epoch, or `null` if it never has. Recorded at most once a
+             *     minute.
+             */
+            lastUsedTime?: number | null;
+        };
         /** @description An identifier that uniquely identifies this deployment within the project. */
         DeploymentReference: string;
         /** @enum {string} */
@@ -2373,6 +2437,14 @@ export interface components {
         JoinDirectorySyncedTeamResponse: {
             teamId: components["schemas"]["TeamId"];
             teamSlug: string;
+        };
+        LegacyAdminKeyDeploymentUsage: {
+            deploymentName: string;
+            /**
+             * Format: int64
+             * @description Milliseconds since the epoch. Recorded at most once a minute.
+             */
+            lastUsedTime: number;
         };
         ListDirectorySyncGroupsResponse: {
             groups: components["schemas"]["DirectoryGroupResponse"][];
@@ -2662,7 +2734,7 @@ export interface components {
             devDeploymentName?: string | null;
             prodDeploymentReference?: string | null;
             devDeploymentReference?: string | null;
-            tags?: string[] | null;
+            tags: string[];
         };
         /** @description Summary of a project WorkOS environment for list responses - slimmer than
          *     full environment details, uses workos_ prefix for consistency with
@@ -2930,6 +3002,17 @@ export interface components {
         };
         /** Format: int64 */
         TeamId: number;
+        TeamLegacyAdminKeyUsageResponse: {
+            /**
+             * Format: int64
+             * @description When the team disabled legacy admin keys, in milliseconds since the
+             *     epoch, or `null` if they are allowed.
+             */
+            disabledTime?: number | null;
+            /** @description The deployments that most recently used a legacy admin key while owned
+             *     by this team, most recent first, up to 100. */
+            deployments: components["schemas"]["LegacyAdminKeyDeploymentUsage"][];
+        };
         /** @description A custom role attached to a team member, denormalized with the
          *     role's display name so API consumers can render members without a
          *     separate roles lookup. */
@@ -3092,6 +3175,7 @@ export type DeleteProjectsArgs = components['schemas']['DeleteProjectsArgs'];
 export type DeleteWorkOsEnvironmentRequest = components['schemas']['DeleteWorkOSEnvironmentRequest'];
 export type DeleteWorkOsEnvironmentResponse = components['schemas']['DeleteWorkOSEnvironmentResponse'];
 export type DeploymentId = components['schemas']['DeploymentId'];
+export type DeploymentLegacyAdminKeyUsageResponse = components['schemas']['DeploymentLegacyAdminKeyUsageResponse'];
 export type DeploymentReference = components['schemas']['DeploymentReference'];
 export type DeploymentType = components['schemas']['DeploymentType'];
 export type DeploymentWorkOsEnvironmentInfo = components['schemas']['DeploymentWorkOSEnvironmentInfo'];
@@ -3136,6 +3220,7 @@ export type InvoicesResponse = components['schemas']['InvoicesResponse'];
 export type IsDefaultDeployment = components['schemas']['IsDefaultDeployment'];
 export type JoinDirectorySyncedTeamRequest = components['schemas']['JoinDirectorySyncedTeamRequest'];
 export type JoinDirectorySyncedTeamResponse = components['schemas']['JoinDirectorySyncedTeamResponse'];
+export type LegacyAdminKeyDeploymentUsage = components['schemas']['LegacyAdminKeyDeploymentUsage'];
 export type ListDirectorySyncGroupsResponse = components['schemas']['ListDirectorySyncGroupsResponse'];
 export type ListMyCustomRolesResponse = components['schemas']['ListMyCustomRolesResponse'];
 export type ListStagedDirectoryMembersResponse = components['schemas']['ListStagedDirectoryMembersResponse'];
@@ -3216,6 +3301,7 @@ export type StagedMemberResponse = components['schemas']['StagedMemberResponse']
 export type TeamCurrentBillingPeriodResponse = components['schemas']['TeamCurrentBillingPeriodResponse'];
 export type TeamEntitlementsResponse = components['schemas']['TeamEntitlementsResponse'];
 export type TeamId = components['schemas']['TeamId'];
+export type TeamLegacyAdminKeyUsageResponse = components['schemas']['TeamLegacyAdminKeyUsageResponse'];
 export type TeamMemberCustomRole = components['schemas']['TeamMemberCustomRole'];
 export type TeamName = components['schemas']['TeamName'];
 export type TeamResponse = components['schemas']['TeamResponse'];
@@ -4475,6 +4561,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeamResponse"];
+                };
+            };
+        };
+    };
+    get_team_legacy_admin_key_usage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamLegacyAdminKeyUsageResponse"];
+                };
+            };
+        };
+    };
+    disable_team_legacy_admin_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_deployment_legacy_admin_key_usage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Deployment name */
+                deployment_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeploymentLegacyAdminKeyUsageResponse"];
                 };
             };
         };

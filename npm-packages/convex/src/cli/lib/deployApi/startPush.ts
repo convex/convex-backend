@@ -23,6 +23,7 @@ export const startPushRequest = looseObject({
   nodeDependencies: z.array(nodeDependency),
 
   nodeVersion: z.optional(z.string()),
+  nodeDefaultMemoryMb: z.optional(z.number()),
 });
 export type StartPushRequest = z.infer<typeof startPushRequest>;
 

@@ -24,6 +24,7 @@ import {
   getMultiPeriodUsageSpend,
   getUsageSpend,
   getIncludedUsage,
+  hasIncludedUsage,
   isGaugeMetric,
   formatSpend,
 } from "./lib/usageSpend";
@@ -284,31 +285,56 @@ export function BusinessPlanSummary({
       section.metric !== "auditLogBandwidth" ||
       entitlements?.customAuditLogsInLogStreamsConfigEnabled === true,
   );
-  const historicalIncludedUsage =
-    !isCurrentBillingPeriod && !isFiltered && pricing.status === "ready"
-      ? Object.fromEntries(
-          visibleSections.map((section) => [
-            section.metric,
-            section.metric === "deploymentCount"
-              ? undefined
-              : getIncludedUsage(
-                  pricing.periods.map(({ period }) => period),
-                  section.metric,
-                ),
-          ]),
-        )
+  const sharesTeamSpend =
+    isFiltered &&
+    pricing.status === "ready" &&
+    hasIncludedUsage(pricing.periods.map(({ period }) => period));
+  // Unfiltered current-period included usage comes from the plan's limits.
+  // Filtered usage can't be compared with team-wide limits, so in every period
+  // its included amounts are its share of the team's ledger, which needs the
+  // per-period team usage that comes with priced usage.
+  const ledgerPeriods = isFiltered
+    ? pricedUsage.status === "ready" &&
+      pricedUsage.summaries.every(({ teamSummary }) => teamSummary)
+      ? pricedUsage.summaries
+      : undefined
+    : !isCurrentBillingPeriod && pricing.status === "ready"
+      ? pricing.periods
       : undefined;
-  const showHistoricalIncluded =
-    historicalIncludedUsage !== undefined &&
-    Object.values(historicalIncludedUsage).some(
+  const ledgerIncludedUsage = ledgerPeriods
+    ? Object.fromEntries(
+        visibleSections.map((section) => [
+          section.metric,
+          section.metric === "deploymentCount"
+            ? undefined
+            : getIncludedUsage(ledgerPeriods, section.metric),
+        ]),
+      )
+    : undefined;
+  const ledgerHasIncludedUsage =
+    ledgerIncludedUsage !== undefined &&
+    Object.values(ledgerIncludedUsage).some(
       (usage) => usage !== undefined && usage > 0,
     );
-  const showIncluded = hasSubscription || showHistoricalIncluded;
+  // Without recorded consumption, as when a full discount means the allowance
+  // is never drawn down, the ledger can't say what was included. In the current
+  // period, filtered usage also follows the team view, which shows the Included
+  // column only for subscriptions.
+  const showLedgerIncluded =
+    ledgerHasIncludedUsage && (!isCurrentBillingPeriod || hasSubscription);
+  const showIncluded = (hasSubscription && !isFiltered) || showLedgerIncluded;
   const showIncludedLimits = showEntitlements && isCurrentBillingPeriod;
 
+  // Filtered included usage comes from per-period usage, so the Included
+  // column waits for it too.
+  const includedUsagePending =
+    isFiltered &&
+    pricing.status === "ready" &&
+    pricedUsage.status === "loading";
   const layoutDecided =
     !subscriptionLoading &&
-    (!dashboardShowCashUsage || pricing.status !== "loading");
+    (!dashboardShowCashUsage ||
+      (pricing.status !== "loading" && !includedUsagePending));
   const [settledColumns, setSettledColumns] = useState<{
     showIncluded: boolean;
     showSpend: boolean;
@@ -400,7 +426,11 @@ export function BusinessPlanSummary({
               <div className="flex items-center gap-1">
                 Included{" "}
                 <Tooltip
-                  tip="The amount of usage used within the included limits of your plan."
+                  tip={
+                    isFiltered
+                      ? "This selection's share of the usage within the included limits of your plan. Included usage is shared across the team, so it is split in proportion to usage in each deployment class and region."
+                      : "The amount of usage used within the included limits of your plan."
+                  }
                   side="right"
                   className="hidden sm:block"
                 >
@@ -427,7 +457,11 @@ export function BusinessPlanSummary({
             <div className="flex items-center gap-1">
               Spend
               <Tooltip
-                tip="Usage is rounded up to the nearest whole unit before calculating spend. Storage and deployment metrics show estimated monthly prices based on the most recent usage in the selected period."
+                tip={
+                  sharesTeamSpend
+                    ? "Included usage is shared across the team, so filtered usage is credited with a share of it in proportion to its usage in each deployment class and region. Storage metrics show estimated monthly prices based on the most recent usage in the selected period."
+                    : "Usage is rounded up to the nearest whole unit before calculating spend. Storage and deployment metrics show estimated monthly prices based on the most recent usage in the selected period."
+                }
                 side="right"
               >
                 <QuestionMarkCircledIcon />
@@ -467,10 +501,17 @@ export function BusinessPlanSummary({
                 ? entitlements[section.entitlement]
                 : undefined;
 
+            const recordedIncluded = ledgerIncludedUsage?.[section.metric];
+            // Orb rounds some metrics up to whole units before drawing on the
+            // allowance, so the ledger can record more than was used.
+            const ledgerIncluded =
+              recordedIncluded === undefined
+                ? undefined
+                : Math.min(recordedIncluded, metric);
             const includedAmount = section.allOnDemand
               ? 0
-              : showHistoricalIncluded
-                ? historicalIncludedUsage?.[section.metric]
+              : showLedgerIncluded
+                ? ledgerIncluded
                 : entitlement !== undefined
                   ? Math.min(metric, entitlement)
                   : undefined;
@@ -481,7 +522,7 @@ export function BusinessPlanSummary({
 
             const displayedUsage =
               showIncluded &&
-              (showHistoricalIncluded || !section.noOnDemand) &&
+              (showLedgerIncluded || !section.noOnDemand) &&
               includedAmount !== undefined
                 ? includedAmount
                 : metric;
@@ -491,17 +532,24 @@ export function BusinessPlanSummary({
             const unavailableWhenFiltered =
               isFiltered && section.metric === "deploymentCount";
             const isGauge = isGaugeMetric(section.metric);
+            // Unfiltered gauges price the whole-range summary at the latest
+            // prices. Filtered gauges price the latest period's usage instead,
+            // which comes with the team-wide usage their share is taken of.
+            const usesPricedUsage =
+              section.metric !== "aiGatewayCost" && (!isGauge || isFiltered);
             const pricedSummaryFailed =
-              !isGauge &&
-              section.metric !== "aiGatewayCost" &&
-              pricedUsage.status === "error";
+              usesPricedUsage && pricedUsage.status === "error";
             const pricedSummaryPending =
-              !isGauge &&
-              section.metric !== "aiGatewayCost" &&
-              pricedUsage.status === "loading";
+              usesPricedUsage && pricedUsage.status === "loading";
+            const latestPricedUsage =
+              pricedUsage.status === "ready"
+                ? pricedUsage.summaries.at(-1)
+                : undefined;
 
             const spend =
-              showSpend && pricing.status === "ready" && !isFiltered
+              showSpend &&
+              pricing.status === "ready" &&
+              !unavailableWhenFiltered
                 ? section.metric === "aiGatewayCost"
                   ? aiCostFailed || aiGatewayCost === undefined
                     ? undefined
@@ -510,18 +558,25 @@ export function BusinessPlanSummary({
                         includedAmount: 0,
                         missingDimensions: [],
                       }
-                  : isGauge
+                  : isGauge && !isFiltered
                     ? getUsageSpend(
                         summary,
                         section.metric,
                         pricing.periods.at(-1)?.period,
                       )
-                    : pricedUsage.status === "ready"
-                      ? getMultiPeriodUsageSpend(
-                          pricedUsage.summaries,
+                    : isGauge
+                      ? getUsageSpend(
+                          latestPricedUsage?.summary,
                           section.metric,
+                          latestPricedUsage?.period,
+                          latestPricedUsage?.teamSummary,
                         )
-                      : undefined
+                      : pricedUsage.status === "ready"
+                        ? getMultiPeriodUsageSpend(
+                            pricedUsage.summaries,
+                            section.metric,
+                          )
+                        : undefined
                 : undefined;
 
             return (
@@ -551,7 +606,7 @@ export function BusinessPlanSummary({
                   {unavailableWhenFiltered ||
                   (showIncluded &&
                     (section.allOnDemand ||
-                      (showHistoricalIncluded &&
+                      (showLedgerIncluded &&
                         includedAmount === undefined &&
                         section.metric !== "deploymentCount"))) ? (
                     <EmptyValue />
@@ -629,7 +684,7 @@ export function BusinessPlanSummary({
                 )}
                 {showSpend && (
                   <div className="animate-fadeInFromLoading tabular-nums">
-                    {isFiltered || section.noOnDemand ? (
+                    {unavailableWhenFiltered || section.noOnDemand ? (
                       <EmptyValue />
                     ) : aiCostFailed || pricedSummaryFailed ? (
                       <span className="text-content-secondary">

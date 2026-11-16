@@ -13,7 +13,7 @@ import { fn, mocked, userEvent, within, waitFor, expect } from "storybook/test";
 import { useTableShapes } from "@common/lib/deploymentApi";
 import { Shape } from "shapes";
 import { SchemaView } from "@common/features/schema/components/SchemaView";
-import { FunctionsContext } from "@common/lib/functions/FunctionsProvider";
+import { FunctionsProvider } from "@common/lib/functions/FunctionsProvider";
 
 // Fixed "now" so timestamps are stable.
 const NOW = new Date("2026-03-10T14:25:00Z").getTime();
@@ -180,6 +180,7 @@ const mockShapesData: Record<string, Shape> = {
 
 const mockConvexClient = mockConvexReactClient()
   .registerQueryFake(udfs.components.list, () => [])
+  .registerQueryFake(udfs.modules.listForAllComponents, () => [])
   .registerQueryFake(udfs.getVersion.default, () => "1.18.0")
   .registerQueryFake(udfs.getSchemas.default, () => ({
     active: JSON.stringify(mockActiveSchema),
@@ -269,9 +270,9 @@ const meta = {
           }}
         >
           <PermissionsProvider>
-            <FunctionsContext.Provider value={new Map()}>
+            <FunctionsProvider>
               <SchemaView />
-            </FunctionsContext.Provider>
+            </FunctionsProvider>
           </PermissionsProvider>
         </DeploymentInfoContext.Provider>
       </ConvexProvider>

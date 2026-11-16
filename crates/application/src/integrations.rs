@@ -34,6 +34,22 @@ use value::{
 
 use crate::Application;
 
+/// The statuses a config change can move an integration to.
+#[derive(Clone, Copy, Debug)]
+pub enum IntegrationStartState {
+    Pending,
+    Restarting,
+}
+
+impl From<IntegrationStartState> for IntegrationState {
+    fn from(status: IntegrationStartState) -> Self {
+        match status {
+            IntegrationStartState::Pending => IntegrationState::Pending,
+            IntegrationStartState::Restarting => IntegrationState::Restarting,
+        }
+    }
+}
+
 pub struct IntegrationWithId {
     pub id: ResolvedDocumentId,
     pub config: IntegrationConfig,
@@ -84,20 +100,20 @@ impl<RT: Runtime> Application<RT> {
         id: &String,
         config: IntegrationConfig,
     ) -> anyhow::Result<()> {
-        self.patch_integration_config_and_status(identity, request_metadata, id, config, false)
+        self.patch_integration_config_and_status(identity, request_metadata, id, config, None)
             .await
     }
 
-    /// Like `patch_integration_config`, and with `reset_to_pending` also sets
-    /// the status to Pending in the same transaction, so no status written
-    /// for the old config can land after the new config.
+    /// Like `patch_integration_config`, and with `status` also sets the status
+    /// in the same transaction, so no status written for the old config can
+    /// land after the new config.
     pub async fn patch_integration_config_and_status(
         &self,
         identity: Identity,
         request_metadata: RequestMetadata,
         id: &String,
         config: IntegrationConfig,
-        reset_to_pending: bool,
+        status: Option<IntegrationStartState>,
     ) -> anyhow::Result<()> {
         let integration_type = config.integration_type().as_str().to_string();
         let developer_id = DeveloperDocumentId::decode(id).map_err(|_| {
@@ -121,10 +137,8 @@ impl<RT: Runtime> Application<RT> {
                     let current = audit_config(&config);
                     let credential_changes = audit_credential_changes(&previous_config, &config);
                     model.patch_config(developer_id, config).await?;
-                    if reset_to_pending {
-                        model
-                            .patch_status(developer_id, IntegrationState::Pending)
-                            .await?;
+                    if let Some(status) = status {
+                        model.patch_status(developer_id, status.into()).await?;
                     }
                     Ok((
                         (),

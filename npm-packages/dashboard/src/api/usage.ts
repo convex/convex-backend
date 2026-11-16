@@ -51,7 +51,7 @@ type UsageQueryArgs = {
   skip?: boolean;
 };
 
-function usageQueryParams({
+export function usageQueryParams({
   queryId,
   projectId,
   deploymentName,
