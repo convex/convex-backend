@@ -440,6 +440,9 @@ export async function subscribe(
       // pretend that a Node.js 'ws' library WebSocket is a browser WebSocket
       webSocketConstructor: ws as unknown as typeof WebSocket,
       unsavedChangesWarning: false,
+      // Keep client diagnostics (e.g. WebSocket reconnect notices) off stdout,
+      // which carries the command's result.
+      logger: instantiateStderrLogger(),
     },
   );
   client.setAdminAuth(args.adminKey, args.identity);
