@@ -124,6 +124,14 @@ pub fn legacy_admin_key_disabled_error() -> ErrorMetadata {
     )
 }
 
+pub fn legacy_admin_key_obsolete_error() -> ErrorMetadata {
+    ErrorMetadata::unauthenticated(
+        "LegacyAdminKeyObsolete",
+        "Legacy admin keys are no longer supported. Use a deploy key from the Convex dashboard \
+         instead.",
+    )
+}
+
 pub fn bad_admin_key_error(instance_name: Option<String>) -> ErrorMetadata {
     let msg = match instance_name {
         Some(name) => format!(

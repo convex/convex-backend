@@ -41,6 +41,7 @@ pub use self::{
     operations::{
         bad_admin_key_error,
         legacy_admin_key_disabled_error,
+        legacy_admin_key_obsolete_error,
         operations_for_deploy_key,
         read_only_operations,
         DeploymentOp,
