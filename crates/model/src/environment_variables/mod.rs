@@ -164,6 +164,33 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
         Ok(environment_variables)
     }
 
+    /// The variables that aren't secrets, the only ones whose value may be
+    /// shown outside of the deployment's functions.
+    pub async fn get_all_non_secret(
+        &mut self,
+    ) -> anyhow::Result<BTreeMap<EnvVarName, EnvVarValue>> {
+        let mut environment_variables = BTreeMap::new();
+        for env_var in self
+            .tx
+            .query_system(
+                TableNamespace::Global,
+                &SystemIndex::<EnvironmentVariablesTable>::by_creation_time(),
+            )?
+            .all()
+            .await?
+        {
+            if env_var.is_secret() {
+                continue;
+            }
+            let old_value = environment_variables.insert(
+                env_var.variable.name().to_owned(),
+                env_var.variable.value().to_owned(),
+            );
+            anyhow::ensure!(old_value.is_none(), "Duplicate environment variable");
+        }
+        Ok(environment_variables)
+    }
+
     /// Creates a variable whose visibility isn't chosen.
     pub async fn create(
         &mut self,
