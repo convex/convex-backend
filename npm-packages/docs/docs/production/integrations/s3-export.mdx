@@ -17,40 +17,20 @@ Amazon S3 bucket that you own. Each table is written as an
 so you can query your data from Amazon Athena, Snowflake, Databricks, Spark,
 DuckDB, or any other engine that reads Iceberg.
 
-The first sync copies every document in the tables you choose. After that, the
-export streams only changes: each insert, update, and delete is appended as a
-new row within seconds, sent in small batches. There's no connector to run and
-no sync schedule to manage.
+The first sync copies every document in the tables you choose. After that,
+Convex appends each insert, update, and delete within seconds. Exported tables
+hold every version of each document, so see
+[Changes and deletes](#changes-and-deletes) to query your current data.
 
-Convex only appends to the exported tables. It doesn't update or remove existing
-rows, so an exported table holds every version of each document rather than a
-copy of your current data. To query your current data, select the most recent
-version of each document, as described in
-[Changes and deletes](#changes-and-deletes).
+Convex writes your data to your bucket and registers the tables in Glue, through
+an IAM role in your AWS account that you can delete at any time. Your data stays
+in the bucket if you delete the export or your Convex project.
 
 <ProFeatureUpsell feature="S3 export" verb="requires" />
 
-## How it works
-
-- **Your data stays in your account.** Convex only writes to the bucket you
-  choose, under a separate path for each deployment. If you delete the export or
-  your Convex project, the data stays in your bucket.
-- **No long-lived keys.** Convex accesses your bucket through an IAM role in
-  your AWS account. The role can only be assumed by Convex, using an External ID
-  that's unique to your export, and you can delete it at any time to revoke
-  access.
-- **A change log, not a mirror.** Every insert, update, and delete adds a row
-  holding the full document as of that change. Your queries pick the latest
-  version of each document.
-- **Typed columns.** Each top-level field in your documents gets its own Iceberg
-  column, typed from your [schema](/database/schemas.mdx) or, if you don't have
-  one, from the documents in the table. See [Table format](#table-format) for
-  details.
-
 ## Setting up an S3 export
 
-S3 export is configured per deployment, in three steps: choose a bucket, connect
-your AWS account, and pick which tables to sync.
+Each deployment can have one S3 export.
 
 ### 1. Choose a bucket
 
@@ -82,8 +62,7 @@ hyphens replaced by underscores. For example, `musical-otter-456` becomes
 
 The bucket, region, and prefix can't be changed once the export is created. To
 change them, delete the export and create a new one, which copies all of your
-tables again. The new export reuses the same Glue database and replaces the old
-export's Glue tables, though the old export's files stay in S3.
+tables again. The old export's files stay in S3.
 
 :::
 
@@ -112,8 +91,9 @@ Dashboard fills in every value for you.
 
 1. Open the **Terraform** tab and click **Copy Terraform**.
 2. Add the snippet to your Terraform configuration and run `terraform apply`.
-   Make sure your AWS provider is set to the export's region, since the snippet
-   creates the bucket and grants Glue access in the provider's region.
+   Set your AWS provider to the export's region. The snippet creates the bucket
+   there (if you checked **Create the bucket**) and grants Glue access in that
+   region.
 3. Back in the Dashboard, enter your **AWS account ID**.
 
 <Screenshot
@@ -121,10 +101,7 @@ Dashboard fills in every value for you.
   alt="The Terraform tab of the Connect AWS step"
 />
 
-The Dashboard shows the role Convex will connect to,
-`arn:aws:iam::<account-id>:role/convex/ConvexIntegrations-<external-id>`. Click
-**Next: sync settings** to continue. The role is saved when you click **Save**
-in the next step.
+Click **Next: sync settings**.
 
 ### 3. Choose tables and save
 
@@ -140,9 +117,8 @@ whether tables you add later are exported automatically.
 />
 
 Click **Save** to start the first sync. The integration card shows **Starting
-first sync**, followed by the progress of the initial snapshot. Once the export
-has caught up with your deployment, the card shows **Active** along with the
-time of the last sync.
+first sync**, followed by its progress. Once the export has caught up with your
+deployment, the card shows **Active** along with the time of the last sync.
 
 <Screenshot
   story="docs/pages/project/deployment/settings/Integrations#S3 Export Active"
@@ -155,21 +131,20 @@ removed tables stay in S3 but stop updating.
 
 If you click **Finish later** before saving, the export stays pending. To pick
 up where you left off, open the **⋮** menu on the card and click **Configure**,
-or click **Discard export** to delete it. Each deployment can have one S3
-export.
+or click **Discard export** to delete it.
 
 ## Permissions
 
 The role created by CloudFormation or Terraform can only write the export's
 files and register its tables in Glue:
 
-| Permission                                                                                    | Scope                                                 |
-| --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `s3:GetBucketLocation`                                                                        | The bucket                                            |
-| `s3:ListBucket`                                                                               | `<prefix>/<deployment-name>/data-lake/`               |
-| `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, `s3:AbortMultipartUpload`                  | Objects under `<prefix>/<deployment-name>/data-lake/` |
-| `glue:GetDatabase`, `glue:CreateDatabase`                                                     | The catalog and the deployment's Glue database        |
-| `glue:GetTable`, `glue:GetTables`, `glue:CreateTable`, `glue:UpdateTable`, `glue:DeleteTable` | Tables in the deployment's Glue database              |
+| Permission                                                                                                | Scope                                                 |
+| --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `s3:GetBucketLocation`                                                                                    | The bucket                                            |
+| `s3:ListBucket`                                                                                           | `<prefix>/<deployment-name>/data-lake/`               |
+| `s3:GetObject`<br/>`s3:PutObject`<br/>`s3:DeleteObject`<br/>`s3:AbortMultipartUpload`                     | Objects under `<prefix>/<deployment-name>/data-lake/` |
+| `glue:GetDatabase`<br/>`glue:CreateDatabase`                                                              | The catalog and the deployment's Glue database        |
+| `glue:GetTable`<br/>`glue:GetTables`<br/>`glue:CreateTable`<br/>`glue:UpdateTable`<br/>`glue:DeleteTable` | Tables in the deployment's Glue database              |
 
 The role's trust policy only allows Convex's export role to assume it, and only
 with your export's External ID.
@@ -368,19 +343,16 @@ its column, Convex writes it to `_convex_rescued` instead. This happens when:
 
 ### Changes and deletes
 
-Each exported table is an append-only log of changes. After the first sync,
-Convex streams only changes: every insert, update, and delete adds a row with
-the full document as of that change, so a single document can have many rows.
-Deletes are recorded as a row with `_convex_deleted = true` and no field values.
-Convex never updates or removes rows it has already written.
+Each exported table is an append-only log. Every insert, update, and delete adds
+a row with the full document as of that change, so one document can have many
+rows. Deletes are a row with `_convex_deleted = true` and no field values.
 
 :::important
 
 Querying an exported table directly returns every version of every document,
-including deleted ones. To get your current data, select the most recent version
-of each document yourself: keep the row with the highest `_ts` for each `_id`
-and skip rows where `_convex_deleted` is `true`. Retried syncs can write the
-same row twice, so treat `(_id, _ts)` as the unique key.
+including deleted ones. To get your current data, keep the row with the highest
+`_ts` for each `_id` and skip rows where `_convex_deleted` is `true`. Retried
+syncs can write the same row twice, so treat `(_id, _ts)` as the unique key.
 
 :::
 
@@ -397,13 +369,13 @@ FROM (
 WHERE version = 1 AND NOT _convex_deleted;
 ```
 
-If you query the current data often, consider saving this as a view or
-materializing it into a table of your own on a schedule.
+To reuse this query, save it as a view.
 
 Convex keeps the last 10 Iceberg snapshots of each table, so time travel only
 goes back a few syncs. To read changes incrementally, filter on `_ts` instead.
-Convex doesn't compact the files, so tables that change often will accumulate
-many small files.
+Tables that change often build up many small files, which slows queries. Don't
+compact them yourself: an `OPTIMIZE` breaks the export (see
+[Monitoring and errors](#monitoring-and-errors)).
 
 ## Monitoring and errors
 
@@ -412,12 +384,12 @@ The integration card on the Integrations tab shows the export's status:
 - **Finish AWS setup**: The export doesn't have a role yet. Open it and finish
   [connecting AWS](#2-connect-aws).
 - **Starting first sync**: Convex is connecting to your bucket.
-- **Syncing**: The initial snapshot is running, or the export is catching up
-  with your deployment. Open the card to see its progress.
+- **Syncing**: The first sync is running, or the export is catching up with your
+  deployment. Open the card to see its progress.
 - **Active**: The export is up to date. Open the card to see the bucket path,
   the Glue database, and when it last synced.
 - **Failed**: Convex can't write to your bucket, or the last ten syncs failed.
-  The card shows the reason.
+  Open the card to see why.
 
 To get alerted when an export fails or falls behind, subscribe a
 [log stream](/production/integrations/log-streams/log-streams.mdx#s3_export_stats-events)
@@ -441,8 +413,8 @@ a new one.
 :::caution
 
 An export can only catch up on changes your deployment still has in its history,
-which is about two weeks. If an export stays failed or pending for longer than
-that, it can't resume, and you'll need to delete it and create a new one.
+which is about two weeks. If an export stays failed for longer than that, it
+can't resume, and you'll need to delete it and create a new one.
 
 :::
 
@@ -450,8 +422,8 @@ that, it can't resume, and you'll need to delete it and create a new one.
 
 To stop the export, open the **⋮** menu on the integration card, click
 **Delete**, and confirm. Convex stops writing to your bucket within a few
-seconds. Your files and Glue tables stay in your account until you create a new
-export for the deployment.
+seconds. Your files stay in your bucket. The Glue tables stay until you create a
+new export, which replaces them.
 
 To fully remove Convex's access, delete the CloudFormation stack or remove the
 role from your Terraform configuration. Deleting the stack keeps the bucket and
