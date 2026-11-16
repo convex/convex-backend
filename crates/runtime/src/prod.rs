@@ -198,11 +198,32 @@ impl ProdRuntime {
     /// At the end of `main` its `Drop` will run and join all spawned futures,
     /// which should include all references to the handle `ProdRuntime`.
     /// If `ProdRuntime` is used after the associated `TokioRuntime` has been
-    /// dropped, it will panic.
+    /// dropped, it will panic. A process that uses
+    /// [`Runtime::spawn_thread`] should end `main` with
+    /// [`ProdRuntime::leave_running`] instead of dropping the runtime.
     pub fn new(tokio_rt: &TokioRuntime) -> Self {
         let handle = tokio_rt.handle().clone();
 
         Self { rt: handle }
+    }
+
+    /// Ends `main` without dropping the Tokio runtime.
+    ///
+    /// Dropping the runtime shuts down its time driver, after which polling a
+    /// timer panics ("A Tokio 1.x context was found, but it is being
+    /// shutdown"). The runtime waits for its own tasks, but not for threads it
+    /// doesn't own: threads from [`Runtime::spawn_thread`] run their future
+    /// inside `Handle::block_on` and are told to stop but never joined, and a
+    /// worker inside `block_in_place` has handed its core off. The first of
+    /// them to poll a timer after the drop panics, and with `panic = "abort"`
+    /// the process dies on its way out (exit code 139 as PID 1 in a
+    /// container). It races the exit of the process, so it shows up on hosts
+    /// with few CPUs.
+    ///
+    /// Call this only once the orderly shutdown has returned: what is left in
+    /// the runtime is then freed by the exit of the process.
+    pub fn leave_running(tokio_rt: TokioRuntime) {
+        std::mem::forget(tokio_rt);
     }
 
     pub fn block_on<F: Future>(&self, name: &'static str, f: F) -> F::Output {
@@ -259,5 +280,54 @@ impl Runtime for ProdRuntime {
 
     fn pause_client(&self) -> PauseClient {
         PauseClient::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::mpsc,
+        thread,
+        time::Duration,
+    };
+
+    use common::runtime::{
+        JoinError,
+        Runtime,
+    };
+    use tokio::runtime::Runtime as TokioRuntime;
+
+    use super::ProdRuntime;
+
+    /// Spawns a thread with `spawn_thread`, like an isolate's, that is
+    /// waiting on a timer when `end_main` gets the runtime, and returns how
+    /// the thread ended.
+    fn thread_on_timer_at_end_of_main(
+        end_main: impl FnOnce(TokioRuntime),
+    ) -> Result<(), JoinError> {
+        let tokio = ProdRuntime::init_tokio().unwrap();
+        let runtime = ProdRuntime::new(&tokio);
+        let (started_tx, started_rx) = mpsc::channel();
+        let mut handle = runtime.spawn_thread("isolate", move || async move {
+            started_tx.send(()).unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+        started_rx.recv().unwrap();
+        // Give the thread time to park on its timer.
+        thread::sleep(Duration::from_millis(50));
+        end_main(tokio);
+        futures::executor::block_on(std::future::poll_fn(|cx| handle.poll_join(cx)))
+    }
+
+    #[test]
+    fn test_dropping_runtime_panics_thread_on_timer() {
+        let ended = thread_on_timer_at_end_of_main(drop);
+        assert!(matches!(ended, Err(JoinError::Panicked(_))), "{ended:?}");
+    }
+
+    #[test]
+    fn test_leave_running_does_not_panic_thread_on_timer() {
+        let ended = thread_on_timer_at_end_of_main(ProdRuntime::leave_running);
+        assert!(ended.is_ok(), "{ended:?}");
     }
 }
