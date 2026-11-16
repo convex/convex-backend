@@ -99,6 +99,7 @@ use crate::{
         ApproxSize,
     },
     connection::{
+        is_no_such_table_error,
         MySqlConnection,
         MySqlTransaction,
     },
@@ -671,16 +672,21 @@ impl<RT: Runtime> common::persistence::Persistence for Persistence<RT> {
             .pool
             .acquire("v6_has_index_history", &self.inner.db_name)
             .await?;
-        for bucket in indexes::list_log_buckets(&mut connection, &self.inner.db_name).await? {
-            if connection
+        let buckets = indexes::list_log_buckets(&mut connection, &self.inner.db_name).await?;
+        for bucket in buckets {
+            // Maintenance can drop a listed bucket before it is scanned. A
+            // dropped bucket holds no rows.
+            match connection
                 .query_optional(
                     &sql::has_log_row(bucket),
                     vec![self.inner.deployment_id.into()],
                 )
-                .await?
-                .is_some()
+                .await
             {
-                return Ok(true);
+                Ok(Some(_)) => return Ok(true),
+                Ok(None) => {},
+                Err(e) if is_no_such_table_error(&e) => {},
+                Err(e) => return Err(e),
             }
         }
         Ok(false)
