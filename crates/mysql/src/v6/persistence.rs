@@ -605,8 +605,13 @@ impl<RT: Runtime> common::persistence::Persistence for Persistence<RT> {
         let rows = self.inner.engine.plan_backfill_rows(entries)?;
         let cluster_name = self.inner.pool.cluster_name();
         for chunk in fill_chunks(&rows) {
+            // The chunk does no consistent reads: each upsert keeps
+            // `GREATEST(ts)` against the current row under its record lock, so
+            // READ COMMITTED converges like REPEATABLE READ. It avoids the
+            // next-key locks REPEATABLE READ takes on duplicate keys, which
+            // would block live inserts into neighbouring keys.
             self.lease
-                .transact("write_index_backfill", async |tx| {
+                .transact_read_committed("write_index_backfill", async |tx| {
                     self.inner
                         .engine
                         .write_backfill_chunk(tx, chunk, cluster_name)
