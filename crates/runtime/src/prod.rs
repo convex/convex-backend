@@ -286,8 +286,8 @@ impl Runtime for ProdRuntime {
 #[cfg(test)]
 mod tests {
     use std::{
+        future::poll_fn,
         sync::mpsc,
-        thread,
         time::Duration,
     };
 
@@ -299,35 +299,42 @@ mod tests {
 
     use super::ProdRuntime;
 
-    /// Spawns a thread with `spawn_thread`, like an isolate's, that is
-    /// waiting on a timer when `end_main` gets the runtime, and returns how
-    /// the thread ended.
+    /// Spawns a thread with `spawn_thread`, like an isolate's, that sleeps for
+    /// `timer` and has polled its sleep at least once when `end_main` gets
+    /// the runtime, and returns how the thread ended.
     fn thread_on_timer_at_end_of_main(
+        timer: Duration,
         end_main: impl FnOnce(TokioRuntime),
     ) -> Result<(), JoinError> {
         let tokio = ProdRuntime::init_tokio().unwrap();
         let runtime = ProdRuntime::new(&tokio);
-        let (started_tx, started_rx) = mpsc::channel();
+        let (polled_tx, polled_rx) = mpsc::channel();
         let mut handle = runtime.spawn_thread("isolate", move || async move {
-            started_tx.send(()).unwrap();
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            let mut sleep = std::pin::pin!(tokio::time::sleep(timer));
+            poll_fn(|cx| {
+                let poll = sleep.as_mut().poll(cx);
+                let _ = polled_tx.send(());
+                poll
+            })
+            .await;
         });
-        started_rx.recv().unwrap();
-        // Give the thread time to park on its timer.
-        thread::sleep(Duration::from_millis(50));
+        polled_rx.recv().unwrap();
         end_main(tokio);
-        futures::executor::block_on(std::future::poll_fn(|cx| handle.poll_join(cx)))
+        futures::executor::block_on(poll_fn(|cx| handle.poll_join(cx)))
     }
 
     #[test]
     fn test_dropping_runtime_panics_thread_on_timer() {
-        let ended = thread_on_timer_at_end_of_main(drop);
+        // Only the shutdown of the time driver can wake the thread.
+        let ended = thread_on_timer_at_end_of_main(Duration::from_secs(3600), drop);
         assert!(matches!(ended, Err(JoinError::Panicked(_))), "{ended:?}");
     }
 
     #[test]
     fn test_leave_running_does_not_panic_thread_on_timer() {
-        let ended = thread_on_timer_at_end_of_main(ProdRuntime::leave_running);
+        // The thread has to finish on its own.
+        let ended =
+            thread_on_timer_at_end_of_main(Duration::from_millis(10), ProdRuntime::leave_running);
         assert!(ended.is_ok(), "{ended:?}");
     }
 }
