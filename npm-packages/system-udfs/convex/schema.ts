@@ -354,10 +354,14 @@ export default defineSchema({
       v.object({
         type: v.literal("database"),
         fields: v.array(v.string()),
+        persistenceIndexId: v.optional(v.int64()),
         onDiskState: v.union(
           v.object({
             type: v.literal("Backfilling"),
             backfillState: v.object({
+              // Missing on documents written before these were tracked.
+              indexCreatedLowerBound: v.optional(v.int64()),
+              retentionStarted: v.optional(v.boolean()),
               staged: v.optional(v.boolean()),
             }),
           }),
