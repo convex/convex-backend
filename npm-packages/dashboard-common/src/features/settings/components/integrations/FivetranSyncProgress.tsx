@@ -218,9 +218,9 @@ function SnapshotProgressBar({
   }
   return (
     <ProgressBarWithPercent
-      // `numDocumentsSynced` counts tombstones and re-synced revisions, so it
-      // can overshoot the total: cap below 100% rather than claim the snapshot
-      // is finished.
+      // Every document can be traversed while the sync is still catching up
+      // to a table change: cap below 100% rather than claim the snapshot is
+      // finished.
       fraction={Math.min(
         0.99,
         status.numDocumentsSynced / status.totalDocuments,

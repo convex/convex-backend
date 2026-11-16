@@ -645,9 +645,8 @@ export interface components {
             totalDocumentsInCurrentTable: number;
             /**
              * Format: int64
-             * @description Documents synced over the sync's lifetime, including deletions and
-             *     re-synced revisions of documents that changed mid-sync — so this can
-             *     slightly exceed `totalDocuments`.
+             * @description Documents in the selected tables traversed so far, counted as of the
+             *     same snapshot as `totalDocuments`.
              */
             numDocumentsSynced: number;
             /**

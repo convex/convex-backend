@@ -161,8 +161,11 @@ pub struct SyncProgress {
     /// Documents in the current table at a recent snapshot. `None` while
     /// table summaries are still bootstrapping.
     pub total_documents_in_current_table: Option<u64>,
-    /// Documents (including tombstones and re-emitted revisions) emitted over
-    /// the sync's lifetime, so this can slightly exceed `total_documents`.
+    /// Documents in the selected tables already traversed, plus those
+    /// traversed so far in the current table, by the same counts as
+    /// `total_documents`. While table summaries are still bootstrapping,
+    /// documents (including tombstones and re-emitted revisions) emitted over
+    /// the sync's lifetime.
     pub num_documents_synced: u64,
     /// Documents across all target tables at a recent snapshot. `None` while
     /// table summaries are still bootstrapping.
@@ -721,6 +724,21 @@ impl<'a, RT: Runtime> DataSync<'a, RT> {
                         .map(|tablet_id| counts.tablet_count(tablet_id).num_values())
                         .sum()
                 });
+                // Same counts as `total_documents`, over the tables selected now:
+                // the cursor's lifetime count keeps deselected tables' documents.
+                let num_documents_synced = snapshot.table_counts.as_ref().map_or(
+                    progress.num_documents_synced,
+                    |counts| {
+                        let synced: u64 = page
+                            .cursor
+                            .synced_tables()
+                            .iter()
+                            .map(|tablet_id| counts.tablet_count(tablet_id).num_values())
+                            .sum();
+                        let current = counts.tablet_count(&progress.current_table).num_values();
+                        synced + progress.num_documents_in_current_table.min(current)
+                    },
+                );
                 SyncStatus::Snapshotting {
                     progress: SyncProgress {
                         num_tables_synced: progress.num_tables_synced,
@@ -729,7 +747,7 @@ impl<'a, RT: Runtime> DataSync<'a, RT> {
                         current_table,
                         num_documents_in_current_table: progress.num_documents_in_current_table,
                         total_documents_in_current_table,
-                        num_documents_synced: progress.num_documents_synced,
+                        num_documents_synced,
                         total_documents,
                     },
                 }
