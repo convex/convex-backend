@@ -2291,6 +2291,12 @@ pub static MAX_LOG_LINES_NODE_ACTIONS: LazyLock<usize> =
 pub static MAX_LOG_LINES_DATABASE_UDFS: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_LOG_LINES_DATABASE_UDFS", 256).max(1));
 
+/// Kill switch for S3 exports on this conductor. When set, the S3 export
+/// worker never starts, so Porter gets no sync requests. An export resumes
+/// from its checkpoint on the restart after this is unset.
+pub static DISABLE_S3_EXPORT: LazyLock<bool> =
+    LazyLock::new(|| env_config("DISABLE_S3_EXPORT", false));
+
 /// Number of parallel Glue table writes in one S3 export page.
 pub static S3_EXPORT_GLUE_CONCURRENCY: LazyLock<usize> =
     LazyLock::new(|| env_config("S3_EXPORT_GLUE_CONCURRENCY", 8).max(1));
