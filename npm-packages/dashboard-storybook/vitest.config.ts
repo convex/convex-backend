@@ -39,9 +39,22 @@ export default defineConfig({
   test: {
     // Every story runs once per theme, so the a11y checks (color contrast in
     // particular) cover both palettes.
+    //
+    // The test panel in the Storybook UI sets VITEST_STORYBOOK, which makes
+    // addon-vitest rename every storybookTest() project to
+    // `storybook:<configDir>` and run only that name. Both projects share
+    // `.storybook`, so the panel only gets the light one; `test-storybook`
+    // (and CI) never set the variable and run both themes.
     projects: [
       storybookProject("storybook", "./.storybook/vitest.setup.ts"),
-      storybookProject("storybook-dark", "./.storybook/vitest.setup.dark.ts"),
+      ...(process.env.VITEST_STORYBOOK === "true"
+        ? []
+        : [
+            storybookProject(
+              "storybook-dark",
+              "./.storybook/vitest.setup.dark.ts",
+            ),
+          ]),
     ],
   },
 });
