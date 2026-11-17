@@ -124,6 +124,11 @@
         "nodeVersion": {
           "type": "string",
           "description": "The Node.js version to use for Node.js actions. The currently supported values are '22' and '24'.\n\nAfter you push a new Node.js version, your functions may keep running on the previous version for a few minutes.\n\nDocumentation: https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version"
+        },
+        "defaultMemoryMb": {
+          "type": "integer",
+          "enum": [512, 2048],
+          "description": "Beta. Memory in MB for every Node.js action in the deployment. Defaults to 512. Actions bill at this size.\n\nDocumentation: https://docs.convex.dev/config/convex.json#configuring-nodejs-action-memory"
         }
       }
     },
