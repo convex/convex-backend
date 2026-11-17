@@ -90,6 +90,7 @@ function EnvironmentListItem({
             target="_blank"
             rel="noopener noreferrer"
             className="text-content-tertiary hover:text-content-secondary"
+            aria-label="View in WorkOS"
           >
             <ExternalLinkIcon className="size-3.5" />
           </a>
