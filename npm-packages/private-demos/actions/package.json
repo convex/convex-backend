@@ -5,6 +5,7 @@
     "dev": "vite",
     "build": "shx rm -rf dist && tsc && vite build",
     "lint": "eslint .",
+    "lint:ci": "npm run lint -- --max-warnings=0",
     "serve": "vite preview"
   },
   "dependencies": {

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "convex dev --start 'vite --open'",
     "build": "vite build",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "lint:ci": "npm run lint -- --max-warnings=0"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.6",

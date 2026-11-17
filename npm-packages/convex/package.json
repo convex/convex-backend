@@ -191,6 +191,7 @@
     "bundle-server": "node scripts/bundle-server.mjs",
     "clean": "shx rm -rf dist tmpDist*",
     "lint": "eslint . --cache",
+    "lint:ci": "npm run lint -- --max-warnings=-1",
     "format": "prettier -w . '!CHANGELOG.md' && eslint --fix .",
     "format-check": "prettier -c . '!CHANGELOG.md' && eslint . --cache",
     "prepack": "node scripts/version-check.mjs && npm run build && node scripts/prepack.mjs",
