@@ -12,6 +12,7 @@ mod task_order;
 use std::{
     cmp::Ordering,
     collections::BTreeMap,
+    marker::PhantomData,
     sync::{
         Arc,
         OnceLock,
@@ -19,7 +20,10 @@ use std::{
     time::Duration,
 };
 
-use anyhow::anyhow;
+use anyhow::{
+    anyhow,
+    Context as _,
+};
 use common::{
     components::{
         ComponentId,
@@ -35,6 +39,7 @@ use common::{
     knobs::{
         FUNCTION_MAX_ARGS_SIZE,
         FUNCTION_MAX_RESULT_SIZE,
+        MAX_LOG_LINES_V8_ACTIONS,
         V8_ACTION_SYSTEM_TIMEOUT,
         V8_ACTION_USER_TIMEOUT,
     },
@@ -127,19 +132,20 @@ use value::{
 pub use self::{
     async_syscall::parse_name_or_reference,
     task::{
+        FileResponse,
+        FormPart,
+        FormPartFile,
+        TaskId,
+        TaskRequestEnum,
         TaskResponse,
         TaskResponseEnum,
+        TaskType,
     },
 };
 use self::{
     phase::ActionPhase,
     service_token::ServiceTokenCache,
-    task::{
-        TaskId,
-        TaskRequest,
-        TaskRequestEnum,
-        TaskType,
-    },
+    task::TaskRequest,
     task_executor::TaskExecutor,
 };
 use super::{
@@ -154,10 +160,10 @@ use crate::{
     context_cache::ContextCache,
     environment::{
         helpers::{
+            log_overflow_log_line,
             module_loader::module_specifier_from_path,
             resolve_promise,
             resolve_promise_allow_all_errors,
-            MAX_LOG_LINES,
         },
         AsyncOpRequest,
         JsEnvironment,
@@ -222,7 +228,7 @@ impl<'a, T: Send> CollectResult<'a, T> {
     }
 }
 
-pub struct ActionEnvironment<RT: Runtime> {
+pub struct ActionSyscallProvider<RT: Runtime> {
     identity: Identity,
     total_log_lines: usize,
     log_line_sender: mpsc::UnboundedSender<LogLine>,
@@ -239,22 +245,71 @@ pub struct ActionEnvironment<RT: Runtime> {
 
     running_tasks: Option<Box<dyn SpawnHandle>>,
 
-    // We have to store PromiseResolvers separate from TaskRequests because
-    // TaskRequests will be executed in parallel, but PromiseResolvers are not Send.
-    task_promise_resolvers: BTreeMap<TaskId, (v8::Global<v8::PromiseResolver>, TaskType)>,
     task_responses: mpsc::UnboundedReceiver<TaskResponse>,
     phase: ActionPhase<RT>,
     syscall_trace: Arc<Mutex<SyscallTrace>>,
     http_action_route: Arc<OnceLock<HttpActionRoute>>,
 }
 
-impl<RT: Runtime> Drop for ActionEnvironment<RT> {
+pub struct ActionEnvironment<RT: Runtime, S = ActionSyscallProvider<RT>> {
+    provider: S,
+
+    // We have to store PromiseResolvers separate from TaskRequests because
+    // TaskRequests will be executed in parallel, but PromiseResolvers are not Send.
+    task_promise_resolvers: BTreeMap<TaskId, (v8::Global<v8::PromiseResolver>, TaskType)>,
+    _phantom: PhantomData<RT>,
+}
+
+impl<RT: Runtime> Drop for ActionSyscallProvider<RT> {
     fn drop(&mut self) {
-        self.pending_task_sender.close();
-        if let Some(mut running_tasks) = self.running_tasks.take() {
-            running_tasks.shutdown();
-        }
+        self.shutdown_tasks();
     }
+}
+
+/// The interface between an action's JS and the outside world
+#[allow(async_fn_in_trait)]
+pub trait ActionInnerProvider<RT: Runtime>: SyscallProvider<RT> + HeapSize + 'static {
+    type Outcome;
+    type HttpOutcome;
+
+    fn rt(&self) -> &RT;
+    fn identity(&self) -> &Identity;
+    fn component(&self) -> ComponentId;
+    fn syscall_trace(&self) -> SyscallTrace;
+
+    async fn initialize(&mut self, timeout: &mut Timeout<RT>) -> anyhow::Result<()>;
+    fn begin_execution(&mut self) -> anyhow::Result<()>;
+
+    /// Hands `request` to the task executor, returning the ID that its
+    /// `TaskResponse::TaskDone` will carry.
+    fn start_task(&mut self, request: TaskRequestEnum) -> anyhow::Result<TaskId>;
+    /// Forwards `stream` to the isolate as `TaskResponse::StreamExtend`s for
+    /// `stream_id`.
+    fn send_stream(
+        &mut self,
+        stream_id: uuid::Uuid,
+        stream: Option<BoxStream<'static, anyhow::Result<bytes::Bytes>>>,
+    ) -> anyhow::Result<()>;
+    async fn next_task_response(&mut self) -> anyhow::Result<TaskResponse>;
+    /// Stops running tasks and drops any that haven't started.
+    fn shutdown_tasks(&mut self);
+
+    /// Called only after a lookup succeeds. An unmatched route's path is the
+    /// raw request path, which no token or usage record should keep.
+    fn set_http_action_route(&self, route: HttpActionRoute);
+    /// Resolves when the client that requested the HTTP action goes away.
+    fn http_response_closed(&self) -> anyhow::Result<BoxFuture<'static, ()>>;
+    fn http_response_has_started(&self) -> anyhow::Result<bool>;
+    fn handle_http_streamed_part(
+        &mut self,
+        part: Result<HttpActionResponsePart, JsError>,
+    ) -> anyhow::Result<()>;
+    fn add_http_response_size_warning(&mut self) -> anyhow::Result<()>;
+
+    fn trace_system(&mut self, warning: SystemWarning) -> anyhow::Result<()>;
+
+    fn into_outcome(self, outcome: ActionOutcome) -> Self::Outcome;
+    fn into_http_outcome(self, outcome: HttpActionOutcome) -> Self::HttpOutcome;
 }
 
 impl<RT: Runtime> ActionEnvironment<RT> {
@@ -308,37 +363,63 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         let (pending_task_sender, pending_task_receiver) = spsc::unbounded_channel();
         let running_tasks = rt.spawn("task_executor", task_executor.go(pending_task_receiver));
         Self {
-            identity,
-            rt: rt.clone(),
-            total_log_lines: 0,
-            log_line_sender,
-            http_response_streamer,
-            http_response_too_large: false,
+            provider: ActionSyscallProvider {
+                identity,
+                rt: rt.clone(),
+                total_log_lines: 0,
+                log_line_sender,
+                http_response_streamer,
+                http_response_too_large: false,
 
-            next_task_id: TaskId(0),
-            pending_task_sender,
-            task_responses,
-            running_tasks: Some(running_tasks),
+                next_task_id: TaskId(0),
+                pending_task_sender,
+                task_responses,
+                running_tasks: Some(running_tasks),
+                phase: ActionPhase::new(
+                    rt.clone(),
+                    component,
+                    transaction,
+                    module_loader,
+                    default_system_env_vars,
+                    resources,
+                    convex_origin_override,
+                ),
+                syscall_trace,
+                http_action_route,
+            },
             task_promise_resolvers: BTreeMap::new(),
-            phase: ActionPhase::new(
-                rt.clone(),
-                component,
-                transaction,
-                module_loader,
-                default_system_env_vars,
-                resources,
-                convex_origin_override,
-            ),
-            syscall_trace,
-            http_action_route,
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<RT: Runtime, S: ActionInnerProvider<RT>> ActionEnvironment<RT, S> {
+    pub fn from_provider(provider: S) -> Self {
+        Self {
+            provider,
+            task_promise_resolvers: BTreeMap::new(),
+            _phantom: PhantomData,
         }
     }
 
-    /// Called only after a lookup succeeds. An unmatched route's path is the
-    /// raw request path, which no token or usage record should keep.
-    fn set_http_action_route(&self, route: HttpActionRoute) {
-        if self.http_action_route.set(route).is_err() {
-            tracing::warn!("HTTP action route was already set for this request");
+    pub fn provider(&self) -> &S {
+        &self.provider
+    }
+
+    pub fn into_provider(self) -> S {
+        self.provider
+    }
+
+    /// Replaces the syscall provider, e.g. to wrap it in one that records the
+    /// action's inputs.
+    pub fn map_provider<S2: ActionInnerProvider<RT>>(
+        self,
+        f: impl FnOnce(S) -> S2,
+    ) -> ActionEnvironment<RT, S2> {
+        ActionEnvironment {
+            provider: f(self.provider),
+            task_promise_resolvers: self.task_promise_resolvers,
+            _phantom: PhantomData,
         }
     }
 
@@ -353,14 +434,14 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         routed_path: RoutedHttpPath,
         request: HttpActionRequest,
         function_started: Option<oneshot::Sender<()>>,
-    ) -> anyhow::Result<HttpActionOutcome> {
-        let start_unix_timestamp = self.rt.unix_timestamp();
+    ) -> anyhow::Result<S::HttpOutcome> {
+        let start_unix_timestamp = self.provider.rt().unix_timestamp();
 
         // Double check that we correctly initialized `ActionEnvironment` with the right
         // component path and then pass a bare `CanonicalizedUdfPath` to
         // `run_http_action_inner`.
         let component_function_path = http_module_path.path();
-        anyhow::ensure!(component_function_path.component == self.phase.component());
+        anyhow::ensure!(component_function_path.component == self.provider.component());
         let udf_path = &component_function_path.udf_path;
 
         let (handle, state, mut timeout) =
@@ -395,11 +476,6 @@ impl<RT: Runtime> ActionEnvironment<RT> {
 
         self = isolate_context.take_environment();
         let execution_time = timeout.into_function_execution_time(UdfType::HttpAction);
-        let http_response_streamer = self
-            .http_response_streamer
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No HTTP response streamer for HTTP action"))?;
-        let total_bytes_sent = http_response_streamer.total_bytes_sent();
         match termination_error {
             Ok(Ok(..)) => (),
             Ok(Err(e)) => {
@@ -407,31 +483,22 @@ impl<RT: Runtime> ActionEnvironment<RT> {
                 // succeeded, so usage tracking reports the parameterized route
                 // pattern instead of the raw URL path.
                 let route = result.as_ref().ok().and_then(|(route, _)| route.clone());
-                if !http_response_streamer.has_started() {
-                    result = Ok((route, HttpActionResult::Error(e)));
-                } else {
-                    Self::handle_http_streamed_part(&mut self, Err(e))?;
-                    result = Ok((route, HttpActionResult::Streamed))
-                }
+                result = http_action_failed(&mut self.provider, e).map(|result| (route, result));
             },
             Err(e) => {
                 result = Err(e);
             },
         }
-        let user_execution_time = execution_time.elapsed;
-        self.add_warnings_to_log_lines_http_action(execution_time, total_bytes_sent)?;
-        let (route, result) = result?;
-        let outcome = HttpActionOutcome::new(
-            route,
+        let dangling_task_counts = self.dangling_task_counts();
+        finish_http_action(
+            self.provider,
+            dangling_task_counts,
+            &http_module_path,
             request_head,
-            self.identity.clone().into(),
             start_unix_timestamp,
+            execution_time,
             result,
-            Some(self.syscall_trace.lock().clone()),
-            http_module_path.npm_version().clone(),
-            user_execution_time,
-        );
-        Ok(outcome)
+        )
     }
 
     #[fastrace::trace]
@@ -449,7 +516,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
 
         {
             let state = scope.state_mut()?;
-            state.environment.phase.initialize(timeout).await?;
+            state.environment.provider.initialize(timeout).await?;
         }
 
         /*
@@ -487,13 +554,13 @@ impl<RT: Runtime> ActionEnvironment<RT> {
             None => {
                 handle.check_terminated()?;
                 let state = scope.state_mut()?;
-                let environment = &mut state.environment;
+                let provider = &mut state.environment.provider;
                 let response_parts = HttpActionResponsePart::from_text(
                     StatusCode::NOT_FOUND,
                     "No matching routes found".into(),
                 );
                 for part in response_parts {
-                    Self::handle_http_streamed_part(environment, Ok(part))?;
+                    provider.handle_http_streamed_part(Ok(part))?;
                 }
                 return Ok((None, HttpActionResult::Streamed));
             },
@@ -502,6 +569,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         scope
             .state_mut()?
             .environment
+            .provider
             .set_http_action_route(route.clone());
 
         let run_str = strings::runRequest.create(&scope)?.into();
@@ -521,6 +589,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
                 scope
                     .state_mut()?
                     .environment
+                    .provider
                     .send_stream(stream_id, Some(body))?;
                 Some(stream_id)
             },
@@ -553,7 +622,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
             &v8_args,
             Box::pin(futures::future::pending()),
             Self::stream_http_result,
-            Self::handle_http_streamed_part,
+            |environment, part| environment.provider.handle_http_streamed_part(part),
         )
         .await?;
         match result {
@@ -569,24 +638,13 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         scope: &mut ExecutionScope<'_, '_, '_, RT, Self>,
     ) -> anyhow::Result<uuid::Uuid> {
         let state = scope.state_mut()?;
-        let response_streamer = state
-            .environment
-            .http_response_streamer
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No HTTP response streamer for HTTP action"))?;
-        // NOTE: this clone extends the lifetime of the response_streamer sender to the
-        // lifetime of the TaskExecutor thread. Make sure that thread gets
-        // shutdown before waiting for the response_streamer's receiver to
-        // close. Currently the thread is shutdown in Drop for ActionEnvironment.
-        let response_streamer_ = response_streamer.clone();
-        let sender_closed_fut = async move {
-            response_streamer_.sender.closed().await;
-        };
+        let sender_closed_fut = state.environment.provider.http_response_closed()?;
         let sender_closed =
             Box::pin(futures::stream::once(sender_closed_fut).filter_map(|_| async move { None }));
         let stream_id = state.create_request_stream()?;
         state
             .environment
+            .provider
             .send_stream(stream_id, Some(sender_closed))?;
 
         Ok(stream_id)
@@ -596,7 +654,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         scope: &mut ExecutionScope<'_, '_, '_, RT, Self>,
         result_str: String,
     ) -> anyhow::Result<
-        impl Stream<Item = anyhow::Result<Result<HttpActionResponsePart, JsError>>> + use<RT>,
+        impl Stream<Item = anyhow::Result<Result<HttpActionResponsePart, JsError>>> + use<RT, S>,
     > {
         let json_value: JsonValue = serde_json::from_str(&result_str)?;
         let v8_response: HttpResponseV8 = serde_json::from_value(json_value)?;
@@ -622,72 +680,6 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         ))
     }
 
-    fn handle_http_streamed_part(
-        environment: &mut ActionEnvironment<RT>,
-        part: Result<HttpActionResponsePart, JsError>,
-    ) -> anyhow::Result<()> {
-        let streamer = environment
-            .http_response_streamer
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("No HTTP response streamer for HTTP action"))?;
-        match part {
-            Ok(HttpActionResponsePart::Head(h)) => {
-                streamer.send_part(HttpActionResponsePart::Head(h))??;
-            },
-            Ok(HttpActionResponsePart::BodyChunk(b)) => {
-                if environment.http_response_too_large {
-                    return Ok(());
-                }
-                if streamer.total_bytes_sent() + b.len() > HTTP_ACTION_RESPONSE_BODY_LIMIT {
-                    environment.http_response_too_large = true;
-                    let e = JsError::from_message(format!(
-                        "HttpResponseTooLarge: HTTP actions support responses up to {}",
-                        HTTP_ACTION_RESPONSE_BODY_LIMIT.format_size(BINARY)
-                    ));
-                    environment.trace_system(SystemWarning {
-                        level: LogLevel::Error,
-                        messages: vec![e.to_string()],
-                        system_log_metadata: SystemLogMetadata {
-                            code: "error:httpAction".to_string(),
-                        },
-                    })?;
-                } else {
-                    // If the `streamer` is closed, the inner Result
-                    // will have an error. That's fine; we want to keep letting
-                    // the isolate send data.
-                    let _ = streamer.send_part(HttpActionResponsePart::BodyChunk(b))?;
-                }
-            },
-            Err(e) => environment.trace_system(SystemWarning {
-                level: LogLevel::Error,
-                messages: vec![e.to_string()],
-                system_log_metadata: SystemLogMetadata {
-                    code: "error:httpAction".to_string(),
-                },
-            })?,
-        };
-        Ok(())
-    }
-
-    fn send_stream(
-        &mut self,
-        stream_id: uuid::Uuid,
-        stream: Option<BoxStream<'static, anyhow::Result<bytes::Bytes>>>,
-    ) -> anyhow::Result<()> {
-        let task_id = self.next_task_id.increment();
-        self.pending_task_sender
-            .send(TaskRequest {
-                task_id,
-                variant: TaskRequestEnum::AsyncOp(AsyncOpRequest::SendStream { stream, stream_id }),
-                parent_trace: EncodedSpan::from_parent(),
-            })
-            .map_err(|_| {
-                anyhow!(ErrorMetadata::operational_internal_server_error())
-                    .context("TaskExecutor went away")
-            })?;
-        Ok(())
-    }
-
     #[fastrace::trace]
     pub async fn run_action(
         mut self,
@@ -698,8 +690,8 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         request_params: ActionRequestParams,
         cancellation: BoxFuture<'_, ()>,
         function_started: Option<oneshot::Sender<()>>,
-    ) -> anyhow::Result<ActionOutcome> {
-        let start_unix_timestamp = self.rt.unix_timestamp();
+    ) -> anyhow::Result<S::Outcome> {
+        let start_unix_timestamp = self.provider.rt().unix_timestamp();
 
         let (handle, state, mut timeout) =
             isolate.start_request(context_cache, permit, self).await?;
@@ -739,31 +731,15 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         }
         self = isolate_context.take_environment();
         let execution_time = timeout.into_function_execution_time(UdfType::Action);
-        let user_execution_time = execution_time.elapsed;
-        let (path, arguments, udf_server_version) = request_params.path_and_args.consume();
-        // Arguments that don't parse have already failed the action before it did
-        // any work, so there's nothing to warn about.
-        if let Ok(udf_args) = parse_udf_args(&path.udf_path, arguments.clone().into_args()?) {
-            self.add_warnings_to_log_lines_action(
-                execution_time,
-                &udf_args,
-                result.as_ref().ok().and_then(|r| r.as_ref().ok()),
-            )?;
-        }
-        let outcome = ActionOutcome {
-            path: path.for_logging(),
-            arguments,
-            unix_timestamp: start_unix_timestamp,
-            identity: self.identity.clone().into(),
-            result: match result? {
-                Ok(v) => Ok(JsonPackedValue::pack(v)),
-                Err(e) => Err(e),
-            },
-            syscall_trace: self.syscall_trace.lock().clone(),
-            udf_server_version,
-            user_execution_time: Some(user_execution_time),
-        };
-        Ok(outcome)
+        let dangling_task_counts = self.dangling_task_counts();
+        finish_action(
+            self.provider,
+            dangling_task_counts,
+            request_params,
+            start_unix_timestamp,
+            execution_time,
+            result,
+        )
     }
 
     #[fastrace::trace]
@@ -778,7 +754,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         let mut scope = RequestScope::<RT, Self>::enter(v8_scope);
         {
             let state = scope.state_mut()?;
-            state.environment.phase.initialize(timeout).await?;
+            state.environment.provider.initialize(timeout).await?;
         }
         let (path, arguments, _) = request_params.path_and_args.consume();
 
@@ -1007,7 +983,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
     /// Errors from collecting the result will be surfaced via
     /// `get_result_stream` -> `handle_result_part`
     #[fastrace::trace]
-    async fn run_inner<'a, 's, 'i, T, S>(
+    async fn run_inner<'a, 's, 'i, T, St>(
         scope: &mut ExecutionScope<'a, 's, 'i, RT, Self>,
         timeout: &mut Timeout<RT>,
         handle: ExecutionHandle,
@@ -1018,15 +994,12 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         get_result_stream: impl FnOnce(
             &mut ExecutionScope<'a, 's, 'i, RT, Self>,
             String,
-        ) -> anyhow::Result<S>,
-        mut handle_result_part: impl FnMut(
-            &mut ActionEnvironment<RT>,
-            Result<T, JsError>,
-        ) -> anyhow::Result<()>,
+        ) -> anyhow::Result<St>,
+        mut handle_result_part: impl FnMut(&mut Self, Result<T, JsError>) -> anyhow::Result<()>,
     ) -> anyhow::Result<Result<(), JsError>>
     where
         T: Send,
-        S: Stream<Item = anyhow::Result<Result<T, JsError>>> + Send + 'static,
+        St: Stream<Item = anyhow::Result<Result<T, JsError>>> + Send + 'static,
     {
         // Switch our phase to executing right before calling into the UDF.
         {
@@ -1034,7 +1007,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
             // This enforces on database access in the router.
             // We might relax this to e.g. implement a JavaScript router with
             // auth middleware which affected the matched route.
-            state.environment.phase.begin_execution()?;
+            state.environment.provider.begin_execution()?;
         }
         let global = scope.get_current_context().global(scope);
         let promise_r = scope.with_try_catch(|s| v8_function.call(s, global.into(), v8_args));
@@ -1175,11 +1148,8 @@ impl<RT: Runtime> ActionEnvironment<RT> {
                 // However, actions can call queries, mutations, and other actions
                 // as syscalls, so these should still count towards the user-code
                 // timeout.
-                task_response = environment.task_responses.recv().fuse() => {
-                    let Some(task_response) = task_response else {
-                        anyhow::bail!("Task executor went away?");
-                    };
-                    match task_response {
+                task_response = environment.provider.next_task_response().fuse() => {
+                    match task_response? {
                         TaskResponse::StreamExtend { stream_id, chunk } => {
                             match chunk {
                                 Ok(chunk) => {
@@ -1225,54 +1195,333 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         };
         // Drain all remaining async syscalls that are not sleeps in case the
         // developer forgot to await them.
-        let environment = &mut scope.state_mut()?.environment;
-        environment.pending_task_sender.close();
-        if let Some(mut running_tasks) = environment.running_tasks.take() {
-            running_tasks.shutdown();
-        }
+        scope.state_mut()?.environment.provider.shutdown_tasks();
         Ok(result)
     }
 
-    fn add_warnings_to_log_lines_action(
+    fn dangling_task_counts(&self) -> BTreeMap<String, usize> {
+        dangling_task_counts(self.task_promise_resolvers.values().map(|(_, task)| task))
+    }
+
+    fn start_task(
         &mut self,
-        execution_time: FunctionExecutionTime,
-        arguments: &ConvexArray,
-        result: Option<&ConvexValue>,
+        request: TaskRequestEnum,
+        resolver: v8::Global<v8::PromiseResolver>,
     ) -> anyhow::Result<()> {
-        if let Some(warning) = approaching_limit_warning(
-            arguments.size(),
-            *FUNCTION_MAX_ARGS_SIZE,
-            "FunctionArgumentsTooLarge",
-            || "Large size of the action arguments".to_string(),
+        let task_type = request.to_type();
+        let task_id = self.provider.start_task(request)?;
+        self.task_promise_resolvers
+            .insert(task_id, (resolver, task_type));
+        Ok(())
+    }
+}
+
+pub fn finish_action<RT: Runtime, S: ActionInnerProvider<RT>>(
+    mut provider: S,
+    dangling_task_counts: BTreeMap<String, usize>,
+    request_params: ActionRequestParams,
+    start_unix_timestamp: UnixTimestamp,
+    execution_time: FunctionExecutionTime,
+    result: anyhow::Result<Result<ConvexValue, JsError>>,
+) -> anyhow::Result<S::Outcome> {
+    let user_execution_time = execution_time.elapsed;
+    let (path, arguments, udf_server_version) = request_params.path_and_args.consume();
+    // Arguments that don't parse have already failed the action before it did
+    // any work, so there's nothing to warn about.
+    if let Ok(udf_args) = parse_udf_args(&path.udf_path, arguments.clone().into_args()?) {
+        add_warnings_to_log_lines_action(
+            &mut provider,
+            dangling_task_counts,
+            execution_time,
+            &udf_args,
+            result.as_ref().ok().and_then(|r| r.as_ref().ok()),
+        )?;
+    }
+    let outcome = ActionOutcome {
+        path: path.for_logging(),
+        arguments,
+        unix_timestamp: start_unix_timestamp,
+        identity: provider.identity().clone().into(),
+        result: match result? {
+            Ok(v) => Ok(JsonPackedValue::pack(v)),
+            Err(e) => Err(e),
+        },
+        syscall_trace: provider.syscall_trace(),
+        udf_server_version,
+        user_execution_time: Some(user_execution_time),
+    };
+    Ok(provider.into_outcome(outcome))
+}
+
+pub fn http_action_failed<RT: Runtime, S: ActionInnerProvider<RT>>(
+    provider: &mut S,
+    error: JsError,
+) -> anyhow::Result<HttpActionResult> {
+    if !provider.http_response_has_started()? {
+        return Ok(HttpActionResult::Error(error));
+    }
+    provider.handle_http_streamed_part(Err(error))?;
+    Ok(HttpActionResult::Streamed)
+}
+
+pub fn finish_http_action<RT: Runtime, S: ActionInnerProvider<RT>>(
+    mut provider: S,
+    dangling_task_counts: BTreeMap<String, usize>,
+    http_module_path: &ValidatedHttpPath,
+    request_head: HttpActionRequestHead,
+    start_unix_timestamp: UnixTimestamp,
+    execution_time: FunctionExecutionTime,
+    result: anyhow::Result<(Option<HttpActionRoute>, HttpActionResult)>,
+) -> anyhow::Result<S::HttpOutcome> {
+    let user_execution_time = execution_time.elapsed;
+    provider.add_http_response_size_warning()?;
+    add_warnings_to_log_lines(&mut provider, dangling_task_counts, execution_time)?;
+    let (route, result) = result?;
+    let outcome = HttpActionOutcome::new(
+        route,
+        request_head,
+        provider.identity().clone().into(),
+        start_unix_timestamp,
+        result,
+        Some(provider.syscall_trace()),
+        http_module_path.npm_version().clone(),
+        user_execution_time,
+    );
+    Ok(provider.into_http_outcome(outcome))
+}
+
+fn add_warnings_to_log_lines_action<RT: Runtime, S: ActionInnerProvider<RT>>(
+    provider: &mut S,
+    dangling_task_counts: BTreeMap<String, usize>,
+    execution_time: FunctionExecutionTime,
+    arguments: &ConvexArray,
+    result: Option<&ConvexValue>,
+) -> anyhow::Result<()> {
+    if let Some(warning) = approaching_limit_warning(
+        arguments.size(),
+        *FUNCTION_MAX_ARGS_SIZE,
+        "FunctionArgumentsTooLarge",
+        || "Large size of the action arguments".to_string(),
+        None,
+        Some(" bytes"),
+        None,
+    ) {
+        provider.trace_system(warning)?;
+    }
+    add_warnings_to_log_lines(provider, dangling_task_counts, execution_time)?;
+
+    if let Some(result) = result
+        && let Some(warning) = approaching_limit_warning(
+            result.size(),
+            *FUNCTION_MAX_RESULT_SIZE,
+            "TooLargeFunctionResult",
+            || "Large size of the action return value".to_string(),
             None,
             Some(" bytes"),
             None,
-        ) {
-            self.trace_system(warning)?;
-        }
-        self.add_warnings_to_log_lines(execution_time)?;
+        )
+    {
+        provider.trace_system(warning)?;
+    };
+    Ok(())
+}
 
-        if let Some(result) = result
-            && let Some(warning) = approaching_limit_warning(
-                result.size(),
-                *FUNCTION_MAX_RESULT_SIZE,
-                "TooLargeFunctionResult",
-                || "Large size of the action return value".to_string(),
-                None,
-                Some(" bytes"),
-                None,
-            )
-        {
-            self.trace_system(warning)?;
+fn add_warnings_to_log_lines<RT: Runtime, S: ActionInnerProvider<RT>>(
+    provider: &mut S,
+    dangling_task_counts: BTreeMap<String, usize>,
+    execution_time: FunctionExecutionTime,
+) -> anyhow::Result<()> {
+    if !dangling_task_counts.is_empty() {
+        let total_dangling_tasks = dangling_task_counts.values().sum();
+        let task_names = dangling_task_counts.keys().join(", ");
+        log_unawaited_pending_op(total_dangling_tasks, "action");
+        let message = format!(
+            "{total_dangling_tasks} unawaited operation{}: [{task_names}]. Async operations should be awaited or they might not run. \
+             See https://docs.convex.dev/functions/actions#dangling-promises for more information.",
+            if total_dangling_tasks == 1 { "" } else { "s" },
+        );
+        let warning = SystemWarning {
+            level: LogLevel::Warn,
+            messages: vec![message],
+            system_log_metadata: SystemLogMetadata {
+                code: "UnawaitedOperations".to_string(),
+            },
+        };
+        provider.trace_system(warning)?;
+    }
+    if let Some(warning) = approaching_duration_limit_warning(
+        execution_time.elapsed,
+        execution_time.limit,
+        "UserTimeout",
+        "Function execution took a long time",
+        None,
+    )? {
+        provider.trace_system(warning)?;
+    }
+    Ok(())
+}
+
+pub fn dangling_task_counts<'a>(
+    tasks: impl IntoIterator<Item = &'a TaskType>,
+) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for task in tasks
+        .into_iter()
+        .filter(|task| !matches!(task, TaskType::Sleep))
+    {
+        *counts.entry(task.name_when_dangling()).or_default() += 1;
+    }
+    counts
+}
+
+impl<RT: Runtime> ActionInnerProvider<RT> for ActionSyscallProvider<RT> {
+    type HttpOutcome = HttpActionOutcome;
+    type Outcome = ActionOutcome;
+
+    fn rt(&self) -> &RT {
+        &self.rt
+    }
+
+    fn identity(&self) -> &Identity {
+        &self.identity
+    }
+
+    fn component(&self) -> ComponentId {
+        self.phase.component()
+    }
+
+    fn syscall_trace(&self) -> SyscallTrace {
+        self.syscall_trace.lock().clone()
+    }
+
+    async fn initialize(&mut self, timeout: &mut Timeout<RT>) -> anyhow::Result<()> {
+        self.phase.initialize(timeout).await
+    }
+
+    fn begin_execution(&mut self) -> anyhow::Result<()> {
+        self.phase.begin_execution()
+    }
+
+    fn start_task(&mut self, request: TaskRequestEnum) -> anyhow::Result<TaskId> {
+        self.phase.require_executing(&request)?;
+        let task_id = self.next_task_id.increment();
+        self.pending_task_sender
+            .send(TaskRequest {
+                task_id,
+                variant: request,
+                parent_trace: EncodedSpan::from_parent(),
+            })
+            .map_err(|_| {
+                anyhow!(ErrorMetadata::operational_internal_server_error())
+                    .context("TaskExecutor went away")
+            })?;
+        Ok(task_id)
+    }
+
+    fn send_stream(
+        &mut self,
+        stream_id: uuid::Uuid,
+        stream: Option<BoxStream<'static, anyhow::Result<bytes::Bytes>>>,
+    ) -> anyhow::Result<()> {
+        let task_id = self.next_task_id.increment();
+        self.pending_task_sender
+            .send(TaskRequest {
+                task_id,
+                variant: TaskRequestEnum::AsyncOp(AsyncOpRequest::SendStream { stream, stream_id }),
+                parent_trace: EncodedSpan::from_parent(),
+            })
+            .map_err(|_| {
+                anyhow!(ErrorMetadata::operational_internal_server_error())
+                    .context("TaskExecutor went away")
+            })?;
+        Ok(())
+    }
+
+    async fn next_task_response(&mut self) -> anyhow::Result<TaskResponse> {
+        self.task_responses
+            .recv()
+            .await
+            .context("Task executor went away?")
+    }
+
+    fn shutdown_tasks(&mut self) {
+        self.pending_task_sender.close();
+        if let Some(mut running_tasks) = self.running_tasks.take() {
+            running_tasks.shutdown();
+        }
+    }
+
+    fn set_http_action_route(&self, route: HttpActionRoute) {
+        if self.http_action_route.set(route).is_err() {
+            tracing::warn!("HTTP action route was already set for this request");
+        }
+    }
+
+    fn http_response_closed(&self) -> anyhow::Result<BoxFuture<'static, ()>> {
+        // NOTE: this clone extends the lifetime of the response_streamer sender to the
+        // lifetime of the TaskExecutor thread. Make sure that thread gets
+        // shutdown before waiting for the response_streamer's receiver to
+        // close. Currently the thread is shutdown in Drop for ActionSyscallProvider.
+        let response_streamer = self.http_response_streamer()?.clone();
+        Ok(async move {
+            response_streamer.sender.closed().await;
+        }
+        .boxed())
+    }
+
+    fn http_response_has_started(&self) -> anyhow::Result<bool> {
+        Ok(self.http_response_streamer()?.has_started())
+    }
+
+    fn handle_http_streamed_part(
+        &mut self,
+        part: Result<HttpActionResponsePart, JsError>,
+    ) -> anyhow::Result<()> {
+        let streamer = self
+            .http_response_streamer
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("No HTTP response streamer for HTTP action"))?;
+        match part {
+            Ok(HttpActionResponsePart::Head(h)) => {
+                streamer.send_part(HttpActionResponsePart::Head(h))??;
+            },
+            Ok(HttpActionResponsePart::BodyChunk(b)) => {
+                if self.http_response_too_large {
+                    return Ok(());
+                }
+                if streamer.total_bytes_sent() + b.len() > HTTP_ACTION_RESPONSE_BODY_LIMIT {
+                    self.http_response_too_large = true;
+                    let e = JsError::from_message(format!(
+                        "HttpResponseTooLarge: HTTP actions support responses up to {}",
+                        HTTP_ACTION_RESPONSE_BODY_LIMIT.format_size(BINARY)
+                    ));
+                    self.trace_system(SystemWarning {
+                        level: LogLevel::Error,
+                        messages: vec![e.to_string()],
+                        system_log_metadata: SystemLogMetadata {
+                            code: "error:httpAction".to_string(),
+                        },
+                    })?;
+                } else {
+                    // If the `streamer` is closed, the inner Result
+                    // will have an error. That's fine; we want to keep letting
+                    // the isolate send data.
+                    let _ = streamer.send_part(HttpActionResponsePart::BodyChunk(b))?;
+                }
+            },
+            Err(e) => self.trace_system(SystemWarning {
+                level: LogLevel::Error,
+                messages: vec![e.to_string()],
+                system_log_metadata: SystemLogMetadata {
+                    code: "error:httpAction".to_string(),
+                },
+            })?,
         };
         Ok(())
     }
 
-    fn add_warnings_to_log_lines_http_action(
-        &mut self,
-        execution_time: FunctionExecutionTime,
-        total_bytes_sent: usize,
-    ) -> anyhow::Result<()> {
+    fn add_http_response_size_warning(&mut self) -> anyhow::Result<()> {
+        let total_bytes_sent = self.http_response_streamer()?.total_bytes_sent();
         if !self.http_response_too_large
             && let Some(warning) = approaching_limit_warning(
                 total_bytes_sent,
@@ -1286,78 +1535,6 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         {
             self.trace_system(warning)?;
         }
-        self.add_warnings_to_log_lines(execution_time)?;
-        Ok(())
-    }
-
-    fn add_warnings_to_log_lines(
-        &mut self,
-        execution_time: FunctionExecutionTime,
-    ) -> anyhow::Result<()> {
-        let dangling_task_counts = self.dangling_task_counts();
-        if !dangling_task_counts.is_empty() {
-            let total_dangling_tasks = dangling_task_counts.values().sum();
-            let task_names = dangling_task_counts.keys().join(", ");
-            log_unawaited_pending_op(total_dangling_tasks, "action");
-            let message = format!(
-                "{total_dangling_tasks} unawaited operation{}: [{task_names}]. Async operations should be awaited or they might not run. \
-                 See https://docs.convex.dev/functions/actions#dangling-promises for more information.",
-                if total_dangling_tasks == 1 { "" } else { "s" },
-            );
-            let warning = SystemWarning {
-                level: LogLevel::Warn,
-                messages: vec![message],
-                system_log_metadata: SystemLogMetadata {
-                    code: "UnawaitedOperations".to_string(),
-                },
-            };
-            self.trace_system(warning)?;
-        }
-        if let Some(warning) = approaching_duration_limit_warning(
-            execution_time.elapsed,
-            execution_time.limit,
-            "UserTimeout",
-            "Function execution took a long time",
-            None,
-        )? {
-            self.trace_system(warning)?;
-        }
-        Ok(())
-    }
-
-    fn dangling_task_counts(&self) -> BTreeMap<String, usize> {
-        let mut counts = BTreeMap::new();
-        for (_, req) in self
-            .task_promise_resolvers
-            .values()
-            .filter(|(_, req)| !matches!(req, TaskType::Sleep))
-        {
-            let req_name = req.name_when_dangling();
-            *counts.entry(req_name).or_default() += 1;
-        }
-        counts
-    }
-
-    fn start_task(
-        &mut self,
-        request: TaskRequestEnum,
-        resolver: v8::Global<v8::PromiseResolver>,
-    ) -> anyhow::Result<()> {
-        self.phase.require_executing(&request)?;
-        let task_id = self.next_task_id.increment();
-        self.task_promise_resolvers
-            .insert(task_id, (resolver, request.to_type()));
-        self.pending_task_sender
-            .send(TaskRequest {
-                task_id,
-                variant: request,
-                parent_trace: EncodedSpan::from_parent(),
-            })
-            .map_err(|_| {
-                self.task_promise_resolvers.remove(&task_id);
-                anyhow!(ErrorMetadata::operational_internal_server_error())
-                    .context("TaskExecutor went away")
-            })?;
         Ok(())
     }
 
@@ -1366,13 +1543,35 @@ impl<RT: Runtime> ActionEnvironment<RT> {
             .send(warning.into_log_line(self.rt.unix_timestamp()))?;
         Ok(())
     }
+
+    fn into_outcome(self, outcome: ActionOutcome) -> Self::Outcome {
+        outcome
+    }
+
+    fn into_http_outcome(self, outcome: HttpActionOutcome) -> Self::HttpOutcome {
+        outcome
+    }
 }
 
-impl<RT: Runtime> OpProvider for ActionEnvironment<RT> {
-    fn trace(&mut self, level: LogLevel, messages: Vec<String>) -> anyhow::Result<()> {
-        // - 1 to reserve for the [ERROR] log line
+impl<RT: Runtime> ActionSyscallProvider<RT> {
+    fn http_response_streamer(&self) -> anyhow::Result<&HttpActionResponseStreamer> {
+        self.http_response_streamer
+            .as_ref()
+            .context("No HTTP response streamer for HTTP action")
+    }
+}
 
-        match self.total_log_lines.cmp(&(MAX_LOG_LINES - 1)) {
+impl<RT: Runtime> HeapSize for ActionSyscallProvider<RT> {
+    fn heap_size(&self) -> usize {
+        self.syscall_trace.lock().heap_size()
+    }
+}
+
+impl<RT: Runtime> OpProvider for ActionSyscallProvider<RT> {
+    fn trace(&mut self, level: LogLevel, messages: Vec<String>) -> anyhow::Result<()> {
+        let max_log_lines = *MAX_LOG_LINES_V8_ACTIONS;
+        // - 1 to reserve for the [ERROR] log line
+        match self.total_log_lines.cmp(&(max_log_lines - 1)) {
             // We are explicitly dropping errors in actions in case the log line sender goes away.
             // We should throw errors again once we correctly handle clients going away in HTTP
             // actions.
@@ -1385,12 +1584,8 @@ impl<RT: Runtime> OpProvider for ActionEnvironment<RT> {
                 self.total_log_lines += 1;
             },
             Ordering::Equal => {
-                // Add a message about omitting log lines once
-                let _ = self.log_line_sender.send(LogLine::new_developer_log_line(
-                    LogLevel::Error,
-                    vec![format!(
-                        "Log overflow (maximum {MAX_LOG_LINES}). Remaining log lines omitted."
-                    )],
+                let _ = self.log_line_sender.send(log_overflow_log_line(
+                    max_log_lines,
                     self.rt.unix_timestamp(),
                 ));
                 self.total_log_lines += 1;
@@ -1432,7 +1627,7 @@ impl<RT: Runtime> OpProvider for ActionEnvironment<RT> {
     }
 }
 
-impl<RT: Runtime> SyscallProvider<RT> for ActionEnvironment<RT> {
+impl<RT: Runtime> SyscallProvider<RT> for ActionSyscallProvider<RT> {
     // We lookup all modules' sources upfront when initializing the action
     // environment, so this function always returns immediately.
     async fn lookup_source(
@@ -1450,12 +1645,12 @@ impl<RT: Runtime> SyscallProvider<RT> for ActionEnvironment<RT> {
     }
 }
 
-impl<RT: Runtime> JsEnvironment<RT> for ActionEnvironment<RT> {
+impl<RT: Runtime, S: ActionInnerProvider<RT>> JsEnvironment<RT> for ActionEnvironment<RT, S> {
     type AsyncResolver = v8::Global<v8::PromiseResolver>;
-    type SyscallProvider = Self;
+    type SyscallProvider = S;
 
     fn syscall_provider(&mut self) -> &mut Self::SyscallProvider {
-        self
+        &mut self.provider
     }
 
     fn start_async_syscall(
@@ -1476,7 +1671,7 @@ impl<RT: Runtime> JsEnvironment<RT> for ActionEnvironment<RT> {
     }
 
     fn environment_heap_size(&self) -> usize {
-        self.syscall_trace.lock().heap_size()
+        self.provider.heap_size()
     }
 
     fn user_timeout(&self) -> std::time::Duration {

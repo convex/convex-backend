@@ -179,13 +179,7 @@ where
                 .map(|ct| ct.parse())
                 .transpose()?;
             usage
-                .track_storage_call(
-                    component_path.clone(),
-                    requestor.usage_tag(),
-                    file_storage_entry.storage_id.clone(),
-                    content_type,
-                    file_storage_entry.sha256.clone(),
-                )
+                .track_storage_call(component_path.clone(), requestor.usage_tag(), content_type)
                 .await;
             usage
                 .track_storage_egress(

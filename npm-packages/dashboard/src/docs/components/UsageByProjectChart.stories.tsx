@@ -70,6 +70,7 @@ const meta = {
               name: "my-cute-app",
               slug: "my-cute-app",
               createTime: Date.now(),
+              tags: [],
               prodDeploymentName: "musical-otter-456",
               devDeploymentName: "happy-capybara-123",
             }
@@ -81,6 +82,7 @@ const meta = {
                 name: "my-cool-app",
                 slug: "my-cool-app",
                 createTime: Date.now(),
+                tags: [],
                 prodDeploymentName: "clever-fox-789",
                 devDeploymentName: "swift-penguin-012",
               }

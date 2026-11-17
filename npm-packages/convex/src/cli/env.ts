@@ -171,6 +171,8 @@ const envListCmd = new Command("list")
       "• List all variables and their values: `npx convex env list --include-values`",
       "• Save all variables to a file: `npx convex env list --include-values > .env.convex`",
       "• Append to a file: `npx convex env list --include-values >> .env.convex`",
+      "",
+      "When an AI agent runs this command (detected from environment variables like AI_AGENT or CLAUDECODE), only names are listed unless --include-values is passed.",
     ].join("\n"),
   )
   .option(
@@ -180,7 +182,7 @@ const envListCmd = new Command("list")
   .addOption(
     new Option(
       "--include-values",
-      "Print each variable's value alongside its name, in .env format (the default). Pass it explicitly in scripts that rely on the values.",
+      "Print each variable's value alongside its name, in .env format. This is the default unless an AI agent is detected, so pass it explicitly in scripts that rely on the values.",
     ).conflicts("namesOnly"),
   )
   .configureHelp({ showGlobalOptions: true })
@@ -198,6 +200,7 @@ const envListCmd = new Command("list")
         const backend = deploymentEnvBackend(ctx, deployment);
         await envList(ctx, backend, {
           namesOnly: cmdOptions.namesOnly ?? false,
+          includeValues: cmdOptions.includeValues ?? false,
         });
       },
     });

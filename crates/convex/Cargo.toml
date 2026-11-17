@@ -7,7 +7,7 @@ edition = "2021"
 rust-version = "1.85"
 resolver = "2"
 license = "Apache-2.0"
-repository = "https://github.com/get-convex/convex-rs"
+repository = "https://github.com/convex/convex-rs"
 homepage = "https://www.convex.dev/"
 
 [package.metadata.cargo-machete]

@@ -6,12 +6,12 @@ We include `fly.toml` files to make it easy to deploy your backend to
 ## Setup
 
 Copy the
-[`fly` files](https://github.com/get-convex/convex-backend/tree/main/self-hosted/fly)
+[`fly` files](https://github.com/convex/convex-backend/tree/main/self-hosted/advanced/fly)
 to your local machine. You don't need to copy it into your project directory,
 but you can. `degit` is a tool for copying files from git repositories.
 
 ```sh
-npx degit get-convex/convex-backend/self-hosted/fly fly
+npx degit convex/convex-backend/self-hosted/advanced/fly fly
 cd fly
 ```
 
@@ -36,7 +36,7 @@ Steps:
 
    When prompted, hit 'y' to copy the configuration to your new app. Edit the
    location to be in the same region as your database (if you're using
-   [Postgres or MySQL](https://github.com/get-convex/convex-backend/tree/main/self-hosted/README.md#running-the-database-on-postgres-or-mysql)).
+   [Postgres or MySQL](https://github.com/convex/convex-backend/tree/main/self-hosted/advanced/postgres_or_mysql.md)).
    Now you have a fly app that is running the Convex backend, where you can
    deploy your app's Convex functions.
 
@@ -159,7 +159,7 @@ ls
 ```
 
 To store your data in a SQL database of your choice, see
-[these instructions](https://github.com/get-convex/convex-backend/tree/main/self-hosted/README.md#running-the-database-on-postgres--or-mysql).
+[these instructions](https://github.com/convex/convex-backend/tree/main/self-hosted/advanced/postgres_or_mysql.md).
 
 ## Deploying the dashboard
 
@@ -169,7 +169,7 @@ You can run the dashboard locally with Docker, or deploy it to Fly.io.
 ### Running the dashboard locally
 
 ```sh
-docker run -e 'NEXT_PUBLIC_DEPLOYMENT_URL=<fly-backend-url>' -p '6791:6791' 'ghcr.io/get-convex/convex-dashboard:latest'
+docker run -e 'NEXT_PUBLIC_DEPLOYMENT_URL=<fly-backend-url>' -p '6791:6791' 'ghcr.io/convex/convex-dashboard:latest'
 ```
 
 ### Fly.io deployment
@@ -212,7 +212,7 @@ docker run -e 'NEXT_PUBLIC_DEPLOYMENT_URL=<fly-backend-url>' -p '6791:6791' 'ghc
 ## Deploying your frontend app
 
 See
-[these instructions](https://github.com/get-convex/convex-backend/tree/main/self-hosted/README.md#deploying-your-frontend-app).
+[these instructions](https://github.com/convex/convex-backend/tree/main/self-hosted/README.md#deploying-your-frontend-app).
 
 ## Troubleshooting
 

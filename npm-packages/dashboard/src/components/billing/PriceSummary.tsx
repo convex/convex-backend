@@ -27,15 +27,10 @@ export function PriceSummary({
   return (
     <div className="flex flex-col gap-2 text-sm" data-testid="price-summary">
       {teamManagedBy && (
-        <Callout className="mb-2 flex flex-col gap-1" variant="upsell">
+        <Callout className="mb-2" variant="upsell">
           <p>
-            {newPlanName} is not available for teams managed by{" "}
+            You can upgrade to {newPlanName} by managing your subscription in{" "}
             {startCase(teamManagedBy)}.
-          </p>
-          <p>You can create a new team to use {newPlanName}.</p>
-          <p>
-            Existing projects can be transferred to another team on the Project
-            Settings page.
           </p>
         </Callout>
       )}

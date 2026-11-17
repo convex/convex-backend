@@ -71,6 +71,7 @@ proptest = { workspace = true }
 proptest-derive = { workspace = true }
 runtime = { workspace = true, features = ["testing"] }
 search = { workspace = true, features = ["testing"] }
+search_index_workers = { workspace = true, features = ["testing"] }
 storage = { workspace = true, features = ["testing"] }
 usage_tracking = { workspace = true, features = ["testing"] }
 value = { workspace = true, features = ["testing"] }

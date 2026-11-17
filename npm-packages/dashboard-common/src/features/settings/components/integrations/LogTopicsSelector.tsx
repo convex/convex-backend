@@ -65,6 +65,10 @@ const TOPICS: {
     description: "Reports bytes sent by any log stream to its destination.",
   },
   {
+    key: "s3_export_stats",
+    description: "Reports your S3 export's status and lag about once a minute.",
+  },
+  {
     key: "custom_audit",
     description:
       "Custom audit events emitted via log.audit() in your functions.",

@@ -16,7 +16,7 @@ mod stream;
 mod structured_clone;
 mod subtle_crypto;
 mod text;
-mod time;
+pub mod time;
 mod validate_args;
 mod validate_returns;
 
@@ -59,6 +59,7 @@ use value::{
 };
 
 pub(crate) use self::errors::uncatchable_developer_error;
+pub use self::stream::BodyReceiver;
 use self::{
     console::{
         op_console_message,

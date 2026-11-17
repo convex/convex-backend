@@ -43,7 +43,7 @@ export function Sidebar({
   const { width } = useWindowSize();
 
   return (
-    <aside
+    <nav
       className={classNames(
         "bg-background-secondary animate-fadeInFromLoading",
         "shadow-sm border-b sm:border-b-0 sm:border-r transition-[min-width]",
@@ -103,7 +103,7 @@ export function Sidebar({
       >
         {!collapsed && "Collapse"}
       </Button>
-    </aside>
+    </nav>
   );
 }
 

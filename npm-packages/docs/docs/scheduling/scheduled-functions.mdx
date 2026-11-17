@@ -15,7 +15,7 @@ functions minutes, days, and even months in the future. Scheduling is resilient
 against unexpected downtime or system restarts.
 
 **Example:**
-[Scheduling](https://github.com/get-convex/convex-demos/tree/main/scheduling)
+[Scheduling](https://github.com/convex/convex-demos/tree/main/scheduling)
 
 ## Scheduling functions
 
@@ -143,6 +143,13 @@ What `cancel` does depends on the state of the scheduled function:
 - If it hasn't started running, it won't run.
 - If it already started, it will continue to run, but any functions it schedules
   will not run.
+
+Starting with `convex` 1.50.0, a scheduled mutation cannot cancel itself.
+Calling `ctx.scheduler.cancel` with its own scheduled function ID throws
+`ScheduledFunctionCancelingItself`. If the error is not caught, the mutation
+rolls back and its scheduled function is marked as failed. Older versions treat
+self-cancellation as a no-op and log a deprecation warning. Remove calls that
+cancel the current mutation; return from it to finish instead.
 
 ## Debugging
 

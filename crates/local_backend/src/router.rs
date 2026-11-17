@@ -82,6 +82,7 @@ use crate::{
         push_config,
     },
     deploy_config2,
+    deployment_jwks::deployment_jwks,
     environment_variables::{
         list_environment_variables,
         platform_router,
@@ -369,7 +370,7 @@ pub fn router(st: LocalAppState) -> Router {
             .merge(crate::deployment_info::platform_router())
             .merge(crate::usage_limits::platform_router())
             .merge(crate::canonical_urls::platform_router())
-            .merge(crate::log_sinks::platform_router())
+            .merge(crate::integrations::platform_router())
             .merge(crate::deployment_state::platform_router())
             // Streaming export ("data sync") API at /api/v1/data/sync.
             .merge(crate::streaming_export::platform_router())
@@ -425,6 +426,7 @@ pub fn router(st: LocalAppState) -> Router {
     Router::new()
         .nest("/api", api_routes)
         .merge(health_check_routes(version))
+        .route("/.well-known/jwks.json", get(deployment_jwks))
         .layer(cors())
         .with_state(st)
         .merge(migrated)

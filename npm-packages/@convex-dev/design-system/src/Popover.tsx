@@ -14,6 +14,8 @@ import {
   Portal,
 } from "@headlessui/react";
 import classNames from "classnames";
+import { cn } from "@ui/cn";
+import { useIsNarrowScreen } from "./useIsNarrowScreen";
 
 // Copied from HeadlessUI Types
 type FunctionalChild = (bag: {
@@ -35,6 +37,12 @@ type PopoverProps = {
   portal?: boolean;
   padding?: boolean;
   focus?: boolean;
+  /**
+   * On narrow screens, shows the panel as a sheet along the bottom of the
+   * screen over a dimmed backdrop, like `Combobox` does, instead of next to
+   * the button. The sheet is always portaled.
+   */
+  sheetOnNarrowScreens?: boolean;
 } & (
   | {
       asChild?: false;
@@ -71,7 +79,9 @@ export function Popover({
   portal,
   padding = true,
   focus = false,
+  sheetOnNarrowScreens = false,
 }: PopoverProps) {
+  const isSheet = useIsNarrowScreen() && sheetOnNarrowScreens;
   const [referenceElement, setReferenceElement] =
     useState<HTMLButtonElement | null>(null);
   const [popperElement, setPopperElement] = useState<HTMLElement | null>();
@@ -94,8 +104,35 @@ export function Popover({
 
   return (
     <HeadlessPopover>
-      {({ open }) => {
-        const panel = (
+      {({ open, close }) => {
+        const panel = isSheet ? (
+          // Headless UI renders the panel only while open, but not this
+          // wrapper, whose backdrop would otherwise cover the page.
+          open && (
+            <div className="fixed inset-0 z-50 flex items-end">
+              {/* Headless UI counts the popover's portal as inside it, so a
+                click on the backdrop wouldn't close the panel on its own.
+                Escape closes it from the keyboard. */}
+              <div
+                className="absolute inset-0 bg-black/50"
+                aria-hidden="true"
+                onClick={() => close()}
+              />
+              <HeadlessPopoverPanel
+                ref={setPopperElement}
+                focus={focus}
+                className={cn(
+                  "border bg-background-secondary",
+                  padding && "px-5 py-4",
+                  className,
+                  "relative w-full rounded-t-xl border-b-0 shadow-xl",
+                )}
+              >
+                {children}
+              </HeadlessPopoverPanel>
+            </div>
+          )
+        ) : (
           <HeadlessPopoverPanel
             ref={setPopperElement}
             style={floatingStyles}
@@ -124,7 +161,7 @@ export function Popover({
                 {button as any /* TODO(react-18-upgrade) */}
               </HeadlessPopoverButton>
             )}
-            {portal ? <Portal>{panel}</Portal> : panel}
+            {portal || isSheet ? <Portal>{panel}</Portal> : panel}
           </>
         );
       }}

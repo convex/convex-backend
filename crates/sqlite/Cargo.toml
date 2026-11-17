@@ -6,6 +6,7 @@ edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
 [package.metadata.cargo-machete]
+# `common::run_persistence_test_suite!` expands to `#[tokio::test]`.
 ignored = ["tokio"]
 
 [lib]

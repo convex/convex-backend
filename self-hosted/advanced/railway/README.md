@@ -43,7 +43,6 @@ Steps:
 
    ℹ️ (Optional): If you would like to separete api and http domains follow
    steps below:
-
    - Select `convex-backend` service
    - Select Settings tab and scroll to `Public Networking` section
    - Hover on the domain and click on edit or delete buttons
@@ -57,7 +56,6 @@ Steps:
 
    Follow [these](https://blog.railway.com/p/ssh#how-to-ssh-on-railway)
    instructions to setup railway SSH on your machine
-
    - Link your convex deployment project
    - Run `railway ssh` and select `convex-backend` when prompted
    - Run `ls` and then `./generate_admin_key.sh`
@@ -85,7 +83,7 @@ ls
 ```
 
 To store your data in a SQL database of your choice, see
-[these instructions](https://github.com/get-convex/convex-backend/tree/main/self-hosted/README.md#running-the-database-on-postgres--or-mysql).
+[these instructions](https://github.com/convex/convex-backend/tree/main/self-hosted/README.md#running-the-database-on-postgres--or-mysql).
 
 ## Accessing the deployed dashboard
 
@@ -101,13 +99,13 @@ You can run the dashboard locally with Docker, or deploy it to Railway.
 ### Running the dashboard locally
 
 ```sh
-docker run -e 'NEXT_PUBLIC_DEPLOYMENT_URL=<backend-url>' -p '6791:6791' 'ghcr.io/get-convex/convex-dashboard:latest'
+docker run -e 'NEXT_PUBLIC_DEPLOYMENT_URL=<backend-url>' -p '6791:6791' 'ghcr.io/convex/convex-dashboard:latest'
 ```
 
 ## Deploying your frontend app
 
 See
-[these instructions](https://github.com/get-convex/convex-backend/tree/main/self-hosted/README.md#deploying-your-frontend-app).
+[these instructions](https://github.com/convex/convex-backend/tree/main/self-hosted/README.md#deploying-your-frontend-app).
 
 ## Troubleshooting
 

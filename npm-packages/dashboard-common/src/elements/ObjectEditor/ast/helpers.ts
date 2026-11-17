@@ -29,6 +29,8 @@ export const isValidValue = (
     case "id":
       // TODO: Validate table names
       return typeof value === "string" && IdEncoding.isId(value);
+    case "function":
+      return typeof value === "string";
     case "object": {
       const isObject =
         typeof value === "object" && value !== null && isPlainObject(value);

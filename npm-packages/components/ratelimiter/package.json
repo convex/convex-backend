@@ -39,10 +39,10 @@
     "convex": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "convex-test": "^0.0.41",
     "typescript": "~5.0.3",
-    "vite": "^6.4.3"
+    "vite": "^6.4.5"
   },
   "types": "./dist/client/index.d.ts",
   "module": "./dist/client/index.js"

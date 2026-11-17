@@ -393,7 +393,7 @@ pub enum StructuredLogEvent {
         outcome: AiGatewayOutcome,
         environment: AiGatewayEnvironment,
     },
-    /// Topic for log stream egress. Emitted when a log sink sends a batch
+    /// Topic for log stream egress. Emitted when a integration sends a batch
     /// of events to an external service, reporting the egress bytes used.
     LogStreamEgress {
         egress_bytes: u64,
@@ -402,12 +402,34 @@ pub enum StructuredLogEvent {
     CustomAudit {
         body: JsonValue,
     },
+    /// Topic for the deployment's S3 export, sent after each sync attempt.
+    S3ExportStats {
+        status: S3ExportStatus,
+        /// How far the export's last consistent snapshot trails the
+        /// deployment. `None` until the export finishes snapshotting.
+        lag_seconds: Option<Duration>,
+        /// Why the last sync failed, in words the customer can act on. `None`
+        /// unless `status` is `Failed`.
+        last_error: Option<String>,
+    },
     // User-specified topics -- not yet implemented.
     // See here for more details: https://www.notion.so/Log-Streaming-in-Convex-19a1dfadd6924c33b29b2796b0f5b2e2
     // User {
     //     topic: String,
     //     payload: serde_json::Map<String, JsonValue>
     // },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum S3ExportStatus {
+    /// Copying the existing documents of one or more tables.
+    Snapshotting,
+    /// Consistent, but behind the latest writes and syncing again right away.
+    CatchingUp,
+    UpToDate,
+    /// The last sync failed. The export retries on its own.
+    Failed,
 }
 
 // The set of topics that a `StructuredLogEvent` can belong to. Each variant of
@@ -445,6 +467,7 @@ pub enum LogTopic {
     AiGatewayUsage,
     LogStreamEgress,
     CustomAudit,
+    S3ExportStats,
 }
 
 impl LogTopic {
@@ -461,6 +484,7 @@ impl LogTopic {
         LogTopic::AiGatewayUsage,
         LogTopic::LogStreamEgress,
         LogTopic::CustomAudit,
+        LogTopic::S3ExportStats,
     ];
 
     /// Whether this topic can be configured on a log stream subscription.
@@ -485,6 +509,7 @@ impl StructuredLogEvent {
             StructuredLogEvent::AiGatewayUsage { .. } => LogTopic::AiGatewayUsage,
             StructuredLogEvent::LogStreamEgress { .. } => LogTopic::LogStreamEgress,
             StructuredLogEvent::CustomAudit { .. } => LogTopic::CustomAudit,
+            StructuredLogEvent::S3ExportStats { .. } => LogTopic::S3ExportStats,
         }
     }
 }
@@ -745,6 +770,17 @@ impl LogEvent {
                         "body": body
                     })
                 },
+                StructuredLogEvent::S3ExportStats {
+                    status,
+                    lag_seconds,
+                    last_error,
+                } => serialize_map!({
+                    "_timestamp": ms,
+                    "_topic": "_s3_export_stats",
+                    "status": status,
+                    "lag_seconds": lag_seconds.map(|lag| lag.as_secs()),
+                    "last_error": last_error
+                }),
             },
             LogEventFormatVersion::V2 => match &self.event {
                 StructuredLogEvent::Verification => {
@@ -1014,6 +1050,17 @@ impl LogEvent {
                         "body": body
                     })
                 },
+                StructuredLogEvent::S3ExportStats {
+                    status,
+                    lag_seconds,
+                    last_error,
+                } => serialize_map!({
+                    "timestamp": ms,
+                    "topic": "s3_export_stats",
+                    "status": status,
+                    "lag_seconds": lag_seconds.map(|lag| lag.as_secs()),
+                    "last_error": last_error
+                }),
             },
         }
     }
@@ -1050,10 +1097,17 @@ impl FunctionEventSource {
             UdfType::Mutation => "mutation",
             UdfType::Action => "action",
             UdfType::HttpAction => "http_action",
+            UdfType::Init => "init",
+        };
+        let runtime = match self.module_environment {
+            ModuleEnvironment::Isolate => Some("convex"),
+            ModuleEnvironment::Node => Some("node"),
+            ModuleEnvironment::Invalid => None,
         };
         let JsonValue::Object(mut fields) = json!({
             "path": self.udf_path,
             "type": udf_type,
+            "runtime": runtime,
             "cached": self.cached,
             "request_id": self.context.request_id.to_string(),
             "mutation_queue_length": self.mutation_queue_length,

@@ -100,14 +100,6 @@ function DataRowImpl(props: DataRowProps) {
   );
 }
 
-export type EditingColumn =
-  | {
-      document: GenericDocument;
-      column: string;
-      editedValue: Value;
-    }
-  | undefined;
-
 function DataRowLoaded({ index, style, data }: DataRowProps) {
   const {
     areEditsAuthorized,

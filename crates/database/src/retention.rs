@@ -31,6 +31,7 @@ use common::{
             },
             IndexConfig,
             IndexMetadata,
+            INDEX_TABLE,
         },
         tables::{
             TableMetadata,
@@ -50,6 +51,7 @@ use common::{
     fastrace_helpers::get_sampled_span,
     interval::Interval,
     knobs::{
+        ADVANCE_RETENTION_TS_FREQUENCY,
         DEFAULT_DOCUMENTS_PAGE_SIZE,
         DELETE_TABLET_CHUNK_SIZE,
         DOCUMENT_RETENTION_BATCH_INTERVAL_SECONDS,
@@ -64,6 +66,11 @@ use common::{
         RETENTION_CHECKPOINT_PERIOD_SECS,
     },
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
         new_static_repeatable_recent,
         DocumentLogEntry,
         IndexRetentionProgress,
@@ -327,7 +334,7 @@ impl<RT: Runtime> LeaderRetentionWorkerSeed<RT> {
     ) -> anyhow::Result<LeaderRetentionWorkers> {
         let rt = &self.retention_manager.rt;
         let reader = self.persistence.reader();
-        let needs_index_retention_deletes = self.persistence.needs_index_retention_deletes();
+        let needs_index_retention_deletes = reader.needs_index_retention_deletes();
         let SnapshotBounds {
             min_index_snapshot_ts,
             min_document_snapshot_ts,
@@ -345,14 +352,19 @@ impl<RT: Runtime> LeaderRetentionWorkerSeed<RT> {
             // Scan _index.by_id before advancing retention so the deleter includes
             // every index that can still be queried.
             let mut all_indexes = {
-                let mut meta_index_scan = reader.index_scan(
-                    bootstrap_metadata.index_by_id,
-                    bootstrap_metadata.index_tablet_id,
-                    *min_index_snapshot_ts,
-                    &Interval::all(),
-                    Order::Asc,
-                    usize::MAX,
-                    self.retention_manager.clone(),
+                let mut meta_index_scan = attribute_index_scan(
+                    reader.index_scan(
+                        bootstrap_metadata.index_by_id,
+                        bootstrap_metadata.index_tablet_id,
+                        *min_index_snapshot_ts,
+                        &Interval::all(),
+                        Order::Asc,
+                        usize::MAX,
+                        self.retention_manager.clone(),
+                    ),
+                    IndexScanCaller::Retention,
+                    IndexScanKind::ById,
+                    Some(INDEX_TABLE),
                 );
                 let mut indexes = BTreeMap::new();
                 while let Some((_, rev)) = meta_index_scan.try_next().await? {
@@ -639,7 +651,7 @@ impl LeaderRetentionWorkers {
             snapshot_reader,
             checkpoint_reader,
             retention_type,
-            persistence.needs_index_retention_deletes(),
+            persistence.reader().needs_index_retention_deletes(),
         )
         .await?;
         let min_snapshot_ts = match retention_type {
@@ -727,7 +739,7 @@ impl LeaderRetentionWorkers {
         snapshot_reader: Reader<SnapshotManager>,
         shutdown: ShutdownSignal,
     ) {
-        let needs_index_retention_deletes = persistence.needs_index_retention_deletes();
+        let needs_index_retention_deletes = persistence.reader().needs_index_retention_deletes();
         loop {
             {
                 let _timer = retention_advance_timestamp_timer();
@@ -766,7 +778,7 @@ impl LeaderRetentionWorkers {
             }
             // We jitter every loop to avoid synchronization of polling the database
             // across different instances
-            Self::wait_with_jitter(&rt, ADVANCE_RETENTION_TS_FREQUENCY).await;
+            Self::wait_with_jitter(&rt, *ADVANCE_RETENTION_TS_FREQUENCY).await;
         }
     }
 
@@ -1598,8 +1610,6 @@ impl LeaderRetentionWorkers {
         Ok(())
     }
 }
-
-const ADVANCE_RETENTION_TS_FREQUENCY: Duration = Duration::from_secs(30);
 
 #[async_trait]
 impl<RT: Runtime> RetentionValidator for LeaderRetentionManager<RT> {

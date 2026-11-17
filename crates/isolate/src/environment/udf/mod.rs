@@ -17,7 +17,10 @@ use common::{
     },
     errors::report_error_sync,
     execution_context::ExecutionContext,
-    knobs::ISOLATE_MAX_USER_HEAP_SIZE,
+    knobs::{
+        ISOLATE_MAX_USER_HEAP_SIZE,
+        MAX_LOG_LINES_DATABASE_UDFS,
+    },
 };
 use fastrace::local::LocalSpan;
 use futures::{
@@ -182,9 +185,9 @@ use crate::{
     },
     environment::{
         helpers::{
+            log_overflow_log_line,
             module_loader::module_specifier_from_path,
             resolve_promise,
-            MAX_LOG_LINES,
         },
         AsyncOpRequest,
         JsEnvironment,
@@ -254,6 +257,10 @@ pub struct DatabaseUdfEnvironment<RT: Runtime, S = DatabaseUdfSyscallProvider<RT
     pub _phantom: PhantomData<RT>,
 }
 
+pub fn async_op_not_allowed_in_udf(request: &AsyncOpRequest) -> ErrorMetadata {
+    not_allowed_in_udf(request.name_for_error(), &request.description_for_error())
+}
+
 fn not_allowed_in_udf(name: &str, description: &str) -> ErrorMetadata {
     ErrorMetadata::bad_request(
         format!("No{name}InQueriesOrMutations"),
@@ -261,6 +268,13 @@ fn not_allowed_in_udf(name: &str, description: &str) -> ErrorMetadata {
             "Can't use {description} in queries and mutations. Please consider using an action. \
             See https://docs.convex.dev/functions/actions for more details.",
         ),
+    )
+}
+
+fn not_allowed_in_init(name: &str, description: &str) -> ErrorMetadata {
+    ErrorMetadata::bad_request(
+        format!("{name}InInit"),
+        format!("Can't use {description} in an init function."),
     )
 }
 
@@ -293,14 +307,16 @@ impl<RT: Runtime> OpProvider for DatabaseUdfSyscallProvider<RT> {
             // Queries must be deterministic, so now() is fixed at its value at the
             // start of execution and doesn't observe elapsed time.
             UdfType::Query => self.phase.performance_now_fixed(),
-            UdfType::Mutation => self.phase.performance_now_incrementing(),
+            UdfType::Mutation | UdfType::Init => self.phase.performance_now_incrementing(),
             _ => anyhow::bail!("Expected a query or mutation"),
         }
     }
 
     fn performance_time_origin(&mut self) -> anyhow::Result<UnixTimestamp> {
         match self.udf_type {
-            UdfType::Query | UdfType::Mutation => self.phase.performance_time_origin(),
+            UdfType::Query | UdfType::Mutation | UdfType::Init => {
+                self.phase.performance_time_origin()
+            },
             _ => anyhow::bail!("Expected a query or mutation"),
         }
     }
@@ -309,6 +325,9 @@ impl<RT: Runtime> OpProvider for DatabaseUdfSyscallProvider<RT> {
         &mut self,
         name: EnvVarName,
     ) -> anyhow::Result<Option<EnvVarValue>> {
+        if self.udf_type == UdfType::Init {
+            anyhow::bail!(not_allowed_in_init("EnvVar", "environment variables"));
+        }
         self.phase.get_environment_variable(name)
     }
 
@@ -364,10 +383,7 @@ impl<RT: Runtime, S: DatabaseUdfInnerProvider<RT>> JsEnvironment<RT>
         request: AsyncOpRequest,
         _resolver: Self::AsyncResolver,
     ) -> anyhow::Result<()> {
-        anyhow::bail!(not_allowed_in_udf(
-            request.name_for_error(),
-            &request.description_for_error(),
-        ))
+        anyhow::bail!(async_op_not_allowed_in_udf(&request))
     }
 
     fn environment_heap_size(&self) -> usize {
@@ -488,7 +504,7 @@ impl<RT: Runtime> DatabaseUdfInnerProvider<RT> for DatabaseUdfSyscallProvider<RT
         };
         let outcome = match self.udf_type {
             UdfType::Query => FunctionOutcome::Query(outcome),
-            UdfType::Mutation => FunctionOutcome::Mutation(outcome),
+            UdfType::Mutation | UdfType::Init => FunctionOutcome::Mutation(outcome),
             _ => anyhow::bail!("UdfEnvironment should only run queries and mutations"),
         };
         Ok((self.phase.into_transaction()?, outcome))
@@ -1042,7 +1058,7 @@ where
 
         let invoke_str = match (udf_type, is_query, is_mutation) {
             (UdfType::Query, true, false) => invoke_query_str,
-            (UdfType::Mutation, false, true) => invoke_mutation_str,
+            (UdfType::Mutation | UdfType::Init, false, true) => invoke_mutation_str,
             (_, false, false) => {
                 let message = format!(
                     "Function {udf_path:?} is neither a query or mutation. Did you forget to wrap \
@@ -1057,7 +1073,7 @@ where
                 );
                 return Ok(Err(JsError::from_message(message)));
             },
-            (UdfType::Mutation, true, false) => {
+            (UdfType::Mutation | UdfType::Init, true, false) => {
                 let message = format!(
                     "Function {udf_path:?} is registered as a query but is being run as a \
                      mutation."
@@ -1265,7 +1281,7 @@ where
                 // from a pending write). A top-level query has no commit
                 // timestamp to resolve to, so it cannot return one.
                 let result = deserialize_udf_result_pending(&path, &result_str)?;
-                if udf_type == UdfType::Mutation || reactor_depth > 0 {
+                if matches!(udf_type, UdfType::Mutation | UdfType::Init) || reactor_depth > 0 {
                     result
                 } else {
                     match result {
@@ -1330,20 +1346,15 @@ impl<RT: Runtime> DatabaseUdfSyscallProvider<RT> {
     }
 
     pub fn emit_log_line(&mut self, log_line: LogLine) {
+        let max_log_lines = *MAX_LOG_LINES_DATABASE_UDFS;
         // - 1 to reserve for the [ERROR] log line
-        match self.log_lines.len().cmp(&(MAX_LOG_LINES - 1)) {
+        match self.log_lines.len().cmp(&(max_log_lines - 1)) {
             Ordering::Less => self.log_lines.push(log_line),
             Ordering::Equal => {
                 drop(log_line);
-                let log_line = LogLine::new_developer_log_line(
-                    LogLevel::Error,
-                    vec![format!(
-                        "Log overflow (maximum {MAX_LOG_LINES}). Remaining log lines omitted."
-                    )],
-                    // Note: accessing the current time here is still deterministic since
-                    // we don't externalize the time to the function.
-                    self.rt.unix_timestamp(),
-                );
+                // Note: accessing the current time here is still deterministic since
+                // we don't externalize the time to the function.
+                let log_line = log_overflow_log_line(max_log_lines, self.rt.unix_timestamp());
                 self.log_lines.push(log_line);
             },
             Ordering::Greater => (),
@@ -1355,27 +1366,22 @@ impl<RT: Runtime> DatabaseUdfSyscallProvider<RT> {
         path: CanonicalizedComponentFunctionPath,
         log_lines: LogLines,
     ) {
+        let max_log_lines = *MAX_LOG_LINES_DATABASE_UDFS;
         // -1 to reserve for the [ERROR] log line
-        if self.log_lines.len() > MAX_LOG_LINES - 1 {
+        if self.log_lines.len() > max_log_lines - 1 {
             // We have previously exceeded the logging limit, so skip these logs.
             return;
         }
-        if self.log_lines.len() + log_lines.len() > MAX_LOG_LINES - 1 {
+        if self.log_lines.len() + log_lines.len() > max_log_lines - 1 {
             // We are about to exceed the logging limit, so truncate the logs.
-            let allowed_length = MAX_LOG_LINES - 1 - self.log_lines.len();
+            let allowed_length = max_log_lines - 1 - self.log_lines.len();
             self.log_lines.push(LogLine::SubFunction {
                 path,
                 log_lines: log_lines.truncated(allowed_length),
             });
-            let log_line = LogLine::new_developer_log_line(
-                LogLevel::Error,
-                vec![format!(
-                    "Log overflow (maximum {MAX_LOG_LINES}). Remaining log lines omitted."
-                )],
-                // Note: accessing the current time here is still deterministic since
-                // we don't externalize the time to the function.
-                self.rt.unix_timestamp(),
-            );
+            // Note: accessing the current time here is still deterministic since
+            // we don't externalize the time to the function.
+            let log_line = log_overflow_log_line(max_log_lines, self.rt.unix_timestamp());
             self.log_lines.push(log_line);
         } else {
             self.log_lines

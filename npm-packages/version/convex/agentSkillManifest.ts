@@ -82,7 +82,7 @@ export const ingest = internalMutation({
       await ctx.db.replace("agentSkillCatalog", existing._id, nextValue);
     }
 
-    // Lets tombstone any skills that are no longer in the get-convex/agent-skills repo
+    // Lets tombstone any skills that are no longer in the convex/agent-skills repo
     for (const existing of existingCatalog) {
       if (liveSkillNames.has(existing.skillName) || existing.isDeleted)
         continue;

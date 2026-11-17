@@ -153,6 +153,7 @@ impl<RT: Runtime> UsageLimitWorker<RT> {
             })
             .collect();
         let token = tx.into_token()?;
+        let has_enabled_configs = configs.iter().any(|(_, config)| config.enabled);
         self.prune_reported(&configs);
         self.meter.refresh_configs(configs);
         let database = self.database.clone();
@@ -160,6 +161,10 @@ impl<RT: Runtime> UsageLimitWorker<RT> {
         pin_mut!(invalidated);
         loop {
             self.evaluate_once().await?;
+            if !has_enabled_configs {
+                invalidated.as_mut().await?;
+                return Ok(());
+            }
             select_biased! {
                 result = invalidated => {
                     result?;
@@ -281,10 +286,7 @@ impl<RT: Runtime> UsageLimitWorker<RT> {
         // `commit_with_audit_log_events` isn't used here because the limits
         // are marked reported between this commit and streaming the logs
         // below.
-        let ts = self
-            .database
-            .commit_with_write_source(tx, "usage_limit_enforcement")
-            .await?;
+        let ts = self.database.commit(tx, "usage_limit_enforcement").await?;
         // Mark reported once the audit events are durable, before the
         // best-effort log streaming below, so a later failure doesn't
         // re-commit the same events on the next evaluation.

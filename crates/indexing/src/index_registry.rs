@@ -92,6 +92,10 @@ pub struct IndexRegistry {
     // Indexes that are not enabled for queries, typically backfilling, waiting to be
     // committed, or disabled.
     pending_indexes: OrdMap<TabletIndexName, Index>,
+    // Name of every index in `enabled_indexes` or `pending_indexes`, keyed by
+    // id. Index ids are unique across both maps, while a name can appear in
+    // both, so lookups by id must still check the id of the index they find.
+    index_names_by_id: OrdMap<IndexId, TabletIndexName>,
 }
 
 impl IndexRegistry {
@@ -121,6 +125,7 @@ impl IndexRegistry {
             index_table_number,
             enabled_indexes: OrdMap::new(),
             pending_indexes: OrdMap::new(),
+            index_names_by_id: OrdMap::new(),
         };
 
         let meta_index_name = GenericIndexName::by_id(index_table);
@@ -607,15 +612,17 @@ impl IndexRegistry {
     }
 
     pub fn enabled_index_by_index_id(&self, index_id: &IndexId) -> Option<&Index> {
+        let name = self.index_names_by_id.get(index_id)?;
         self.enabled_indexes
-            .values()
-            .find(|index| *index_id == index.id())
+            .get(name)
+            .filter(|index| index.id() == *index_id)
     }
 
     pub fn pending_index_by_index_id(&self, index_id: &IndexId) -> Option<&Index> {
+        let name = self.index_names_by_id.get(index_id)?;
         self.pending_indexes
-            .values()
-            .find(|index| *index_id == index.id())
+            .get(name)
+            .filter(|index| index.id() == *index_id)
     }
 
     pub fn all_indexes(&self) -> impl Iterator<Item = &ParsedDocument<TabletIndexMetadata>> {
@@ -760,11 +767,17 @@ impl IndexRegistry {
 
     fn insert(&mut self, index: Index) -> Option<Index> {
         let name = index.name();
-        if index.metadata.config.is_enabled() {
-            self.enabled_indexes.insert(name, index)
+        let id = index.id();
+        let replaced = if index.metadata.config.is_enabled() {
+            self.enabled_indexes.insert(name.clone(), index)
         } else {
-            self.pending_indexes.insert(name, index)
+            self.pending_indexes.insert(name.clone(), index)
+        };
+        if let Some(replaced) = &replaced {
+            self.index_names_by_id.remove(&replaced.id());
         }
+        self.index_names_by_id.insert(id, name);
+        replaced
     }
 
     fn remove(&mut self, to_remove: &ParsedDocument<TabletIndexMetadata>) {
@@ -778,6 +791,7 @@ impl IndexRegistry {
             if removed.id() != to_remove.id().internal_id().into() {
                 panic!("Tried to remove a different index with the same name");
             }
+            self.index_names_by_id.remove(&removed.id());
         } else {
             panic!("Tried to remove a non-existent index, or an index in the wrong state");
         }

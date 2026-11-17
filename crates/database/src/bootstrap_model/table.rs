@@ -593,5 +593,4 @@ impl<'a, RT: Runtime> TableModel<'a, RT> {
             })
         }
     }
-
 }

@@ -34,9 +34,7 @@ pub async fn best_effort_update_progress_message<RT: Runtime>(
                 num_rows_written,
             )
             .await?;
-        database
-            .commit_with_write_source(tx, "snapshot_update_progress_msg")
-            .await?;
+        database.commit(tx, "snapshot_update_progress_msg").await?;
     });
     if let Err(err) = result {
         report_error(&mut err.context(format!(

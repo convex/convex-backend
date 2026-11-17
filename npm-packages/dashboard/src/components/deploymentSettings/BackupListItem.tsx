@@ -523,7 +523,9 @@ function BackupSummary({
   backup,
   sourceDeploymentAppearance,
 }: BackupSummaryProps) {
-  const backupDeployment = useDeploymentByName(backup?.sourceDeploymentName);
+  const { deployment: backupDeployment } = useDeploymentByName(
+    backup?.sourceDeploymentName,
+  );
   const sourceDeployment = backupDeployment ? (
     <Tooltip tip={<code>{backupDeployment.name}</code>}>
       <FullDeploymentName deployment={backupDeployment} />

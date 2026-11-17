@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
-[package.metadata.cargo-machete]
-ignored = ["convex_macro"]
-
 [features]
 testing = [
     "common/testing",
@@ -61,7 +58,6 @@ vector = { workspace = true }
 [dev-dependencies]
 cmd_util = { workspace = true }
 common = { workspace = true, features = ["testing"] }
-convex_macro = { workspace = true }
 database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }

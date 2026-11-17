@@ -9,6 +9,7 @@ import { setupWeakRefs } from "udf-runtime/src/00_weakref";
 import { setupConsole } from "udf-runtime/src/02_console";
 import { setupStructuredClone } from "udf-runtime/src/02_structured_clone";
 import { setupEvent } from "udf-runtime/src/02_event";
+import { setupTimers } from "udf-runtime/src/02_timers";
 import { setupStreams } from "udf-runtime/src/06_streams";
 import { setupBlob } from "udf-runtime/src/09_file";
 import { setupAbortSignal } from "udf-runtime/src/03_abort_signal";
@@ -17,6 +18,7 @@ import { setupHeaders } from "udf-runtime/src/20_headers";
 import { setupFormData } from "udf-runtime/src/21_formdata";
 import { setupRequest } from "udf-runtime/src/23_request";
 import { setupResponse } from "udf-runtime/src/23_response";
+import { setupFetch } from "udf-runtime/src/26_fetch";
 import { setupPerformance } from "udf-runtime/src/27_performance";
 import { setupJsSyscall } from "udf-runtime/src/js_syscall";
 import { setupTextEncodingStreams } from "./text-encoding-streams";
@@ -27,6 +29,7 @@ setupWeakRefs(globalThis);
 setupConsole(globalThis);
 setupStructuredClone(globalThis);
 setupEvent(globalThis);
+setupTimers(globalThis);
 setupStreams(globalThis);
 setupTextEncodingStreams(globalThis);
 setupAbortSignal(globalThis);
@@ -36,36 +39,6 @@ setupHeaders(globalThis);
 setupFormData(globalThis);
 setupRequest(globalThis);
 setupResponse(globalThis);
+setupFetch(globalThis);
 setupPerformance(globalThis);
 setupJsSyscall(globalThis);
-
-// TODO: implement actions
-globalThis.fetch = async function fetch(_input: unknown) {
-  throw new TypeError(
-    "Can't use fetch() in queries and mutations. Please consider using an action. See https://docs.convex.dev/functions/actions for more details.",
-  );
-};
-
-// Globals the wasm runtime does not implement but which deployment code
-// commonly touches while its modules evaluate: feature-detection
-// (`typeof Intl`), a top-level `setTimeout` reference, an SDK checking for
-// `Request`. Each exists so that evaluation gets past the reference, and
-// throws when actually used so a function that depends on it fails at the
-// call site rather than returning something V8 would not.
-const unsupported = (name: string) =>
-  new TypeError(`${name} is not supported in the wasm runtime`);
-
-const unsupportedFunction = (name: string, length = 0) => {
-  const fn = () => {
-    throw unsupported(name);
-  };
-  Object.defineProperty(fn, "name", { value: name });
-  Object.defineProperty(fn, "length", { value: length });
-  return fn;
-};
-
-globalThis.setTimeout = unsupportedFunction("setTimeout", 2) as any;
-globalThis.setInterval = unsupportedFunction("setInterval", 2) as any;
-// Nothing can be scheduled, so there is never a timer to clear.
-globalThis.clearTimeout = function clearTimeout(_id: unknown) {};
-globalThis.clearInterval = function clearInterval(_id: unknown) {};

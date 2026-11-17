@@ -50,11 +50,19 @@ function UsageLimitsContent({
   canWrite: boolean;
   canViewUsage: boolean;
 }) {
-  const { useCurrentDeployment, useCurrentTeam, useTeamPlanType, teamsURI } =
-    useContext(DeploymentInfoContext);
+  const {
+    useCurrentDeployment,
+    useCurrentTeam,
+    useTeamPlanType,
+    useCurrentDeploymentUnitPrices,
+    teamsURI,
+    estimateUsageLimitsCost,
+  } = useContext(DeploymentInfoContext);
   const deployment = useCurrentDeployment();
   const team = useCurrentTeam();
   const planType = useTeamPlanType(team?.id ?? null);
+  const { unitPrices, isLoading: isLoadingUnitPrices } =
+    useCurrentDeploymentUnitPrices(estimateUsageLimitsCost);
   // Business and Enterprise share the "CONVEX_BUSINESS" plan type.
   const isBusinessPlan = planType === "CONVEX_BUSINESS";
   // Dedicated (DXXXX) deployment classes start with "d" (e.g. "d1024").
@@ -89,6 +97,8 @@ function UsageLimitsContent({
         />
       }
       unbilledMetrics={unbilledMetrics}
+      unitPrices={unitPrices}
+      isLoadingUnitPrices={isLoadingUnitPrices}
       currentUsage={currentUsage}
       seedStatus={seedStatus}
       deploymentCreateTime={deployment?.createTime}

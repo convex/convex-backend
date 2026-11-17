@@ -2,6 +2,8 @@ import { Expand } from "../type_utils.js";
 import { GenericId } from "./index.js";
 import { GenericValidator, ObjectType } from "./validator.js";
 import { CommitTsPlaceholder, JSONValue, convexToJson } from "./value.js";
+import type { FunctionType } from "../server/api.js";
+import type { FunctionHandle_future } from "../server/components/index.js";
 
 type TableNameFromType<T> =
   T extends GenericId<infer TableName> ? TableName : string;
@@ -189,6 +191,80 @@ export class VCommitTs<
   optional() {
     return new VCommitTs<Type | undefined, "optional">({
       isOptional: "optional",
+    });
+  }
+  /** @internal */
+  asOptional() {
+    return this.optional();
+  }
+}
+
+/**
+ * The type of the `v.function()` validator.
+ */
+export class VFunction<
+  Type = FunctionHandle_future<any>,
+  IsOptional extends OptionalProperty = "required",
+> extends BaseValidator<Type, IsOptional> {
+  /**
+   * The kind of validator, `"function"`.
+   */
+  readonly kind = "function" as const;
+
+  /**
+   * The type of function the handle names, if one was given.
+   * This is only enforced during typechecking and will not be validated at
+   * runtime.
+   */
+  readonly fnType: FunctionType | undefined;
+
+  /**
+   * The validator for the function's arguments, if one was given.
+   * This is only enforced during typechecking and will not be validated at
+   * runtime.
+   */
+  readonly args: GenericValidator | undefined;
+
+  /**
+   * The validator for the function's return value, if one was given.
+   * This is only enforced during typechecking and will not be validated at
+   * runtime.
+   */
+  readonly returns: GenericValidator | undefined;
+
+  constructor({
+    isOptional,
+    fnType,
+    args,
+    returns,
+  }: {
+    isOptional: IsOptional;
+    fnType?: FunctionType | undefined;
+    args?: GenericValidator | undefined;
+    returns?: GenericValidator | undefined;
+  }) {
+    super({ isOptional });
+    this.fnType = fnType;
+    this.args = args;
+    this.returns = returns;
+  }
+
+  /** @internal */
+  get json(): ValidatorJSON {
+    return {
+      type: this.kind,
+      ...(this.fnType === undefined ? {} : { fnType: this.fnType }),
+      ...(this.args === undefined ? {} : { args: this.args.json }),
+      ...(this.returns === undefined ? {} : { returns: this.returns.json }),
+    };
+  }
+  /** Allow this validated field to be absent. */
+  optional() {
+    return new VFunction<Type | undefined, "optional">({
+      isOptional: "optional",
+      fnType: this.fnType,
+      args: this.args,
+      returns: this.returns,
     });
   }
   /** @internal */
@@ -737,6 +813,8 @@ export type VOptional<T extends Validator<any, OptionalProperty, any>> =
     ? VInt64<Type | undefined, "optional">
   : T extends VCommitTs<infer Type, OptionalProperty>
     ? VCommitTs<Type | undefined, "optional">
+  : T extends VFunction<infer Type, OptionalProperty>
+    ? VFunction<Type | undefined, "optional">
   : T extends VBoolean<infer Type, OptionalProperty>
     ? VBoolean<Type | undefined, "optional">
   : T extends VNull<infer Type, OptionalProperty>
@@ -797,6 +875,7 @@ export type Validator<
   | VFloat64<Type, IsOptional>
   | VInt64<Type, IsOptional>
   | VCommitTs<Type, IsOptional>
+  | VFunction<Type, IsOptional>
   | VBoolean<Type, IsOptional>
   | VNull<Type, IsOptional>
   | VAny<Type, IsOptional>
@@ -836,6 +915,12 @@ export type ValidatorJSON =
   | { type: "number" }
   | { type: "bigint" }
   | { type: "commitTs" }
+  | {
+      type: "function";
+      fnType?: FunctionType;
+      args?: ValidatorJSON;
+      returns?: ValidatorJSON;
+    }
   | { type: "boolean" }
   | { type: "string" }
   | { type: "bytes" }

@@ -60,7 +60,7 @@ pub fn persistence_seed<RT: Runtime>(
     flags: ConnectPersistenceFlags,
     deployment_name: &str,
     deployment_id: Option<DeploymentId>,
-    runtime: RT,
+    _runtime: RT,
 ) -> anyhow::Result<PersistenceSeed<RT>> {
     match db {
         DbDriverTag::Sqlite => Ok(PersistenceSeed::Sqlite {
@@ -127,7 +127,6 @@ pub fn persistence_seed<RT: Runtime>(
                             &url,
                             *DATABASE_USE_PREPARED_STATEMENTS,
                             require_leader,
-                            Some(runtime),
                         )?),
                         db_name,
                         options,
@@ -182,7 +181,6 @@ pub async fn connect_persistence_reader<RT: Runtime>(
     db: DbDriverTag,
     db_spec: &str,
     require_ssl: bool,
-    db_should_be_leader: bool,
     deployment_name: &str,
     deployment_id: Option<DeploymentId>,
     runtime: RT,
@@ -224,7 +222,6 @@ pub async fn connect_persistence_reader<RT: Runtime>(
             options,
         } => {
             let options = MySqlReaderOptions {
-                db_should_be_leader,
                 version: options.version,
                 multitenant: options.multitenant,
                 instance_name: options.instance_name,

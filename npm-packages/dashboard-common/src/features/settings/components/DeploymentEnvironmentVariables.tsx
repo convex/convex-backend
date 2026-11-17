@@ -142,6 +142,7 @@ export function DeploymentEnvironmentVariables({
             })),
           ]);
           setInitialValues([]);
+          return true;
         }}
         initialFormValues={initialValues}
         onEnvironmentVariablesAdded={onEnvironmentVariablesAdded}

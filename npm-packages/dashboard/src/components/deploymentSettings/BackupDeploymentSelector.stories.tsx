@@ -37,6 +37,7 @@ const mockProjects: ProjectResponse[] = [
     teamId: 1,
     teamSlug: "test-team",
     createTime: Date.now() - 30 * 24 * 60 * 60 * 1000,
+    tags: [],
   },
   {
     id: 2,
@@ -45,6 +46,7 @@ const mockProjects: ProjectResponse[] = [
     teamId: 1,
     teamSlug: "test-team",
     createTime: Date.now() - 60 * 24 * 60 * 60 * 1000,
+    tags: [],
   },
 ];
 
@@ -176,9 +178,6 @@ const meta = {
   component: BackupDeploymentSelector,
   parameters: {
     layout: "fullscreen",
-    // The anchored menu is a focus-trapping Radix dialog over an otherwise
-    // empty canvas, which trips the automated a11y checks meant for full pages.
-    a11y: { test: "todo" },
     nextjs: {
       router: {
         pathname: "/t/[team]/[project]/[deploymentName]/settings/backups",
@@ -200,6 +199,7 @@ const meta = {
     mocked(useCurrentProject).mockReturnValue(mockProjects[0]);
     mocked(useInfiniteProjects).mockReturnValue({
       projects: mockProjects,
+      pages: [mockProjects],
       isLoading: false,
       isLoadingMore: false,
       hasMore: false,
@@ -290,6 +290,7 @@ const generateManyProjects = (
       teamId: 1,
       teamSlug: "test-team",
       createTime: Date.now() - index * 24 * 60 * 60 * 1000,
+      tags: [],
     };
   });
 };
@@ -347,6 +348,7 @@ export const ManyProjects: Story = {
       useEffect(() => {
         mocked(useInfiniteProjects).mockReturnValue({
           projects: loadedProjects,
+          pages: data,
           isLoading: false,
           isLoadingMore: isLoadingMore.current,
           hasMore,

@@ -115,4 +115,10 @@ Optional message to attach to this deployment in the audit log.
 Skip the confirmation prompt when this push creates, changes, or deletes an index on a large table. Creating or changing an index blocks the deploy until it is backfilled; consider staging it instead so it backfills in the background.
 
 </dd>
+<dt>`--allow-unstaging-schema`</dt>
+<dd>
+
+Skip the confirmation prompt when this push discards a staged table validator that is validating or already validated.
+
+</dd>
 </dl>

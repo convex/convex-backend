@@ -5,9 +5,14 @@ import { TextInput } from "@ui/TextInput";
 import { useCopy } from "@common/lib/useCopy";
 import { CopyIcon } from "@radix-ui/react-icons";
 import { useFormik } from "formik";
+import isEqual from "lodash/isEqual";
 import { useUpdateProject } from "api/projects";
 import { ProjectDetails, TeamResponse } from "generatedApi";
 import * as Yup from "yup";
+import { SLUG_CHARSET } from "lib/slugs";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+import { useProjectTagSuggestions } from "hooks/useProjectTagSuggestions";
+import { ProjectTagsInput } from "./ProjectTagsInput";
 
 const TeamSchema = Yup.object().shape({
   name: Yup.string()
@@ -18,7 +23,7 @@ const TeamSchema = Yup.object().shape({
     .min(3, "Project slug must be at least 3 characters long.")
     .max(64, "Project slug must be at most 64 characters long.")
     .matches(
-      /^[\w-]+$/,
+      SLUG_CHARSET,
       "Project slug may contain numbers, letters, underscores, and '-'.",
     )
     .required(),
@@ -36,15 +41,23 @@ export function ProjectForm({
   permissionDeniedTip?: React.ReactNode;
 }) {
   const updateProject = useUpdateProject(project.id);
+  const { tagEditUi } = useLaunchDarkly();
+  const tagSuggestions = useProjectTagSuggestions(
+    tagEditUi && hasAdminPermissions ? team.id : undefined,
+  );
   const formState = useFormik({
     initialValues: {
       name: project.name,
       slug: project.slug,
+      tags: project.tags,
     },
     enableReinitialize: true,
     validationSchema: TeamSchema,
-    onSubmit: async (values) => {
-      await updateProject(values);
+    onSubmit: async ({ tags, ...values }) => {
+      await updateProject({
+        ...values,
+        tags: isEqual(tags, project.tags) ? undefined : tags,
+      });
       // Completely reload the page to avoid race conditions
       // with the slug of the project being updated.
       window.location.href = `/t/${team.slug}/${values.slug}/settings`;
@@ -94,6 +107,21 @@ export function ProjectForm({
                 disabled={!hasAdminPermissions}
               />
             </Tooltip>
+
+            {tagEditUi && (
+              <Tooltip
+                tip={!hasAdminPermissions ? permissionDeniedTip : undefined}
+              >
+                <ProjectTagsInput
+                  tags={formState.values.tags}
+                  onChange={(tags) =>
+                    void formState.setFieldValue("tags", tags)
+                  }
+                  suggestions={tagSuggestions}
+                  disabled={!hasAdminPermissions}
+                />
+              </Tooltip>
+            )}
           </div>
 
           <div className="flex justify-end">

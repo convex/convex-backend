@@ -26,7 +26,7 @@ export async function chatCompletion(
   const completion = await createOpenAIClient(
     gatewayUrl,
   ).chat.completions.create({
-    model: "openai/gpt-4o-mini",
+    model: "~anthropic/claude-sonnet-latest",
     messages: [{ role: "user", content: prompt }],
   });
   const text = completion.choices[0]?.message.content;

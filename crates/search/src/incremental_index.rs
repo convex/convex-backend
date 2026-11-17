@@ -511,14 +511,23 @@ async fn fetch_segment_term_ordinal_and_remap_deletes(
             )
         })
         .collect();
-    let term_ordinals_by_field = segment_term_metadata_fetcher
+    let term_ordinals_by_field = match segment_term_metadata_fetcher
         .fetch_term_ordinals(
             storage.clone(),
             segment_key.clone(),
             term_values_by_field.clone(),
             labels.clone(),
         )
-        .await?;
+        .await
+    {
+        Ok(term_ordinals_by_field) => term_ordinals_by_field,
+        // Segments tokenized under older Unicode tables can lack terms.
+        Err(e) if format!("{e:#}").contains("Segment must contain term") => {
+            tracing::warn!("Skipping term deletion stats for segment {segment_key:?}: {e:#}");
+            return Ok((segment_key, SegmentTermMetadata::default()));
+        },
+        Err(e) => return Err(e),
+    };
     let mut term_metadata_by_field = BTreeMap::new();
     for (field, field_deletions) in deletions.0 {
         let FieldDeletions {

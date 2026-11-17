@@ -143,7 +143,7 @@ impl HeapSize for Cursor {
     }
 }
 
-#[derive(Clone, Copy, Eq, Hash, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, PartialOrd, Ord, Debug)]
 /// The order to scan a range.
 pub enum Order {
     /// Ascending order, e.g. 1, 2, 3.

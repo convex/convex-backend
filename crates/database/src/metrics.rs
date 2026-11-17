@@ -1,13 +1,21 @@
-use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    time::Duration,
+};
 
 use ::search::metrics::{
     SearchType,
     SEARCH_TYPE_LABEL,
 };
 use common::{
+    document::CreationTime,
     identity::IDENTITY_LABEL,
+    persistence::PersistenceIndexEntry,
     runtime::Runtime,
-    types::Timestamp,
+    types::{
+        IndexWriteMode,
+        Timestamp,
+    },
 };
 use errors::ErrorMetadata;
 use keybroker::Identity;
@@ -325,8 +333,8 @@ register_convex_histogram!(
     "Time from enqueueing a commit to it reaching the committer thread: the committer queue wait, \
      plus the wait for a pre-validation lane and the off-thread conflict check itself"
 );
-pub fn commit_queue_timer() -> Timer<VMHistogram> {
-    Timer::new(&DATABASE_COMMIT_QUEUE_SECONDS)
+pub fn log_commit_dequeued(time_in_queue: Duration) {
+    log_distribution(&DATABASE_COMMIT_QUEUE_SECONDS, time_in_queue.as_secs_f64());
 }
 
 register_convex_histogram!(
@@ -336,6 +344,15 @@ register_convex_histogram!(
 );
 pub fn commit_timer() -> StatusTimer {
     StatusTimer::new(&DATABASE_COMMIT_SECONDS)
+}
+
+register_convex_histogram!(
+    DATABASE_COMMIT_PERSISTED_SECONDS,
+    "Time from a commit's submission until persistence acknowledges its write. Excludes time \
+     waiting for the committed timestamp to become repeatable."
+);
+pub fn log_commit_persisted(elapsed: Duration) {
+    log_distribution(&DATABASE_COMMIT_PERSISTED_SECONDS, elapsed.as_secs_f64());
 }
 
 register_convex_histogram!(
@@ -462,6 +479,166 @@ register_convex_counter!(
 );
 pub fn commit_index_rows(num_rows: u64) {
     log_counter(&DATABASE_COMMIT_INDEX_ROWS, num_rows);
+}
+
+register_convex_counter!(
+    DATABASE_COMMIT_INDEX_ENTRIES_TOTAL,
+    "Logical index entries in commits acknowledged by persistence",
+    &["operation", "is_system_index", "mode"]
+);
+register_convex_counter!(
+    DATABASE_COMMIT_INDEX_BYTES_TOTAL,
+    "Logical index bytes in commits acknowledged by persistence, measured with \
+     PersistenceIndexEntry::size",
+    &["operation", "is_system_index", "mode"]
+);
+register_convex_counter!(
+    DATABASE_COMMIT_DOCUMENTS_DELETED_TOTAL,
+    "Documents deleted in commits acknowledged by persistence, by how long they had existed: from \
+     their `_creationTime` to the deleting commit. `lifetime` is the upper bound of its bucket.",
+    &["is_system_table", "lifetime"]
+);
+
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
+enum IndexWriteOperation {
+    #[strum(serialize = "unchanged_key")]
+    Unchanged,
+    #[strum(serialize = "new_key")]
+    New,
+    #[strum(serialize = "removed_key")]
+    Removed,
+}
+
+impl From<&PersistenceIndexEntry> for IndexWriteOperation {
+    fn from(entry: &PersistenceIndexEntry) -> Self {
+        match (entry.value, entry.prev) {
+            (Some(_), Some(_)) => Self::Unchanged,
+            (Some(_), None) => Self::New,
+            (None, _) => Self::Removed,
+        }
+    }
+}
+
+/// How long a deleted document had existed, named by each bucket's upper
+/// bound. Fixed buckets keep the counter to a few series per conductor across
+/// lifetimes that range from milliseconds to months.
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
+enum DocumentLifetime {
+    #[strum(serialize = "100ms")]
+    Under100Millis,
+    #[strum(serialize = "1s")]
+    UnderOneSecond,
+    #[strum(serialize = "10s")]
+    UnderTenSeconds,
+    #[strum(serialize = "1m")]
+    UnderOneMinute,
+    #[strum(serialize = "4m")]
+    UnderFourMinutes,
+    #[strum(serialize = "1h")]
+    UnderOneHour,
+    #[strum(serialize = "1d")]
+    UnderOneDay,
+    #[strum(serialize = "older")]
+    Older,
+}
+
+impl DocumentLifetime {
+    fn of(seconds: f64) -> Self {
+        match seconds {
+            s if s < 0.1 => Self::Under100Millis,
+            s if s < 1.0 => Self::UnderOneSecond,
+            s if s < 10.0 => Self::UnderTenSeconds,
+            s if s < 60.0 => Self::UnderOneMinute,
+            s if s < 240.0 => Self::UnderFourMinutes,
+            s if s < 3600.0 => Self::UnderOneHour,
+            s if s < 86400.0 => Self::UnderOneDay,
+            _ => Self::Older,
+        }
+    }
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd)]
+struct IndexWriteLabels {
+    operation: IndexWriteOperation,
+    is_system_index: bool,
+    mode: IndexWriteMode,
+}
+
+#[derive(Default)]
+struct IndexWriteTotals {
+    entries: u64,
+    bytes: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct CommitIndexWriteMetrics {
+    totals: BTreeMap<IndexWriteLabels, IndexWriteTotals>,
+}
+
+impl CommitIndexWriteMetrics {
+    pub(crate) fn record(&mut self, entry: &PersistenceIndexEntry, is_system_index: bool) {
+        let totals = self
+            .totals
+            .entry(IndexWriteLabels {
+                operation: entry.into(),
+                is_system_index,
+                mode: entry.mode,
+            })
+            .or_default();
+        totals.entries += 1;
+        totals.bytes += entry.size();
+    }
+
+    pub(crate) fn log(self) {
+        for (key, totals) in self.totals {
+            let labels = vec![
+                StaticMetricLabel::new("operation", <&'static str>::from(key.operation)),
+                StaticMetricLabel::new("is_system_index", key.is_system_index.as_label()),
+                StaticMetricLabel::new("mode", <&'static str>::from(key.mode)),
+            ];
+            log_counter_with_labels(
+                &DATABASE_COMMIT_INDEX_ENTRIES_TOTAL,
+                totals.entries,
+                labels.clone(),
+            );
+            log_counter_with_labels(&DATABASE_COMMIT_INDEX_BYTES_TOTAL, totals.bytes, labels);
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct CommitDocumentDeleteMetrics {
+    /// Deleted documents by whether their table is a system table and how long
+    /// they had existed.
+    deleted: BTreeMap<(bool, DocumentLifetime), u64>,
+}
+
+impl CommitDocumentDeleteMetrics {
+    pub(crate) fn record(
+        &mut self,
+        created: CreationTime,
+        deleted_at: Timestamp,
+        is_system_table: bool,
+    ) {
+        let lifetime_ms = u64::from(deleted_at) as f64 / 1e6 - f64::from(created);
+        *self
+            .deleted
+            .entry((is_system_table, DocumentLifetime::of(lifetime_ms / 1e3)))
+            .or_default() += 1;
+    }
+
+    pub(crate) fn log(self) {
+        for ((is_system_table, lifetime), documents) in self.deleted {
+            log_counter_with_labels(
+                &DATABASE_COMMIT_DOCUMENTS_DELETED_TOTAL,
+                documents,
+                vec![
+                    StaticMetricLabel::new("is_system_table", is_system_table.as_label()),
+                    StaticMetricLabel::new("lifetime", <&'static str>::from(lifetime)),
+                ],
+            );
+        }
+    }
 }
 
 register_convex_histogram!(

@@ -1,7 +1,6 @@
 use std::str::FromStr;
 
 use ada_url::Url;
-use common::sync::spsc;
 use deno_core::{
     serde_v8,
     v8::{
@@ -15,7 +14,10 @@ use serde::{
 };
 use url::form_urlencoded;
 
-use super::V8OpProvider;
+use super::{
+    stream::listen_to_stream,
+    V8OpProvider,
+};
 use crate::{
     convert_v8::TypeError,
     environment::{
@@ -23,7 +25,6 @@ use crate::{
         AsyncOpRequest,
     },
     http::HttpRequestV8,
-    request_scope::StreamListener,
 };
 
 pub fn async_op_fetch<'b, P: V8OpProvider<'b>>(
@@ -33,7 +34,9 @@ pub fn async_op_fetch<'b, P: V8OpProvider<'b>>(
 ) -> anyhow::Result<()> {
     let arg: HttpRequestV8 = serde_v8::from_v8(&mut provider.scope(), args.get(1))?;
 
-    let request = with_argument_error("fetch", || HttpRequestV8::into_stream(arg, provider))?;
+    let request = with_argument_error("fetch", || {
+        arg.into_stream(|stream_id| listen_to_stream(provider, stream_id))
+    })?;
     let response_body_stream_id = provider.create_stream()?;
     provider.start_async_op(
         AsyncOpRequest::Fetch {
@@ -51,12 +54,7 @@ pub fn async_op_parse_multi_part<'b, P: V8OpProvider<'b>>(
 ) -> anyhow::Result<()> {
     let content_type: String = serde_v8::from_v8(&mut provider.scope(), args.get(1))?;
     let request_stream_id: uuid::Uuid = serde_v8::from_v8(&mut provider.scope(), args.get(2))?;
-    let (request_sender, request_receiver) = spsc::unbounded_channel();
-    provider.new_stream_listener(
-        request_stream_id,
-        StreamListener::RustStream(request_sender),
-    )?;
-
+    let request_receiver = listen_to_stream(provider, request_stream_id)?;
     provider.start_async_op(
         AsyncOpRequest::ParseMultiPart {
             content_type,

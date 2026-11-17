@@ -84,6 +84,16 @@ const nonAppleKeyNameOverrides: PlatformKeyNameOverrides = {
   PageDown: "PgDn",
 };
 
+// Whether the platform's primary shortcut modifier is ⌘ rather than Ctrl. Only
+// meaningful in the browser.
+export function isApplePlatform() {
+  return (
+    navigator.platform.includes("Mac") ||
+    navigator.platform.includes("iPhone") ||
+    navigator.platform.includes("iPad")
+  );
+}
+
 export function KeyboardShortcut({
   value,
   isApple = "auto",
@@ -95,11 +105,7 @@ export function KeyboardShortcut({
 }) {
   const [isAppleDetected, setIsAppleDetected] = useState<boolean | undefined>();
   useEffect(() => {
-    setIsAppleDetected(
-      navigator.platform.includes("Mac") ||
-        navigator.platform.includes("iPhone") ||
-        navigator.platform.includes("iPad"),
-    );
+    setIsAppleDetected(isApplePlatform());
   }, []);
 
   const resolvedIsApple = isApple === "auto" ? isAppleDetected : isApple;

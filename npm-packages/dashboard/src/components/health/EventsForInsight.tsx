@@ -37,6 +37,11 @@ type OccRecentEvent = {
   occ_document_id: string;
   occ_write_source: string;
   occ_retry_count: number;
+  // Executions this event covers. Usage events are pre-aggregated per minute,
+  // so `calls` > 1 means `timestamp` is the minute start and the other fields
+  // come from one sampled execution. Absent on events recorded one per
+  // execution.
+  calls?: number;
 };
 
 type BytesReadRecentEvent = {
@@ -66,6 +71,7 @@ type FormattedOccEvent = {
   occDocumentId: string;
   occWriteSource: string;
   occRetryCount: number;
+  calls: number;
 };
 
 // Note: Hourly data padding and sorting is handled in the useInsights hook in api/insights.ts
@@ -336,6 +342,7 @@ function OCCFailedEvents({
         occDocumentId: event.occ_document_id,
         occWriteSource: event.occ_write_source,
         occRetryCount: event.occ_retry_count,
+        calls: event.calls ?? 1,
       }) as FormattedOccEvent,
   );
 
@@ -351,6 +358,7 @@ function OCCFailedEvents({
         eventTimestampColumn,
         eventOccDocumentIdColumn,
         eventOccWriteSourceColumn,
+        eventOccCountColumn,
       ]}
     />
   );
@@ -373,6 +381,7 @@ function OCCRetriedEvents({
         occDocumentId: event.occ_document_id,
         occWriteSource: event.occ_write_source,
         occRetryCount: event.occ_retry_count,
+        calls: event.calls ?? 1,
       }) as FormattedOccEvent,
   );
 
@@ -393,9 +402,10 @@ function OCCRetriedEvents({
           className: "flex w-16 items-center gap-1",
           key: "occRetryCount",
           tooltip:
-            "The number of previous attempts before this one to call the function.",
+            "The number of previous attempts before this one to call the function. Every call counted in this event was on this same attempt.",
           Column: EventOccRetryCount,
         },
+        eventOccCountColumn,
       ]}
     />
   );
@@ -602,6 +612,30 @@ function EventOccWriteSource({
         ))}
     </div>
   );
+}
+
+// Since #59687 the backend aggregates OCC executions per minute and per
+// function, table, and retry count before they reach Databricks, so one event
+// can stand for many executions.
+const eventOccCountColumn = {
+  header: "Count",
+  className: "flex w-16 items-center gap-1",
+  key: "calls",
+  tooltip:
+    "The number of function calls this event represents. Calls in the same minute with the same retry number are grouped into one event, which shows the details of one of them.",
+  Column: EventOccCalls,
+};
+
+function EventOccCalls({
+  event,
+  insight: _insight,
+  componentId: _componentId,
+}: {
+  event: FormattedOccEvent;
+  insight: Insight;
+  componentId: ComponentId | undefined;
+}) {
+  return <div className="w-16">{event.calls.toLocaleString()}</div>;
 }
 
 function EventOccRetryCount({

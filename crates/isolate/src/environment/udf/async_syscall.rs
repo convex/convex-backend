@@ -252,6 +252,26 @@ pub enum AsyncRead {
     QueryStreamNext(JsonValue),
 }
 
+impl HeapSize for AsyncSyscallBatch {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::Reads(reads) => reads.iter().map(HeapSize::heap_size).sum(),
+            Self::StorageGetUrls(args) | Self::StorageGets(args) => {
+                args.iter().map(HeapSize::heap_size).sum()
+            },
+            Self::Unbatched { name, args } => name.heap_size() + args.heap_size(),
+        }
+    }
+}
+
+impl HeapSize for AsyncRead {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::Get(args) | Self::QueryStreamNext(args) => args.heap_size(),
+        }
+    }
+}
+
 impl AsyncSyscallBatch {
     pub fn new(name: String, args: JsonValue) -> Self {
         match &*name {
@@ -536,11 +556,14 @@ impl<RT: Runtime> DatabaseUdfSyscallProvider<RT> {
         &mut self,
         storage_ids: &BTreeMap<BatchKey, FileStorageId>,
     ) -> anyhow::Result<BTreeMap<BatchKey, anyhow::Result<Option<(Bytes, Option<String>)>>>> {
-        if self.udf_type != UdfType::Mutation {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "StorageGetNotSupported",
-                "Getting files from storage is only supported in mutations and actions",
-            ));
+        match self.udf_type {
+            UdfType::Mutation | UdfType::Init => {},
+            UdfType::Query | UdfType::Action | UdfType::HttpAction => {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "StorageGetNotSupported",
+                    "Getting files from storage is only supported in mutations and actions",
+                ));
+            },
         }
         let component = self.phase.component()?;
         let tx = self.phase.tx()?;
@@ -615,6 +638,12 @@ impl<RT: Runtime> DatabaseUdfSyscallProvider<RT> {
         udf_callback: impl UdfCallback<RT>,
     ) -> anyhow::Result<PendingValue> {
         match (self.udf_type, nested_udf_type) {
+            (UdfType::Init, _) => {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "InvalidFunctionCall",
+                    "Can't call another function from an init function.",
+                ));
+            },
             // Queries can call other queries, but not snapshot queries.
             (UdfType::Query, NestedUdfType::Query) => (),
             // Mutations can call queries (including snapshot queries) or mutations.
@@ -685,7 +714,9 @@ impl<RT: Runtime> DatabaseUdfSyscallProvider<RT> {
             nested_tx.set_transaction_limits(limits);
         }
 
-        let query_journal = if self.is_system() && nested_udf_type == NestedUdfType::Query {
+        let share_query_journal =
+            self.udf_type == UdfType::Query && nested_udf_type == NestedUdfType::Query;
+        let query_journal = if share_query_journal {
             self.prev_journal.clone()
         } else {
             QueryJournal::new()
@@ -776,7 +807,15 @@ impl<RT: Runtime> DatabaseUdfSyscallProvider<RT> {
 
         self.syscall_trace.merge(&syscall_trace);
 
-        if self.is_system() && nested_udf_type == NestedUdfType::Query && result.is_ok() {
+        if share_query_journal && result.is_ok() && journal.end_cursor.is_some() {
+            anyhow::ensure!(
+                self.next_journal.end_cursor.is_none(),
+                ErrorMetadata::bad_request(
+                    "MultiplePaginatedDatabaseQueries",
+                    "This query function ran multiple paginated queries. Convex only supports a \
+                     single paginated query in each query function.",
+                )
+            );
             self.next_journal = journal;
         }
 
@@ -866,6 +905,8 @@ pub(super) async fn run_async_syscall_batch<RT: Runtime>(
                 "1.0/getRequestMetadata" => request_metadata(provider),
                 // Auth
                 "1.0/getUserIdentity" => Box::pin(get_user_identity(provider, args)).await,
+                "1.0/signJwt" => Box::pin(sign_deployment_jwt(provider, args)).await,
+                "1.0/getDeploymentJwks" => deployment_jwks(provider),
                 // Storage
                 "1.0/storageDelete" => Box::pin(storage_delete(provider, args)).await,
                 "1.0/storageGetMetadata" => Box::pin(storage_get_metadata(provider, args)).await,
@@ -1002,13 +1043,15 @@ fn deployment_metadata<RT: Runtime>(
 fn request_metadata<RT: Runtime>(
     provider: &mut DatabaseUdfSyscallProvider<RT>,
 ) -> anyhow::Result<Box<RawValue>> {
-    anyhow::ensure!(
-        provider.udf_type == UdfType::Mutation,
-        ErrorMetadata::bad_request(
-            "RequestMetadataNotAllowed",
-            format!("Cannot get request metadata in a {}", provider.udf_type)
-        )
-    );
+    match provider.udf_type {
+        UdfType::Mutation | UdfType::Init => {},
+        UdfType::Query | UdfType::Action | UdfType::HttpAction => {
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "RequestMetadataNotAllowed",
+                format!("Cannot get request metadata in a {}", provider.udf_type)
+            ));
+        },
+    }
     // Expose the raw auth JWT the request was authenticated with, if any. Only
     // `User` identities carry a JWT (an OIDC or custom JWT); admin keys and
     // logged-out requests have no token.
@@ -1108,6 +1151,53 @@ async fn get_user_identity<RT: Runtime>(
     }
 
     Ok(RawValue::NULL.to_owned())
+}
+
+/// Syscall for JWT signing in mutations.
+///
+/// Not supported in queries (JWT creation involves the current time and query
+/// caching makes it too likely that an incorrect value would later be served).
+#[convex_macro::instrument_future]
+async fn sign_deployment_jwt<RT: Runtime>(
+    provider: &mut DatabaseUdfSyscallProvider<RT>,
+    args: JsonValue,
+) -> anyhow::Result<Box<RawValue>> {
+    match provider.udf_type {
+        UdfType::Mutation | UdfType::Init => {},
+        UdfType::Query | UdfType::Action | UdfType::HttpAction => {
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "JwtSignInQuery",
+                "ctx.auth.signJwt() can't be called from a query. Call it from a mutation.",
+            ));
+        },
+    }
+    let default_system_env_vars = provider.phase.default_system_env_vars().clone();
+    let component = provider.phase.component()?;
+    let tx = provider.phase.tx()?;
+    let origin = udf::deployment_jwt::deployment_origin(tx, &default_system_env_vars).await?;
+    let signer = tx
+        .get_component_path(component)
+        .context("Calling component not found")?;
+    let keys = provider.key_broker.deployment_jwt_keys()?;
+    let token = udf::deployment_jwt::mint(
+        keys,
+        &origin,
+        signer,
+        args,
+        provider.phase.unix_timestamp()?.as_system_time(),
+    )?;
+    Ok(serde_json::value::to_raw_value(&token)?)
+}
+
+/// The public keys that verify `ctx.auth.signJwt` tokens, the same JWKS that
+/// `/.well-known/jwks.json` serves. Unlike signing, this is allowed in
+/// queries: the keys are deployment state shared by every caller, not a fresh
+/// value like a token's `iat` and `exp`.
+fn deployment_jwks<RT: Runtime>(
+    provider: &mut DatabaseUdfSyscallProvider<RT>,
+) -> anyhow::Result<Box<RawValue>> {
+    let jwks = provider.key_broker.deployment_jwt_keys()?.jwks()?;
+    Ok(serde_json::value::to_raw_value(&jwks)?)
 }
 
 #[convex_macro::instrument_future]
@@ -1892,7 +1982,7 @@ async fn run_udf<RT: Runtime>(
         // Only a mutation can hold an unresolved commit timestamp to pass
         // along; queries keep rejecting the `$commitTs` token.
         let args = match caller_udf_type {
-            UdfType::Mutation => {
+            UdfType::Mutation | UdfType::Init => {
                 let args = PendingValue::from_uncommitted_json(args).context(ArgName("args"))?;
                 if !args.is_object() {
                     return Err(anyhow::anyhow!("Value must be an Object").context(ArgName("args")));
@@ -2176,13 +2266,6 @@ async fn query_page<RT: Runtime>(
     };
 
     let component = provider.phase.component()?;
-    if !component.is_root() && !provider.is_system() {
-        anyhow::bail!(ErrorMetadata::bad_request(
-                "PaginationUnsupportedInComponents",
-                "paginate() is only supported in the app. Learn more at https://docs.convex.dev/components/authoring#pagination",
-            ));
-    }
-
     let tx = provider.phase.tx()?;
 
     let (
@@ -2229,15 +2312,17 @@ async fn query_page<RT: Runtime>(
         }
     );
 
-    anyhow::ensure!(
-        provider.next_journal.end_cursor.is_none(),
-        ErrorMetadata::bad_request(
-            "MultiplePaginatedDatabaseQueries",
-            "This query or mutation function ran multiple paginated queries. Convex only supports \
-             a single paginated query in each function.",
-        )
-    );
-    provider.next_journal.end_cursor = Some(cursor);
+    if provider.udf_type == UdfType::Query {
+        anyhow::ensure!(
+            provider.next_journal.end_cursor.is_none(),
+            ErrorMetadata::bad_request(
+                "MultiplePaginatedDatabaseQueries",
+                "This query function ran multiple paginated queries. Convex only supports a \
+                 single paginated query in each query function.",
+            )
+        );
+        provider.next_journal.end_cursor = Some(cursor);
+    }
 
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]

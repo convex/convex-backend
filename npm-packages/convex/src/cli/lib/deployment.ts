@@ -102,7 +102,7 @@ export async function eraseDeploymentEnvVar(ctx: Context): Promise<boolean> {
   return true;
 }
 
-async function gitIgnoreEnvVarFile(ctx: Context): Promise<boolean> {
+export async function gitIgnoreEnvVarFile(ctx: Context): Promise<boolean> {
   const gitIgnorePath = ".gitignore";
   const gitIgnoreContents = ctx.fs.exists(gitIgnorePath)
     ? ctx.fs.readUtf8File(gitIgnorePath)
@@ -186,7 +186,7 @@ export async function deploymentNameFromAdminKeyOrCrash(
   return deploymentName;
 }
 
-function deploymentNameFromAdminKey(adminKey: string) {
+export function deploymentNameFromAdminKey(adminKey: string) {
   const parts = adminKey.split("|");
   if (parts.length === 1) {
     return null;

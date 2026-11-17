@@ -972,7 +972,7 @@ function DeploymentSettingsLink({
   deploymentName: string;
   urlSuffix?: string;
 }) {
-  const deployment = useDeploymentByName(deploymentName);
+  const { deployment } = useDeploymentByName(deploymentName);
   const { project, isLoading: isLoadingProject } = useProjectById(
     deployment?.projectId,
   );

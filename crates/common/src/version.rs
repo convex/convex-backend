@@ -173,7 +173,7 @@ impl TryFrom<pb::common::ClientVersionIdent> for ClientVersionIdent {
 pub enum ClientType {
     Python,
     CLI,
-    // `npm create convex` CLI tool https://github.com/get-convex/templates/tree/main/create-convex
+    // `npm create convex` CLI tool https://github.com/convex/templates/tree/main/create-convex
     CreateConvex,
     NPM,
     // Actions running in node call into queries/mutations/etc. with this client.

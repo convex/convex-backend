@@ -63,7 +63,7 @@
     "@docusaurus/types": "~3.10.1",
     "cspell": "^6.30.2",
     "detect-port": "^2.1.0",
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@docusaurus/theme-classic": "~3.10.1",
     "prettier": "3.8.1",
     "tailwind-merge": "^3.3.1",
@@ -84,6 +84,6 @@
     ]
   },
   "engines": {
-    "node": ">=18.0"
+    "node": ">=22.0.0"
   }
 }

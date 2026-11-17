@@ -15,7 +15,7 @@ your Convex backend. It allows your frontend code to:
 2. Authenticate users using [Auth0](/auth/auth0.mdx)
 
 The library is open source and
-[available on GitHub](https://github.com/get-convex/convex-mobile/tree/main/android).
+[available on GitHub](https://github.com/convex/convex-mobile/tree/main/android).
 
 Follow the [Android Quickstart](/quickstart/android.mdx) to get started.
 
@@ -210,10 +210,10 @@ To use Auth0, you'll need the `convex-android-auth0` library as well as an Auth0
 account and application configuration.
 
 See the
-[README](https://github.com/get-convex/convex-android-auth0/blob/main/README.md)
-in the `convex-android-auth0` repo for more detailed setup instructions, and the
-[Workout example app](https://github.com/get-convex/android-convex-workout)
-which is configured for Auth0.
+[README](https://github.com/convex/convex-android-auth0/blob/main/README.md) in
+the `convex-android-auth0` repo for more detailed setup instructions, and the
+[Workout example app](https://github.com/convex/android-convex-workout) which is
+configured for Auth0.
 
 ### Clerk {/* #authentication-with-clerk */}
 
@@ -231,7 +231,7 @@ available so you can see a real-world integration.
 
 It should also be possible to integrate other similar OpenID Connect
 authentication providers. See the
-[`AuthProvider`](https://github.com/get-convex/convex-mobile/blob/720a79a752e76297cc8c905d4f6e2dfbbc82bae7/android/convexmobile/src/main/java/dev/convex/android/ConvexClient.kt#L376)
+[`AuthProvider`](https://github.com/convex/convex-mobile/blob/720a79a752e76297cc8c905d4f6e2dfbbc82bae7/android/convexmobile/src/main/java/dev/convex/android/ConvexClient.kt#L376)
 interface in the `convex-mobile` repo for more info.
 
 ## Production and dev deployments
@@ -272,7 +272,7 @@ val convex = ConvexClient(context.getString(R.string.convex_url))
   create a custom `my_app.properties` file that is configured to be ignored in
   your `.gitignore` file. You can then read this file in your `build.gradle.kts`
   file. You can see this pattern in use in the [workout sample
-  app](https://github.com/get-convex/android-convex-workout?tab=readme-ov-file#configuration).
+  app](https://github.com/convex/android-convex-workout?tab=readme-ov-file#configuration).
 </Admonition>
 
 ## Structuring your application
@@ -283,7 +283,7 @@ guidance on how to structure a whole application.
 The official
 [Android application architecture](https://developer.android.com/topic/architecture/intro)
 docs cover best practices for building applications, and Convex also has a
-[sample open source application](https://github.com/get-convex/android-convex-workout/tree/main)
+[sample open source application](https://github.com/convex/android-convex-workout/tree/main)
 that attempts to demonstrate what a small multi-screen application might look
 like.
 
@@ -303,7 +303,7 @@ In general, do the following:
 you want to use more of the real client, you can pass a fake
 `MobileConvexClientInterface` in to the `ConvexClient` constructor. Just be
 aware that you'll need to provide JSON in Convex's undocumented
-[JSON format](https://github.com/get-convex/convex-mobile/blob/5babd583631a7ff6d739e1a2ab542039fd532548/android/convexmobile/src/main/java/dev/convex/android/jsonhelpers.kt#L47).
+[JSON format](https://github.com/convex/convex-mobile/blob/5babd583631a7ff6d739e1a2ab542039fd532548/android/convexmobile/src/main/java/dev/convex/android/jsonhelpers.kt#L47).
 
 You can also use the full `ConvexClient` in Android instrumentation tests. You
 can set up a special backend instance for testing or run a local Convex server
@@ -336,7 +336,7 @@ The connection is either in `CONNECTED` or `CONNECTING` state, as Convex always
 tries to maintain a connection to the backend.
 
 _Available since
-[version 0.7.0](https://github.com/get-convex/convex-mobile/releases/tag/kotlin%400.7.0)._
+[version 0.7.0](https://github.com/convex/convex-mobile/releases/tag/kotlin%400.7.0)._
 
 ### Debug logging
 
@@ -352,4 +352,4 @@ of the Convex client. Calling the `initConvexLogging()` function in your
 </Admonition>
 
 _Available since
-[version 0.6.1](https://github.com/get-convex/convex-mobile/releases/tag/kotlin%400.6.1)._
+[version 0.6.1](https://github.com/convex/convex-mobile/releases/tag/kotlin%400.6.1)._

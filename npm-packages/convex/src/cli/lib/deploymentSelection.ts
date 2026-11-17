@@ -31,18 +31,27 @@ import {
   targetProjectForLocalSelector,
 } from "./localDeployment/projectMismatch.js";
 import { chalkStderr } from "chalk";
-import { getBuildEnvironment } from "./envvars.js";
+import {
+  getBuildEnvironment,
+  loadProjectEnvironmentVariables,
+} from "./envvars.js";
 import { readGlobalConfig } from "./utils/globalConfig.js";
+import {
+  getAccountSelection,
+  AccountSelection,
+  readAccountAuth,
+  rememberAuthEnvFile,
+} from "./accounts.js";
 import {
   CONVEX_DEPLOYMENT_ENV_VAR_NAME,
   CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME,
   CONVEX_DEPLOY_KEY_ENV_VAR_NAME,
   CONVEX_SELF_HOSTED_ADMIN_KEY_VAR_NAME,
   CONVEX_SELF_HOSTED_URL_VAR_NAME,
-  ENV_VAR_FILE_PATH,
   bigBrainAPI,
   processDeployKeyValue,
   readDeployKeyFromEnv,
+  readDeployKeyEnvVar,
   typedPlatformClient,
 } from "./utils/utils.js";
 import * as dotenv from "dotenv";
@@ -83,10 +92,11 @@ export async function initializeBigBrainAuth(
   if (initialArgs.url !== undefined && initialArgs.adminKey !== undefined) {
     // Do not check any env vars if `url` and `adminKey` are specified via CLI
     ctx._updateBigBrainAuth(
-      getBigBrainAuth(ctx, {
+      await getBigBrainAuth(ctx, {
         previewDeployKey: null,
         projectKey: null,
         deploymentKey: null,
+        skipAccount: true,
       }),
     );
     return;
@@ -106,30 +116,31 @@ export async function initializeBigBrainAuth(
     const rawDeployKey = readDeployKeyFromEnv((name) => config[name]);
     const deployKey = await processDeployKeyValue(ctx, rawDeployKey);
     if (deployKey !== undefined) {
-      const bigBrainAuth = getBigBrainAuth(ctx, {
+      const bigBrainAuth = await getBigBrainAuth(ctx, {
         previewDeployKey: isPreviewDeployKey(deployKey) ? deployKey : null,
         projectKey: isProjectKey(deployKey) ? deployKey : null,
         deploymentKey: isDeploymentKey(deployKey) ? deployKey : null,
+        envFile: initialArgs.envFile,
       });
       ctx._updateBigBrainAuth(bigBrainAuth);
       return;
     }
     // No deploy key was found in the env file, so fall back on using the global config
     ctx._updateBigBrainAuth(
-      getBigBrainAuth(ctx, {
+      await getBigBrainAuth(ctx, {
         previewDeployKey: null,
         projectKey: null,
         deploymentKey: null,
+        envFile: initialArgs.envFile,
       }),
     );
     return;
   }
-  dotenv.config({ path: ENV_VAR_FILE_PATH });
-  dotenv.config();
+  loadProjectEnvironmentVariables();
   const rawDeployKey = readDeployKeyFromEnv((name) => process.env[name]);
   const deployKey = await processDeployKeyValue(ctx, rawDeployKey);
   if (deployKey !== undefined) {
-    const bigBrainAuth = getBigBrainAuth(ctx, {
+    const bigBrainAuth = await getBigBrainAuth(ctx, {
       previewDeployKey: isPreviewDeployKey(deployKey) ? deployKey : null,
       projectKey: isProjectKey(deployKey) ? deployKey : null,
       deploymentKey: isDeploymentKey(deployKey) ? deployKey : null,
@@ -138,7 +149,7 @@ export async function initializeBigBrainAuth(
     return;
   }
   ctx._updateBigBrainAuth(
-    getBigBrainAuth(ctx, {
+    await getBigBrainAuth(ctx, {
       previewDeployKey: null,
       projectKey: null,
       deploymentKey: null,
@@ -150,6 +161,7 @@ export async function initializeBigBrainAuth(
 export async function updateBigBrainAuthAfterLogin(
   ctx: Context,
   accessToken: string,
+  account?: AccountSelection,
 ) {
   const existingAuth = ctx.bigBrainAuth();
   if (existingAuth !== null && existingAuth.kind === "projectKey") {
@@ -162,6 +174,7 @@ export async function updateBigBrainAuthAfterLogin(
     accessToken: accessToken,
     kind: "accessToken",
     header: `Bearer ${accessToken}`,
+    ...(account ? { account } : {}),
   });
 }
 
@@ -169,19 +182,23 @@ export async function clearBigBrainAuth(ctx: Context) {
   ctx._updateBigBrainAuth(null);
 }
 
-function getBigBrainAuth(
+async function getBigBrainAuth(
   ctx: Context,
   opts: {
     previewDeployKey: string | null;
     projectKey: string | null;
     deploymentKey: string | null;
+    envFile?: string;
+    skipAccount?: boolean;
   },
-): BigBrainAuth | null {
+): Promise<BigBrainAuth | null> {
+  rememberAuthEnvFile(ctx, opts.envFile);
   if (process.env.CONVEX_OVERRIDE_ACCESS_TOKEN) {
     return {
       accessToken: process.env.CONVEX_OVERRIDE_ACCESS_TOKEN,
       kind: "accessToken",
       header: `Bearer ${process.env.CONVEX_OVERRIDE_ACCESS_TOKEN}`,
+      account: null,
     };
   }
   if (opts.projectKey !== null) {
@@ -200,12 +217,23 @@ function getBigBrainAuth(
       deploymentKey: opts.deploymentKey,
     };
   }
-  const globalConfig = readGlobalConfig(ctx);
+  const account = opts.skipAccount
+    ? null
+    : await getAccountSelection(ctx, { envFile: opts.envFile });
+  // A selected account that is logged out leaves the command without account
+  // credentials, so commands that need none still run and the rest ask for a
+  // login to that account. The shared login may belong to a different account.
+  const globalConfig = account === null ? readGlobalConfig(ctx) : null;
+  if (account !== null) {
+    const accountAuth = await readAccountAuth(ctx, account, true);
+    if (accountAuth !== null) return accountAuth;
+  }
   if (globalConfig) {
     return {
       kind: "accessToken",
       header: `Bearer ${globalConfig.accessToken}`,
       accessToken: globalConfig.accessToken,
+      account: null,
     };
   }
   if (opts.previewDeployKey !== null) {
@@ -272,9 +300,9 @@ export async function ensureAuthCanCreateDeployment(
       )} and try again.`,
     });
   }
-  const envVar = process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
-    ? CONVEX_DEPLOY_KEY_ENV_VAR_NAME
-    : CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME;
+  const envVar =
+    readDeployKeyEnvVar((name) => process.env[name])?.name ??
+    CONVEX_DEPLOY_KEY_ENV_VAR_NAME;
   return await ctx.crash({
     exitCode: 1,
     errorType: "fatal",
@@ -569,10 +597,7 @@ async function resolveBaseDeploymentSelection(
     }
     return result.metadata;
   }
-  // start with .env.local (but doesn't override existing)
-  dotenv.config({ path: ENV_VAR_FILE_PATH });
-  // for variables not already set, use .env values
-  dotenv.config();
+  loadProjectEnvironmentVariables();
   const result = await getDeploymentSelectionFromEnv(
     ctx,
     selectionWithinProject,

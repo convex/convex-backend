@@ -121,3 +121,14 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {};
+
+/**
+ * The Edit Project form, where project admins rename a project and edit its
+ * tags.
+ */
+export const Tags: Story = {
+  parameters: {
+    // The sheet around the form, so the crop includes its heading.
+    screenshotSelector: ':has(> form[aria-label="Edit project settings"])',
+  },
+};

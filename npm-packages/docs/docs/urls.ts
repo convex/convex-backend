@@ -13,7 +13,7 @@ export function gitUrl() {
     window.location.hostname === "docs.convex.dev" ||
     window.location.hostname === "localhost"
   ) {
-    return "https://github.com/get-convex/convex-demos.git";
+    return "https://github.com/convex/convex-demos.git";
   }
   return `https://${window.location.hostname.replace(
     "-docs.",

@@ -16,3 +16,9 @@ export const actionCallAction = action({
     await ctx.runAction(api.nodeAction.nodeAction);
   },
 });
+
+export const nodeVersion = action({
+  handler: async () => {
+    return process.version;
+  },
+});

@@ -53,7 +53,7 @@ can go up from here.
 ### jwt-decode
 
 This is a unbundled dep, we had issues when we upgraded.
-https://github.com/get-convex/convex/pull/30674
+https://github.com/convex/convex/pull/30674
 
 ### Chalk
 

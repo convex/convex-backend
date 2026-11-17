@@ -66,7 +66,8 @@ export function TeamMemberListItem({
   // Members can always remove themselves (leave the team) regardless of the
   // `member:remove` gate, as long as they're not the last admin.
   const canManageMember =
-    (canRemoveMember === true || isMemberMe) && !isMemberTheLastAdmin;
+    (isMemberMe || (canRemoveMember === true && !member.directoryManaged)) &&
+    !isMemberTheLastAdmin;
 
   const isHighlighted = window.location.hash === `#${member.id}`;
 
@@ -81,6 +82,9 @@ export function TeamMemberListItem({
   if (isMemberTheLastAdmin) {
     removeMemberDisabledReason =
       "You cannot remove the last admin from this team. Contact us for help at support@convex.dev";
+  } else if (!isMemberMe && member.directoryManaged) {
+    removeMemberDisabledReason =
+      "This member is managed by Directory Sync. Remove them from the directory in your identity provider instead.";
   } else if (!canManageMember) {
     removeMemberDisabledReason = permissionDeniedTip(
       "You do not have permission to remove members from this team.",
@@ -94,6 +98,9 @@ export function TeamMemberListItem({
       "You cannot change your own team role. Ask another admin to do it for you.";
   } else if (team.managedBy === "vercel") {
     updateRoleDisabledReason = `This team is managed by ${startCase(team.managedBy)}. You may manage team roles in ${startCase(team.managedBy)}.`;
+  } else if (member.directoryManaged) {
+    updateRoleDisabledReason =
+      "This member's role is managed by Directory Sync. Change the groups they belong to in your identity provider instead.";
   } else if (isMemberTheLastAdmin) {
     updateRoleDisabledReason = "You cannot change the role of the last admin.";
   } else if (canUpdateRole !== true) {

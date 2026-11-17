@@ -36,6 +36,7 @@ use value::{
 };
 
 pub mod developer_index_config;
+pub mod integration_config;
 pub mod types;
 
 use types::{

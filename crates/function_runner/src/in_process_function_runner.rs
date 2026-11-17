@@ -14,11 +14,9 @@ use anyhow::Context;
 use async_trait::async_trait;
 use common::{
     auth::AuthConfig,
-    bootstrap_model::components::definition::ComponentDefinitionMetadata,
     components::{
         ComponentDefinitionPath,
-        ComponentName,
-        Resource,
+        ResolvedComponentFunctionPath,
     },
     errors::JsError,
     execution_context::ExecutionContext,
@@ -29,6 +27,7 @@ use common::{
     },
     log_lines::LogLine,
     persistence::{
+        index_scan_attribution::IndexScanCaller,
         PersistenceReader,
         RepeatablePersistence,
     },
@@ -43,6 +42,7 @@ use common::{
         DeploymentMetadata,
         IndexId,
         RepeatableTimestamp,
+        UdfRuntime,
         UdfType,
     },
 };
@@ -57,6 +57,7 @@ use futures::{
     FutureExt,
     StreamExt,
 };
+use indexing::index_reader::AttributedIndexReader;
 use isolate::{
     isolate_worker::FunctionRunnerIsolateWorker,
     ConcurrencyLimiter,
@@ -87,13 +88,13 @@ use sync_types::{
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use udf::{
+    validation::ValidatedPathAndArgs,
     ActionCallbacks,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
     HttpActionResponseStreamer,
 };
 use usage_tracking::FunctionUsageStats;
-use value::identifier::Identifier;
 
 use super::FunctionRunner;
 use crate::{
@@ -236,6 +237,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
     async fn run_function(
         &self,
         udf_type: UdfType,
+        _udf_runtime: Option<UdfRuntime>,
         identity: Identity,
         ts: RepeatableTimestamp,
         existing_writes: FunctionWrites,
@@ -256,7 +258,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         let snapshot = self.database.snapshot(ts)?;
         let table_count_snapshot = Arc::new(snapshot.table_counts);
         let text_index_snapshot = Arc::new(TextIndexManagerSnapshot::new(
-            snapshot.index_registry,
+            snapshot.index_registry.clone(),
             snapshot.text_indexes,
             self.database.searcher.clone(),
             self.database.search_storage.clone(),
@@ -274,7 +276,12 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
             ts,
             self.database.retention_validator(),
         );
-        let index_reader = Arc::new(repeatable_persistence.read_snapshot(ts)?);
+        let index_reader = Arc::new(AttributedIndexReader::new(
+            repeatable_persistence.read_snapshot(ts)?,
+            IndexScanCaller::FunctionRunner,
+            Some(snapshot.index_registry),
+            Some(snapshot.table_registry.table_mapping().clone()),
+        ));
         let request_metadata = RunRequestArgs {
             key_broker: self.key_broker.clone(),
             index_reader,
@@ -300,6 +307,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         // function execution. It is important that we do not surface any errors
         // or results until after we call `validate_run_function_result` below.
         let result = match udf_type {
+            UdfType::Init => Err(anyhow::anyhow!("Unexpected init function")),
             UdfType::Query | UdfType::Mutation | UdfType::Action => {
                 self.server
                     .run_function_no_retention_check(request_metadata, function_metadata, None)
@@ -314,6 +322,75 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
             },
         };
         validate_run_function_result(udf_type, *ts, self.database.retention_validator()).await?;
+        result
+    }
+
+    #[fastrace::trace]
+    async fn run_component_inits(
+        &self,
+        identity: Identity,
+        ts: RepeatableTimestamp,
+        existing_writes: FunctionWrites,
+        path_and_args: Vec<ValidatedPathAndArgs>,
+        default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
+        in_memory_index_last_modified: BTreeMap<IndexId, Timestamp>,
+        context: ExecutionContext,
+    ) -> anyhow::Result<(
+        FunctionFinalTransaction,
+        BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>,
+        FunctionUsageStats,
+    )> {
+        let snapshot = self.database.snapshot(ts)?;
+        let table_count_snapshot = Arc::new(snapshot.table_counts);
+        let text_index_snapshot = Arc::new(TextIndexManagerSnapshot::new(
+            snapshot.index_registry,
+            snapshot.text_indexes,
+            self.database.searcher.clone(),
+            self.database.search_storage.clone(),
+        ));
+        let action_callbacks = self
+            .action_callbacks
+            .read()
+            .clone()
+            .context("Action callbacks not set")?
+            .upgrade()
+            .context(shutdown_error())?;
+
+        let repeatable_persistence = RepeatablePersistence::new(
+            self.persistence_reader.clone(),
+            ts,
+            self.database.retention_validator(),
+        );
+        let index_reader = Arc::new(repeatable_persistence.read_snapshot(ts)?);
+        let run_request_args = RunRequestArgs {
+            key_broker: self.key_broker.clone(),
+            index_reader,
+            convex_origin: self.convex_origin.clone(),
+            bootstrap_metadata: self.database.bootstrap_metadata.clone(),
+            table_count_snapshot,
+            text_index_snapshot,
+            action_callbacks,
+            fetch_client: self.fetch_client.clone(),
+            log_line_sender: None,
+            function_started_sender: None,
+            udf_type: UdfType::Init,
+            identity,
+            existing_writes,
+            default_system_env_vars,
+            in_memory_index_last_modified,
+            context,
+            subfunctions_in_same_isolate: *SUBFUNCTIONS_IN_SAME_ISOLATE,
+            deployment: self.deployment.clone(),
+        };
+        // NOTE: We run the inits without checking retention until after they
+        // execute. It is important that we do not surface any errors or results
+        // until after we call `validate_run_function_result` below.
+        let result = self
+            .server
+            .run_component_inits_no_retention_check(run_request_args, path_and_args)
+            .await;
+        validate_run_function_result(UdfType::Init, *ts, self.database.retention_validator())
+            .await?;
         result
     }
 
@@ -350,27 +427,6 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 dependency_graph,
                 user_environment_variables,
                 system_env_vars,
-                self.deployment.name.clone(),
-            )
-            .await
-    }
-
-    #[fastrace::trace]
-    async fn evaluate_component_initializer(
-        &self,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-        path: ComponentDefinitionPath,
-        definition: ModuleConfig,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
-        self.server
-            .evaluate_component_initializer(
-                evaluated_definitions,
-                path,
-                definition,
-                args,
-                name,
                 self.deployment.name.clone(),
             )
             .await

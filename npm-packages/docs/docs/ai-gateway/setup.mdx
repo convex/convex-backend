@@ -261,10 +261,15 @@ Anonymous local deployments cannot use the gateway.
 ## Token and timeouts
 
 Call `getServiceToken("ai-gateway")` inside an action whenever a gateway request
-needs a credential. It returns a short-lived token scoped to your deployment;
-the action runtime caches and refreshes it as needed. Keep the token private.
-Don't return it to clients, store it in environment variables, or cache it
-yourself.
+needs a credential. It returns a short-lived token scoped to your deployment.
+You can call it as many times as you want: the action runtime caches the token
+and returns a fresh one when the cached token is close to expiring. Keep the
+token private. Don't return it to clients, store it in environment variables, or
+cache it yourself.
+
+A long action that sends many requests can outlive a single token, so call
+`getServiceToken` again before each request instead of reusing one token for the
+whole action.
 
 The request runs inside your action, so a long completion can hit the
 [action timeout](/production/state/limits.mdx#execution-time-and-scheduling) (30

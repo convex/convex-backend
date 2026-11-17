@@ -12,15 +12,6 @@ export function UsageNoDataError() {
   );
 }
 
-export function UsageDataNotAvailable({ entity }: { entity: string }) {
-  return (
-    <TeamUsageError
-      title={`${entity} not available`}
-      description={`${entity} is not available for the period shown.`}
-    />
-  );
-}
-
 export function UsageDataError({ entity = "usage" }: { entity?: string }) {
   const title = `Error fetching ${entity} data`;
   const description = `An error occurred while fetching ${entity.toLowerCase()} data. Please try again later.`;

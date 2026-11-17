@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Regenerates the skills catalog rendered by src/components/AgentSkills.tsx
-// from the get-convex/agent-skills repo.
+// from the convex/agent-skills repo.
 
 import { execFileSync } from "node:child_process";
 import {
@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SKILLS_REPO = "https://github.com/get-convex/agent-skills.git";
+const SKILLS_REPO = "https://github.com/convex/agent-skills.git";
 const OUTPUT_PATH = fileURLToPath(
   new URL("../src/data/agent-skills.json", import.meta.url),
 );

@@ -6,7 +6,7 @@ import { Loading } from "@ui/Loading";
 
 export function BackupIdentifier({ backup }: { backup: BackupResponse }) {
   const team = useCurrentTeam();
-  const deployment = useDeploymentByName(backup.sourceDeploymentName);
+  const { deployment } = useDeploymentByName(backup.sourceDeploymentName);
   const { project } = useProjectById(deployment?.projectId);
   return (
     <span className="text-xs text-content-secondary">

@@ -1,7 +1,6 @@
 import { Infer } from "convex/values";
 import { ReactNode } from "react";
 import * as Yup from "yup";
-import { Doc } from "system-udfs/convex/_generated/dataModel";
 import {
   DatadogSiteLocation,
   ExportIntegrationType,
@@ -31,8 +30,6 @@ import { AirbyteLogo } from "@common/lib/logos/AirbyteLogo";
 import { FivetranLogo } from "@common/lib/logos/FivetranLogo";
 import { WorkosLogo } from "./logos/WorkosLogo";
 
-export type SinkStatus = Doc<"_log_sinks">["status"];
-
 // A configured integration narrowed to a single kind, as `listConfiguredSinks`
 // returns it. Derives fields from the schema.
 type LogSinkDoc<T extends IntegrationConfig["type"]> = Omit<
@@ -55,7 +52,6 @@ export const LOG_INTEGRATIONS = [
   "postHogLogs",
 ] as const;
 export const EXC_INTEGRATIONS = ["sentry", "postHogErrorTracking"] as const;
-export const AUTH_INTEGRATIONS = ["workos"] as const;
 export const ANALYTICS_INTEGRATIONS = ["s3Export"] as const;
 export const EXPORT_INTEGRATIONS: ExportIntegrationType[] = ["fivetran"];
 export const IMPORT_INTEGRATIONS: ImportIntegrationType[] = ["airbyte"];
@@ -257,19 +253,6 @@ export const LOG_STREAMS_DESCRIPTION = (
   </div>
 );
 
-export const EXCEPTION_REPORTING_DESCRIPTION = (
-  <div>
-    <p>
-      Configure and monitor exception reporting integrations within this
-      deployment.
-    </p>
-    <p>
-      Exceptions thrown from your Convex functions will be reported to your
-      configured integrations.
-    </p>
-  </div>
-);
-
 export const STREAMING_EXPORT_DESCRIPTION = (
   <div>
     <p>Set up streaming export with a third party connector platform.</p>{" "}
@@ -330,13 +313,6 @@ export type IntegrationUnavailableReason =
   | "MissingEntitlement"
   | "CannotManageDeployment"
   | "LocalDeployment";
-
-export const UNAVAILABLE_TOOLTIP_TEXT = {
-  MissingEntitlement: "This integration requires the Pro plan.",
-  CannotManageDeployment:
-    "You do not have permission to manage integrations in this deployment.",
-  LocalDeployment: "You cannot manage integrations in a local deployment.",
-};
 
 export function configToUrl(config: IntegrationConfig): string {
   const kind = config.type;

@@ -131,13 +131,18 @@ impl FetchClient for ProxiedFetchClient {
         // by `streaming_body`) reports `is_end_stream() == false`, so hyper omits
         // END_STREAM from the HTTP/2 HEADERS frame and closes the stream with a
         // trailing empty DATA frame -- which strict servers reject for a body-less
-        // GET (https://github.com/get-convex/convex-backend/issues/497). Omitting
+        // GET (https://github.com/convex/convex-backend/issues/497). Omitting
         // the body uses `Body::empty()` (`is_end_stream() == true`), so hyper sets
         // END_STREAM on HEADERS and sends no DATA frame.
         if let Some(body) = request.body {
             request_builder = request_builder.body(streaming_body(body, request_size.clone()));
         }
         for (name, value) in &request.headers {
+            // `Proxy-Authorization` is hop-by-hop and comes from the client's proxy
+            // configuration.
+            if name == http::header::PROXY_AUTHORIZATION {
+                continue;
+            }
             request_builder = request_builder.header(name.as_str(), value.as_bytes());
         }
         let raw_request = request_builder.build()?;
@@ -186,7 +191,7 @@ impl FetchClient for ProxiedFetchClient {
 /// full-duplex body whose first chunk is only produced after the response
 /// headers arrive, so we must not poll it before the request is sent.
 fn streaming_body(
-    body: Pin<Box<dyn Stream<Item = anyhow::Result<Bytes>> + Sync + Send>>,
+    body: Pin<Box<dyn Stream<Item = anyhow::Result<Bytes>> + Send>>,
     request_size: Arc<AtomicU64>,
 ) -> Body {
     Body::wrap_stream(body.inspect(move |b| {

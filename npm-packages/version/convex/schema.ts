@@ -20,14 +20,14 @@ export default defineSchema({
     version: v.string(),
   }),
 
-  // Stores the audit trail of skill snapshots and is uploaded by the get-convex/agent-skills CI pipeline
+  // Stores the audit trail of skill snapshots and is uploaded by the convex/agent-skills CI pipeline
   agentSkillSnapshots: defineTable({
     repoSha: v.string(),
     manifestHash: v.string(),
     skills: v.array(agentSkillEntry),
   }).index("by_repo_sha", ["repoSha"]),
 
-  // Stores a cached copy of each skill from the get-convex/agent-skills repo and its state
+  // Stores a cached copy of each skill from the convex/agent-skills repo and its state
   agentSkillCatalog: defineTable({
     skillName: v.string(),
     directoryName: v.string(),

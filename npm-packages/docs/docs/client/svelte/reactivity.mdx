@@ -8,43 +8,42 @@ description:
 pagination_next: client/svelte/authentication
 ---
 
-This page covers the core reactive API of
-[`convex-svelte`](https://www.npmjs.com/package/convex-svelte). Everything here
-works in **any Svelte app** — SvelteKit, Vite + Svelte, or any other setup.
-
-Make sure you've called `setupConvex()` in a root layout first — see
-[Overview](/client/svelte/overview.mdx#setup).
+This page covers the reactive API of
+[`convex-svelte`](https://www.npmjs.com/package/convex-svelte). It works in any
+Svelte app, with or without SvelteKit, and assumes `setupConvex()` is in a root
+layout as shown in [Overview](/client/svelte/overview.mdx#setup).
 
 ## Two clients
 
 Convex Svelte talks to your backend through two clients, and the one you use
-decides what's available:
+decides what you can do:
 
-|                        | `ConvexClient` (WebSocket)           | `ConvexHttpClient` (`fetch`) |
-| ---------------------- | ------------------------------------ | ---------------------------- |
-| **Queries**            | `useQuery()`                         | `.query()`                   |
-| **Mutations**          | `useMutation()` — optimistic updates | `.mutation()`                |
-| **Actions**            | `useAction()`                        | `.action()`                  |
-| **Live subscriptions** | ✓                                    | -                            |
+|                        | `ConvexClient` (WebSocket)          | `ConvexHttpClient` (`fetch`) |
+| ---------------------- | ----------------------------------- | ---------------------------- |
+| **Queries**            | `useQuery()`                        | `.query()`                   |
+| **Mutations**          | `useMutation()`, optimistic updates | `.mutation()`                |
+| **Actions**            | `useAction()`                       | `.action()`                  |
+| **Live subscriptions** | Yes                                 | No                           |
 
-`ConvexClient` is the live WebSocket client that `setupConvex()` opens — the
-`useQuery` / `useMutation` / `useAction` helpers are thin Svelte wrappers around
-it, and you can retrieve it directly with
-[`getConvexClient()` / `useConvexClient()`](#client-access). `ConvexHttpClient`
-is a stateless `fetch`-based client for single calls from server code or scripts
-— see [One-time calls](#one-time-calls). Live subscriptions and optimistic
-updates are WebSocket-only, and optimistic updates apply to mutations only.
+`ConvexClient` is the WebSocket client that `setupConvex()` opens in the
+browser. `useQuery()`, `useMutation()` and `useAction()` wrap it, and
+[`getConvexClient()` and `useConvexClient()`](#client-access) return it. On the
+server it never connects, so server code and scripts use `ConvexHttpClient`, a
+stateless client that sends each call with `fetch` (see
+[One-time calls](#one-time-calls)). Live subscriptions and optimistic updates
+need the WebSocket client.
 
 ## Queries
 
-Use `useQuery()` to subscribe to a Convex query with automatic real-time
-updates. When the data changes on the server, your component re-renders
-automatically.
+Use `useQuery()` to subscribe to a Convex query. When the data changes on the
+server, the component updates.
 
 ```svelte
 <script lang="ts">
   import { useQuery } from "convex-svelte";
   import { api } from "../convex/_generated/api.js";
+
+  let searchWords = $state<string[]>([]);
 
   const messages = useQuery(api.messages.list, () => ({ searchWords }), {
     keepPreviousData: true,
@@ -78,24 +77,23 @@ The returned object is reactive and has the following shape:
 
 ### Options
 
-- **`initialData`** — pre-loaded data for SSR/hydration, avoids the loading
-  state (see
-  [SSR with initialData](/client/svelte/sveltekit-server-rendering.mdx#ssr-with-initialdata-manual-alternative))
-- **`keepPreviousData`** — when `true`, keeps displaying the previous result
-  while new data loads after args change
+- `initialData`: data to show before the first result, for example from a server
+  load, so there's no loading state (see
+  [SSR with initialData](/client/svelte/sveltekit-server-rendering.mdx#ssr-with-initialdata-manual-alternative)).
+- `keepPreviousData`: when `true`, keeps showing the previous result while the
+  query loads for new arguments.
 
 ### Skipping queries
 
-You can conditionally skip a query by returning `'skip'` from the arguments
-function. This is useful when a query depends on some condition, like
-authentication state or user input.
+To skip a query, return `'skip'` from the arguments function, for example while
+the user isn't signed in or hasn't typed anything yet.
 
 ```svelte
 <script lang="ts">
-  import { useQuery } from "convex-svelte";
+  import { useAuth, useQuery } from "convex-svelte";
   import { api } from "../convex/_generated/api.js";
 
-  let auth = $state({ isAuthenticated: true });
+  const auth = useAuth();
 
   const user = useQuery(api.users.queries.getActiveUser, () =>
     auth.isAuthenticated ? {} : "skip",
@@ -111,15 +109,18 @@ authentication state or user input.
 {/if}
 ```
 
-When a query is skipped, `isLoading` will be `false`, `error` will be `null`,
-and `data` will be `undefined`.
+While a query is skipped, `isLoading` is `false`, `error` is `undefined`, and
+`data` is `undefined`. With `keepPreviousData`, `data` keeps the last result
+instead.
 
 ## Mutations & Actions
 
-Use `useMutation()` and `useAction()` to get callable functions for your Convex
-mutations and actions. Both use the module-level singleton (`getConvexClient()`)
-internally, so they work in `.svelte` components **and** plain `.ts` / `.js`
-files — anywhere after `setupConvex()` has been called.
+`useMutation()` and `useAction()` return functions that call your Convex
+mutations and actions. Both use the client from `getConvexClient()`, so they
+work in `.svelte` components and in plain `.ts` / `.js` files in the browser,
+once `setupConvex()` has run. On the server, use
+[`createConvexHttpClient()`](/client/svelte/sveltekit-server-rendering.mdx#one-off-calls-from-the-server)
+instead.
 
 ```svelte
 <script lang="ts">
@@ -164,9 +165,9 @@ const uploadUrl = await generateUploadUrl({});
 
 ### Optimistic updates
 
-Optimistic updates let you update the UI immediately when a mutation is called,
-without waiting for the server to respond. Pass an `optimisticUpdate` callback
-in the mutation options at the call site to update the local query cache.
+An optimistic update changes the UI as soon as you call a mutation, before the
+server responds. Pass an `optimisticUpdate` callback in the mutation options at
+the call site to change the local query results.
 
 ```svelte
 <script lang="ts">
@@ -188,48 +189,34 @@ in the mutation options at the call site to update the local query cache.
 </script>
 ```
 
-Inside the `optimisticUpdate` callback, use `store.setQuery()` to update the
-local cache for a specific query. The arguments are:
-
-1. **Query reference** — the query to update (e.g. `api.user.get`)
-2. **Query arguments** — must match the arguments used by the active
-   `useQuery()` subscription
-3. **New value** — the optimistic data to display immediately
-
-If the mutation fails, the optimistic update is automatically rolled back and
-the UI reverts to the server state.
+In the callback, `store.setQuery(query, args, value)` sets the local result of a
+query. `args` must match the arguments of the active `useQuery()` subscription.
+If the mutation fails, Convex rolls the optimistic update back and the UI shows
+the server state again.
 
 ## Client access
 
-### `getConvexClient()` — universal client access
+`setupConvex()` returns the client in the root layout. Everywhere else, two
+functions return the same `ConvexClient`:
 
-`getConvexClient()` retrieves the client from a **module-level singleton**. It
-works anywhere — `.svelte` components, plain `.ts` utility files, service
-layers, async callbacks — as long as `setupConvex()` has been called first.
+- `getConvexClient()` reads it from a module-level singleton. It works in
+  components, plain `.ts` files and async callbacks in the browser, once
+  `setupConvex()` has run. Use it by default.
+- `useConvexClient()` reads it from Svelte context with `getContext()`, so it
+  only works while a component initializes: in a component's `<script>` block,
+  or in code called synchronously from there.
 
-This is the recommended way to access the client outside of the layout where
-`setupConvex()` returns it directly.
-
-### `useConvexClient()` — Svelte context alternative
-
-`useConvexClient()` retrieves the same client from **Svelte context** via
-`getContext()`. It only works during component initialization — inside `.svelte`
-files or code called synchronously from a component's `<script>` block. Both
-functions return the same `ConvexClient` instance.
-
-|               | `getConvexClient()`                | `useConvexClient()`    |
-| ------------- | ---------------------------------- | ---------------------- |
-| **Works in**  | Anywhere (`.ts`, `.svelte`, hooks) | Svelte components only |
-| **Mechanism** | Module singleton                   | Svelte `getContext()`  |
+On the server the client never connects, so server code uses
+[`createConvexHttpClient()`](/client/svelte/sveltekit-server-rendering.mdx#one-off-calls-from-the-server).
 
 ### Using mutations in utility files
 
-`useMutation()` and `useAction()` work in plain `.ts` files too, since they use
-the module-level singleton:
+`useMutation()` and `useAction()` work in plain `.ts` files too:
 
 ```ts title="src/lib/services/tasks.ts"
 import { useMutation } from "convex-svelte";
-import { api } from "../convex/_generated/api.js";
+import { api } from "../../convex/_generated/api.js";
+import type { Id } from "../../convex/_generated/dataModel.js";
 
 const createTaskMutation = useMutation(api.tasks.create);
 const completeTaskMutation = useMutation(api.tasks.complete);
@@ -238,17 +225,16 @@ export async function createTask(text: string) {
   await createTaskMutation({ text });
 }
 
-export async function completeTask(id: string) {
+export async function completeTask(id: Id<"tasks">) {
   await completeTaskMutation({ id });
 }
 ```
 
-Then call these functions from any component without plumbing the client
-through:
+Then call these functions from any component, without passing the client around:
 
 ```svelte
 <script lang="ts">
-  import { createTask } from "$lib/services/tasks.js";
+  import { createTask } from "#lib/services/tasks.js"; // SvelteKit 2: "$lib/…"
 
   let text = $state("");
 </script>
@@ -268,19 +254,25 @@ through:
 <Admonition type="note">
 
 The `.svelte.ts` file extension enables Svelte 5 runes (`$state`, `$derived`,
-`$effect`) but does **not** make `getContext()` work outside components. If you
-need the client in a plain `.ts` file, use `getConvexClient()`, not
-`useConvexClient()`.
+`$effect`), but `getContext()` still only works in components. In a `.ts` or
+`.svelte.ts` file, use `getConvexClient()`, not `useConvexClient()`.
 
 </Admonition>
 
 ## One-time calls
 
-`useQuery` keeps a live subscription open. When you instead need a single result
-with no ongoing binding — a SvelteKit load function, a form action, an endpoint,
-or a one-off script — use the stateless
-[`ConvexHttpClient`](/client/javascript/overview.mdx#http-client), which runs
-`query` / `mutation` / `action` over `fetch` with no WebSocket.
+`useQuery()` keeps a live subscription open. For a single result without a
+subscription:
+
+- In SvelteKit load functions, use
+  [`convexLoad()`](/client/svelte/sveltekit-server-rendering.mdx#load-data). It
+  renders on the server and then keeps the result live in the browser.
+- In other SvelteKit server code, such as form actions and endpoints, use
+  [`createConvexHttpClient()`](/client/svelte/sveltekit-server-rendering.mdx#one-off-calls-from-the-server).
+  It passes the request's auth token for you.
+- In scripts and outside SvelteKit, use
+  [`ConvexHttpClient`](/client/javascript/overview.mdx#http-client), which runs
+  `query`, `mutation` and `action` over `fetch`, without a WebSocket.
 
 ```ts
 import { ConvexHttpClient } from "convex/browser";
@@ -290,20 +282,14 @@ const client = new ConvexHttpClient(process.env.CONVEX_URL!);
 const count = await client.query(api.tasks.count, {});
 ```
 
-In SvelteKit, the
-[`createConvexHttpClient()`](/client/svelte/sveltekit-server-rendering.mdx#server-helpers)
-helper builds one with per-request auth wired in. The HTTP client supports
-one-shot calls only — no subscriptions and no optimistic updates.
-
-Mutations and actions have no "live" form to opt out of: `useMutation()` and
-`useAction()` are already one-shot calls (thin wrappers over the WebSocket
-client), so they cover writes in both reactive and non-reactive code.
+The HTTP client has no subscriptions and no optimistic updates. In the browser,
+`useMutation()` and `useAction()` already make single calls, so writes there
+don't need it.
 
 ## Paginated queries
 
-For queries that return large datasets, use `usePaginatedQuery()` to load
-results incrementally. This hook manages cursor-based pagination automatically
-and provides a `loadMore` function to fetch additional pages.
+For queries that return many results, `usePaginatedQuery()` loads them page by
+page. It keeps track of the cursors, and `loadMore()` loads the next page.
 
 ```svelte
 <script lang="ts">
@@ -340,13 +326,13 @@ and provides a `loadMore` function to fetch additional pages.
 
 ### Options
 
-- **`initialNumItems`** (required) — number of items to load on the first page
-- **`initialData`** — optional initial data for SSR/hydration
-- **`keepPreviousData`** — when `true`, keeps previous results visible while
-  loading new data after args change
+- `initialNumItems` (required): the number of items on the first page.
+- `initialData`: the first page, for example from a server load.
+- `keepPreviousData`: when `true`, keeps showing the previous results while the
+  query loads for new arguments.
 
-You can also skip a paginated query by returning `'skip'` from the arguments
-function, just like with `useQuery()`.
+To skip a paginated query, return `'skip'` from the arguments function, as with
+`useQuery()`.
 
 ```svelte
 <script lang="ts">
@@ -365,13 +351,13 @@ function, just like with `useQuery()`.
 
 ## API reference
 
-Functions and types exported from `convex-svelte`:
+The main functions and types exported from `convex-svelte`:
 
 | Export                                    | Kind     | Description                                                                                                      |
 | ----------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
 | `setupConvex(url, options?)`              | Function | Initialize the Convex client and store it in Svelte context. Call once in a root layout. Returns `ConvexClient`. |
 | `useConvexClient()`                       | Function | Retrieve the `ConvexClient` from Svelte context. Must be called during component initialization.                 |
-| `getConvexClient()`                       | Function | Retrieve the `ConvexClient` module singleton. Works anywhere — no Svelte context needed.                         |
+| `getConvexClient()`                       | Function | Retrieve the `ConvexClient` module singleton. Works in browser code without Svelte context.                      |
 | `closeConvex()`                           | Function | Close the app-scoped client and clear the singleton. For explicit teardown, e.g. in tests. Returns `Promise`.    |
 | `useQuery(query, args, options?)`         | Function | Subscribe to a Convex query with reactive updates. Returns `UseQueryReturn`.                                     |
 | `UseQueryOptions<Query>`                  | Type     | Options for `useQuery`: `initialData`, `keepPreviousData`.                                                       |

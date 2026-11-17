@@ -13,7 +13,7 @@ Make sure you have Git and Cargo installed. We recommend installing Cargo via
 [rustup](https://rustup.rs/).
 
 ```
-git clone https://github.com/get-convex/convex-backend.git
+git clone https://github.com/convex/convex-backend.git
 cd convex-backend
 cargo build --release -p fivetran_source
 ```
@@ -78,8 +78,8 @@ connector runs on the host, so it reaches the backend over loopback rather than
 Inspect the result with `duckdb /tmp/ft_tester_data/warehouse.db`. Editing the
 tester's `/data` directory between runs exercises the interesting paths — in
 `schema_selection.txt`, flip a table's `[x]` to `[ ]` and re-run to check that
-deselecting it emits a truncate, then back to `[x]` to check that reselecting it
-backfills the table.
+the deselected table keeps its synced data but stops updating, then back to
+`[x]` to check that reselecting it truncates and backfills the table.
 
 ## Sync Mechanism
 
@@ -95,6 +95,8 @@ pages until the API reports the sync has caught up to the latest data, then
 waits for Fivetran to schedule the next sync.
 
 The API also reports which tables the destination must drop and refill — a
-table's first sync, one added to or removed from the selection, or one replaced
-wholesale (for instance by `npx convex import`) — which the connector passes on
-to Fivetran as truncates.
+table's first sync, one added to the selection, or one replaced wholesale (for
+instance by `npx convex import`) — which the connector passes on to Fivetran as
+truncates. A table removed from the selection is not truncated: like any
+Fivetran connector, its synced data stays in the destination and stops updating
+until the table is selected again.

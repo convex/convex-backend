@@ -20,6 +20,7 @@ testing = [
 [dependencies]
 anyhow = { workspace = true }
 aws-lc-rs = { workspace = true }
+base64 = { workspace = true }
 biscuit = { workspace = true }
 byteorder = { workspace = true }
 chrono = { workspace = true }
@@ -31,6 +32,7 @@ derive_more = { workspace = true }
 errors = { workspace = true }
 metrics = { workspace = true }
 openidconnect = { workspace = true }
+parking_lot = { workspace = true }
 pb = { workspace = true }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
@@ -45,7 +47,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-base64 = { workspace = true }
 common = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }

@@ -98,7 +98,7 @@ pub(crate) async fn delete_index_rows<RT: Runtime>(
         }
     });
     p.lease
-        .transact_read_committed(async move |tx| {
+        .transact_read_committed("delete_index_rows", async move |tx| {
             let mut deleted_count = 0;
             for chunk in smart_chunks(&expired_entries) {
                 let mut params = Vec::with_capacity(

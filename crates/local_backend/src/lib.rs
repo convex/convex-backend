@@ -23,6 +23,7 @@ use application::{
     QueryCache,
     SourceMapCache,
 };
+use beacon::BuildRevision;
 use common::{
     self,
     http::{
@@ -40,6 +41,7 @@ use common::{
         new_rate_limiter,
         Runtime,
     },
+    sentry::proxied_sentry_transport_factory,
     shutdown::ShutdownSignal,
     types::{
         ConvexOrigin,
@@ -96,10 +98,11 @@ pub mod deploy_config;
 pub mod deploy_config2;
 pub mod deployment_audit_log;
 pub mod deployment_info;
+pub mod deployment_jwks;
 pub mod deployment_state;
 pub mod environment_variables;
 pub mod http_actions;
-pub mod log_sinks;
+pub mod integrations;
 pub mod logs;
 pub mod node_action_callbacks;
 pub mod parse;
@@ -157,6 +160,7 @@ pub async fn make_app(
     persistence: Arc<dyn Persistence>,
     zombify_rx: async_broadcast::Receiver<()>,
     preempt_tx: ShutdownSignal,
+    build_revision: BuildRevision,
 ) -> anyhow::Result<LocalAppState> {
     let key_broker = config.key_broker()?;
     let in_process_searcher = Arc::new(InProcessSearcher::new(runtime.clone())?);
@@ -272,7 +276,7 @@ pub async fn make_app(
         )),
         QueryCache::new(*UDF_CACHE_MAX_SIZE),
         fetch_client,
-        config.local_log_sink.clone(),
+        proxied_sentry_transport_factory(config.convex_http_proxy.clone(), config.name()),
         preempt_tx.clone(),
         Arc::new(InProcessExportProvider),
         deleted_tablet_receiver,
@@ -294,6 +298,7 @@ pub async fn make_app(
             database.clone(),
             config.beacon_tag.clone(),
             config.beacon_fields.clone(),
+            build_revision,
         );
         runtime.spawn_background("beacon_worker", beacon_future);
     }

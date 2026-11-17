@@ -1,6 +1,6 @@
 import { fetchAllGitHubReleases, findReleaseWithAllAssets } from "./github";
 
-const REPO_PATH = "get-convex/convex-backend";
+const REPO_PATH = "convex/convex-backend";
 const REQUIRED_ASSETS = [
   "convex-local-backend-aarch64-apple-darwin.zip",
   "convex-local-backend-x86_64-apple-darwin.zip",

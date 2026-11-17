@@ -196,6 +196,8 @@ pub struct IndexWriter<RT: Runtime> {
     rate_limiter: Option<Arc<RateLimiter<RT>>>,
     runtime: RT,
     progress_tx: Option<mpsc::Sender<TabletBackfillProgress>>,
+    chunk_size: NonZeroU32,
+    progress_interval: Duration,
     // Optional sink for the read-vs-write timing measured during backfill, so a
     // caller with extra labels (e.g. a db-cluster migration) can emit a metric.
     read_write_reporter: Option<ReadWriteReporter>,
@@ -243,6 +245,8 @@ impl<RT: Runtime> IndexWriter<RT> {
             runtime,
             progress_tx,
             read_write_reporter: None,
+            chunk_size: *INDEX_BACKFILL_CHUNK_SIZE,
+            progress_interval: *INDEX_BACKFILL_PROGRESS_INTERVAL,
         }
     }
 
@@ -546,7 +550,7 @@ impl<RT: Runtime> IndexWriter<RT> {
         };
 
         let updates = revision_pairs
-            .chunks((INDEX_BACKFILL_CHUNK_SIZE.get() as usize).div_ceil(approx_num_indexes))
+            .chunks((self.chunk_size.get() as usize).div_ceil(approx_num_indexes))
             .map(|chunk| async move {
                 let persistence = self.persistence.clone();
                 let rate_limiter = self.rate_limiter.clone();
@@ -622,6 +626,8 @@ impl<RT: Runtime> IndexWriter<RT> {
         let mut backfill_bytes_read = 0;
         let mut backfill_bytes_written = 0u64;
         let mut last_cursor = None;
+        // Blocking in this loop is very bad, don't do it.  If blocked, the futures in
+        // updates will get stuck at arbitrary points.
         while let Some(result) = updates.next().await {
             let (docs_in_chunk, cursor, bytes_read, bytes_written) = result?;
             if cursor.is_some() {
@@ -632,26 +638,30 @@ impl<RT: Runtime> IndexWriter<RT> {
             backfill_bytes_written += bytes_written;
             backfill_bytes_read += bytes_read;
             if let Some(tx) = self.progress_tx.as_ref()
-                && last_checkpointed.elapsed()? >= *INDEX_BACKFILL_PROGRESS_INTERVAL
+                && last_checkpointed.elapsed()? >= self.progress_interval
                 && let Some(cursor) = cursor
             {
-                tx.send(TabletBackfillProgress {
+                match tx.try_send(TabletBackfillProgress {
                     tablet_id: cursor.table(),
                     index_ids: index_selector.index_ids().collect(),
                     cursor,
                     num_docs_indexed: num_docs_indexed_since_progress_reported,
                     backfill_bytes_read,
                     backfill_bytes_written,
-                })
-                .await?;
-                num_docs_indexed_since_progress_reported = 0;
-                backfill_bytes_written = 0;
-                backfill_bytes_read = 0;
-                last_checkpointed = self.runtime.system_time();
-                self.runtime
-                    .pause_client()
-                    .wait(UPDATE_BACKFILL_PROGRESS_LABEL)
-                    .await;
+                }) {
+                    Ok(()) => {
+                        num_docs_indexed_since_progress_reported = 0;
+                        backfill_bytes_written = 0;
+                        backfill_bytes_read = 0;
+                        last_checkpointed = self.runtime.system_time();
+                        self.runtime
+                            .pause_client()
+                            .wait(UPDATE_BACKFILL_PROGRESS_LABEL)
+                            .await;
+                    },
+                    Err(mpsc::error::TrySendError::Full(_)) => {},
+                    Err(error) => return Err(error.into()),
+                }
             }
             if last_logged.elapsed()? >= Duration::from_secs(60) {
                 let now = self.runtime.system_time();
@@ -675,7 +685,7 @@ impl<RT: Runtime> IndexWriter<RT> {
             }
         }
         // Flush any remaining accumulated bytes that weren't sent during the loop
-        if (backfill_bytes_read > 0 || backfill_bytes_written > 0)
+        if num_docs_indexed_since_progress_reported > 0
             && let Some(tx) = self.progress_tx.as_ref()
             && let Some(cursor) = last_cursor
         {

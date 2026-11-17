@@ -51,6 +51,7 @@ lockfile = true
 [bootstrap.packages]
 "apt:build-essential" = "latest"
 "apt:pkg-config" = "latest"
+"apt:libclang-dev" = "latest"
 "apt:libssl-dev" = "latest"
 "apt:libsodium-dev" = "latest"
 # librocksdb-dev (not librocksdb8.9): the -dev package exists on every Ubuntu (8.x on
@@ -66,5 +67,5 @@ lockfile = true
 # GNU diff3 for copybara pull merges (Apple's diff3 silently corrupts them)
 "brew:diffutils" = { version = "latest", os = "macos" }
 # rocksdb (+ gflags) can't live here: they need pinning to match the librocksdb-sys
-# bindings, which brew can't do for core formulae. setup_env.py installs them from
-# the get-convex/tap tap instead.
+# bindings, which brew can't do for core formulae. setup_env.py installs pinned
+# versions from our Homebrew tap instead.

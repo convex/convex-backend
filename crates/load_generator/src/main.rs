@@ -4,10 +4,7 @@
 use std::{
     io::ErrorKind,
     net::SocketAddr,
-    path::{
-        Path,
-        PathBuf,
-    },
+    path::Path,
     sync::{
         Arc,
         LazyLock,
@@ -320,7 +317,6 @@ async fn run(config: &Config) -> anyhow::Result<()> {
                 admin_key.clone(),
                 logs.clone(),
                 config,
-                None,
             )
             .await?;
         } else {
@@ -354,7 +350,7 @@ async fn run(config: &Config) -> anyhow::Result<()> {
                     &provision_request,
                     &SCENARIO_RUNNER_PATH,
                     load_description_label.clone(),
-                    |mut backend_url, admin_key, local_log_sink| {
+                    |mut backend_url, admin_key| {
                         if config.use_usher_test_url {
                             backend_url = backend_url.replace("convex.cloud", "test.convex.cloud");
                         }
@@ -364,7 +360,6 @@ async fn run(config: &Config) -> anyhow::Result<()> {
                             admin_key,
                             logs.clone(),
                             config,
-                            local_log_sink,
                         )
                     },
                 )
@@ -401,7 +396,7 @@ async fn run_preview_deployment_workload(
         &provision_request,
         &SCENARIO_RUNNER_PATH,
         metric_label.clone(),
-        |_a, _b, _c| async move {
+        |_a, _b| async move {
             for _ in 0..config
                 .num_preview_deployment_pushes
                 .expect("Required argument if use_preview_deployments set")
@@ -420,7 +415,7 @@ async fn run_preview_deployment_workload(
                         &provision_request,
                         &SCENARIO_RUNNER_PATH,
                         metric_label.clone(),
-                        |mut backend_url, admin_key, local_log_sink| {
+                        |mut backend_url, admin_key| {
                             if config.use_usher_test_url {
                                 backend_url =
                                     backend_url.replace("convex.cloud", "test.convex.cloud");
@@ -431,7 +426,6 @@ async fn run_preview_deployment_workload(
                                 admin_key,
                                 logs.clone(),
                                 config,
-                                local_log_sink,
                             )
                         },
                     )
@@ -485,12 +479,12 @@ async fn run_workload(
     admin_key: String,
     logs: LogInterleaver,
     config: &Config,
-    local_log_sink: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     // Get the backend version - only retry twice since the instance should be up by
     // this point.
     let backend_version = wait_for_http_health(
         &backend_url.parse()?,
+        concat!("load-generator-", env!("CARGO_PKG_VERSION")),
         None,
         None,
         2,
@@ -558,7 +552,6 @@ async fn run_workload(
     let mut load_generator = LoadGenerator::new(
         config,
         vec![load_description_label.clone(), backend_version_label],
-        local_log_sink,
     )?;
     tracing::info!("Running workload: {:?}", config.workload);
     load_generator
@@ -590,13 +583,9 @@ struct LoadGenerator {
 }
 
 impl LoadGenerator {
-    fn new(
-        config: &Config,
-        metric_labels: Vec<StaticMetricLabel>,
-        local_log_sink: Option<PathBuf>,
-    ) -> anyhow::Result<Self> {
+    fn new(config: &Config, metric_labels: Vec<StaticMetricLabel>) -> anyhow::Result<Self> {
         let duration = Duration::from_secs(config.duration);
-        let stats = Stats::new(duration, local_log_sink);
+        let stats = Stats::new(duration);
         let (tx, rx) = mpsc::channel(200);
         Ok(Self {
             event_processor: EventProcessor {
@@ -692,8 +681,6 @@ impl LoadGenerator {
                 }
             },
         }
-        // Wait to give backend time to process any remaining log events.
-        tokio::time::sleep(Duration::from_secs(10)).await;
         if stats_report {
             self.event_processor.stats.report();
         }

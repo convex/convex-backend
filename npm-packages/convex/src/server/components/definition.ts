@@ -28,7 +28,7 @@ type ComponentInstantiation = {
   name: string;
   // This is a ComponentPath.
   path: string;
-  args: [string, { type: "value"; value: string }][] | null;
+  args: [string, { type: "value"; value: string }][];
   env: [string, { type: "value"; value: string }][] | null;
 };
 

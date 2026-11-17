@@ -37,6 +37,10 @@ export function useDeploymentUris(
   return {
     isLoading,
     isProdDefault,
+    prodDeploymentName,
+    devDeploymentName,
+    prodDeploymentReference: project?.prodDeploymentReference ?? null,
+    devDeploymentReference: project?.devDeploymentReference ?? null,
     prodHref,
     devHref,
     hasDefaultProdDeployment,

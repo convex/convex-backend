@@ -12,18 +12,21 @@ const schema: SchemaValidationByTable = {
   tables: [
     {
       tableName: "books",
+      staged: false,
       state: "pending",
       numDocsValidated: 428_000,
       totalDocs: 1_190_000,
     },
     {
       tableName: "pages",
+      staged: false,
       state: "valid",
       numDocsValidated: 400,
       totalDocs: 400,
     },
     {
       tableName: "authors",
+      staged: false,
       state: "failed",
       error: "Document with ID abc123 does not match the schema",
       numDocsValidated: 0,
@@ -31,30 +34,35 @@ const schema: SchemaValidationByTable = {
     },
     {
       tableName: "reviews",
+      staged: false,
       state: "pending",
       numDocsValidated: 0,
       totalDocs: 30_000,
     },
     {
       tableName: "shelves",
+      staged: false,
       state: "pending",
       numDocsValidated: 2_100,
       totalDocs: 3_000,
     },
     {
       tableName: "tags",
+      staged: true,
       state: "pending",
       numDocsValidated: 900,
       totalDocs: 9_000,
     },
     {
       tableName: "users",
+      staged: false,
       state: "valid",
       numDocsValidated: 18_000,
       totalDocs: 18_000,
     },
     {
       tableName: "sessions",
+      staged: false,
       state: "pending",
       numDocsValidated: 40_000,
       totalDocs: 250_000,
@@ -166,6 +174,7 @@ export const UnknownTotals: Story = {
       tables: [
         {
           tableName: "books",
+          staged: false,
           state: "pending",
           numDocsValidated: 250,
           totalDocs: null,

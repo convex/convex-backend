@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    LazyLock,
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        LazyLock,
+    },
 };
 
 use common::{
@@ -92,6 +95,28 @@ impl<'a, RT: Runtime> IndexBackfillModel<'a, RT> {
             .await
     }
 
+    pub async fn all_backfill_metadata(
+        &mut self,
+    ) -> anyhow::Result<HashMap<IndexId, Arc<ParsedDocument<IndexBackfillMetadata>>>> {
+        let documents = self
+            .tx
+            .query_system(
+                TableNamespace::Global,
+                &SystemIndex::<IndexBackfillTable>::by_id(),
+            )?
+            .all()
+            .await?;
+        let mut by_index_id = HashMap::with_capacity(documents.len());
+        for document in documents {
+            let index_id = IndexId(document.index_id.internal_id());
+            anyhow::ensure!(
+                by_index_id.insert(index_id, document).is_none(),
+                "multiple _index_backfills documents for index {index_id}"
+            );
+        }
+        Ok(by_index_id)
+    }
+
     pub async fn initialize_search_index_backfill(
         &mut self,
         index_id: IndexId,
@@ -149,6 +174,35 @@ impl<'a, RT: Runtime> IndexBackfillModel<'a, RT> {
                 .insert(&INDEX_BACKFILLS_TABLE, backfill_metadata.try_into()?)
                 .await
         }
+    }
+
+    pub async fn resume_database_index_backfill(
+        &mut self,
+        index_id: IndexId,
+        snapshot_ts: Timestamp,
+    ) -> anyhow::Result<()> {
+        let Some(existing_backfill_metadata) =
+            self.existing_backfill_metadata_for_index(index_id).await?
+        else {
+            return Ok(());
+        };
+        let backfill_metadata = IndexBackfillMetadata {
+            cursor: existing_backfill_metadata
+                .cursor
+                .as_ref()
+                .map(|c| BackfillCursor {
+                    snapshot_ts,
+                    cursor: c.cursor,
+                }),
+            ..(**existing_backfill_metadata).clone()
+        };
+        SystemMetadataModel::new_global(self.tx)
+            .replace(
+                existing_backfill_metadata.id(),
+                backfill_metadata.try_into()?,
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn update_search_index_backfill_progress(

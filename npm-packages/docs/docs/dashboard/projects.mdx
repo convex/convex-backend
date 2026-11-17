@@ -10,8 +10,28 @@ description: "Create and manage Convex projects, settings, and deployments"
 A project corresponds to a codebase that uses Convex, which contains a
 production deployment and one personal deployment for each team member.
 
-Clicking on a project in the [landing page](https://dashboard.convex.dev) will
-redirect you to project details.
+## The projects list
+
+The [landing page](https://dashboard.convex.dev) lists your team's projects.
+Search by project name or slug, filter by [tag](#project-tags), and switch
+between grid and list views with the buttons next to the search box.
+
+Each project shows its name, slug, tags, and when it was created, along with
+quick links to its deployments:
+
+- **Production**: the project's default
+  [production deployment](/dashboard/deployments/deployments.mdx).
+- **Development**: your default personal development deployment in the project.
+- **Recently viewed**: the non-default deployment you most recently opened in
+  the project.
+
+The icon after the quick links opens the list of deployments you've created in
+the project.
+
+<Screenshot
+  story="docs/components/ProjectCard#With Recent Deployment"
+  alt="Project card with quick links to deployments"
+/>
 
 ## Creating a project
 
@@ -32,6 +52,47 @@ into one of them.
   alt="Project switcher"
 />
 
+## Project tags
+
+Tags are short labels, that you can attach to projects to organize them. Use
+them to [filter the projects list](#filtering-projects-by-tag) and to
+[grant custom-role access to groups of projects](/team-management/custom-roles.mdx#selectors-by-kind).
+
+### Adding tags
+
+Tags can be added when a project is first created on the dashboard.
+
+<Screenshot
+  story="docs/pages/Projects#Create Project With Tags"
+  alt="Adding tags to a new project"
+/>
+
+To change an existing project's tags, open its
+[Project Settings](#project-settings) page and edit the Tags field in the Edit
+Project form.
+
+<Screenshot
+  story="docs/pages/project/ProjectSettings#Tags"
+  alt="Editing tags in project settings"
+/>
+
+A project can have up to 5 tags. Each tag can be up to 32 characters long, and
+can contain only letters, numbers, `-`, and `_`.
+
+Anyone who can view a project can see its tags. Listing every tag used across
+the team, as the tag filter and tag suggestions do, requires the
+[`team:projectTags:view`](/team-management/role-actions.mdx#team) action.
+
+### Filtering projects by tag
+
+To show only the projects with a given tag, pick it from the tag filter next to
+the search box on the projects list.
+
+<Screenshot
+  story="docs/pages/Projects#Filtered By Tag"
+  alt="Projects list filtered by tag"
+/>
+
 ## Project Settings
 
 You can access project-level settings by clicking on the triple-dot `⋮` button
@@ -42,7 +103,7 @@ on each Project card on the Projects page.
 On the [Project Settings page](https://dashboard.convex.dev/project/settings),
 you can:
 
-- Update your project's name and slug.
+- Update your project's name, slug, and [tags](#project-tags).
 - Manage the project's Admins. See
   [Roles and Permissions](/dashboard/teams/teams.mdx#roles-and-permissions) for
   more details.
@@ -82,6 +143,13 @@ To transfer a project:
 - You also need to be an admin on the **destination team** (or have the
   `project:receive` permission if using
   [custom roles](/team-management/custom-roles.mdx)).
+- At least one of the two teams must be on a paid plan (Starter, Professional,
+  or Business). Either the source or the destination team qualifies, so you only
+  need to upgrade one of them. Transfers between two teams on the Free plan
+  aren't supported. See [pricing](https://www.convex.dev/pricing) for plan
+  details.
+- The destination team can't already have a project with the same slug. Rename
+  one of the projects' slugs before transferring.
 
 ## Deleting a project
 

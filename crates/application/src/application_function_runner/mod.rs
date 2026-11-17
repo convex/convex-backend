@@ -19,18 +19,13 @@ use common::{
     audit_log_lines::AuditLogVars,
     auth::AuthConfig,
     backoff::Backoff,
-    bootstrap_model::components::{
-        definition::ComponentDefinitionMetadata,
-        handles::FunctionHandle,
-    },
+    bootstrap_model::components::handles::FunctionHandle,
     components::{
         CanonicalizedComponentFunctionPath,
         ComponentDefinitionPath,
         ComponentId,
-        ComponentName,
         ComponentPath,
         PublicFunctionPath,
-        Resource,
     },
     errors::JsError,
     execution_context::{
@@ -46,6 +41,7 @@ use common::{
         APPLICATION_MAX_CONCURRENT_NODE_ACTIONS,
         APPLICATION_MAX_CONCURRENT_QUERIES,
         APPLICATION_MAX_CONCURRENT_V8_ACTIONS,
+        AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB,
         DEFAULT_APPLICATION_MAX_FUNCTION_CONCURRENCY,
         ISOLATE_MAX_USER_HEAP_SIZE,
         UDF_EXECUTOR_OCC_INITIAL_BACKOFF,
@@ -201,7 +197,6 @@ use usage_tracking::{
 };
 use value::{
     id_v6::DeveloperDocumentId,
-    identifier::Identifier,
     serialized_args_ext::SerializedArgsExt,
     JsonPackedValue,
     Size as _,
@@ -227,6 +222,7 @@ use crate::{
         function_total_timer,
         log_function_wait_timeout,
         log_mutation_already_committed,
+        log_mutation_file_storage_failure,
     },
     audit_logging::AuditLogClient,
     cache::{
@@ -307,21 +303,45 @@ impl<RT: Runtime> FunctionRouter<RT> {
 }
 
 impl<RT: Runtime> FunctionRouter<RT> {
+    pub(crate) async fn acquire_permit(
+        &self,
+        udf_type: UdfType,
+    ) -> anyhow::Result<RequestGuard<'_, RT>> {
+        self.limiter(udf_type)
+            .acquire_permit(&self.rt, PermitTimeout::Enforce)
+            .await
+    }
+
+    fn limiter(&self, udf_type: UdfType) -> &Limiter<RT> {
+        match udf_type {
+            UdfType::Query => &self.query_limiter,
+            UdfType::Mutation | UdfType::Init => &self.mutation_limiter,
+            UdfType::Action | UdfType::HttpAction => &self.action_limiter,
+        }
+    }
+
     #[fastrace::trace]
     pub(crate) async fn execute_query_or_mutation(
         &self,
         tx: Transaction<RT>,
+        permit: RequestGuard<'_, RT>,
         path_and_args: ValidatedPathAndArgs,
         udf_type: UdfType,
         journal: QueryJournal,
         context: ExecutionContext,
     ) -> anyhow::Result<(Transaction<RT>, FunctionOutcome)> {
         anyhow::ensure!(udf_type == UdfType::Query || udf_type == UdfType::Mutation);
+        anyhow::ensure!(
+            permit.limiter.udf_type == udf_type,
+            "Running a {udf_type} with a {} permit",
+            permit.limiter.udf_type
+        );
         // All queries and mutations are run in the isolate environment.
         let timer = function_total_timer(ModuleEnvironment::Isolate, udf_type);
         let (tx, outcome) = self
             .function_runner_execute(
                 tx,
+                permit,
                 udf_type,
                 context,
                 None,
@@ -330,7 +350,6 @@ impl<RT: Runtime> FunctionRouter<RT> {
                     path_and_args,
                 }),
                 None,
-                false,
             )
             .await?;
         let tx = tx.with_context(|| format!("Missing transaction in response for {udf_type}"))?;
@@ -345,11 +364,16 @@ impl<RT: Runtime> FunctionRouter<RT> {
         path_and_args: ValidatedPathAndArgs,
         log_line_sender: mpsc::UnboundedSender<LogLine>,
         context: ExecutionContext,
-        wait_for_permit: bool,
+        permit_timeout: PermitTimeout,
     ) -> anyhow::Result<ActionOutcome> {
+        let permit = self
+            .action_limiter
+            .acquire_permit(&self.rt, permit_timeout)
+            .await?;
         let (_, outcome) = self
             .function_runner_execute(
                 tx,
+                permit,
                 UdfType::Action,
                 context,
                 Some(log_line_sender),
@@ -358,7 +382,6 @@ impl<RT: Runtime> FunctionRouter<RT> {
                     path_and_args,
                 }),
                 None,
-                wait_for_permit,
             )
             .await?;
 
@@ -378,15 +401,16 @@ impl<RT: Runtime> FunctionRouter<RT> {
     ) -> anyhow::Result<HttpActionOutcome> {
         // All http actions are run in the isolate environment.
         let timer = function_total_timer(ModuleEnvironment::Isolate, UdfType::HttpAction);
+        let permit = self.acquire_permit(UdfType::HttpAction).await?;
         let (_, outcome) = self
             .function_runner_execute(
                 tx,
+                permit,
                 UdfType::HttpAction,
                 context,
                 Some(log_line_sender),
                 None,
                 Some(http_action_metadata),
-                false,
             )
             .await?;
 
@@ -397,49 +421,36 @@ impl<RT: Runtime> FunctionRouter<RT> {
         Ok(outcome)
     }
 
-    /// Waits to acquire action permit
-    pub async fn acquire_action_permit(&self) -> anyhow::Result<RequestGuard<'_, RT>> {
-        self.action_limiter.acquire_permit().await
-    }
-
-    // Drain the v8 action concurrency permits to deterministically
+    // Drain the concurrency permits for `udf_type` to deterministically
     // exercise the concurrency limit in tests.
-    // Execute using the function runner. Can be used for v8 udfs other than http
-    // actions.
     #[fastrace::trace]
     async fn function_runner_execute(
         &self,
         mut tx: Transaction<RT>,
+        permit: RequestGuard<'_, RT>,
         udf_type: UdfType,
         context: ExecutionContext,
         log_line_sender: Option<mpsc::UnboundedSender<LogLine>>,
         function_metadata: Option<FunctionMetadata>,
         http_action_metadata: Option<HttpActionMetadata>,
-        wait_for_permit: bool,
     ) -> anyhow::Result<(Option<Transaction<RT>>, FunctionOutcome)> {
+        // Read in this transaction so preference changes invalidate cached queries.
+        let udf_runtime = BackendInfoModel::new(&mut tx)
+            .get()
+            .await?
+            .and_then(|info| info.default_udf_runtime);
         let in_memory_index_last_modified = self
             .database
             .snapshot(tx.begin_timestamp())?
             .in_memory_indexes
             .in_memory_indexes_last_modified();
 
-        let limiter = match udf_type {
-            UdfType::Query => &self.query_limiter,
-            UdfType::Mutation => &self.mutation_limiter,
-            UdfType::Action | UdfType::HttpAction => &self.action_limiter,
-        };
-
-        let permit = if wait_for_permit {
-            limiter.acquire_permit().await?
-        } else {
-            limiter.acquire_permit_with_timeout(&self.rt).await?
-        };
-
         let timer = function_run_timer(udf_type);
         let (function_tx, outcome, usage_stats) = self
             .function_runner
             .run_function(
                 udf_type,
+                udf_runtime,
                 tx.identity().clone(),
                 tx.begin_timestamp(),
                 FunctionWrites {
@@ -487,6 +498,12 @@ impl<RT: Runtime> FunctionRouter<RT> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum PermitTimeout {
+    Enforce,
+    WaitIndefinitely,
+}
+
 // Used to limit upstream concurrency for a given function type. It also tracks
 // and log gauges for the number of waiting and currently running functions.
 struct Limiter<RT: Runtime> {
@@ -530,25 +547,31 @@ impl<RT: Runtime> Limiter<RT> {
     }
 
     #[fastrace::trace]
-    async fn acquire_permit_with_timeout<'a>(
+    async fn acquire_permit<'a>(
         &'a self,
         rt: &'a RT,
+        timeout: PermitTimeout,
     ) -> anyhow::Result<RequestGuard<'a, RT>> {
         let mut request_guard = self.start();
         select! {
             biased;
-            _ = request_guard.acquire_permit() => {},
+            result = request_guard.acquire_permit() => result?,
             x = async {
                 // Report metrics while waiting for a permit. This captures the
                 // queued state only when the semaphore is actually full.
                 self.report_metrics();
                 future::pending::<!>().await
             } => match x {},
-            _ = rt.wait(self.semaphore_timeout) => {
+            _ = async {
+                match timeout {
+                    PermitTimeout::Enforce => rt.wait(self.semaphore_timeout).await,
+                    PermitTimeout::WaitIndefinitely => future::pending().await,
+                }
+            } => {
                 log_function_wait_timeout(self.env, self.udf_type);
                 let functions = match self.udf_type {
                     UdfType::Query => "queries",
-                    UdfType::Mutation => "mutations",
+                    UdfType::Mutation | UdfType::Init => "mutations",
                     UdfType::Action => "actions",
                     UdfType::HttpAction => "HTTP actions",
                 };
@@ -566,13 +589,6 @@ impl<RT: Runtime> Limiter<RT> {
                 ));
             },
         }
-        Ok(request_guard)
-    }
-
-    /// Waits to acquire a permit
-    async fn acquire_permit(&self) -> anyhow::Result<RequestGuard<'_, RT>> {
-        let mut request_guard = self.start();
-        request_guard.acquire_permit().await?;
         Ok(request_guard)
     }
 
@@ -775,9 +791,9 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         }
         let mut tx = self.database.begin_system().await?;
         self.bail_if_backend_not_running(&mut tx).await?;
-        let ai_gateway_disabled = BackendInfoModel::new(&mut tx)
-            .get()
-            .await?
+        let backend_info = BackendInfoModel::new(&mut tx).get().await?;
+        let ai_gateway_disabled = backend_info
+            .as_ref()
             .and_then(|backend_info| backend_info.ai_gateway_disabled)
             .unwrap_or(false);
         if ai_gateway_disabled {
@@ -797,12 +813,28 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                  provider directly with your own API key."
             ));
         };
-        minter.mint(&self.deployment, attribution, request_id).await
+        let team_id = backend_info.as_ref().map(|backend_info| backend_info.team);
+        let project_id = backend_info
+            .as_ref()
+            .map(|backend_info| backend_info.project);
+        minter
+            .mint(
+                &self.deployment,
+                team_id,
+                project_id,
+                attribution,
+                request_id,
+            )
+            .await
     }
 
     pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
         self.node_actions.shutdown();
         Ok(())
+    }
+
+    pub fn supported_node_memory_mb(&self) -> &'static [u32] {
+        self.node_actions.supported_memory_mb()
     }
 
     // Only used for running queries from REPLs.
@@ -831,9 +863,15 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         let context = ExecutionContext::new(request_context, &caller);
         let (mut tx, outcome) = match validate_result {
             Ok(path_and_args) => {
+                // Preserve the caller's uncommitted module writes in this transaction.
+                let permit = self
+                    .isolate_functions
+                    .acquire_permit(UdfType::Query)
+                    .await?;
                 self.isolate_functions
                     .execute_query_or_mutation(
                         tx,
+                        permit,
                         path_and_args,
                         UdfType::Query,
                         QueryJournal::new(),
@@ -961,6 +999,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             let context = ExecutionContext::new(request_context.clone(), &caller);
 
             let start = self.runtime.monotonic_now();
+            let permit = self.acquire_mutation_permit().await;
             let mut tx = self
                 .database
                 .begin_with_usage(identity.clone(), usage_tracker.clone())
@@ -969,7 +1008,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             pause_client.wait("retry_mutation_loop_start").await;
             let identity = tx.inert_identity();
 
-            // Return the previous execution's result if the mutation was committed already.
+            // Committed mutations can be replayed even if permit acquisition failed.
             if let Some(result) = self
                 .check_mutation_status(&mut tx, &mutation_identifier)
                 .await?
@@ -980,6 +1019,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             let result: Result<(Transaction<RT>, ValidatedUdfOutcome), anyhow::Error> = self
                 .run_mutation_no_udf_log(
                     tx,
+                    permit,
                     path.clone(),
                     arguments.clone(),
                     caller.allowed_visibility(),
@@ -1001,19 +1041,24 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         self.runtime.wait(sleep).await;
                         continue;
                     }
-                    if matches!(
-                        e.short_msg(),
-                        FILE_UPLOAD_FAILED_SHORT_MSG | FILE_DOWNLOAD_FAILED_SHORT_MSG
-                    ) && (file_storage_backoff.failures() as usize)
-                        < *UDF_FILE_STORAGE_MAX_RETRIES
-                    {
-                        let sleep = file_storage_backoff.fail(&mut self.runtime.rng());
-                        tracing::warn!(
-                            "File storage failed ({e:#}), retrying {write_source:?} after \
-                             {sleep:?}",
-                        );
-                        self.runtime.wait(sleep).await;
-                        continue;
+                    let file_storage_error = match e.short_msg() {
+                        FILE_UPLOAD_FAILED_SHORT_MSG => Some(FILE_UPLOAD_FAILED_SHORT_MSG),
+                        FILE_DOWNLOAD_FAILED_SHORT_MSG => Some(FILE_DOWNLOAD_FAILED_SHORT_MSG),
+                        _ => None,
+                    };
+                    if let Some(short_msg) = file_storage_error {
+                        let retry = (file_storage_backoff.failures() as usize)
+                            < *UDF_FILE_STORAGE_MAX_RETRIES;
+                        log_mutation_file_storage_failure(short_msg, retry);
+                        if retry {
+                            let sleep = file_storage_backoff.fail(&mut self.runtime.rng());
+                            tracing::warn!(
+                                "File storage failed ({e:#}), retrying {write_source:?} after \
+                                 {sleep:?}",
+                            );
+                            self.runtime.wait(sleep).await;
+                            continue;
+                        }
                     }
                     self.function_log
                         .log_mutation_system_error(
@@ -1068,11 +1113,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             // Attempt to commit the transaction and log an error if commit failed,
             // even if it was an OCC error. We may decide later to suppress OCC
             // errors from the log.
-            let result = match self
-                .database
-                .commit_with_write_source(tx, write_source.clone())
-                .await
-            {
+            let result = match self.database.commit(tx, write_source.clone()).await {
                 Ok(ts) => Ok(MutationReturn {
                     // The commit timestamp is known now, so unresolved commit
                     // timestamps in the return value resolve to it, matching
@@ -1177,22 +1218,38 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         }
     }
 
+    /// Ordinary mutations acquire before beginning their transaction to keep
+    /// the snapshot fresh. Background jobs begin their transactions before
+    /// waiting and rely on OCC retries for freshness.
+    ///
+    /// Fails with `TooManyWrites` instead of waiting while the write throughput
+    /// limit is exceeded. The mutation checks the limit again after the wait.
+    pub async fn acquire_mutation_permit(&self) -> anyhow::Result<RequestGuard<'_, RT>> {
+        self.database.check_write_throughput_limit()?;
+        self.isolate_functions
+            .acquire_permit(UdfType::Mutation)
+            .await
+    }
+
     /// Attempts to run a mutation once using the given transaction.
-    /// The method is not idempotent. It is the caller responsibility to
-    /// drive retries as we as log in the UDF log.
+    /// The caller handles retries and UDF logging.
+    ///
+    /// Accepts a permit acquisition error so it can be logged with other system
+    /// errors.
     pub async fn run_mutation_no_udf_log(
         &self,
         tx: Transaction<RT>,
+        permit: anyhow::Result<RequestGuard<'_, RT>>,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         allowed_visibility: AllowedVisibility,
         context: ExecutionContext,
         mutation_queue_length: Option<usize>,
     ) -> anyhow::Result<(Transaction<RT>, ValidatedUdfOutcome)> {
-        self.database.check_write_throughput_limit()?;
         let result = self
             .run_mutation_inner(
                 tx,
+                permit,
                 path,
                 arguments,
                 allowed_visibility,
@@ -1224,12 +1281,15 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     async fn run_mutation_inner(
         &self,
         mut tx: Transaction<RT>,
+        permit: anyhow::Result<RequestGuard<'_, RT>>,
         path: PublicFunctionPath,
         arguments: SerializedArgs,
         allowed_visibility: AllowedVisibility,
         context: ExecutionContext,
         mutation_queue_length: Option<usize>,
     ) -> anyhow::Result<(Transaction<RT>, ValidatedUdfOutcome)> {
+        let permit = permit?;
+        self.database.check_write_throughput_limit()?;
         if path.is_system() && !(tx.identity().is_admin() || tx.identity().is_system()) {
             anyhow::bail!(unauthorized_error("mutation"));
         }
@@ -1264,6 +1324,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             .isolate_functions
             .execute_query_or_mutation(
                 tx,
+                permit,
                 path_and_args,
                 UdfType::Mutation,
                 QueryJournal::new(),
@@ -1321,7 +1382,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 caller.clone(),
                 usage_tracking.clone(),
                 context.clone(),
-                false,
+                PermitTimeout::Enforce,
             )
             .await;
         let completion = match completion_result {
@@ -1369,7 +1430,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         caller: FunctionCaller,
         usage_tracking: FunctionUsageTracker,
         context: ExecutionContext,
-        wait_for_permit: bool,
+        permit_timeout: PermitTimeout,
     ) -> anyhow::Result<ActionCompletion> {
         let result = self
             .run_action_inner(
@@ -1379,7 +1440,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 caller,
                 usage_tracking,
                 context,
-                wait_for_permit,
+                permit_timeout,
             )
             .await;
         match result.as_ref() {
@@ -1411,7 +1472,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         caller: FunctionCaller,
         usage_tracking: FunctionUsageTracker,
         context: ExecutionContext,
-        wait_for_permit: bool,
+        permit_timeout: PermitTimeout,
     ) -> anyhow::Result<ActionCompletion> {
         if path.is_system() && !(identity.is_admin() || identity.is_system()) {
             anyhow::bail!(unauthorized_error("action"));
@@ -1486,7 +1547,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         path_and_args,
                         log_line_sender,
                         context.clone(),
-                        wait_for_permit,
+                        permit_timeout,
                     )
                     .boxed();
                 let (outcome_result, log_lines) = run_function_and_collect_log_lines(
@@ -1529,6 +1590,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     .get_latest()
                     .await?
                     .context("no source package?")?;
+                let memory_mb: u32 = match source_package.node_default_memory_mb {
+                    Some(memory_mb) => memory_mb,
+                    None => (*AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB).try_into()?,
+                };
                 let source_maps_callback = async {
                     let mut source_maps = BTreeMap::new();
                     if let Some(source_map) = self
@@ -1545,13 +1610,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     }
                     Ok(source_maps)
                 };
-                let _permit = if wait_for_permit {
-                    self.node_action_limiter.acquire_permit().await?
-                } else {
-                    self.node_action_limiter
-                        .acquire_permit_with_timeout(&self.runtime)
-                        .await?
-                };
+                let _permit = self
+                    .node_action_limiter
+                    .acquire_permit(&self.runtime, permit_timeout)
+                    .await?;
 
                 let mut environment_variables =
                     system_env_vars(&mut tx, self.default_system_env_vars.clone()).await?;
@@ -1600,6 +1662,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         external_deps: external_deps_package,
                     },
                     source_package_id: source_package.developer_id().into(),
+                    memory_mb,
                     user_identity: tx.user_identity(),
                     auth_header: token_to_authorization_header(tx.authentication_token())?,
                     environment_variables,
@@ -1663,7 +1726,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         outcome,
                         execution_time: start.elapsed(),
                         environment: ModuleEnvironment::Node,
-                        memory_in_mb: node_outcome.memory_used_in_mb,
+                        memory_in_mb: memory_mb.into(),
                         context: context.clone(),
                         unix_timestamp,
                         caller: caller.clone(),
@@ -1708,7 +1771,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         }
     }
 
-    // Drain the v8 action concurrency permits so tests can
+    // Drain the isolate concurrency permits for `udf_type` so tests can
     // deterministically force `TooManyConcurrentRequests` and then recover.
     #[fastrace::trace]
     pub async fn build_deps(
@@ -1754,21 +1817,6 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 user_environment_variables,
                 system_env_vars,
             )
-            .await
-    }
-
-    #[fastrace::trace]
-    pub async fn evaluate_component_initializer(
-        &self,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-        path: ComponentDefinitionPath,
-        definition: ModuleConfig,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
-        self.isolate_functions
-            .function_runner
-            .evaluate_component_initializer(evaluated_definitions, path, definition, args, name)
             .await
     }
 
@@ -1925,6 +1973,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                             cron_spec.udf_path
                         ))));
                     },
+                    UdfType::Init => anyhow::bail!("Unexpected init function"),
                     UdfType::Mutation => {},
                     UdfType::Action => {},
                 }

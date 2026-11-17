@@ -34,72 +34,6 @@ export function glueDatabaseName(deploymentName: string) {
 }
 
 /**
- * The least-privilege IAM policy the export's access key needs. The account ID
- * is `*` so users don't have to look theirs up. The key still can't reach
- * another account's catalog unless that account grants it access.
- */
-export function iamPolicy({
-  bucket,
-  region,
-  prefix,
-  deploymentName,
-}: {
-  bucket: string;
-  region: string;
-  prefix: string;
-  deploymentName: string;
-}): string {
-  const root = exportRoot(prefix, deploymentName);
-  const glue = `arn:aws:glue:${region || "<region>"}:*`;
-  const database = glueDatabaseName(deploymentName);
-  const bucketArn = `arn:aws:s3:::${bucket || "<bucket>"}`;
-  return JSON.stringify(
-    {
-      Version: "2012-10-17",
-      Statement: [
-        {
-          Effect: "Allow",
-          Action: ["s3:ListBucket"],
-          Resource: bucketArn,
-          Condition: { StringLike: { "s3:prefix": [`${root}/*`] } },
-        },
-        {
-          Effect: "Allow",
-          // Iceberg uploads large files in parts and aborts the upload when a
-          // write fails.
-          Action: [
-            "s3:GetObject",
-            "s3:PutObject",
-            "s3:DeleteObject",
-            "s3:AbortMultipartUpload",
-          ],
-          Resource: `${bucketArn}/${root}/*`,
-        },
-        {
-          Effect: "Allow",
-          Action: [
-            "glue:GetDatabase",
-            "glue:CreateDatabase",
-            "glue:GetTable",
-            "glue:GetTables",
-            "glue:CreateTable",
-            "glue:UpdateTable",
-            "glue:DeleteTable",
-          ],
-          Resource: [
-            `${glue}:catalog`,
-            `${glue}:database/${database}`,
-            `${glue}:table/${database}/*`,
-          ],
-        },
-      ],
-    },
-    null,
-    2,
-  );
-}
-
-/**
  * The right-hand side of the S3 export card: the sync's status, and its
  * destination on click.
  */
@@ -123,7 +57,9 @@ export function S3ExportStatus({ existing }: { existing: S3Export }) {
             </>
           ) : (
             <>
-              {isStarting(existing) ? (
+              {needsRoleArn(existing) ? (
+                <HealthLabel type="pending">Finish AWS setup</HealthLabel>
+              ) : isStarting(existing) ? (
                 <HealthLabel type="pending">Starting first sync</HealthLabel>
               ) : (
                 <HealthIndicator status={existing.status} />
@@ -149,7 +85,7 @@ export function S3ExportStatus({ existing }: { existing: S3Export }) {
 function S3ExportDetails({ existing }: { existing: S3Export }) {
   const deploymentName = useDeploymentName();
   const { bucket, region, prefix } = existing.config;
-  const tablesPath = `${exportRoot(prefix, deploymentName)}/tables/`;
+  const dataLakePath = `${exportRoot(prefix, deploymentName)}/data-lake/`;
   const database = glueDatabaseName(deploymentName);
   const status = syncStatus(existing);
   const components = componentTablesIncluded(existing.config.selection);
@@ -157,6 +93,11 @@ function S3ExportDetails({ existing }: { existing: S3Export }) {
     <div className="flex flex-col gap-4 py-3 text-xs">
       {status ? (
         <SyncProgress status={status} />
+      ) : needsRoleArn(existing) ? (
+        <p className="font-medium">
+          Waiting on AWS access. Open Configure to finish connecting AWS and
+          enter your account ID.
+        </p>
       ) : isStarting(existing) ? (
         <div className="flex items-center gap-1.5">
           {/* `Spinner` defaults to `ml-auto` for use as a trailing element. */}
@@ -185,18 +126,22 @@ function S3ExportDetails({ existing }: { existing: S3Export }) {
         <dt className="text-content-secondary">S3 location</dt>
         <dd className="min-w-0 break-all">
           <Link
-            href={`https://s3.console.aws.amazon.com/s3/buckets/${bucket}?region=${region}&prefix=${encodeURIComponent(tablesPath)}`}
+            href={`https://s3.console.aws.amazon.com/s3/buckets/${bucket}?region=${encodeURIComponent(
+              region,
+            )}&prefix=${encodeURIComponent(dataLakePath)}`}
             target="_blank"
             className="inline-flex items-center gap-1"
           >
-            s3://{bucket}/{tablesPath}
+            s3://{bucket}/{dataLakePath}
             <ExternalLinkIcon className="shrink-0" />
           </Link>
         </dd>
         <dt className="text-content-secondary">Glue database</dt>
         <dd className="min-w-0 break-all">
           <Link
-            href={`https://${region}.console.aws.amazon.com/glue/home?region=${region}#/v2/data-catalog/databases/view/${database}`}
+            href={`https://console.aws.amazon.com/glue/home?region=${encodeURIComponent(
+              region,
+            )}#/v2/data-catalog/databases/view/${database}`}
             target="_blank"
             className="inline-flex items-center gap-1"
           >
@@ -209,10 +154,20 @@ function S3ExportDetails({ existing }: { existing: S3Export }) {
   );
 }
 
+// A role export the admin has not finished on the AWS side. A failure or a
+// deletion in progress says more, so those statuses win.
+export function needsRoleArn(existing: S3Export) {
+  return (
+    existing.config.roleArn === "" &&
+    existing.status.type !== "failed" &&
+    existing.status.type !== "deleting"
+  );
+}
+
 // No page has landed yet, and nothing has gone wrong.
 function isStarting(existing: S3Export) {
   return (
-    !existing.config.progress &&
+    !existing.exportProgress &&
     existing.status.type !== "failed" &&
     existing.status.type !== "deleting"
   );
@@ -224,7 +179,7 @@ function isStarting(existing: S3Export) {
  * export has failed or is being deleted.
  */
 export function syncStatus(existing: S3Export): SyncStatus | undefined {
-  const { progress } = existing.config;
+  const progress = existing.exportProgress;
   if (
     !progress ||
     existing.status.type === "failed" ||

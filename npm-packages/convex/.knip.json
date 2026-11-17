@@ -9,6 +9,7 @@
   ],
   "project": ["src/**/*.{js,cjs,mjs,jsx,ts,cts,mts,tsx}", "scripts/**/*.*js"],
   "ignoreBinaries": ["python3"],
+  "ignoreDependencies": ["pkg-pr-new"],
   "ignore": [
     "src/cli/generatedApi.ts",
     "src/cli/lib/generatedLogStreamApi.ts",

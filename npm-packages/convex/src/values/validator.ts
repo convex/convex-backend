@@ -7,6 +7,7 @@ import {
   VBoolean,
   VBytes,
   VFloat64,
+  VFunction,
   VId,
   VCommitTs,
   VInt64,
@@ -19,6 +20,8 @@ import {
   VUnion,
   Validator,
 } from "./validators.js";
+import type { FunctionType } from "../server/api.js";
+import type { FunctionHandle_future } from "../server/components/index.js";
 
 /**
  * The type that all validators must extend.
@@ -219,6 +222,55 @@ export const v = {
    */
   commitTs: () => {
     return new VCommitTs({ isOptional: "required" });
+  },
+
+  /**
+   * Validates that the value is a function handle, as returned by
+   * {@link server.createFunctionHandle}. The validated type is a
+   * {@link server.FunctionHandle_future}.
+   *
+   * Note that this does not validate that the function handle is for a valid function at runtime, as functions may be deleted during code push.
+   *
+   * The `fnType`, `args`, and `returns` provide types for typechecking and codegen. They will not be enforced at runtime.
+   *
+   * @example
+   * ```typescript
+   * args: {
+   *   onComplete: v.function({
+   *     fnType: "mutation",
+   *     args: { jobId: v.string() },
+   *     returns: v.null(),
+   *   }),
+   * }
+   * ```
+   */
+  function: <
+    Type extends FunctionType | undefined = undefined,
+    ArgsValidator extends PropertyValidators | GenericValidator | undefined =
+      undefined,
+    ReturnsValidator extends PropertyValidators | GenericValidator | undefined =
+      undefined,
+  >(signature?: {
+    fnType?: Type;
+    args?: ArgsValidator;
+    returns?: ReturnsValidator;
+  }) => {
+    return new VFunction<
+      FunctionHandle_future<
+        Type extends FunctionType ? Type : any,
+        ArgsValidator extends PropertyValidators | GenericValidator
+          ? Infer<AsObjectValidator<ArgsValidator>>
+          : any,
+        ReturnsValidator extends PropertyValidators | GenericValidator
+          ? Infer<AsObjectValidator<ReturnsValidator>>
+          : any
+      >
+    >({
+      isOptional: "required",
+      fnType: signature?.fnType,
+      args: signature?.args && asObjectValidator(signature.args),
+      returns: signature?.returns && asObjectValidator(signature.returns),
+    });
   },
 
   /**

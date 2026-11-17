@@ -22,7 +22,7 @@ use std::{
 };
 
 use ::exports::interface::ExportProvider;
-use ::log_streaming::{
+use ::integrations::{
     LogManager,
     LogManagerClient,
 };
@@ -145,6 +145,7 @@ use common::{
         IndexId,
         IndexName,
         IndexRef,
+        MemberId,
         ModuleEnvironment,
         NodeDependency,
         ObjectKey,
@@ -191,13 +192,6 @@ use file_storage::{
     FileStorage,
     FileStream,
 };
-use fivetran_destination::{
-    api_types::{
-        BatchWriteRow,
-        DeleteType,
-    },
-    constants::FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR,
-};
 use function_runner::FunctionRunner;
 use futures::stream::BoxStream;
 use headers::{
@@ -209,11 +203,14 @@ use http_client::{
     ClientPurpose,
 };
 use keybroker::{
+    AdminIdentity,
+    AdminIdentityPrincipal,
     DeploymentOp,
+    ExportDownloadActor,
     Identity,
     KeyBroker,
 };
-use log_streaming::add_local_log_sink_on_startup;
+use managed_export_worker::S3ExportWorker;
 use maplit::{
     btreemap,
     btreeset,
@@ -285,7 +282,12 @@ use model::{
         FileStorageId,
         FileStorageModel,
     },
-    fivetran_import::FivetranImportModel,
+    fivetran_import::{
+        constants::FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR,
+        BatchWriteRow,
+        DeleteType,
+        FivetranImportModel,
+    },
     migrations::MigrationWorker,
     modules::{
         module_versions::{
@@ -325,7 +327,10 @@ use model::{
     usage_limits::UsageLimitsModel,
 };
 use node_executor::NodeActions;
-use parking_lot::Mutex;
+use parking_lot::{
+    Mutex,
+    RwLock,
+};
 use rand::Rng;
 use roles::RequireDeploymentOp;
 use scheduled_jobs::ScheduledJobRunner;
@@ -419,7 +424,6 @@ use crate::{
         RedactedJsError,
         RedactedLogLines,
     },
-    s3_export_worker::S3ExportWorker,
     snapshot_import::{
         clear_tables,
         SnapshotImportWorker,
@@ -431,7 +435,9 @@ pub mod airbyte_import;
 pub mod api;
 pub mod app_metric_seed;
 pub mod application_function_runner;
+mod audit_log_config;
 pub mod audit_logging;
+mod backend_info;
 mod cache;
 pub mod cron_jobs;
 pub mod deploy_config;
@@ -439,11 +445,10 @@ pub mod deployment_state;
 mod execute_query_timestamp;
 mod exports;
 pub mod function_log;
-pub mod log_streaming;
+pub mod integrations;
 pub mod log_visibility;
 mod metrics;
 pub mod redaction;
-mod s3_export_worker;
 pub mod scheduled_jobs;
 mod schema_worker;
 pub mod snapshot_import;
@@ -583,12 +588,13 @@ pub(crate) fn validate_env_var_values(
         {
             env_var_validator
                 .check_provided_value(value.as_ref())
-                .map_err(|e| {
+                .map_err(|_| {
                     ErrorMetadata::bad_request(
                         "InvalidEnvironmentVariable",
                         format!(
                             "Environment variable {name_str} does not match its declared \
-                             validator: {e}"
+                             validator {}.",
+                            env_var_validator.validator
                         ),
                     )
                 })?;
@@ -625,6 +631,10 @@ pub struct Application<RT: Runtime> {
     app_auth: Arc<ApplicationAuth<RT>>,
     log_manager_client: LogManagerClient,
     audit_log_client: AuditLogClient,
+    sentry_tags: Arc<RwLock<Vec<(&'static str, String)>>>,
+    // Serializes `_backend_info` writes together with the log-streaming permission
+    // and Sentry tag updates that follow them.
+    backend_info_write_lock: Arc<tokio::sync::Mutex<()>>,
     oidc_http_client: CachedHttpClient,
 }
 
@@ -678,9 +688,7 @@ impl<RT: Runtime> Application<RT> {
             let storage_type = DatabaseGlobalsModel::new(&mut tx)
                 .initialize_storage_tag(storage_tag_initializer, deployment_name)
                 .await?;
-            database
-                .commit_with_write_source(tx, "init_storage")
-                .await?;
+            database.commit(tx, "init_storage").await?;
             storage_type
         };
 
@@ -736,7 +744,7 @@ impl<RT: Runtime> Application<RT> {
         app_auth: Arc<ApplicationAuth<RT>>,
         cache: QueryCache,
         fetch_client: Arc<dyn FetchClient>,
-        local_log_sink: Option<String>,
+        sentry_transport: Arc<dyn sentry::TransportFactory>,
         lease_lost_shutdown: ShutdownSignal,
         export_provider: Arc<dyn ExportProvider<RT>>,
         deleted_tablet_receiver: tokio::sync::mpsc::Receiver<TabletId>,
@@ -808,24 +816,16 @@ impl<RT: Runtime> Application<RT> {
             runtime.spawn("system_table_cleanup_worker", system_table_cleanup_worker),
         ));
 
-        // If local_log_sink is passed in, this is a local instance, so we enable log
-        // streaming by default. Otherwise, it's hard to grant the
-        // entitlement in testing and in load generator. If not local, we
-        // read the entitlement from the database.
         let mut tx = database.begin(Identity::system()).await?;
         let mut bi = BackendInfoModel::new(&mut tx);
-        let log_streaming_allowed = if let Some(path) = local_log_sink {
-            add_local_log_sink_on_startup(database.clone(), path).await?;
-            true
-        } else {
-            bi.is_log_streaming_allowed().await?
-        };
+        let log_streaming_allowed = bi.is_log_streaming_allowed().await?;
 
         let usage_counter = UsageCounter::new(usage_event_logger.clone());
         let log_manager_client = LogManager::start(
             runtime.clone(),
             database.clone(),
             fetch_client.clone(),
+            sentry_transport,
             deployment_name.clone(),
             deployment_region.as_ref().map(|r| r.to_string()),
             log_streaming_allowed,
@@ -917,6 +917,9 @@ impl<RT: Runtime> Application<RT> {
             database.clone(),
             deployment_name.clone(),
             export_provider.clone(),
+            usage_counter.clone(),
+            key_broker.clone(),
+            Arc::new(log_manager_client.clone()),
         );
         let s3_export_worker = Arc::new(Mutex::new(Some(
             runtime.spawn("s3_export_worker", s3_export_worker.run()),
@@ -1001,6 +1004,8 @@ impl<RT: Runtime> Application<RT> {
             app_auth,
             log_manager_client,
             audit_log_client,
+            sentry_tags: Default::default(),
+            backend_info_write_lock: Default::default(),
             oidc_http_client,
         })
     }
@@ -1034,6 +1039,13 @@ impl<RT: Runtime> Application<RT> {
         self.runner
             .mint_ai_gateway_jwt(identity, claims, request_id)
             .await
+    }
+
+    /// Served at `/.well-known/jwks.json`.
+    pub async fn deployment_jwks(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(
+            self.key_broker.deployment_jwt_keys().jwks()?,
+        )?)
     }
 
     pub fn metrics_log(&self, identity: &Identity) -> anyhow::Result<FunctionMetricsLog<'_, RT>> {
@@ -1130,9 +1142,7 @@ impl<RT: Runtime> Application<RT> {
         transaction: Transaction<RT>,
         write_source: impl Into<WriteSource>,
     ) -> anyhow::Result<Timestamp> {
-        self.database
-            .commit_with_write_source(transaction, write_source)
-            .await
+        self.database.commit(transaction, write_source).await
     }
 
     #[fastrace::trace]
@@ -1653,6 +1663,7 @@ impl<RT: Runtime> Application<RT> {
                      message should be returned instead."
                 )
             },
+            UdfType::Init => anyhow::bail!("Unexpected init function"),
         }
     }
 
@@ -1717,19 +1728,13 @@ impl<RT: Runtime> Application<RT> {
         }?;
         let component_id = component.serialize_to_string();
         let component_path = tx.must_component_path(component)?;
-        let format_str = match &format {
-            ExportFormat::Zip { include_storage } if *include_storage => {
-                "zip_with_storage".to_string()
-            },
-            ExportFormat::Zip { .. } => "zip".to_string(),
-        };
         self.commit_with_audit_log_events(
             tx,
             vec![DeploymentAuditLogEvent::RequestExport {
                 id: DeveloperDocumentId::from(snapshot_id).encode(),
                 component_id,
                 component: component_path,
-                format: format_str,
+                format: format.audit_log_format().to_string(),
                 requestor: requestor.usage_tag().to_string(),
             }],
             request_metadata,
@@ -1739,41 +1744,77 @@ impl<RT: Runtime> Application<RT> {
         Ok(snapshot_id.into())
     }
 
+    pub async fn export_download_identity(
+        &self,
+        actor: ExportDownloadActor,
+        download_token: String,
+    ) -> anyhow::Result<Identity> {
+        let principal = match (actor.member_id, actor.token_id) {
+            (Some(member_id), _) => AdminIdentityPrincipal::Member(member_id),
+            (None, None) => return Ok(Identity::system()),
+            (None, Some(_)) => {
+                let mut tx = self.begin(Identity::system()).await?;
+                let backend_info = BackendInfoModel::new(&mut tx).get().await?.context(
+                    ErrorMetadata::forbidden(
+                        "InvalidExportDownloadToken",
+                        "Invalid export download token",
+                    ),
+                )?;
+                AdminIdentityPrincipal::Team(backend_info.team)
+            },
+        };
+        Ok(Identity::DeploymentAdmin(
+            AdminIdentity::new_for_access_token(
+                self.deployment_name(),
+                principal,
+                download_token,
+                true,
+                vec![DeploymentOp::DownloadBackups],
+                self.runtime.system_time(),
+                actor.token_id,
+                None,
+            ),
+        ))
+    }
+
     pub async fn get_zip_export(
         &self,
         identity: Identity,
+        request_metadata: RequestMetadata,
         id: Either<DeveloperDocumentId, Timestamp>,
     ) -> anyhow::Result<(StorageGetStream, String)> {
-        let (object_key, snapshot_ts) = {
-            let mut tx = self.begin(identity).await?;
-            let export = match id {
-                Either::Left(id) => ExportsModel::new(&mut tx).get(id).await?,
-                Either::Right(ts) => {
-                    ExportsModel::new(&mut tx)
-                        .completed_export_at_ts(ts)
-                        .await?
-                },
-            }
-            .context(ErrorMetadata::not_found(
-                "ExportNotFound",
-                format!("The requested export {id} was not found"),
-            ))?;
-            match export.into_value() {
-                Export::Completed {
-                    zip_object_key,
-                    start_ts,
-                    ..
-                } => (zip_object_key, start_ts),
-                Export::Failed { .. }
-                | Export::Canceled { .. }
-                | Export::InProgress { .. }
-                | Export::Requested { .. } => {
-                    anyhow::bail!(ErrorMetadata::bad_request(
-                        "ExportNotComplete",
-                        format!("The requested export {id} has not completed"),
-                    ))
-                },
-            }
+        let mut tx = self.begin(identity).await?;
+        let export = match id {
+            Either::Left(id) => ExportsModel::new(&mut tx).get(id).await?,
+            Either::Right(ts) => {
+                ExportsModel::new(&mut tx)
+                    .completed_export_at_ts(ts)
+                    .await?
+            },
+        }
+        .context(ErrorMetadata::not_found(
+            "ExportNotFound",
+            format!("The requested export {id} was not found"),
+        ))?;
+        let snapshot_id = DeveloperDocumentId::from(export.id()).encode();
+        let component = export.component();
+        let format = export.format();
+        let requestor = export.requestor();
+        let (object_key, snapshot_ts) = match export.into_value() {
+            Export::Completed {
+                zip_object_key,
+                start_ts,
+                ..
+            } => (zip_object_key, start_ts),
+            Export::Failed { .. }
+            | Export::Canceled { .. }
+            | Export::InProgress { .. }
+            | Export::Requested { .. } => {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "ExportNotComplete",
+                    format!("The requested export {id} has not completed"),
+                ))
+            },
         };
         let storage_get_stream = self
             .application_storage
@@ -1784,6 +1825,22 @@ impl<RT: Runtime> Application<RT> {
                 "ExportNotFound",
                 format!("The requested export {snapshot_ts}/{object_key:?} was not found"),
             ))?;
+
+        let component_id = component.serialize_to_string();
+        let component_path = tx.must_component_path(component)?;
+        self.commit_with_audit_log_events(
+            tx,
+            vec![DeploymentAuditLogEvent::DownloadExport {
+                id: snapshot_id,
+                component_id,
+                component: component_path,
+                format: format.audit_log_format().to_string(),
+                requestor: requestor.usage_tag().to_string(),
+            }],
+            request_metadata,
+            "download_export",
+        )
+        .await?;
 
         let filename = format!(
             // This should match the format in SnapshotExport.tsx.
@@ -1854,7 +1911,8 @@ impl<RT: Runtime> Application<RT> {
             match change {
                 EnvVarChange::Set(env_var) => {
                     let name = env_var.name();
-                    if let Some(_existing) = model.delete(name).await? {
+                    let existing = model.delete(name).await?;
+                    if existing.is_some() {
                         audit_events.push(DeploymentAuditLogEvent::UpdateEnvironmentVariable {
                             name: name.clone(),
                         });
@@ -1863,7 +1921,11 @@ impl<RT: Runtime> Application<RT> {
                             name: name.clone(),
                         });
                     }
-                    model.create(env_var, &self.system_env_var_names).await?;
+                    // Replacing a variable keeps its visibility.
+                    let visibility = existing.and_then(|existing| existing.visibility);
+                    model
+                        .create_with_visibility(env_var, visibility, &self.system_env_var_names)
+                        .await?;
                 },
                 EnvVarChange::Unset(name) => {
                     if let Some(_existing) = model.delete(&name).await? {
@@ -2433,6 +2495,7 @@ impl<RT: Runtime> Application<RT> {
                     &app_modules,
                     external_deps_id_and_pkg.clone(),
                     config.node_version,
+                    config.node_default_memory_mb,
                 )
                 .await?;
             drop(permit);
@@ -2445,9 +2508,14 @@ impl<RT: Runtime> Application<RT> {
             let definition_path = component_def.definition_path.clone();
             let component_modules = component_def.modules().cloned().collect();
             let upload_limit = upload_limit.clone();
+            let node_default_memory_mb = config.node_default_memory_mb;
             let component_pkg_future = async move {
                 let permit = upload_limit.acquire().await?;
-                let component_pkg = app.upload_package(&component_modules, None, None).await?;
+                // Components share the deployment's Lambda, so their Node actions
+                // run and bill at the app's size.
+                let component_pkg = app
+                    .upload_package(&component_modules, None, None, node_default_memory_mb)
+                    .await?;
                 drop(permit);
                 anyhow::Ok((definition_path, component_pkg))
             };
@@ -2635,6 +2703,7 @@ impl<RT: Runtime> Application<RT> {
         modules: &Vec<ModuleConfig>,
         external_deps_id_and_pkg: Option<(ExternalDepsPackageId, ExternalDepsPackage)>,
         node_version: Option<NodeVersion>,
+        node_default_memory_mb: Option<u32>,
     ) -> anyhow::Result<SourcePackage> {
         // If there are any node actions, turn on the lambdas.
         if modules
@@ -2683,6 +2752,7 @@ impl<RT: Runtime> Application<RT> {
             external_deps_package_id,
             package_size,
             node_version,
+            node_default_memory_mb,
         })
     }
 
@@ -2737,7 +2807,7 @@ impl<RT: Runtime> Application<RT> {
         // This will become a dangling reference since the _modules entry won't
         // be committed to the database, but we have to deal with those anyway.
         let source_package = self
-            .upload_package(&vec![module.clone()], None, None)
+            .upload_package(&vec![module.clone()], None, None, None)
             .await?;
 
         let mut tx = self.begin(identity.clone()).await?;
@@ -2870,6 +2940,7 @@ impl<RT: Runtime> Application<RT> {
                     "HTTP actions are not supported in the REPL yet."
                 ))
             },
+            UdfType::Init => anyhow::bail!("Unexpected init function"),
         }?;
         let log_lines = RedactedLogLines::from_log_lines(log_lines, block_logging);
         Ok(match result {
@@ -3367,13 +3438,39 @@ impl<RT: Runtime> Application<RT> {
     /// transaction commits successfully.
     pub async fn commit_with_audit_log_events(
         &self,
-        mut transaction: Transaction<RT>,
+        transaction: Transaction<RT>,
         events: Vec<DeploymentAuditLogEvent>,
         request_metadata: RequestMetadata,
         write_source: impl Into<WriteSource>,
     ) -> anyhow::Result<Timestamp> {
+        self.commit_with_audit_log_events_with_member_override(
+            transaction,
+            events,
+            None,
+            request_metadata,
+            write_source,
+        )
+        .await
+    }
+
+    /// System tasks can attribute changes to the member who initiated them
+    /// while retaining their system identity for authorization.
+    pub async fn commit_with_audit_log_events_with_member_override(
+        &self,
+        mut transaction: Transaction<RT>,
+        events: Vec<DeploymentAuditLogEvent>,
+        member_id_override: Option<MemberId>,
+        request_metadata: RequestMetadata,
+        write_source: impl Into<WriteSource>,
+    ) -> anyhow::Result<Timestamp> {
+        if member_id_override.is_some() && !transaction.identity().is_system() {
+            anyhow::bail!(ErrorMetadata::forbidden(
+                "MemberIdOverrideRequiresSystemIdentity",
+                "Only system identities can override the audit log member ID.",
+            ));
+        }
         DeploymentAuditLogModel::new(&mut transaction)
-            .insert(events.clone(), &request_metadata)
+            .insert_with_member_override(events.clone(), member_id_override, &request_metadata)
             .await?;
         let ts = self.commit(transaction, write_source).await?;
         let logs = events

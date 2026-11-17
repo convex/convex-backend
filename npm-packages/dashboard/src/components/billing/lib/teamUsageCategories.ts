@@ -10,17 +10,6 @@ export const DATABASE_STORAGE_CATEGORIES = {
   },
 };
 
-export const FILE_STORAGE_CATEGORIES = {
-  userFiles: {
-    name: "User Files",
-    color: "fill-chart-line-1",
-  },
-  cloudBackup: {
-    name: "Cloud Backups",
-    color: "fill-chart-line-2",
-  },
-};
-
 export const BANDWIDTH_CATEGORIES = {
   egress: {
     name: "Reads",
@@ -31,33 +20,6 @@ export const BANDWIDTH_CATEGORIES = {
     name: "Writes",
     color: "fill-chart-line-2",
     backgroundColor: "bg-chart-line-2/30 dark:bg-chart-line-2",
-  },
-};
-
-export const FILE_BANDWIDTH_CATEGORIES = {
-  servingEgress: {
-    name: "File Serving",
-    color: "fill-chart-line-1",
-  },
-  userFunctionEgress: {
-    name: "User Function Reads",
-    color: "fill-chart-line-3",
-  },
-  cloudRestore: {
-    name: "Cloud Restore",
-    color: "fill-chart-line-5",
-  },
-  cloudBackup: {
-    name: "Cloud Backup",
-    color: "fill-chart-line-6",
-  },
-  snapshotExport: {
-    name: "Snapshot Export",
-    color: "fill-chart-line-7",
-  },
-  snapshotImport: {
-    name: "Snapshot Import",
-    color: "fill-chart-line-8",
   },
 };
 
@@ -180,6 +142,7 @@ const DEPLOYMENT_CLASS_COLORS: Record<string, string> = {
   s256: "fill-chart-line-2",
   d1024: "fill-chart-line-3",
   d2048: "fill-chart-line-4",
+  p256: "fill-chart-line-5",
 };
 
 export const DEPLOYMENT_CLASS_CATEGORIES: Record<

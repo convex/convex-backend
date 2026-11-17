@@ -17,6 +17,7 @@ import {
 import { BILLING_RESOURCE } from "lib/permissions";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { Button } from "@ui/Button";
+import { Link } from "@ui/Link";
 import { formatDate } from "@common/lib/format";
 import { Sheet } from "@ui/Sheet";
 import { useFormik } from "formik";
@@ -36,10 +37,10 @@ import { Callout } from "@ui/Callout";
 import { formatUsd } from "@common/lib/utils";
 import { planNameMap } from "components/billing/planCards/PlanCard";
 import startCase from "lodash/startCase";
+import isEqual from "lodash/isEqual";
 import { BillingContactInputs } from "./BillingContactInputs";
 import { CreateSubscriptionSchema } from "./UpgradePlanContent";
 import { PaymentDetailsForm } from "./PaymentDetailsForm";
-import { Invoices } from "./Invoices";
 import { PrepaidCredits } from "./PrepaidCredits";
 import { SubscriptionCredits } from "./SubscriptionCredits";
 import { BillingAddressInputs } from "./BillingAddressInputs";
@@ -49,7 +50,9 @@ import {
   useSubmitSpendingLimits,
 } from "./SpendingLimits";
 
-const DEFAULT_INVOICES_LIMIT = 10;
+// The renewal date comes from the upcoming (draft) invoice, which is among the
+// most recent ones.
+const RENEWAL_INVOICES_LIMIT = 10;
 
 export function SubscriptionOverview({
   team,
@@ -63,10 +66,7 @@ export function SubscriptionOverview({
   const isLoading = subscription === undefined;
   const resumeSubscription = useResumeSubscription(team.id);
   const [isResuming, setIsResuming] = useState(false);
-  const [invoicesLimit, setInvoicesLimit] = useState<number>(
-    DEFAULT_INVOICES_LIMIT,
-  );
-  const invoicesResult = useListInvoices(team.id, invoicesLimit);
+  const invoicesResult = useListInvoices(team.id, RENEWAL_INVOICES_LIMIT);
   // `billing:view` gates the billing-detail forms (contact / address /
   // payment method); the surrounding "Current plan" section is readable by
   // all team members.
@@ -92,10 +92,6 @@ export function SubscriptionOverview({
   }
   const invoices =
     invoicesResult.status === "ok" ? invoicesResult.data.invoices : undefined;
-  const invoicesHasMore =
-    invoicesResult.status === "ok" ? invoicesResult.data.hasMore : false;
-  const invoicesIsRefreshing =
-    invoicesResult.status === "ok" ? invoicesResult.data.isRefreshing : false;
   const nextInvoiceDate = invoices?.find(
     (i) => i.status === "draft",
   )?.invoiceDate;
@@ -120,7 +116,17 @@ export function SubscriptionOverview({
     <>
       {subscription && (
         <Sheet className="flex flex-col gap-4">
-          <h3>Subscription</h3>
+          <div className="flex items-center justify-between gap-4">
+            <h3>Subscription</h3>
+            {team.managedBy !== "vercel" && (
+              <Link
+                href={`/t/${team.slug}/settings/invoices`}
+                className="text-sm"
+              >
+                View invoices
+              </Link>
+            )}
+          </div>
           <div className="text-sm">
             Current Plan:{" "}
             <span className="font-semibold">
@@ -225,35 +231,6 @@ export function SubscriptionOverview({
           )}
         </Sheet>
       )}
-      {team.managedBy !== "vercel" && invoicesResult.status === "loading" && (
-        <Loading className="h-60 w-full" fullHeight={false} />
-      )}
-      {team.managedBy !== "vercel" && invoicesResult.status === "denied" && (
-        <Sheet className="flex w-full flex-col gap-4">
-          <h3>Invoices</h3>
-          <span className="text-sm">
-            Preview or download your upcoming and past invoices.
-          </span>
-          <NoPermissionMessage
-            message="You do not have permission to view invoices for this team."
-            missingPermission={invoicesResult.deniedAction}
-          />
-        </Sheet>
-      )}
-      {team.managedBy !== "vercel" &&
-        invoices &&
-        (invoices.length > 0 || subscription) && (
-          <Invoices
-            invoices={invoices}
-            invoicingThreshold={subscription?.invoicingThreshold}
-            onShowMore={
-              invoicesHasMore
-                ? () => setInvoicesLimit(invoicesLimit + 10)
-                : undefined
-            }
-            isLoadingMore={invoicesIsRefreshing}
-          />
-        )}
     </>
   );
 }
@@ -599,26 +576,53 @@ function BillingAddressForm({
     false,
   );
   const canUpdate = isTeamAdmin || canUpdateCustom;
+  const canUpdateContactCustom = useHasCustomRolePermission(
+    team.id,
+    "billing:contact:update",
+    BILLING_RESOURCE,
+    false,
+  );
+  const canUpdateContact = isTeamAdmin || canUpdateContactCustom;
 
   const updateBillingAddress = useUpdateBillingAddress(team.id);
-  const formState = useFormik<{ billingAddress?: Address }>({
+  const updateBillingContact = useUpdateBillingContact(team.id);
+  const formState = useFormik<{ billingAddress?: Address; name: string }>({
     initialValues: {
       billingAddress: subscription.billingAddress || undefined,
+      name: billingContact.name,
     },
     onSubmit: async (v) => {
-      if (v.billingAddress) {
-        await updateBillingAddress({ billingAddress: v.billingAddress });
-        await formState.setTouched({});
-        setShowForm(false);
+      if (!v.billingAddress) {
+        return;
       }
+      // The name field on the address form is the billing contact's name,
+      // which is stored on the customer rather than on the address.
+      if (v.name !== formState.initialValues.name) {
+        await updateBillingContact({
+          name: v.name,
+          email: billingContact.email,
+        });
+      }
+      if (!isEqual(v.billingAddress, formState.initialValues.billingAddress)) {
+        await updateBillingAddress({ billingAddress: v.billingAddress });
+      }
+      await formState.setTouched({});
+      setShowForm(false);
     },
     enableReinitialize: true,
   });
+  const nameChanged = formState.values.name !== formState.initialValues.name;
 
   const { setFieldValue } = formState;
   const setBillingAddress = useCallback(
     async (address?: Address) => {
       await setFieldValue("billingAddress", address);
+    },
+    [setFieldValue],
+  );
+  const setName = useCallback(
+    async (name: string) => {
+      await setFieldValue("name", name);
     },
     [setFieldValue],
   );
@@ -691,6 +695,7 @@ function BillingAddressForm({
               <Elements stripe={stripePromise} options={options}>
                 <BillingAddressInputs
                   onChangeAddress={setBillingAddress}
+                  onChangeName={setName}
                   existingBillingAddress={
                     subscription.billingAddress || undefined
                   }
@@ -729,14 +734,21 @@ function BillingAddressForm({
               disabled={
                 !formState.dirty ||
                 !formState.values.billingAddress ||
-                canUpdate !== true
+                canUpdate !== true ||
+                (nameChanged && canUpdateContact !== true)
               }
               tip={
-                canUpdate === false &&
-                permissionDeniedTip(
-                  "You do not have permission to update the billing address.",
-                  "billing:address:update",
-                )
+                canUpdate === false
+                  ? permissionDeniedTip(
+                      "You do not have permission to update the billing address.",
+                      "billing:address:update",
+                    )
+                  : nameChanged &&
+                    canUpdateContact === false &&
+                    permissionDeniedTip(
+                      "You do not have permission to update the billing contact name.",
+                      "billing:contact:update",
+                    )
               }
               loading={formState.isSubmitting}
             >
@@ -847,14 +859,18 @@ function UpdatePaymentMethod({
     },
     [onSave, updatePaymentMethod],
   );
-  const { stripePromise, options, retrieveSetupIntent, confirmSetup } =
-    useStripePaymentSetup(team, undefined, updatePaymentMethodCb);
+  const { stripePromise, options, confirmSetup } = useStripePaymentSetup(
+    team,
+    undefined,
+    updatePaymentMethodCb,
+  );
+  const { preAuthorizePaymentMethodChange } = useLaunchDarkly();
 
   return options.clientSecret ? (
     <Elements stripe={stripePromise} options={options}>
       <PaymentDetailsForm
-        retrieveSetupIntent={retrieveSetupIntent}
         confirmSetup={confirmSetup}
+        showCardHoldNote={preAuthorizePaymentMethodChange}
       />
     </Elements>
   ) : null;

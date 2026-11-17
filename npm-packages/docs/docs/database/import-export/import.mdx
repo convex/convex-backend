@@ -54,6 +54,16 @@ Imports where tables have existing data will fail by default, but you can
 specify `--replace` to replace existing data in tables mentioned in the ZIP
 file.
 
+## Limits
+
+CSV and JSONLines imports have a 16 MiB line limit, including line endings and
+CSV headers. Quoted multiline CSV values count as a single logical line. For ZIP
+imports, the limit applies to decompressed lines in `documents.jsonl` and
+`generated_schema.jsonl` files.
+
+Imported documents must also meet the
+[1 MiB document size limit](/database/types#limits).
+
 ## Use cases
 
 1. Seed dev deployments with sample data.

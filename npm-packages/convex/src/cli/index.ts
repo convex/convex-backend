@@ -8,7 +8,7 @@ import { setGlobalDispatcher, EnvHttpProxyAgent } from "undici";
 import { logVerbose } from "../bundler/log.js";
 import { buildProgram } from "./program.js";
 
-const HARD_MINIMUM_NODE_MAJOR_VERSION = 20;
+const HARD_MINIMUM_NODE_MAJOR_VERSION = 22;
 const HARD_MINIMUM_NODE_MINOR_VERSION = 0;
 
 // console.error before it started being red by default in Node.js v20
@@ -32,10 +32,7 @@ async function main() {
 
   // Increase the timeout from default 250ms for high latency situations,
   // see https://github.com/nodejs/node/issues/54359.
-  if (majorVersion >= 20) {
-    // While we use Node.js v18 types
-    (net as any).setDefaultAutoSelectFamilyAttemptTimeout?.(1000);
-  }
+  net.setDefaultAutoSelectFamilyAttemptTimeout?.(1000);
 
   initSentry();
 

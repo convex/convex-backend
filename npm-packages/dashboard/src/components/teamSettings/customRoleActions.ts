@@ -33,6 +33,7 @@ export const ACTIONS_BY_CATEGORY: Record<
     "team:domain:create",
     "team:domain:delete",
     "team:domain:view",
+    "team:projectTags:view",
     "team:usage:view",
   ],
   billing: [

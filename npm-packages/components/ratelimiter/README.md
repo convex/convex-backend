@@ -4,10 +4,9 @@ This package exists to test components when a different copy of convex is
 installed, so uses `"injected": true` for the convex dependency.
 
 This is no longer the canonical Convex component. See
-https://github.com/get-convex/ratelimiter-component for the actual rate limter
-components or
-https://github.com/get-convex/templates/tree/main/template-component for the
-template that powers
+https://github.com/convex/ratelimiter-component for the actual rate limiter
+components or https://github.com/convex/templates/tree/main/template-component
+for the template that powers `create-convex`:
 
 ```
 npx create-convex@latest --component

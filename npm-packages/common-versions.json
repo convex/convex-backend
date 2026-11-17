@@ -16,10 +16,9 @@
    */
   "allowedAlternativeVersions": {
     /**
-     * The convex-test docs demo needs the global isolation behavior in 0.0.58
-     * and `t.withRequestMetadata` from 0.0.59.
+     * The convex-test docs demo needs `defineTestApp` from 0.0.61.
      */
-    "convex-test": ["^0.0.60"],
+    "convex-test": ["^0.0.61"],
     /**
      * Convex minimum version of TypeScript supported is 5.0;
      * Whatever features were added after that, don't use them!
@@ -49,7 +48,7 @@
      * but some of our projects have dependencies that are not compatible
      * with Vite 7 so far.
      */
-    "vite": ["^7.3.5"],
+    "vite": ["^7.3.7"],
     /**
      * These are for private-demos/tanstack-start to closely match
      * https://github.com/TanStack/router
@@ -59,7 +58,7 @@
     /**
      * The dashboards are on Next.js 16 while the demos stay on 15.
      */
-    "next": ["^16.3.8"],
+    "next": ["^16.4.6"],
     "react": ["^18.3.1", "^19.2.4"],
     "react-dom": ["^18.3.1", "^19.2.4"],
     //"typescript": ["^5"],

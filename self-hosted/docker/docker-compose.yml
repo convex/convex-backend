@@ -1,7 +1,7 @@
 services:
   backend:
     # Change this to :${REV} if you want to pin to a specific version
-    image: ghcr.io/get-convex/convex-backend:latest
+    image: ghcr.io/convex/convex-backend:latest
     stop_grace_period: 10s
     stop_signal: SIGINT
     ports:
@@ -53,7 +53,7 @@ services:
 
   dashboard:
     # Change this to :${REV} if you want to pin to a specific version
-    image: ghcr.io/get-convex/convex-dashboard:latest
+    image: ghcr.io/convex/convex-dashboard:latest
     stop_grace_period: 10s
     stop_signal: SIGINT
     ports:
@@ -61,6 +61,8 @@ services:
     environment:
       - NEXT_PUBLIC_DEPLOYMENT_URL=${NEXT_PUBLIC_DEPLOYMENT_URL:-http://127.0.0.1:${PORT:-3210}}
       - NEXT_PUBLIC_LOAD_MONACO_INTERNALLY
+      - NEXT_PUBLIC_ADMIN_KEY
+      - NEXT_PUBLIC_SKIP_LOGIN
     depends_on:
       backend:
         condition: service_healthy

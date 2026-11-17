@@ -11,6 +11,7 @@ import {
 const _contentLength = Symbol("[[contentLength]]");
 export const _redirected = Symbol("[[redirected]]");
 const _responseType = Symbol("[[responseType]]");
+const NULL_BODY_STATUSES = [204, 205, 304];
 
 export class Response {
   private _status: number;
@@ -105,6 +106,9 @@ export class Response {
     }
 
     if (convertedBody !== null) {
+      if (NULL_BODY_STATUSES.includes(this._status)) {
+        throw new TypeError("Response with null body status cannot have body");
+      }
       const { stream, contentType, contentLength } = extractBody(convertedBody);
       if (this._headers.get("content-type") === null && contentType !== null) {
         this._headers.set("content-type", contentType);
@@ -290,12 +294,17 @@ export const convexJsonFromResponse = ({ response }: { response: any }) => {
 export const responseFromConvexObject = (
   convexObject: Record<string, any>,
   mapBodyError?: (e: unknown) => unknown,
+  requestMethod?: string,
 ) => {
-  const body = convexObject.streamId
-    ? extractStream(convexObject.streamId, mapBodyError)
-    : null;
+  const status = Number(convexObject.status);
+  const body =
+    requestMethod !== "HEAD" &&
+    !NULL_BODY_STATUSES.includes(status) &&
+    convexObject.streamId
+      ? extractStream(convexObject.streamId, mapBodyError)
+      : null;
   const response = new Response(body, {
-    status: Number(convexObject.status),
+    status,
     statusText: convexObject.statusText,
     headers: convexObject.headerPairs,
     url: convexObject.url,

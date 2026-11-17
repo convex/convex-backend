@@ -26,6 +26,9 @@ pub type ServerMessage = convex_sync_types::ServerMessage<Value>;
 pub enum ProtocolResponse {
     ServerMessage(ServerMessage),
     Failure,
+    /// The protocol handled a reconnect request. Responses after this come
+    /// from the new connection.
+    ReconnectStarted,
 }
 
 #[derive(Debug)]
@@ -41,7 +44,9 @@ pub enum WebSocketState {
 pub trait SyncProtocol: Send + Sized {
     async fn open(
         ws_url: Url,
-        on_response: mpsc::Sender<ProtocolResponse>,
+        // Unbounded, so the protocol never waits for the client worker, which
+        // can itself be waiting on the protocol.
+        on_response: mpsc::UnboundedSender<ProtocolResponse>,
         on_state_change: Option<mpsc::Sender<WebSocketState>>,
         client_id: &str,
     ) -> anyhow::Result<Self>;

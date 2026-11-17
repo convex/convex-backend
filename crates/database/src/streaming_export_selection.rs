@@ -282,6 +282,13 @@ pub struct StreamingExportDocument {
     value: PII<ConvexObject>,
 }
 
+/// The document's fields, `_id` included.
+impl From<StreamingExportDocument> for ConvexObject {
+    fn from(document: StreamingExportDocument) -> Self {
+        document.value.0
+    }
+}
+
 impl StreamingExportDocument {
     pub fn new(id: DeveloperDocumentId, value: PII<ConvexObject>) -> anyhow::Result<Self> {
         // Verify that `value` contains `_id`
@@ -300,6 +307,10 @@ impl StreamingExportDocument {
 
     pub fn size(&self) -> usize {
         self.value.0.size()
+    }
+
+    pub fn id(&self) -> DeveloperDocumentId {
+        self.id
     }
 
     pub fn export_fields(

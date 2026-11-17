@@ -1,0 +1,5 @@
+{
+  "extends": "./convex/tsconfig.json",
+  "include": ["convex", "jobs"],
+  "exclude": ["convex/_generated", "jobs/_generated"]
+}

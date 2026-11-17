@@ -1,7 +1,6 @@
 import {
   ArrowDownIcon,
   CaretDownIcon,
-  HamburgerMenuIcon,
   QuestionMarkCircledIcon,
 } from "@radix-ui/react-icons";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
@@ -332,23 +331,6 @@ function WindowedLogList({
         )}
       </div>
     </div>
-  );
-}
-
-export function LogsMenuButton({ open }: { open: boolean }) {
-  return (
-    <Button
-      inline
-      focused={open}
-      variant="neutral"
-      size="sm"
-      className="-ml-2.5"
-    >
-      <h3 className="flex items-center gap-2 font-mono">
-        <HamburgerMenuIcon className="mt-0.5" />
-        Logs
-      </h3>
-    </Button>
   );
 }
 

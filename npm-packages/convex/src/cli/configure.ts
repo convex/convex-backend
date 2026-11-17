@@ -1,4 +1,5 @@
 import { chalkStderr } from "chalk";
+import { handleNoAccessToConfiguredProject } from "./account.js";
 import { Context } from "../bundler/context.js";
 import {
   logFailure,
@@ -52,6 +53,7 @@ import {
 import { ensureLoggedIn } from "./lib/login.js";
 import { handleAnonymousDeployment } from "./lib/localDeployment/anonymous.js";
 import { fetchDeploymentCanonicalUrls } from "./lib/deploy2.js";
+import { tagSentryWithDeployment } from "./lib/utils/sentryDeploymentTags.js";
 type DeploymentCredentials = {
   url: string;
   adminKey: string;
@@ -122,6 +124,7 @@ export async function deploymentCredentialsOrConfigure(
     chosenConfiguration,
     cmdOptions,
   );
+  tagSentryWithDeployment(selectedDeployment.deploymentFields);
   const { convexCloudUrl, convexSiteUrl: siteUrl } =
     await fetchDeploymentCanonicalUrls(ctx, {
       adminKey: selectedDeployment.adminKey,
@@ -350,11 +353,26 @@ async function handleDeploymentWithinProject(
     return result;
   }
 
-  const accessResult = await checkAccessToSelectedProject(
+  let accessResult = await checkAccessToSelectedProject(
     ctx,
     deploymentSelection.targetProject,
   );
-  if (accessResult.kind === "noAccess") {
+  while (accessResult.kind === "noAccess") {
+    const next =
+      cmdOptions.team !== undefined && cmdOptions.project !== undefined
+        ? "chooseProject"
+        : await handleNoAccessToConfiguredProject(
+            ctx,
+            deploymentSelection.targetProject,
+            cmdOptions.envFile,
+          );
+    if (next === "retry") {
+      accessResult = await checkAccessToSelectedProject(
+        ctx,
+        deploymentSelection.targetProject,
+      );
+      continue;
+    }
     logMessage("You don't have access to the selected project.");
     const result = await handleChooseProject(
       ctx,

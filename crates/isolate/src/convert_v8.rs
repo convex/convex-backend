@@ -16,6 +16,7 @@ use serde::{
     Serialize,
 };
 use strum::IntoStaticStr;
+use value::heap_size::HeapSize;
 
 use crate::strings;
 
@@ -98,6 +99,15 @@ pub enum DOMExceptionName {
 pub enum JsException {
     DOMException(DOMException),
     TypeError(TypeError),
+}
+
+impl HeapSize for JsException {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::DOMException(DOMException { message, name: _ }) => message.heap_size(),
+            Self::TypeError(TypeError { message }) => message.heap_size(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

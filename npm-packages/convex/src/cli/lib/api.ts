@@ -1,5 +1,6 @@
 import { Context } from "../../bundler/context.js";
 import { logVerbose, logWarning } from "../../bundler/log.js";
+import { tagSentryWithDeployment } from "./utils/sentryDeploymentTags.js";
 import { getTeamAndProjectFromPreviewAdminKey } from "./deployment.js";
 import {
   assertLocalBackendRunning,
@@ -848,6 +849,20 @@ export async function loadSelectedDeploymentCredentials(
   ctx: Context,
   deploymentSelection: DeploymentSelection,
   { ensureLocalRunning } = { ensureLocalRunning: true },
+): Promise<DetailedDeploymentCredentials> {
+  const credentials = await _loadSelectedDeploymentCredentials(
+    ctx,
+    deploymentSelection,
+    { ensureLocalRunning },
+  );
+  tagSentryWithDeployment(credentials.deploymentFields);
+  return credentials;
+}
+
+async function _loadSelectedDeploymentCredentials(
+  ctx: Context,
+  deploymentSelection: DeploymentSelection,
+  { ensureLocalRunning }: { ensureLocalRunning: boolean },
 ): Promise<DetailedDeploymentCredentials> {
   switch (deploymentSelection.kind) {
     case "existingDeployment":

@@ -94,6 +94,24 @@ impl TryFrom<pb::common::HttpActionRequestHead> for HttpActionRequestHead {
     }
 }
 
+impl From<HttpActionRequestHead> for pb::common::HttpActionRequestHead {
+    fn from(
+        HttpActionRequestHead {
+            headers,
+            url,
+            method,
+        }: HttpActionRequestHead,
+    ) -> Self {
+        Self {
+            http_headers: normalize_header_map(headers)
+                .map(HttpHeader::from)
+                .collect(),
+            url: url.to_string(),
+            method: method.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum HttpActionResponsePart {
     Head(HttpActionResponseHead),

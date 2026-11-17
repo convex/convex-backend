@@ -1,3 +1,4 @@
+import path from "path";
 import { Command, Option } from "@commander-js/extra-typings";
 import { oneoffContext } from "../bundler/context.js";
 import { logError } from "../bundler/log.js";
@@ -6,6 +7,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { actionDescription } from "./lib/command.js";
 import { checkAuthorization } from "./lib/login.js";
 import {
+  encodeDeploymentSelector,
   McpOptions,
   RequestContext,
   RequestCrash,
@@ -13,6 +15,10 @@ import {
 import { mcpTool, convexTools, ConvexTool } from "./lib/mcp/tools/index.js";
 import { Mutex } from "./lib/utils/mutex.js";
 import { initializeBigBrainAuth } from "./lib/deploymentSelection.js";
+import {
+  accountNotLoggedInMessage,
+  getAccountSelection,
+} from "./lib/accounts.js";
 
 const allToolNames = convexTools.map((t) => t.name).sort();
 
@@ -115,6 +121,14 @@ function enabledTools(
 export function makeServer(options: McpOptions) {
   const enabledToolsByName = enabledTools(options);
   const mutex = new Mutex();
+  const serverDirectory = process.cwd();
+  options = {
+    ...options,
+    envFile:
+      options.envFile === undefined
+        ? undefined
+        : path.resolve(serverDirectory, options.envFile),
+  };
   const server = new Server(
     {
       name: "Convex MCP Server",
@@ -128,17 +142,7 @@ export function makeServer(options: McpOptions) {
   );
   server.setRequestHandler("tools/call", async (request: CallToolRequest) => {
     const ctx = new RequestContext(options);
-    await initializeBigBrainAuth(ctx, options);
     try {
-      const authorized = await checkAuthorization(ctx, false);
-      if (!authorized) {
-        await ctx.crash({
-          exitCode: 1,
-          errorType: "fatal",
-          printedMessage:
-            "Not Authorized: Run `npx convex dev` to login to your Convex project.",
-        });
-      }
       if (!request.params.arguments) {
         await ctx.crash({
           exitCode: 1,
@@ -158,7 +162,58 @@ export function makeServer(options: McpOptions) {
 
       // Serialize tool handlers since they're mutating the current working directory.
       const result = await mutex.runExclusive(async () => {
-        return await convexTool.handler(ctx, input);
+        const projectDir =
+          "deploymentSelector" in input
+            ? ctx.decodeDeploymentSelectorUnchecked(input.deploymentSelector)
+                .projectDir
+            : (("projectDir" in input ? input.projectDir : undefined) ??
+              options.projectDir);
+        const previousDirectory = process.cwd();
+        try {
+          if (projectDir !== undefined)
+            process.chdir(path.resolve(serverDirectory, projectDir));
+          await initializeBigBrainAuth(ctx, options);
+          if (!(await checkAuthorization(ctx, false))) {
+            const auth = ctx.bigBrainAuth();
+            // An explicit URL and admin key bypass account selection.
+            const usesAccount =
+              options.url === undefined || options.adminKey === undefined;
+            const account =
+              auth?.kind === "accessToken"
+                ? (auth.account ?? null)
+                : auth === null && usesAccount
+                  ? await getAccountSelection(ctx, { envFile: options.envFile })
+                  : null;
+            await ctx.crash({
+              exitCode: 1,
+              errorType: "fatal",
+              printedMessage:
+                account === null
+                  ? "Not Authorized: Run `npx convex dev` to login to your Convex project."
+                  : auth === null
+                    ? accountNotLoggedInMessage(account)
+                    : `Not Authorized: The login for account "${account.name}" selected by ${account.source} is no longer valid. Run \`npx convex login --account ${account.name}\`.`,
+            });
+          }
+          const absoluteDirectory = process.cwd();
+          const resolvedInput =
+            "deploymentSelector" in input
+              ? {
+                  ...input,
+                  deploymentSelector: encodeDeploymentSelector(
+                    absoluteDirectory,
+                    ctx.decodeDeploymentSelectorUnchecked(
+                      input.deploymentSelector,
+                    ).deployment,
+                  ),
+                }
+              : projectDir === undefined
+                ? input
+                : { ...input, projectDir: absoluteDirectory };
+          return await convexTool.handler(ctx, resolvedInput);
+        } finally {
+          process.chdir(previousDirectory);
+        }
       });
       return {
         content: [

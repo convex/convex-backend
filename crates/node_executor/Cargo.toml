@@ -30,7 +30,6 @@ errors = { workspace = true }
 fastrace = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
-home = { workspace = true }
 isolate = { workspace = true }
 keybroker = { workspace = true }
 maplit = { workspace = true }

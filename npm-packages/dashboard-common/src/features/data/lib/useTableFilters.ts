@@ -121,7 +121,3 @@ function hasValidEnabledFilters(filters?: FilterExpression) {
 
   return false;
 }
-
-export function areAllFiltersValid(filters?: FilterExpression) {
-  return filters === undefined || filters.clauses.every(isValidFilter);
-}

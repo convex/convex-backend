@@ -10,7 +10,7 @@
     "prepublishOnly": "echo \"$@\"; echo this is prepublish; env"
   },
   "dependencies": {
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "get-port": "~7.1.0",
     "typescript": "~5.0.3",
     "verdaccio": "^6.0.5",

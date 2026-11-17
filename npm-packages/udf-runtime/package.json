@@ -12,7 +12,7 @@
     "udf-syscall-ffi": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@types/object-inspect": "^1.8.1",
     "typescript": "^5.9.2"
   }

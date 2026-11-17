@@ -105,6 +105,10 @@ export const mockDeploymentInfo: DeploymentInfo = {
   DisconnectOverlay: () => <div>Disconnected</div>,
   useTeamUsageState: () => "Default",
   useTeamPlanType: () => null,
+  useCurrentDeploymentUnitPrices: () => ({
+    unitPrices: undefined,
+    isLoading: false,
+  }),
   teamsURI: "",
   projectsURI: "",
   deploymentsURI: "",
@@ -114,6 +118,8 @@ export const mockDeploymentInfo: DeploymentInfo = {
   s3ExportIntegrationEnabled: false,
   connectionStateCheckIntervalMs: 2500,
   showFivetranSyncProgress: false,
+  componentSwitcherTreeEnabled: false,
+  estimateUsageLimitsCost: false,
   openFeedbackForm: () => {},
   captureEvent: () => {},
 };

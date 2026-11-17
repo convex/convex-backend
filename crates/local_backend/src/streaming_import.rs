@@ -16,6 +16,10 @@ use application::{
     valid_identifier::ValidIdentifier,
 };
 use axum::response::IntoResponse;
+use chrono::{
+    DateTime,
+    Utc,
+};
 use common::{
     self,
     components::ComponentPath,
@@ -27,17 +31,20 @@ use common::{
         ExtractRequestMetadata,
         HttpResponseError,
     },
-    schemas::json::DatabaseSchemaJson,
+    schemas::json::{
+        DatabaseSchemaJson,
+        TableDefinitionJson,
+    },
 };
 use errors::ErrorMetadata;
-use fivetran_destination::api_types::{
-    BatchWriteRow,
-    CreateTableArgs,
-    DeleteType,
-    TruncateTableArgs,
-};
 use http::StatusCode;
-use model::snapshot_imports::types::ImportRequestor;
+use model::{
+    fivetran_import::{
+        BatchWriteRow,
+        DeleteType,
+    },
+    snapshot_imports::types::ImportRequestor,
+};
 use roles::RequireDeploymentOp;
 use serde::{
     Deserialize,
@@ -124,6 +131,12 @@ pub async fn get_schema(
     }))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTableArgs {
+    table_definition: TableDefinitionJson,
+}
+
 pub async fn fivetran_create_table(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
@@ -179,6 +192,14 @@ pub async fn clear_tables(
     drop(usage);
 
     Ok(StatusCode::OK)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TruncateTableArgs {
+    table_name: String,
+    delete_before: Option<DateTime<Utc>>,
+    delete_type: DeleteType,
 }
 
 /// Truncates the given table.

@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::bail;
 use big_brain_private_api_types::{
+    validate_project_tag,
     validate_slug,
     ProjectSlug,
 };
@@ -40,7 +41,11 @@ fn parse_project_selector(s: &str) -> anyhow::Result<ProjectSelector> {
         validate_slug(slug).map_err(|e| anyhow::anyhow!("Invalid slug in selector: {e}"))?;
         return Ok(ProjectSelector::Slug(ProjectSlug::from(slug.to_string())));
     }
-    bail!("Invalid selector for project resource: {s} (valid: *, id=value, slug=value)")
+    if let Some(tag) = s.strip_prefix("tag=") {
+        validate_project_tag(tag).map_err(|e| anyhow::anyhow!("Invalid tag in selector: {e}"))?;
+        return Ok(ProjectSelector::Tag(tag.to_string()));
+    }
+    bail!("Invalid selector for project resource: {s} (valid: *, id=value, slug=value, tag=value)")
 }
 
 fn parse_creator_matcher(value: &str) -> anyhow::Result<CreatorMatcher> {
@@ -294,6 +299,7 @@ impl fmt::Display for ProjectSelector {
             ProjectSelector::Any => write!(f, "*"),
             ProjectSelector::Id(id) => write!(f, "id={id}"),
             ProjectSelector::Slug(slug) => write!(f, "slug={slug}"),
+            ProjectSelector::Tag(tag) => write!(f, "tag={tag}"),
         }
     }
 }

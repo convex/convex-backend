@@ -49,6 +49,8 @@ npm-packages/convex/api-extractor-configs/reports
 npm-packages/convex/api-extractor-configs/temp
 # openapi
 npm-packages/convex/src/cli/generatedApi.ts
+# Snapshot written by `schema.test.ts`, which compares it byte for byte
+npm-packages/system-udfs/systemSchema.json
 # Autoformatted by codegen, but with different prettier settings
 npm-packages/**/convex/README.md
 npm-packages/**/convex/_generated/*
@@ -66,8 +68,6 @@ npm-packages/private-demos/react-native
 npm-packages/private-demos/quickstarts/sveltekit
 # Nuxt might be too
 npm-packages/private-demos/quickstarts/nuxt
-# Should match Remix quickstart
-npm-packages/private-demos/quickstarts/remix
 # Should match Vue quickstart
 npm-packages/private-demos/quickstarts/vue
 # Formatting quickstarts generally just isn't a good idea
@@ -78,7 +78,6 @@ npm-packages/private-demos/tanstack-start-clerk
 npm-packages/private-demos/tanstack-start-workos
 # Docs that we sync over to fivetran
 crates/fivetran_source/docs/
-crates/fivetran_destination/docs/
 # Gets modified by tshy
 npm-packages/private-demos/convex_ratelimiter/package.json
 # Codegen for WASM tests

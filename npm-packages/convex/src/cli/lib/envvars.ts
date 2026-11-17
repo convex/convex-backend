@@ -6,7 +6,49 @@ import * as dotenv from "dotenv";
 
 import { Context } from "../../bundler/context.js";
 import { logWarning } from "../../bundler/log.js";
-import { loadPackageJson } from "./utils/utils.js";
+import {
+  CONVEX_DEPLOY_KEY_ENV_VAR_NAME,
+  readDeployKeyEnvVar,
+  ENV_VAR_FILE_PATH,
+  loadPackageJson,
+} from "./utils/utils.js";
+
+export const CONVEX_ACCOUNT_ENV_VAR = "CONVEX_ACCOUNT";
+
+const loadedEnvironment = new Map<string, { value: string; source: string }>();
+
+export function loadProjectEnvironmentVariables() {
+  // Only remove values supplied by our previous load; later shell overrides win.
+  for (const [name, { value }] of loadedEnvironment) {
+    if (process.env[name] === value) delete process.env[name];
+  }
+  loadedEnvironment.clear();
+  const environment: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value !== undefined) environment[name] = value;
+  }
+  for (const file of [ENV_VAR_FILE_PATH, ".env"]) {
+    dotenv.config({ path: file, processEnv: environment });
+    for (const [name, value] of Object.entries(environment)) {
+      // Account selection reads the current project's files directly.
+      if (name !== CONVEX_ACCOUNT_ENV_VAR && process.env[name] === undefined) {
+        process.env[name] = value;
+        loadedEnvironment.set(name, { value, source: file });
+      }
+    }
+  }
+}
+
+export function getDeployKeySource(key: string) {
+  const envVarName =
+    readDeployKeyEnvVar((name) => process.env[name])?.name ??
+    CONVEX_DEPLOY_KEY_ENV_VAR_NAME;
+  const loaded = loadedEnvironment.get(envVarName);
+  return {
+    envVarName,
+    source: loaded?.value === key ? loaded.source : "shell environment",
+  };
+}
 
 const _FRAMEWORKS = [
   "create-react-app",

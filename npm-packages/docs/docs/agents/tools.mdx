@@ -37,6 +37,38 @@ and re-generating if you pass `stopWhen: stepCountIs(num)` where `num > 1` to
 The tool call and result will be stored as messages in the thread associated
 with the source message. See [Messages](./messages.mdx) for more details.
 
+### Stopping the tool loop
+
+The loop stops after a step that makes no tool calls, after a step with a tool
+call still waiting on approval, or when a `stopWhen` condition matches.
+`stopWhen`, on the call or on the Agent, is the control over this. The Agent's
+`maxSteps` option is a fallback: `generateText` and `streamText` turn it into
+`stepCountIs(maxSteps)` only when neither the call nor the Agent sets
+`stopWhen`, and it is not accepted as a call argument. `asTextAction` is the
+exception: a `maxSteps` argument there replaces `stopWhen`.
+
+Conditions in an array are ORed, so the loop stops as soon as any of them holds.
+Pair a tool condition with a step cap, otherwise a model that keeps calling the
+tool without producing the result you wanted will loop until the action times
+out:
+
+```ts
+import { hasSuccessfulToolCall, stepCountIs } from "@convex-dev/agent";
+
+await agent.generateText(
+  ctx,
+  { threadId },
+  {
+    prompt,
+    stopWhen: [hasSuccessfulToolCall("generateImage"), stepCountIs(5)],
+  },
+);
+```
+
+`hasSuccessfulToolCall` matches only when the tool returned a result. The AI
+SDK's `hasToolCall` matches the call even if the tool fails, which can stop the
+loop before the model has a chance to retry.
+
 ## Creating a tool with a Convex context
 
 There are two ways to create a tool that has access to the Convex context.
@@ -47,8 +79,10 @@ There are two ways to create a tool that has access to the Convex context.
 ```ts
 export const ideaSearch = createTool({
   description: "Search for ideas in the database",
-  args: z.object({ query: z.string().describe("The query to search for") }),
-  handler: async (ctx, args, options): Promise<Array<Idea>> => {
+  inputSchema: z.object({
+    query: z.string().describe("The query to search for"),
+  }),
+  execute: async (ctx, args, options): Promise<Array<Idea>> => {
     // ctx has agent, userId, threadId, messageId
     // as well as ActionCtx properties like auth, storage, runMutation, and runAction
     const ideas = await ctx.runQuery(api.ideas.searchIdeas, {
@@ -114,13 +148,54 @@ Then, in your tools, you can use the `orgId` field.
 type MyCtx = ToolCtx & { orgId: string };
 
 const myTool = createTool({
-  args: z.object({ ... }),
+  inputSchema: z.object({ ... }),
   description: "...",
-  handler: async (ctx: MyCtx, args) => {
+  execute: async (ctx: MyCtx, args) => {
     // use ctx.orgId
   },
 });
 ```
+
+## Artifacts and canvases
+
+An artifact (a document, a code file, a canvas) can live in your application's
+tables rather than in message content. One pattern is to store a version per
+edit and give the model tools that write to it:
+
+```ts
+// convex/schema.ts
+artifacts: defineTable({
+  threadId: v.string(),
+  key: v.string(),
+  version: v.number(),
+  content: v.string(),
+}).index("by_threadId_key_version", ["threadId", "key", "version"]),
+```
+
+```ts
+const writeArtifact = createTool({
+  description: "Create or replace the named artifact with new content.",
+  inputSchema: z.object({ key: z.string(), content: z.string() }),
+  execute: async (ctx, { key, content }): Promise<{ version: number }> => {
+    if (!ctx.threadId) throw new Error("writeArtifact requires a thread");
+    return ctx.runMutation(internal.artifacts.write, {
+      threadId: ctx.threadId,
+      key,
+      content,
+    });
+  },
+});
+```
+
+The mutation must authorize the write and allocate the next version. The tool
+result stays small because it contains only the version, while the client reads
+the artifact with `useQuery` and receives updates reactively. Keeping each
+version as a separate row lets the app show earlier edits.
+
+Avoid asking the model to emit the artifact inside special tags in its text. The
+text is stored verbatim and streamed as it arrives, so a half-written tag is
+visible to users, and the parse has to be maintained per model. A tool call is
+validated against a schema and either happens or does not.
 
 ## Using an LLM or Agent as a tool
 
@@ -142,10 +217,10 @@ to the parent thread.
 ```ts
 const llmTool = createTool({
   description: "Ask a question to some LLM",
-  args: z.object({
+  inputSchema: z.object({
     message: z.string().describe("The message to ask the LLM"),
   }),
-  handler: async (ctx, args): Promise<string> => {
+  execute: async (ctx, args, options): Promise<string> => {
     const result = await generateText({
       instructions: "You are a helpful assistant.",
       // Pass through all messages from the current generation
@@ -162,10 +237,10 @@ const llmTool = createTool({
 ```ts
 const agentTool = createTool({
   description: `Ask a question to agent ${agent.name}`,
-  args: z.object({
+  inputSchema: z.object({
     message: z.string().describe("The message to ask the agent"),
   }),
-  handler: async (ctx, args, options): Promise<string> => {
+  execute: async (ctx, args, options): Promise<string> => {
     const { userId } = ctx;
     const { thread } = await agent.createThread(ctx, { userId });
     const result = await thread.generateText(

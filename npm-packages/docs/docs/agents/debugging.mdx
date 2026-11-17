@@ -110,14 +110,14 @@ export const generateTextWithTelemetry = action({
 ```
 
 See the full example in
-[debugging/telemetry.ts](https://github.com/get-convex/agent/blob/main/example/convex/debugging/telemetry.ts).
+[debugging/telemetry.ts](https://github.com/convex/agent/blob/main/example/convex/debugging/telemetry.ts).
 
 ## Inspecting the database in the dashboard
 
 You can go to the Data tab in the dashboard and select the agent component above
 the table list to see the Agent data. The organization of the tables matches the
-[schema](https://github.com/get-convex/agent/blob/main/src/component/schema.ts).
-The most useful tables are:
+[schema](https://github.com/convex/agent/blob/main/src/component/schema.ts). The
+most useful tables are:
 
 - `threads` has one row per thread
 - `messages` has a separate row for each ModelMessage - e.g. a user message,
@@ -138,6 +138,27 @@ If you get type errors about `components.agent`, ensure you've run
 `npx convex dev` to generate code for the component. The types expected by the
 library are in the npm library, and the types for `components.agent` currently
 come from generated code in your project (via `npx convex dev`).
+
+### `dynamic module import unsupported` from an unrelated query
+
+Queries and mutations run in the Convex runtime, which cannot load Node.js
+built-in modules or packages that dynamically import them. If a tool's `execute`
+imports such a package, the whole module that defines the agent fails to load
+there, and the error surfaces from whichever query or mutation imports that
+module, typically the one listing thread messages.
+
+Keep the Node-only work in its own file marked `"use node"` as an
+`internalAction`, and have the tool call it with `ctx.runAction`. The agent
+module then stays loadable from the Convex runtime. To find an import of a Node
+built-in such as `fs`, run this (it requires `--once`):
+
+```sh
+npx convex dev --once --debug-node-apis
+```
+
+It re-bundles each non-`"use node"` entry point and names the first unresolvable
+import. A package that bundles but calls `import()` at runtime will not show up
+here.
 
 ### Circular dependencies
 

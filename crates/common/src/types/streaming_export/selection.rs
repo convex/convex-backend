@@ -6,7 +6,6 @@ use serde::{
     Serialize,
 };
 use utoipa::ToSchema;
-
 use super::SelectionArg;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Eq, PartialEq, ToSchema)]

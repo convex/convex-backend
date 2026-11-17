@@ -115,7 +115,7 @@ If you don’t want to sync all the data from your Convex database, you can excl
 For more information, see our [Data Blocking documentation](/docs/using-fivetran/features/data-blocking-column-hashing).
 
 {% note %}
-Including or excluding a component or table applies retroactively, with no historical re-sync needed. Newly included tables are backfilled from your Convex deployment on the next sync, and tables you exclude are dropped from your destination.
+Newly included components and tables are backfilled from your Convex deployment on the next sync, with no historical re-sync needed. When you exclude a component or table, its synced data stays in your destination and stops updating. Selecting it again truncates and backfills the affected tables from your Convex deployment.
 {% /note %}
 
 {% important %}

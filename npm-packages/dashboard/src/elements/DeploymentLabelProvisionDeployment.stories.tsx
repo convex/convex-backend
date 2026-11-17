@@ -9,6 +9,7 @@ const mockProject: ProjectDetails = {
   slug: "test-project",
   teamId: 1,
   createTime: Date.now(),
+  tags: [],
 };
 
 const meta = {

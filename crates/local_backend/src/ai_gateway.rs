@@ -23,6 +23,8 @@ use common::{
     types::{
         AttributionClaims,
         DeploymentMetadata,
+        ProjectId,
+        TeamId,
     },
 };
 use errors::ErrorMetadata;
@@ -85,6 +87,10 @@ impl AiGatewayJwtMinter for LocalAiGatewayTokenMinter {
     async fn mint(
         &self,
         deployment: &DeploymentMetadata,
+        // Big Brain signs local tokens with the project and team it has
+        // authorized, so the backend's copy isn't needed.
+        _team_id: Option<TeamId>,
+        _project_id: Option<ProjectId>,
         attribution: AttributionClaims,
         _request_id: &RequestId,
     ) -> anyhow::Result<String> {

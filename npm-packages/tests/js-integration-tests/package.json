@@ -18,7 +18,7 @@
     "@jest/types": "^30.0.0",
     "@testing-library/react": "~16.3.0",
     "@types/jest": "^30.0.0",
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@types/node-fetch": "^2.6.1",
     "@types/react": "^19.2.4",
     "@types/ws": "^8.5.13",

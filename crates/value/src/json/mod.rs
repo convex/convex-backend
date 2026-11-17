@@ -102,7 +102,7 @@ pub mod value {
             ConvexValueType::Null => serializer.serialize_unit(),
             ConvexValueType::Int64(n) => {
                 let mut obj = serializer.serialize_map(Some(1))?;
-                obj.serialize_entry("$integer", &JsonInteger::encode(n))?;
+                obj.serialize_entry("$integer", &JsonInteger(n))?;
                 obj.end()
             },
             ConvexValueType::Float64(n) => {
@@ -113,7 +113,7 @@ pub mod value {
                 };
                 if is_special {
                     let mut obj = serializer.serialize_map(Some(1))?;
-                    obj.serialize_entry("$float", &JsonFloat::encode(n))?;
+                    obj.serialize_entry("$float", &JsonFloat(n))?;
                     obj.end()
                 } else {
                     serializer.serialize_f64(n)

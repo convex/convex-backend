@@ -5,7 +5,6 @@ import flatMap from "lodash/flatMap";
 import { useInitialData } from "hooks/useServerSideData";
 import { useAuthHeader } from "hooks/fetching";
 import type { PaginatedDeploymentsResponse } from "@convex-dev/platform/managementApi";
-import { useProfile } from "./profile";
 import { useCurrentProject } from "./projects";
 import {
   useManagementApiInfiniteQuery,
@@ -32,27 +31,6 @@ export function useDeployments(projectId?: number) {
   });
 
   return { deployments: data, isLoading };
-}
-
-export function useDefaultDevDeployment(projectId: number | undefined) {
-  const member = useProfile();
-  const { deployments } = useDeployments(projectId);
-  const cloudDev = deployments?.find(
-    (d) =>
-      d.deploymentType === "dev" &&
-      d.kind === "cloud" &&
-      d.creator === member?.id &&
-      d.isDefault,
-  );
-  const localDev = deployments?.find(
-    (d) =>
-      d.deploymentType === "dev" &&
-      d.kind === "local" &&
-      d.creator === member?.id &&
-      d.isActive,
-  );
-  // Prefer local deployments if they exist.
-  return localDev ?? cloudDev;
 }
 
 export function useCurrentDeployment() {
@@ -135,15 +113,21 @@ export function useDeploymentRegions(teamId: number | undefined) {
   return { regions: data?.items, isLoading };
 }
 
+/**
+ * `notFound` is set when Big Brain says the deployment doesn't exist: it was
+ * deleted, or the member can't view it (Big Brain answers both the same way).
+ */
 export function useDeploymentByName(deploymentName?: string) {
-  const { data: deployment } = useManagementApiQuery({
+  const { data: deployment, error } = useManagementApiQuery({
     path: "/deployments/{deployment_name}",
     pathParams: {
       deployment_name: deploymentName || "",
     },
   });
 
-  return deployment;
+  const notFound =
+    (error as { code?: string } | undefined)?.code === "DeploymentNotFound";
+  return { deployment, notFound };
 }
 
 export function useDeleteDeployment(
@@ -320,10 +304,8 @@ export function useInfiniteDeployments(
     }
   }, [debouncedQuery, projectId, setSize]);
 
-  const deployments = useMemo(
-    () => flatMap(data?.map((page) => page.items)),
-    [data],
-  );
+  const pages = useMemo(() => data?.map((page) => page.items) ?? [], [data]);
+  const deployments = useMemo(() => flatMap(pages), [pages]);
 
   const hasMore = data?.[data.length - 1]?.pagination.hasMore ?? false;
 
@@ -340,6 +322,8 @@ export function useInfiniteDeployments(
 
   return {
     deployments,
+    // The raw pages, for callers that transform each page separately.
+    pages,
     isLoading,
     isLoadingMore,
     hasMore,

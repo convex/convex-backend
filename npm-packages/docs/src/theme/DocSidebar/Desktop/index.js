@@ -28,9 +28,9 @@ function DocSidebarDesktop({ path, sidebar, onCollapse, isHidden }) {
           <Link href="/home">
             <svg
               className="convex-docs-title"
-              width="220"
-              height="150"
-              viewBox="0 0 220 150"
+              width="53"
+              height="37.5"
+              viewBox="3 0 212 150"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
             >

@@ -697,10 +697,12 @@ impl<RT: Runtime> CacheManager<RT> {
                     },
                     Ok((path_and_args, returns_validator, visibility_info)) => {
                         let component = path_and_args.path().component;
+                        let permit = self.function_router.acquire_permit(UdfType::Query).await?;
                         let (mut tx, outcome) = self
                             .function_router
                             .execute_query_or_mutation(
                                 tx,
+                                permit,
                                 path_and_args,
                                 UdfType::Query,
                                 journal.clone(),

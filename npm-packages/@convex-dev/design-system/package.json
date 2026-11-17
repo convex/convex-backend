@@ -5,7 +5,7 @@
   "sideEffects": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/@convex-dev/design-system"
   },
   "files": [
@@ -14,8 +14,8 @@
   ],
   "scripts": {
     "build": "tsc && tsc -p tsconfig.publish.json && tsc-alias -p tsconfig.publish.json && mkdir -p dist/styles && cp src/styles/shared.css dist/styles/shared.css",
-    "lint": "bash ../../dashboard-common/scripts/checkNode22.sh && npx --prefix ../../lint eslint . --config ../../lint/eslint.config.mjs --cache",
-    "lint:fix": "bash ../../dashboard-common/scripts/checkNode22.sh && npx --prefix ../../lint eslint --fix . --config ../../lint/eslint.config.mjs --cache",
+    "lint": "bash ../../dashboard-common/scripts/checkNode24.sh && npx --prefix ../../lint eslint . --config ../../lint/eslint.config.mjs --cache",
+    "lint:fix": "bash ../../dashboard-common/scripts/checkNode24.sh && npx --prefix ../../lint eslint --fix . --config ../../lint/eslint.config.mjs --cache",
     "prepack": "node src/scripts/dont-publish-alpha-as-latest.mjs"
   },
   "peerDependencies": {
@@ -46,17 +46,17 @@
     "@testing-library/react": "~16.3.0",
     "@testing-library/user-event": "~14.6.0",
     "@types/jest": "^30.0.0",
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@types/react": "^19.2.4",
     "@types/react-dom": "^19.2.3",
     "@types/testing-library__jest-dom": "~5.14.5",
-    "@storybook/nextjs": "^10.5.10",
-    "next": "^16.3.8",
+    "@storybook/nextjs": "^10.6.2",
+    "next": "^16.4.6",
     "jest": "^30.0.0",
     "jest-environment-jsdom": "^30.0.0",
     "jsdom-testing-mocks": "^1.16.0",
     "postcss": "^8.5.18",
-    "storybook": "^10.5.10",
+    "storybook": "^10.6.2",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.2",
     "tsc-alias": "~1.9.0",
@@ -74,6 +74,14 @@
     "./Checkbox": {
       "import": "./dist/Checkbox.jsx",
       "types": "./dist/Checkbox.d.ts"
+    },
+    "./Chip": {
+      "import": "./dist/Chip.jsx",
+      "types": "./dist/Chip.d.ts"
+    },
+    "./ChipInput": {
+      "import": "./dist/ChipInput.jsx",
+      "types": "./dist/ChipInput.d.ts"
     },
     "./ConfirmationDialog": {
       "import": "./dist/ConfirmationDialog.jsx",

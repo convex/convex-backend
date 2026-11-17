@@ -1,0 +1,9 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      // The build script only typechecks; it emits no files.
+      "outputs": []
+    }
+  }
+}

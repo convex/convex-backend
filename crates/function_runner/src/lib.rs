@@ -12,11 +12,9 @@ use std::{
 use async_trait::async_trait;
 use common::{
     auth::AuthConfig,
-    bootstrap_model::components::definition::ComponentDefinitionMetadata,
     components::{
         ComponentDefinitionPath,
-        ComponentName,
-        Resource,
+        ResolvedComponentFunctionPath,
     },
     document::PendingDocumentUpdate,
     errors::JsError,
@@ -30,6 +28,7 @@ use common::{
     types::{
         IndexId,
         RepeatableTimestamp,
+        UdfRuntime,
         UdfType,
     },
 };
@@ -65,13 +64,13 @@ use sync_types::{
 };
 use tokio::sync::mpsc;
 use udf::{
+    validation::ValidatedPathAndArgs,
     ActionCallbacks,
     EvaluateAppDefinitionsResult,
     FunctionOutcome,
 };
 use usage_tracking::FunctionUsageStats;
 use value::{
-    identifier::Identifier,
     ResolvedDocumentId,
     TabletId,
 };
@@ -87,6 +86,7 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
     async fn run_function(
         &self,
         udf_type: UdfType,
+        udf_runtime: Option<UdfRuntime>,
         identity: Identity,
         ts: RepeatableTimestamp,
         existing_writes: FunctionWrites,
@@ -99,6 +99,21 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
     ) -> anyhow::Result<(
         Option<FunctionFinalTransaction>,
         FunctionOutcome,
+        FunctionUsageStats,
+    )>;
+
+    async fn run_component_inits(
+        &self,
+        identity: Identity,
+        ts: RepeatableTimestamp,
+        existing_writes: FunctionWrites,
+        path_and_args: Vec<ValidatedPathAndArgs>,
+        default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
+        in_memory_index_last_modified: BTreeMap<IndexId, Timestamp>,
+        context: ExecutionContext,
+    ) -> anyhow::Result<(
+        FunctionFinalTransaction,
+        BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>,
         FunctionUsageStats,
     )>;
 
@@ -117,15 +132,6 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
         user_environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
         system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
     ) -> anyhow::Result<EvaluateAppDefinitionsResult>;
-
-    async fn evaluate_component_initializer(
-        &self,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-        path: ComponentDefinitionPath,
-        definition: ModuleConfig,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>>;
 
     async fn evaluate_schema(
         &self,

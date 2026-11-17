@@ -459,6 +459,7 @@ export async function deployToDeployment(
     skipWorkosCheck?: boolean | undefined;
     skipLargeIndexesCheck: boolean;
     allowDeletingLargeIndexes: boolean;
+    allowUnstagingSchema: boolean;
     message: string | null;
   },
 ) {
@@ -510,6 +511,9 @@ export async function deployToDeployment(
         ? "has confirmation"
         : "ask for confirmation",
     largeIndexBackfillCheck: options.skipLargeIndexesCheck
+      ? "has confirmation"
+      : "ask for confirmation",
+    stagedValidatorDeletionCheck: options.allowUnstagingSchema
       ? "has confirmation"
       : "ask for confirmation",
     warnOnSlowSchemaValidation: true,

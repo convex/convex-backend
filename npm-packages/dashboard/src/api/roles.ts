@@ -35,28 +35,6 @@ export function useHasProjectAdminPermissions(projectId?: number): boolean {
   );
 }
 
-export function useHasProjectAdminPermissionsForProject(): (
-  projectId: number,
-) => boolean {
-  const isTeamAdmin = useIsCurrentMemberTeamAdmin();
-  const { projectRoles } = useProjectRoles();
-  const profile = useProfile();
-  if (isTeamAdmin) {
-    return () => true;
-  }
-
-  return (projectId: number) => {
-    const filteredProjectRoles = projectRoles?.filter(
-      (r) => r.projectId === projectId,
-    );
-    return (
-      filteredProjectRoles?.some(
-        (role) => role.role === "admin" && role.memberId === profile?.id,
-      ) ?? false
-    );
-  };
-}
-
 export function useProjectRoles() {
   const team = useCurrentTeam();
   const teamId = team?.id;

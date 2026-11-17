@@ -111,12 +111,7 @@ impl<RT: Runtime> TaskExecutor<RT> {
                 Some(file_name) => {
                     let file_name = Some(file_name.to_string());
                     let content_type = field.content_type().map(|c| c.to_string());
-                    let data = field
-                        .bytes()
-                        .await
-                        .map_err(map_multer_error)?
-                        .to_vec()
-                        .into();
+                    let data = field.bytes().await.map_err(map_multer_error)?;
                     (
                         Some(FormPartFile {
                             content_type,

@@ -64,6 +64,11 @@ use common::{
     },
     pause::Fault,
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
         new_idle_repeatable_ts,
         ConflictStrategy,
         DocumentLogEntry,
@@ -148,6 +153,7 @@ use indexing::{
         IndexCacheHandleBuilder,
     },
     index_reader::{
+        AttributedIndexReader,
         IndexEntry,
         IndexReader,
     },
@@ -429,17 +435,29 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
         persistence_snapshot: &PersistenceSnapshot,
         index: IndexRef,
         tablet_id: TabletId,
+        table: TableName,
+        caller: IndexScanCaller,
     ) -> anyhow::Result<(Vec<(Timestamp, PackedDocument)>, Vec<ParsedDocument<D>>)> {
-        persistence_snapshot
-            .index_scan(index, tablet_id, &Interval::all(), Order::Asc, usize::MAX)
-            .map(|row| {
-                let rev = row?.1;
-                let doc = PackedDocument::pack(&rev.value);
-                let parsed = rev.value.parse()?;
-                Ok(((rev.ts, doc), parsed))
-            })
-            .try_collect()
-            .await
+        attribute_index_scan(
+            persistence_snapshot.index_scan(
+                index,
+                tablet_id,
+                &Interval::all(),
+                Order::Asc,
+                usize::MAX,
+            ),
+            caller,
+            IndexScanKind::ById,
+            Some(table),
+        )
+        .map(|row| {
+            let rev = row?.1;
+            let doc = PackedDocument::pack(&rev.value);
+            let parsed = rev.value.parse()?;
+            Ok(((rev.ts, doc), parsed))
+        })
+        .try_collect()
+        .await
     }
 
     fn load_table_documents<T: SystemTable>(
@@ -494,6 +512,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
     #[fastrace::trace]
     pub async fn load_table_and_index_metadata(
         persistence_snapshot: &PersistenceSnapshot,
+        caller: IndexScanCaller,
     ) -> anyhow::Result<(
         TableMapping,
         OrdMap<TabletId, TableState>,
@@ -515,12 +534,16 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             persistence_snapshot,
             index_by_id,
             index_tablet_id,
+            INDEX_TABLE,
+            caller,
         )
         .await?;
         let (table_documents, parsed_table_documents) = Self::load_raw_and_parsed_table_documents(
             persistence_snapshot,
             tables_by_id,
             tables_tablet_id,
+            TABLES_TABLE,
+            caller,
         )
         .await?;
 
@@ -806,7 +829,8 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             table_documents,
             index_documents,
             bootstrap_metadata,
-        ) = Self::load_table_and_index_metadata(&persistence_snapshot).await?;
+        ) = Self::load_table_and_index_metadata(&persistence_snapshot, IndexScanCaller::Bootstrap)
+            .await?;
 
         // Step 2: Load bootstrap tables indexes into memory.
         let load_indexes_into_memory_timer = load_indexes_into_memory_timer();
@@ -910,6 +934,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             self.retention_validator.clone(),
             self.ts,
             BootstrapKind::FromCheckpoint,
+            IndexScanCaller::Bootstrap,
         )
         .await?;
         let table_counts = TableCounts::new(
@@ -990,7 +1015,12 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             self.snapshot.index_registry.clone(),
             Arc::new(NoInMemoryIndexes),
             self.snapshot.table_registry.table_mapping().clone(),
-            Arc::new(self.persistence_snapshot.clone()),
+            Arc::new(AttributedIndexReader::new(
+                self.persistence_snapshot.clone(),
+                IndexScanCaller::Transaction,
+                Some(self.snapshot.index_registry.clone()),
+                Some(self.snapshot.table_registry.table_mapping().clone()),
+            )),
             self.index_cache_handle.clone(),
             None,
         );
@@ -1016,27 +1046,6 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             usage_tracker,
             virtual_system_mapping,
         ))
-    }
-}
-
-pub struct StreamingExportFilter {
-    pub selection: StreamingExportSelection,
-    pub include_hidden: bool,
-    pub include_system: bool,
-}
-
-impl Default for StreamingExportFilter {
-    fn default() -> Self {
-        Self {
-            selection: StreamingExportSelection::default(),
-            // Allow snapshot imports to be streamed by default.
-            // Note this behavior is kind of odd for `--require-empty` imports
-            // because the rows are streamed before they are committed to Convex,
-            // and it's very strange for `--replace` imports because the imported
-            // rows are merged with existing rows.
-            include_hidden: true,
-            include_system: false,
-        }
     }
 }
 
@@ -1217,6 +1226,7 @@ impl<RT: Runtime> Database<RT> {
             self.retention_validator(),
             ts,
             BootstrapKind::FromCheckpoint,
+            IndexScanCaller::TableShapes,
         )
         .await?;
         Ok(Some(Arc::new(snapshot.into())))
@@ -1347,12 +1357,14 @@ impl<RT: Runtime> Database<RT> {
         min_ts: RepeatableTimestamp,
         page_size: usize,
     ) -> LatestTableIterator<RT> {
+        let database = self.clone();
         LatestTableIterator::new(
             self.runtime.clone(),
             min_ts,
             self.reader.clone(),
             self.retention_validator(),
             page_size,
+            Arc::new(move || database.now_ts_for_reads()),
         )
     }
 
@@ -1778,7 +1790,16 @@ impl<RT: Runtime> Database<RT> {
             } else {
                 self.index_ref_at(snapshot.as_ref(), index.id())?
             };
-            let mut reader = Arc::new(persistence_snapshot) as Arc<dyn IndexReader>;
+            let mut reader = Arc::new(AttributedIndexReader::new(
+                persistence_snapshot,
+                IndexScanCaller::FunctionRunner,
+                snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.index_registry.clone()),
+                snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.table_registry.table_mapping().clone()),
+            )) as Arc<dyn IndexReader>;
             if let Some(snapshot) = snapshot {
                 // TODO: it is probably OK to still use the index cache even if
                 // we don't have an index_registry at the same timestamp.
@@ -1850,9 +1871,7 @@ impl<RT: Runtime> Database<RT> {
             let result = async {
                 let t = f(&mut tx).0.await?;
                 let func_end_time = Instant::now();
-                let ts = self
-                    .commit_with_write_source(tx, write_source.clone())
-                    .await?;
+                let ts = self.commit(tx, write_source.clone()).await?;
                 let commit_end_time = Instant::now();
                 Ok((ts, t, func_end_time, commit_end_time))
             }
@@ -2042,14 +2061,17 @@ impl<RT: Runtime> Database<RT> {
                 snapshot.index_registry.clone(),
                 Arc::new(snapshot.in_memory_indexes),
                 snapshot.table_registry.table_mapping().clone(),
-                Arc::new(
+                Arc::new(AttributedIndexReader::new(
                     RepeatablePersistence::new(
                         self.reader.clone(),
                         repeatable_ts,
                         self.retention_manager.clone(),
                     )
                     .read_snapshot(repeatable_ts)?,
-                ),
+                    IndexScanCaller::Transaction,
+                    Some(snapshot.index_registry.clone()),
+                    Some(snapshot.table_registry.table_mapping().clone()),
+                )),
                 Some(self.index_cache_handle.clone()),
                 index_cache,
             ),
@@ -2129,7 +2151,7 @@ impl<RT: Runtime> Database<RT> {
     }
 
     #[fastrace::trace]
-    pub async fn commit_with_write_source(
+    pub async fn commit(
         &self,
         transaction: Transaction<RT>,
         write_source: impl Into<WriteSource>,
@@ -2176,8 +2198,16 @@ impl<RT: Runtime> Database<RT> {
         Ok(invalid_ts)
     }
 
-    fn streaming_export_table_filter(
-        filter: &StreamingExportFilter,
+    /// Whether the legacy `document_deltas` / `list_snapshot` APIs export
+    /// `tablet_id`.
+    ///
+    /// We allow snapshot imports to be streamed by default.
+    /// Note this behavior is kind of odd for `--require-empty` imports
+    /// because the rows are streamed before they are committed to Convex,
+    /// and it's very strange for `--replace` imports because the imported
+    /// rows are merged with existing rows.
+    fn legacy_streaming_export_table_filter(
+        selection: &StreamingExportSelection,
         tablet_id: TabletId,
         table_mapping: &TableMapping,
         component_paths: &BTreeMap<ComponentId, ComponentPath>,
@@ -2186,10 +2216,7 @@ impl<RT: Runtime> Database<RT> {
             // Always exclude deleted tablets.
             return Ok(false);
         }
-        if !filter.include_system && table_mapping.is_system_tablet(tablet_id) {
-            return Ok(false);
-        }
-        if !filter.include_hidden && !table_mapping.is_active(tablet_id) {
+        if table_mapping.is_system_tablet(tablet_id) {
             return Ok(false);
         }
 
@@ -2202,9 +2229,7 @@ impl<RT: Runtime> Database<RT> {
             return Ok(false);
         };
 
-        Ok(filter
-            .selection
-            .is_table_included(component_path, table_name))
+        Ok(selection.is_table_included(component_path, table_name))
     }
 
     #[fastrace::trace]
@@ -2212,7 +2237,7 @@ impl<RT: Runtime> Database<RT> {
         &self,
         identity: Identity,
         cursor: Option<Timestamp>,
-        filter: StreamingExportFilter,
+        selection: StreamingExportSelection,
         rows_read_limit: usize,
         rows_returned_limit: usize,
     ) -> anyhow::Result<DocumentDeltas> {
@@ -2288,8 +2313,8 @@ impl<RT: Runtime> Database<RT> {
                 new_cursor = Some(ts);
             }
             // Skip deltas for system and non-selected tables.
-            if Self::streaming_export_table_filter(
-                &filter,
+            if Self::legacy_streaming_export_table_filter(
+                &selection,
                 id.table(),
                 &table_mapping,
                 &component_paths,
@@ -2302,9 +2327,7 @@ impl<RT: Runtime> Database<RT> {
                     .cloned()
                     .unwrap_or_else(ComponentPath::root);
                 let id = DeveloperDocumentId::new(table_number, id.internal_id());
-                let column_filter = filter
-                    .selection
-                    .column_filter(&component_path, &table_name)?;
+                let column_filter = selection.column_filter(&component_path, &table_name)?;
                 let filtered_doc = maybe_doc
                     .map(|doc| column_filter.filter_document(doc.to_developer()))
                     .transpose()?;
@@ -2345,7 +2368,7 @@ impl<RT: Runtime> Database<RT> {
         identity: Identity,
         snapshot: Option<Timestamp>,
         cursor: Option<ResolvedDocumentId>,
-        filter: StreamingExportFilter,
+        selection: StreamingExportSelection,
         rows_read_limit: usize,
         rows_returned_limit: usize,
     ) -> anyhow::Result<SnapshotPage> {
@@ -2393,8 +2416,8 @@ impl<RT: Runtime> Database<RT> {
                     return None;
                 }
 
-                match Self::streaming_export_table_filter(
-                    &filter,
+                match Self::legacy_streaming_export_table_filter(
+                    &selection,
                     tablet_id,
                     &table_mapping,
                     &component_paths,
@@ -2527,9 +2550,7 @@ impl<RT: Runtime> Database<RT> {
                 .get(&component_id)
                 .cloned()
                 .unwrap_or_else(ComponentPath::root);
-            let column_filter = filter
-                .selection
-                .column_filter(&component_path, &table_name)?;
+            let column_filter = selection.column_filter(&component_path, &table_name)?;
 
             let filtered_doc = column_filter.filter_document(doc.to_developer())?;
 
@@ -2719,7 +2740,6 @@ impl<RT: Runtime> Database<RT> {
         let index_name = query.index_name.clone();
         let index_size = index.metadata().config.estimate_pricing_size_bytes()?;
         let resolved: vector::InternalVectorSearch = query.resolve(&table_mapping)?;
-        let dimensions = resolved.vector.len() as u64;
         let search_storage = self.search_storage();
         let results: Vec<_> = snapshot
             .vector_indexes
@@ -2738,7 +2758,7 @@ impl<RT: Runtime> Database<RT> {
             .component_registry
             .must_component_path(component_id, &mut TransactionReadSet::new())?;
         usage.track_vector_egress(component_path.clone(), index_name.table(), size);
-        usage.track_vector_query(component_path, index_name, index_size, dimensions);
+        usage.track_vector_query(component_path, index_name, index_size);
         timer.finish();
         Ok((results, usage.gather_user_stats()))
     }

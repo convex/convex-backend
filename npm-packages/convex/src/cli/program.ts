@@ -1,5 +1,6 @@
 import { Command } from "@commander-js/extra-typings";
 import { aiFiles } from "./aiFiles.js";
+import { account } from "./account.js";
 import { auth } from "./auth.js";
 import { codegen } from "./codegen.js";
 import { convexExport } from "./convexExport.js";
@@ -21,6 +22,7 @@ import { logout } from "./logout.js";
 import { logs } from "./logs.js";
 import { mcp } from "./mcp.js";
 import { networkTest } from "./network_test.js";
+import { plugins } from "./plugins.js";
 import { project } from "./project.js";
 import { reinit } from "./reinit.js";
 import { run } from "./run.js";
@@ -56,12 +58,14 @@ export function buildProgram() {
       .addCommand(codegen)
       .addCommand(update)
       .addCommand(logout)
+      .addCommand(account)
       .addCommand(networkTest, { hidden: true })
       .addCommand(integration, { hidden: true })
       .addCommand(functionSpec)
       .addCommand(insights)
       .addCommand(mcp)
       .addCommand(aiFiles)
+      .addCommand(plugins)
       .helpCommand("help <command>", "Show help for given <command>")
       .version(version)
       // Hide version and help so they don't clutter

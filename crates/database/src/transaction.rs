@@ -984,7 +984,6 @@ impl<RT: Runtime> Transaction<RT> {
             .get_component_path(component_id, &mut self.reads))
     }
 
-    // XXX move to table model?
     async fn table_number_for_system_table(
         &mut self,
         namespace: TableNamespace,
@@ -1536,7 +1535,7 @@ pub struct FinalTransaction {
     pub(crate) table_mapping: TableMapping,
     pub(crate) component_registry: ComponentRegistry,
 
-    pub(crate) reads: TransactionReadSet,
+    pub(crate) reads: Arc<TransactionReadSet>,
     pub(crate) writes: Writes,
 
     pub(crate) usage_tracker: FunctionUsageTracker,
@@ -1551,13 +1550,14 @@ impl FinalTransaction {
     fn new<RT: Runtime>(transaction: Transaction<RT>) -> anyhow::Result<Self> {
         // All subtransactions must have committed or rolled back.
         transaction.require_not_nested()?;
+        transaction.file_uploads.require_no_pending()?;
 
         let begin_timestamp = transaction.begin_timestamp();
         Ok(Self {
             begin_timestamp,
             table_mapping: transaction.metadata.into_flat()?.table_mapping().clone(),
             component_registry: transaction.component_registry.into_flat()?,
-            reads: transaction.reads,
+            reads: Arc::new(transaction.reads),
             writes: transaction.writes.into_flat()?,
             usage_tracker: transaction.usage_tracker,
 

@@ -9,6 +9,7 @@ import * as Yup from "yup";
 import { useCopy } from "@common/lib/useCopy";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { TEAM_SETTINGS_SECTIONS } from "lib/sectionAnchors";
+import { SLUG_CHARSET } from "lib/slugs";
 
 export type TeamSlugFormProps = {
   team: TeamResponse;
@@ -21,7 +22,7 @@ const TeamSlugSchema = Yup.object().shape({
     .min(3, "Team slug must be at least 3 characters long.")
     .max(64, "Team slug must be at most 64 characters long.")
     .matches(
-      /^[\w-]+$/,
+      SLUG_CHARSET,
       "Team slug may contain numbers, letters, underscores, and '-'.",
     )
     .required(),

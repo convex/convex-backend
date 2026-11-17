@@ -546,6 +546,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Only return projects with this tag. This parameter can be provided more than once to match projects with any of several tags",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         ],
         "responses": {
@@ -1462,6 +1474,81 @@
         }
       }
     },
+    "/teams/{team_id}/legacy_admin_key_usage": {
+      "get": {
+        "summary": "Legacy admin key settings and usage for a team",
+        "operationId": "get_team_legacy_admin_key_usage",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamLegacyAdminKeyUsageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/disable_legacy_admin_keys": {
+      "post": {
+        "summary": "Disable legacy admin keys for a team's deployments",
+        "description": "Deployments start rejecting legacy admin keys once their cached\nauthorization results expire, within a minute.",
+        "operationId": "disable_team_legacy_admin_keys",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/deployments/{deployment_name}/legacy_admin_key_usage": {
+      "get": {
+        "summary": "When a deployment last used a legacy admin key",
+        "operationId": "get_deployment_legacy_admin_key_usage",
+        "parameters": [
+          {
+            "name": "deployment_name",
+            "in": "path",
+            "description": "Deployment name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentLegacyAdminKeyUsageResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/teams/{team_id}/cancel_orb_subscription": {
       "post": {
         "operationId": "cancel_orb_subscription",
@@ -1598,6 +1685,58 @@
                       "$ref": "#/components/schemas/OrbSubscriptionResponse"
                     }
                   ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/teams/{team_id}/get_prices": {
+      "get": {
+        "tags": [
+          "alpha"
+        ],
+        "operationId": "get_prices",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Inclusive lower bound in YYYY-MM-DD format, using UTC.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Inclusive upper bound in YYYY-MM-DD format, using UTC.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetPricesResponse"
                 }
               }
             }
@@ -2051,49 +2190,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TeamCurrentBillingPeriodResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/teams/{team_slug}/usage/get_token_info": {
-      "get": {
-        "operationId": "get_token_info",
-        "parameters": [
-          {
-            "name": "team_slug",
-            "in": "path",
-            "description": "",
-            "required": true
-          },
-          {
-            "name": "from",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            },
-            "style": "form"
-          },
-          {
-            "name": "to",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            },
-            "style": "form"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GetTokenInfoResponse"
                 }
               }
             }
@@ -4221,6 +4317,28 @@
           }
         }
       },
+      "CurrentPlanPriceResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MetricPriceRate"
+          },
+          {
+            "type": "object",
+            "required": [
+              "includedUnits",
+              "roundUpUnits"
+            ],
+            "properties": {
+              "includedUnits": {
+                "type": "string"
+              },
+              "roundUpUnits": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
       "CustomRoleId": {
         "type": "integer",
         "format": "int64",
@@ -4373,6 +4491,19 @@
         "type": "integer",
         "format": "int64",
         "minimum": 0
+      },
+      "DeploymentLegacyAdminKeyUsageResponse": {
+        "type": "object",
+        "properties": {
+          "lastUsedTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the deployment last accepted a legacy admin key, in milliseconds\nsince the epoch, or `null` if it never has. Recorded at most once a\nminute."
+          }
+        }
       },
       "DeploymentReference": {
         "type": "string",
@@ -4818,6 +4949,85 @@
           }
         }
       },
+      "GetPricesPeriodResponse": {
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "plan",
+          "metrics"
+        ],
+        "properties": {
+          "start": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "end": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/GetPricesPlanResponse"
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/CurrentPlanPriceResponse"
+            },
+            "propertyNames": {
+              "type": "string",
+              "enum": [
+                "aiGatewayCostDollars",
+                "searchQueryGb",
+                "dataEgressGb",
+                "actionComputeCpuGbHours",
+                "databaseIoGb",
+                "actionComputeNodeJsGbHours",
+                "queryMutationComputeGbHours",
+                "actionComputeConvexGbHours",
+                "functionCalls",
+                "auditLogBandwidthGb",
+                "databaseStorageGb",
+                "activeDeployments",
+                "fileStorageGb",
+                "searchStorageGb"
+              ]
+            }
+          }
+        }
+      },
+      "GetPricesPlanResponse": {
+        "type": "object",
+        "required": [
+          "planType"
+        ],
+        "properties": {
+          "planType": {
+            "type": "string"
+          }
+        }
+      },
+      "GetPricesResponse": {
+        "type": "object",
+        "required": [
+          "currency",
+          "periods"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "periods": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GetPricesPeriodResponse"
+            }
+          }
+        }
+      },
       "GetProjectEnvironmentResponse": {
         "type": "object",
         "description": "Response for getting a project WorkOS environment with credentials - matches\nProvisionProjectEnvironmentResponse pattern with workos_ prefix",
@@ -4893,49 +5103,6 @@
                 "$ref": "#/components/schemas/SpendingLimitsState"
               }
             ]
-          }
-        }
-      },
-      "GetTokenInfoResponse": {
-        "type": "object",
-        "required": [
-          "tokensUsed",
-          "tokensQuota",
-          "centitokensUsed",
-          "centitokensQuota",
-          "isTeamDisabled",
-          "isPaidPlan",
-          "planType"
-        ],
-        "properties": {
-          "tokensUsed": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "tokensQuota": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "centitokensUsed": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "centitokensQuota": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0
-          },
-          "isTeamDisabled": {
-            "type": "boolean"
-          },
-          "isPaidPlan": {
-            "type": "boolean"
-          },
-          "planType": {
-            "type": "string"
           }
         }
       },
@@ -5143,6 +5310,23 @@
           },
           "teamSlug": {
             "type": "string"
+          }
+        }
+      },
+      "LegacyAdminKeyDeploymentUsage": {
+        "type": "object",
+        "required": [
+          "deploymentName",
+          "lastUsedTime"
+        ],
+        "properties": {
+          "deploymentName": {
+            "type": "string"
+          },
+          "lastUsedTime": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds since the epoch. Recorded at most once a minute."
           }
         }
       },
@@ -5363,6 +5547,98 @@
             ]
           }
         }
+      },
+      "MetricPriceAmount": {
+        "type": "object",
+        "required": [
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "type": "string"
+          },
+          "percentageDiscount": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "consumedUnits": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "MetricPriceRate": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "rate"
+            ],
+            "properties": {
+              "rate": {
+                "$ref": "#/components/schemas/MetricPriceAmount"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/RegionalRates"
+          },
+          {
+            "type": "object",
+            "required": [
+              "deploymentClassRate"
+            ],
+            "properties": {
+              "deploymentClassRate": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": [
+                    "regionRate"
+                  ],
+                  "properties": {
+                    "regionRate": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "required": [
+                          "amount"
+                        ],
+                        "properties": {
+                          "amount": {
+                            "type": "string"
+                          },
+                          "percentageDiscount": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "format": "double"
+                          },
+                          "consumedUnits": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "format": "double"
+                          }
+                        }
+                      },
+                      "minProperties": 1
+                    }
+                  }
+                },
+                "minProperties": 1
+              }
+            }
+          }
+        ]
       },
       "MfaStatusResponse": {
         "type": "object",
@@ -5949,7 +6225,8 @@
           "name",
           "slug",
           "teamId",
-          "createTime"
+          "createTime",
+          "tags"
         ],
         "properties": {
           "id": {
@@ -5979,6 +6256,24 @@
               "string",
               "null"
             ]
+          },
+          "prodDeploymentReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "devDeploymentReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -6247,6 +6542,43 @@
           "aws-ap-southeast-2"
         ]
       },
+      "RegionalRates": {
+        "type": "object",
+        "required": [
+          "regionRate"
+        ],
+        "properties": {
+          "regionRate": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "amount"
+              ],
+              "properties": {
+                "amount": {
+                  "type": "string"
+                },
+                "percentageDiscount": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "format": "double"
+                },
+                "consumedUnits": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "format": "double"
+                }
+              }
+            },
+            "minProperties": 1
+          }
+        }
+      },
       "RegisterOauthAppArgs": {
         "type": "object",
         "required": [
@@ -6325,7 +6657,7 @@
           },
           "resource": {
             "type": "string",
-            "description": "Resource path like `project:*`, `project:slug=my-app`, or\n`project:*:deployment:type=prod`.",
+            "description": "Resource path like `project:*`, `project:slug=my-app`,\n`project:tag=prod`, or `project:*:deployment:type=prod`.",
             "example": "project:*"
           }
         }
@@ -6380,6 +6712,7 @@
           "team:domain:create",
           "team:domain:delete",
           "team:domain:view",
+          "team:projectTags:view",
           "team:token:create",
           "team:token:update",
           "team:token:delete",
@@ -6926,6 +7259,29 @@
         "type": "integer",
         "format": "int64",
         "minimum": 0
+      },
+      "TeamLegacyAdminKeyUsageResponse": {
+        "type": "object",
+        "required": [
+          "deployments"
+        ],
+        "properties": {
+          "disabledTime": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the team disabled legacy admin keys, in milliseconds since the\nepoch, or `null` if they are allowed."
+          },
+          "deployments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LegacyAdminKeyDeploymentUsage"
+            },
+            "description": "The deployments that most recently used a legacy admin key while owned\nby this team, most recent first, up to 100."
+          }
+        }
       },
       "TeamMemberCustomRole": {
         "type": "object",

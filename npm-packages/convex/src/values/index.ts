@@ -31,6 +31,7 @@ export type {
   VFloat64,
   VInt64,
   VCommitTs,
+  VFunction,
   VBoolean,
   VBytes,
   VString,

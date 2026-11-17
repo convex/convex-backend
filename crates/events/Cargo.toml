@@ -6,7 +6,7 @@ edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
 [package.metadata.cargo-machete]
-ignored = ["proptest", "proptest-derive"]
+ignored = ["proptest"]
 
 [features]
 testing = ["common", "common/testing", "parking_lot", "proptest", "proptest-derive"]

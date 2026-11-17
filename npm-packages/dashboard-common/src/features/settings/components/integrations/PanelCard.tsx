@@ -182,15 +182,24 @@ export function PanelCard({
         <div className="flex flex-wrap items-center justify-between gap-2">
           {isModalOpen &&
             renderForm(integration, closeModal, onAddedIntegration)}
-          <IntegrationTitle
-            logo={logo}
-            integrationKind={integration.kind}
-            description={
-              integration.kind === "s3Export"
-                ? ANALYTICS_EXPORT_DESCRIPTION
-                : LOG_STREAMS_DESCRIPTION
-            }
-          />
+          <div className="flex min-w-0 flex-col gap-1">
+            <IntegrationTitle
+              logo={logo}
+              integrationKind={integration.kind}
+              description={
+                integration.kind === "s3Export"
+                  ? ANALYTICS_EXPORT_DESCRIPTION
+                  : LOG_STREAMS_DESCRIPTION
+              }
+            />
+            {integration.kind === "s3Export" && integration.existing && (
+              <p className="truncate font-mono text-xs text-content-secondary">
+                s3://{integration.existing.config.bucket}/
+                {integration.existing.config.prefix ?? ""} ·{" "}
+                {integration.existing.config.region}
+              </p>
+            )}
+          </div>
           <div className="flex items-center gap-4">
             {integration.kind === "s3Export" && integration.existing ? (
               <S3ExportStatus existing={integration.existing} />

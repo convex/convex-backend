@@ -72,8 +72,8 @@ See [here](/ops/services/docs/release.md#preview-deployment).
 ## Updating the Component docs
 
 The Component docs are in the /docs folder of the Components that we keep in
-sync. For example, https://github.com/get-convex/component/tree/main/docs To
-update them, run the following command in this directory:
+sync. For example, https://github.com/convex/component/tree/main/docs To update
+them, run the following command in this directory:
 
 ```sh
 node scripts/pull-component-docs.js
@@ -86,13 +86,37 @@ code snippets.
 This is a manual process and generally only needs to be done when the component
 docs change and there is a new release of the component package.
 
+## Updating the Convex Auth docs
+
+The Convex Auth docs live in `packages/docs/docs` of
+https://github.com/convex/convex-auth. Its `publish-docs` workflow attaches them
+to the GitHub Release of each release tag as `convex-auth-docs.tar.gz`, with the
+API reference generated and the code blocks inlined. To update them, run the
+following command with the release tag to publish:
+
+```sh
+just import-convex-auth-docs <tag>
+```
+
+or, in this directory, `node scripts/import-convex-auth-docs.js <tag>`.
+
+This downloads and checks that archive, then replaces `docs/auth/convex-auth`
+with the guides and `docs/convex-auth-api` with the API reference, prefixing the
+site-absolute links of the guides with `/auth/convex-auth`. It runs no code of
+the Convex Auth repo. Check in the result.
+
+To correct the imported docs between releases, edit `docs/auth/convex-auth` or
+`docs/convex-auth-api` here and make the same change in the Convex Auth repo.
+The next import replaces both directories, so a correction made only here is
+reverted then; check the import's diff for removed fixes.
+
 # Dependency notes
 
 These typedoc plugins are forked because they didn't work when the monorepo used
 Rush. FIXME: they might work unforked now that this is a plain pnpm workspace.
 
 We needed to update a couple, so we forked them at
-https://github.com/get-convex/typedoc-plugin-markdown
+https://github.com/convex/typedoc-plugin-markdown
 
 Iterating on typedoc plugins is rough, typedoc implements their own module
 resolution such that our pnpm workspace setup doesn't work. So to iterate I

@@ -4,8 +4,9 @@
   `document_deltas`. Existing connections migrate automatically and keep their
   data — no historical resync is required.
 - Changing the table, schema, or component selection now applies retroactively:
-  newly selected tables are backfilled and deselected ones are dropped from the
-  destination, without a historical resync.
+  newly selected tables are backfilled without a historical resync. Deselected
+  tables keep their synced data in the destination and stop updating. Reselected
+  tables are truncated and backfilled.
 - Requires a Convex backend that serves `/api/v1/data/sync`. Self-hosted
   deployments older than that must be upgraded.
 

@@ -7,7 +7,7 @@ your product.
 
 Get started at [docs.convex.dev](https://docs.convex.dev)!
 
-Or see [Convex demos](https://github.com/get-convex/convex-demos).
+Or see [Convex demos](https://github.com/convex/convex-demos).
 
 Open discussions and issues in this repository about Convex
 TypeScript/JavaScript clients, the Convex CLI, or the Convex platform in

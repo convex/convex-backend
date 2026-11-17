@@ -4,6 +4,8 @@ use common::{
     types::{
         AttributionClaims,
         DeploymentMetadata,
+        ProjectId,
+        TeamId,
     },
 };
 
@@ -15,6 +17,8 @@ pub trait AiGatewayJwtMinter: Send + Sync {
     async fn mint(
         &self,
         deployment: &DeploymentMetadata,
+        team_id: Option<TeamId>,
+        project_id: Option<ProjectId>,
         attribution: AttributionClaims,
         request_id: &RequestId,
     ) -> anyhow::Result<String>;

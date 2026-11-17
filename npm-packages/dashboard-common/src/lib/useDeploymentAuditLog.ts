@@ -66,6 +66,7 @@ function processDeploymentAuditLogEvent(
     case "cancel_all_scheduled_functions":
     case "cancel_scheduled_function":
     case "request_export":
+    case "download_export":
     case "cancel_export":
     case "set_export_expiration":
     case "create_integration":

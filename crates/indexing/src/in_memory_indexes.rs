@@ -40,7 +40,14 @@ use common::{
         IndexKeyBytes,
     },
     interval::Interval,
-    persistence::PersistenceSnapshot,
+    persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
+        PersistenceSnapshot,
+    },
     query::Order,
     static_span,
     types::{
@@ -194,7 +201,7 @@ impl BackendInMemoryIndexes {
         indexes.retain(|index| {
             !self
                 .in_memory_indexes
-                .contains_key(&index.id().internal_id().into())
+                .contains_key(&IndexId::from(index.id().internal_id()))
         });
         if indexes.is_empty() {
             // Already loaded in memory.
@@ -223,16 +230,20 @@ impl BackendInMemoryIndexes {
         }
 
         // Read the table using an arbitrary index from the list
-        let entries: Vec<_> = snapshot
-            .index_scan(
+        let entries: Vec<_> = attribute_index_scan(
+            snapshot.index_scan(
                 IndexRef::try_from(&indexes[0])?,
                 tablet_id,
                 &Interval::all(),
                 Order::Asc,
                 usize::MAX,
-            )
-            .try_collect()
-            .await?;
+            ),
+            IndexScanCaller::InMemoryIndexLoad,
+            IndexScanKind::Unknown,
+            None,
+        )
+        .try_collect()
+        .await?;
         let mut num_keys: usize = 0;
         let mut total_size: usize = 0;
         let mut index_maps = vec![DatabaseIndexMap::new_at(*snapshot.timestamp()); indexes.len()];
@@ -310,7 +321,7 @@ impl BackendInMemoryIndexes {
         {
             // Drop the index from memory.
             self.in_memory_indexes
-                .remove(&old_document.id().internal_id().into());
+                .remove(&IndexId::from(old_document.id().internal_id()));
         }
 
         // Build up the list of updates to apply to all database indexes.

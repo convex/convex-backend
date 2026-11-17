@@ -7,10 +7,10 @@
 import { appendFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-// The get-convex/ai-gateway-models-probe project proxies the
+// The convex/ai-gateway-models-probe project proxies the
 // gateway's `GET /v1/models` because that endpoint needs a service token this
 // workflow does not have.
-// See https://github.com/get-convex/ai-gateway-models-probe
+// See https://github.com/convex/ai-gateway-models-probe
 const MODELS_ENDPOINT = "https://modest-hyena-982.convex.cloud/api/action";
 
 // Display names for the providers we know. A prefix missing here is still

@@ -14,7 +14,6 @@ use database::{
     streaming_export_selection::StreamingExportSelection,
     DocumentDeltas,
     SnapshotPage,
-    StreamingExportFilter,
 };
 use errors::ErrorMetadata;
 use keybroker::Identity;
@@ -30,6 +29,7 @@ use model::{
     deployment_audit_log::types::DeploymentAuditLogEvent,
 };
 use streaming_export::{
+    DataSync,
     DataSyncClient,
     SyncCursor,
     SyncResult,
@@ -62,10 +62,7 @@ impl<RT: Runtime> Application<RT> {
             .document_deltas(
                 identity,
                 Some(cursor),
-                StreamingExportFilter {
-                    selection,
-                    ..Default::default()
-                },
+                selection,
                 *DOCUMENT_DELTAS_LIMIT,
                 *DOCUMENT_DELTAS_LIMIT,
             )
@@ -81,16 +78,16 @@ impl<RT: Runtime> Application<RT> {
         sync_client: DataSyncClient,
         request_metadata: RequestMetadata,
     ) -> anyhow::Result<SyncResult> {
-        let result = streaming_export::data_sync(
-            &self.database.latest_database_snapshot()?,
+        let snapshot = self.database.latest_database_snapshot()?;
+        let iterator = snapshot.data_sync_iterator()?;
+        let result = DataSync::new(
+            &snapshot,
+            &iterator,
             identity.clone(),
-            cursor,
-            StreamingExportFilter {
-                selection,
-                ..Default::default()
-            },
+            selection,
             sync_client,
-        )
+        )?
+        .next(cursor)
         .await?;
         self.record_data_sync_progress(&result, identity, &request_metadata)
             .await?;
@@ -111,10 +108,7 @@ impl<RT: Runtime> Application<RT> {
             &self.database.latest_database_snapshot()?,
             identity,
             cursor,
-            StreamingExportFilter {
-                selection,
-                ..Default::default()
-            },
+            selection,
             sync_client,
         )
         .await
@@ -245,9 +239,7 @@ impl<RT: Runtime> Application<RT> {
                     // A throttled update leaves the transaction empty; skip
                     // the commit to avoid loading the DB with a no-op write.
                     if !tx.is_readonly() {
-                        self.database
-                            .commit_with_write_source(tx, "data_sync_progress")
-                            .await?;
+                        self.database.commit(tx, "data_sync_progress").await?;
                     }
                 },
             }
@@ -279,10 +271,7 @@ impl<RT: Runtime> Application<RT> {
                 identity,
                 snapshot,
                 cursor,
-                StreamingExportFilter {
-                    selection,
-                    ..Default::default()
-                },
+                selection,
                 *SNAPSHOT_LIST_LIMIT,
                 *SNAPSHOT_LIST_LIMIT,
             )

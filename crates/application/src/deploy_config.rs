@@ -12,7 +12,6 @@ use std::{
 };
 
 use anyhow::Context;
-use async_trait::async_trait;
 use common::{
     auth::AuthInfo,
     bootstrap_model::{
@@ -28,9 +27,7 @@ use common::{
     components::{
         ComponentDefinitionPath,
         ComponentId,
-        ComponentName,
         ComponentPath,
-        Resource,
     },
     errors::JsError,
     execution_context::RequestMetadata,
@@ -101,7 +98,6 @@ use model::{
         file_based_routing::file_based_exports,
         type_checking::{
             CheckedComponent,
-            InitializerEvaluator,
             TypecheckContext,
         },
         types::{
@@ -135,6 +131,8 @@ use model::{
     },
     source_packages::{
         types::{
+            check_node_default_memory_mb_for_push,
+            check_node_default_memory_mb_supported,
             NodeVersion,
             NodeVersionDiff,
             SourcePackage,
@@ -159,7 +157,6 @@ use udf::{
 };
 use usage_tracking::FunctionUsageTracker;
 use value::{
-    identifier::Identifier,
     sha256::Sha256Digest,
     DeveloperDocumentId,
     ResolvedDocumentId,
@@ -203,6 +200,12 @@ struct EvaluatedPushContents {
 impl<RT: Runtime> Application<RT> {
     #[fastrace::trace]
     pub async fn start_push(&self, config: &ProjectConfig) -> anyhow::Result<StartPushResult> {
+        if let Some(memory_mb) = config.node_default_memory_mb {
+            check_node_default_memory_mb_supported(
+                memory_mb,
+                self.runner().supported_node_memory_mb(),
+            )?;
+        }
         let EvaluatedPushContents {
             app,
             auth_info,
@@ -329,18 +332,10 @@ impl<RT: Runtime> Application<RT> {
         // Build and typecheck the component tree. We don't strictly need to do this
         // before `/finish_push`, but it's better to fail fast here on errors before
         // waiting for schema backfills to complete.
-        let initializer_evaluator = ApplicationInitializerEvaluator::new(
-            self,
-            config,
-            evaluated_components
-                .iter()
-                .map(|(k, v)| (k.clone(), v.definition.clone()))
-                .collect(),
-        )?;
         let ctx = if config.for_codegen {
-            TypecheckContext::new_for_codegen(&evaluated_components, &initializer_evaluator)
+            TypecheckContext::new_for_codegen(&evaluated_components)
         } else {
-            TypecheckContext::new(&evaluated_components, &initializer_evaluator)
+            TypecheckContext::new(&evaluated_components)
         };
         let app = ctx.instantiate_root().await?;
 
@@ -1021,10 +1016,10 @@ impl<RT: Runtime> Application<RT> {
             .unwrap_or_default();
 
         let source_package = self
-            .upload_package(&modules, external_deps_id_and_pkg, node_version)
+            .upload_package(&modules, external_deps_id_and_pkg, node_version, None)
             .await?;
         let end_upload_source_package = Instant::now();
-        // Verify that we have not exceeded the max zipped or unzipped file size
+        // Verify that we have not exceeded the max unzipped file size
         let combined_pkg_size = source_package.package_size + external_deps_pkg_size;
         combined_pkg_size.verify_size()?;
 
@@ -1093,61 +1088,6 @@ impl<RT: Runtime> Application<RT> {
     }
 }
 
-struct ApplicationInitializerEvaluator<'a, RT: Runtime> {
-    application: &'a Application<RT>,
-    component_definitions: BTreeMap<ComponentDefinitionPath, ModuleConfig>,
-    evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-}
-
-impl<'a, RT: Runtime> ApplicationInitializerEvaluator<'a, RT> {
-    fn new(
-        application: &'a Application<RT>,
-        config: &'a ProjectConfig,
-        evaluated_definitions: BTreeMap<ComponentDefinitionPath, ComponentDefinitionMetadata>,
-    ) -> anyhow::Result<Self> {
-        let mut component_definitions = BTreeMap::new();
-        for component_definition in &config.component_definitions {
-            anyhow::ensure!(component_definitions
-                .insert(
-                    component_definition.definition_path.clone(),
-                    component_definition.definition.clone(),
-                )
-                .is_none());
-        }
-        Ok(Self {
-            application,
-            component_definitions,
-            evaluated_definitions,
-        })
-    }
-}
-
-#[async_trait]
-impl<RT: Runtime> InitializerEvaluator for ApplicationInitializerEvaluator<'_, RT> {
-    async fn evaluate(
-        &self,
-        path: ComponentDefinitionPath,
-        args: BTreeMap<Identifier, Resource>,
-        name: ComponentName,
-    ) -> anyhow::Result<BTreeMap<Identifier, Resource>> {
-        let component_definition = self
-            .component_definitions
-            .get(&path)
-            .context(format!("Missing component definition for {path:?}"))?
-            .clone();
-        self.application
-            .runner
-            .evaluate_component_initializer(
-                self.evaluated_definitions.clone(),
-                path,
-                component_definition,
-                args,
-                name,
-            )
-            .await
-    }
-}
-
 fn validate_env_var_declarations(
     evaluated_components: &BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
 ) -> anyhow::Result<()> {
@@ -1196,6 +1136,9 @@ pub struct StartPushRequest {
     pub node_version: Option<String>,
 
     #[serde(default)]
+    pub node_default_memory_mb: Option<u32>,
+
+    #[serde(default)]
     pub dry_run: bool,
 
     /// Indicates that this request is only for codegen and isn't initiating a
@@ -1206,17 +1149,13 @@ pub struct StartPushRequest {
 
 impl StartPushRequest {
     pub fn into_project_config(self) -> anyhow::Result<ProjectConfig> {
-        let proposed_node_version: Option<NodeVersion> =
-            self.node_version.map(|v| v.parse()).transpose()?;
-        let node_version = match proposed_node_version {
-            Some(NodeVersion::V18x) => {
-                anyhow::bail!(ErrorMetadata::bad_request(
-                    "NodeVersionNotSupported",
-                    "Node 18 is no longer supported. Upgrade to a newer Node version (https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version)."
-                ))
-            },
-            version => version,
-        };
+        let node_version: Option<NodeVersion> = self.node_version.map(|v| v.parse()).transpose()?;
+        if let Some(node_version) = node_version {
+            node_version.check_supported_for_push()?;
+        }
+        if let Some(memory_mb) = self.node_default_memory_mb {
+            check_node_default_memory_mb_for_push(memory_mb)?;
+        }
 
         Ok(ProjectConfig {
             config: ConfigMetadata {
@@ -1235,6 +1174,7 @@ impl StartPushRequest {
                 .map(NodeDependency::from)
                 .collect(),
             node_version,
+            node_default_memory_mb: self.node_default_memory_mb,
             dry_run: self.dry_run,
             for_codegen: self.for_codegen,
         })

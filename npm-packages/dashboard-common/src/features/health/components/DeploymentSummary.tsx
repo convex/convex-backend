@@ -344,7 +344,7 @@ export function DeploymentSummary({
                       size="xs"
                       inline
                       aria-label="Convex NPM Package Upgrade Available"
-                      href="https://github.com/get-convex/convex-js/blob/main/CHANGELOG.md#changelog"
+                      href="https://github.com/convex/convex-js/blob/main/CHANGELOG.md#changelog"
                       target="_blank"
                       // eslint-disable-next-line no-restricted-syntax -- manual Link-Button hybrid implementation
                       className="h-5 text-content-link"

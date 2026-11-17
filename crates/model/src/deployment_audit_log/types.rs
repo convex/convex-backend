@@ -46,6 +46,10 @@ use value::{
     TableName,
 };
 
+use super::integration_config::{
+    IntegrationAuditConfig,
+    IntegrationAuditCredentialChanges,
+};
 use crate::{
     auth::types::AuthDiff,
     backend_state::types::OldBackendState,
@@ -73,6 +77,21 @@ use crate::{
 };
 
 pub const DEPLOYMENT_AUDIT_LOG_TABLE: TableName = TableName::const_new("_deployment_audit_log");
+
+#[derive(Default, Serialize, Deserialize)]
+struct IntegrationAuditMetadata {
+    id: String,
+    #[serde(rename = "type")]
+    r#type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    config: Option<IntegrationAuditConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous: Option<IntegrationAuditConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current: Option<IntegrationAuditConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    credential_changes: Option<IntegrationAuditCredentialChanges>,
+}
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AuditLogIndexDiff {
@@ -231,6 +250,13 @@ pub enum DeploymentAuditLogEvent {
         format: String,
         requestor: String,
     },
+    DownloadExport {
+        id: String,
+        component_id: Option<String>,
+        component: ComponentPath,
+        format: String,
+        requestor: String,
+    },
     CancelExport {
         id: String,
     },
@@ -241,14 +267,19 @@ pub enum DeploymentAuditLogEvent {
     CreateIntegration {
         id: String,
         r#type: String,
+        config: Option<IntegrationAuditConfig>,
     },
     UpdateIntegration {
         id: String,
         r#type: String,
+        previous: Option<IntegrationAuditConfig>,
+        current: Option<IntegrationAuditConfig>,
+        credential_changes: Option<IntegrationAuditCredentialChanges>,
     },
     DeleteIntegration {
         id: String,
         r#type: String,
+        config: Option<IntegrationAuditConfig>,
     },
     // System UDF audit events (from dashboard mutations)
     AddDocuments {
@@ -549,6 +580,13 @@ impl DeploymentAuditLogEvent {
                 component,
                 format,
                 requestor,
+            }
+            | DeploymentAuditLogEvent::DownloadExport {
+                id,
+                component_id,
+                component,
+                format,
+                requestor,
             } => {
                 obj!(
                     "id" => id,
@@ -567,15 +605,29 @@ impl DeploymentAuditLogEvent {
             } => {
                 obj!("id" => id, "expiration_ts_ms" => expiration_ts_ms)
             },
-            DeploymentAuditLogEvent::CreateIntegration { id, r#type } => {
-                obj!("id" => id, "type" => r#type)
+            DeploymentAuditLogEvent::CreateIntegration { id, r#type, config }
+            | DeploymentAuditLogEvent::DeleteIntegration { id, r#type, config } => {
+                value::serde::to_object(IntegrationAuditMetadata {
+                    id: id.clone(),
+                    r#type: r#type.clone(),
+                    config: config.clone(),
+                    ..Default::default()
+                })
             },
-            DeploymentAuditLogEvent::UpdateIntegration { id, r#type } => {
-                obj!("id" => id, "type" => r#type)
-            },
-            DeploymentAuditLogEvent::DeleteIntegration { id, r#type } => {
-                obj!("id" => id, "type" => r#type)
-            },
+            DeploymentAuditLogEvent::UpdateIntegration {
+                id,
+                r#type,
+                previous,
+                current,
+                credential_changes,
+            } => value::serde::to_object(IntegrationAuditMetadata {
+                id: id.clone(),
+                r#type: r#type.clone(),
+                previous: previous.clone(),
+                current: current.clone(),
+                credential_changes: credential_changes.clone(),
+                ..Default::default()
+            }),
             DeploymentAuditLogEvent::AddDocuments {
                 component_id,
                 component,
@@ -1013,6 +1065,22 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
                     requestor,
                 }
             },
+            "download_export" => {
+                let id = remove_string(&mut fields, "id")?;
+                let component_id = remove_nullable_string(&mut fields, "component_id")?;
+                let component = ComponentPath::deserialize(
+                    remove_nullable_string(&mut fields, "component")?.as_deref(),
+                )?;
+                let format = remove_string(&mut fields, "format")?;
+                let requestor = remove_string(&mut fields, "requestor")?;
+                DeploymentAuditLogEvent::DownloadExport {
+                    id,
+                    component_id,
+                    component,
+                    format,
+                    requestor,
+                }
+            },
             "cancel_export" => {
                 let id = remove_string(&mut fields, "id")?;
                 DeploymentAuditLogEvent::CancelExport { id }
@@ -1026,19 +1094,33 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
                 }
             },
             "create_integration" => {
-                let id = remove_string(&mut fields, "id")?;
-                let r#type = remove_string(&mut fields, "type")?;
-                DeploymentAuditLogEvent::CreateIntegration { id, r#type }
+                let metadata: IntegrationAuditMetadata =
+                    value::serde::from_object(fields.try_into()?)?;
+                DeploymentAuditLogEvent::CreateIntegration {
+                    id: metadata.id,
+                    r#type: metadata.r#type,
+                    config: metadata.config,
+                }
             },
             "update_integration" => {
-                let id = remove_string(&mut fields, "id")?;
-                let r#type = remove_string(&mut fields, "type")?;
-                DeploymentAuditLogEvent::UpdateIntegration { id, r#type }
+                let metadata: IntegrationAuditMetadata =
+                    value::serde::from_object(fields.try_into()?)?;
+                DeploymentAuditLogEvent::UpdateIntegration {
+                    id: metadata.id,
+                    r#type: metadata.r#type,
+                    previous: metadata.previous,
+                    current: metadata.current,
+                    credential_changes: metadata.credential_changes,
+                }
             },
             "delete_integration" => {
-                let id = remove_string(&mut fields, "id")?;
-                let r#type = remove_string(&mut fields, "type")?;
-                DeploymentAuditLogEvent::DeleteIntegration { id, r#type }
+                let metadata: IntegrationAuditMetadata =
+                    value::serde::from_object(fields.try_into()?)?;
+                DeploymentAuditLogEvent::DeleteIntegration {
+                    id: metadata.id,
+                    r#type: metadata.r#type,
+                    config: metadata.config,
+                }
             },
             "add_documents" => {
                 let component_id = remove_nullable_string(&mut fields, "component_id")?;

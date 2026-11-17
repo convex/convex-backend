@@ -357,7 +357,7 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
             .replace(id, new_metadata.try_into()?)
             .await?;
         self.database
-            .commit_with_write_source(
+            .commit(
                 tx,
                 match T::search_type() {
                     SearchType::Vector => "search_index_metadata_writer_write_vector",

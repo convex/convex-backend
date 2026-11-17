@@ -21,7 +21,7 @@ jobs:
       - name: Node setup
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
-          node-version: "20.20.2"
+          node-version: "24.22.3"
 
       - name: NPM v10
         run: npm install -g npm@10 --registry=https://registry.npmjs.org

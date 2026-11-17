@@ -23,6 +23,11 @@ use common::{
         TABLE_ITERATOR_MAX_RETRIES,
     },
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
         new_static_repeatable_recent,
         DocumentLogEntry,
         DocumentPrevTsQuery,
@@ -60,6 +65,8 @@ use value::{
     InternalId,
     TabletId,
 };
+
+use crate::metrics::page_timer;
 
 /// A cursor for use while scanning a table by ID.
 ///
@@ -238,7 +245,17 @@ pub struct LatestTableIterator<RT: Runtime> {
     persistence: Arc<dyn PersistenceReader>,
     retention_validator: Arc<dyn RetentionValidator>,
     page_size: usize,
+    latest_ts_source: LatestTsSource,
 }
+
+/// Supplies the "recent" half of a page's read timestamp, saving the
+/// persistence round trip that reading the persisted max repeatable timestamp
+/// would cost per page. It must return timestamps that are repeatable, within
+/// retention, and weakly monotonic across calls;
+/// `Database::now_ts_for_reads` qualifies because the committer publishes a
+/// timestamp only after its writes are durable, and it is at least the
+/// persisted repeatable timestamp.
+pub type LatestTsSource = Arc<dyn Fn() -> RepeatableTimestamp + Send + Sync>;
 
 impl<RT: Runtime> LatestTableIterator<RT> {
     pub fn new(
@@ -247,6 +264,7 @@ impl<RT: Runtime> LatestTableIterator<RT> {
         persistence: Arc<dyn PersistenceReader>,
         retention_validator: Arc<dyn RetentionValidator>,
         page_size: usize,
+        latest_ts_source: LatestTsSource,
     ) -> Self {
         Self {
             runtime,
@@ -254,6 +272,7 @@ impl<RT: Runtime> LatestTableIterator<RT> {
             persistence,
             retention_validator,
             page_size,
+            latest_ts_source,
         }
     }
 
@@ -270,6 +289,7 @@ impl<RT: Runtime> LatestTableIterator<RT> {
                 &self.retention_validator,
                 self.page_size,
                 self.min_ts,
+                Some(&self.latest_ts_source),
                 by_id,
                 tablet_id,
                 &mut cursor,
@@ -636,6 +656,7 @@ impl<RT: Runtime> TableIteratorInner<RT> {
             &self.retention_validator,
             self.page_size,
             self.snapshot_ts,
+            None,
             index_id,
             tablet_id,
             cursor,
@@ -644,8 +665,8 @@ impl<RT: Runtime> TableIteratorInner<RT> {
     }
 
     /// Load the revisions of documents visible at `self.snapshot_ts`.
-    /// Documents are yielded in the same order as input, skipping duplicates
-    /// and documents that didn't exist at the snapshot.
+    /// Documents are yielded in the same order as input, skipping documents
+    /// that didn't exist at the snapshot. Input ids must be unique.
     #[try_stream(ok = LatestDocument, error = anyhow::Error)]
     async fn load_revisions_at_snapshot_ts<'a>(
         &'a self,
@@ -859,6 +880,9 @@ impl Deref for IterationDocuments {
 /// 3. each page is repeatable, as the max of repeatable timestamps;
 /// 4. each page is within retention, since `new_static_repeatable_recent` is.
 ///
+/// A `latest_ts_source` replaces `new_static_repeatable_recent` and must
+/// satisfy the same properties (see [`LatestTsSource`]).
+///
 /// Reads that fall out of retention or time out are retried at a fresh
 /// timestamp up to `TABLE_ITERATOR_MAX_RETRIES` times.
 #[fastrace::trace]
@@ -867,6 +891,7 @@ async fn fetch_page(
     retention_validator: &Arc<dyn RetentionValidator>,
     page_size: usize,
     min_ts: RepeatableTimestamp,
+    latest_ts_source: Option<&LatestTsSource>,
     index_id: IndexRef,
     tablet_id: TabletId,
     cursor: &mut TableScanCursor,
@@ -875,18 +900,30 @@ async fn fetch_page(
     // forever.
     anyhow::ensure!(page_size > 0, "table iterator page size must be positive");
     for attempt in 0.. {
-        let recent_ts = new_static_repeatable_recent(persistence.as_ref()).await?;
+        let recent_ts = {
+            let _timer = page_timer("ts");
+            match latest_ts_source {
+                Some(source) => source(),
+                None => new_static_repeatable_recent(persistence.as_ref()).await?,
+            }
+        };
         let ts = cmp::max(min_ts, recent_ts);
         let repeatable_persistence =
             RepeatablePersistence::new(persistence.clone(), ts, retention_validator.clone());
         let reader = repeatable_persistence.read_snapshot(ts)?;
-        let stream = reader.index_scan(
-            index_id,
-            tablet_id,
-            &cursor.interval(),
-            Order::Asc,
-            page_size,
+        let stream = attribute_index_scan(
+            reader.index_scan(
+                index_id,
+                tablet_id,
+                &cursor.interval(),
+                Order::Asc,
+                page_size,
+            ),
+            IndexScanCaller::TableIterator,
+            IndexScanKind::Unknown,
+            None,
         );
+        let scan_timer = page_timer("scan");
         let documents_in_page: Vec<_> = match stream.take(page_size).try_collect().await {
             Ok(docs) => docs,
             Err(e)
@@ -898,6 +935,7 @@ async fn fetch_page(
             },
             Err(e) => return Err(e),
         };
+        drop(scan_timer);
         if documents_in_page.len() < page_size {
             cursor.advance(CursorPosition::End)?;
         } else if let Some((index_key, ..)) = documents_in_page.last() {

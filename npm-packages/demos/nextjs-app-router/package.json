@@ -6,12 +6,13 @@
     "dev": "convex dev --start 'next dev'",
     "build": "tsc && next build 2>&1",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "lint:ci": "npm run lint -- --max-warnings=0"
   },
   "dependencies": {
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "next": "^15.5.27",
+    "next": "^15.5.28",
     "convex": "workspace:*"
   },
   "devDependencies": {
@@ -20,7 +21,7 @@
     "@eslint/eslintrc": "^3",
     "@radix-ui/react-slot": "^1.0.2",
     "@tailwindcss/postcss": "^4.3.3",
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@types/react-dom": "^19.2.3",
     "@types/react": "^19.2.4",
     "class-variance-authority": "^0.7.0",

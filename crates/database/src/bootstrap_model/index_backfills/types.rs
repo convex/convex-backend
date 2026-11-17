@@ -11,6 +11,7 @@ use value::{
 /// Cursor for a database index that has an in-progress backfill
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct BackfillCursor {
+    /// Snapshot used by the current scan, refreshed on resume for diagnostics.
     pub snapshot_ts: Timestamp,
     pub cursor: Option<DeveloperDocumentId>,
 }

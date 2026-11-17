@@ -1,0 +1,39 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 1
+title: From Convex Auth v1
+description: Migrating from Convex Auth v1.
+---
+
+## What’s new in Convex Auth v2?
+
+Convex Auth v2 is the supported path forward for applications that need
+authentication on the Convex platform. It was built from the ground up using
+components and security best-practices. It does not attempt to wrap or depend on
+any other third-party auth library or framework.
+
+At launch, it actually has fewer features than Convex Auth v1, so some
+applications may not be able to migrate right away.
+
+New features/behavior:
+
+- Username + passkey sign-in method
+  - Including passkey management (list/add/remove)
+- Built-in email verification with the email + password sign-in method
+  - Support for changing and adding verified email addresses
+- No need for managing private/public keys for token signing
+- Auth data encapsulated in components, not spread in your application tables
+- Dedicated React client support for each sign-in method
+- Type safety from the backend to the frontend
+
+## How to migrate?
+
+:::warning
+
+Migration tooling will be available soon.
+
+:::

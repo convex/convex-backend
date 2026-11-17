@@ -358,6 +358,20 @@ impl From<SerializedExportFormat> for ExportFormat {
     }
 }
 
+impl ExportFormat {
+    /// The format string recorded in deployment audit log events.
+    pub fn audit_log_format(&self) -> &'static str {
+        match self {
+            ExportFormat::Zip {
+                include_storage: true,
+            } => "zip_with_storage",
+            ExportFormat::Zip {
+                include_storage: false,
+            } => "zip",
+        }
+    }
+}
+
 codegen_convex_serialization!(ExportFormat, SerializedExportFormat);
 
 #[derive(Copy, Clone, Debug, PartialEq, strum::EnumString, strum::Display)]

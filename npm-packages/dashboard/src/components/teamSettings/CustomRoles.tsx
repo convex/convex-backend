@@ -135,7 +135,8 @@ const CREATOR_VAL = "(self|[0-9]+)";
 // accepts one of these four values, so typos like `type=production` get
 // flagged in the editor instead of failing on save.
 const DEPLOYMENT_TYPE_VAL = "(dev|prod|preview|custom)";
-const projectSel = `(\\*|id=${SELECTOR_VAL}|slug=${SELECTOR_VAL})`;
+const TAG_VAL = "([\\w-]|[^\\x00-\\x7F]){1,32}";
+const projectSel = `(\\*|id=${SELECTOR_VAL}|slug=${SELECTOR_VAL}|tag=${TAG_VAL})`;
 const deploymentSel = `(\\*|id=${SELECTOR_VAL}|type=${DEPLOYMENT_TYPE_VAL}|creator=${CREATOR_VAL})`;
 const tokenSel = `(\\*|creator=${CREATOR_VAL})`;
 const csv = (sel: string) => `${sel}(,${sel})*`;

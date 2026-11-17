@@ -67,7 +67,7 @@
           "Environment Variables"
         ],
         "summary": "List environment variables",
-        "description": "Get all environment variables in a deployment.\nIn the future this might not include \"secret\" environment\nvariables.",
+        "description": "Get the environment variables in a deployment that aren't secrets.",
         "operationId": "list_environment_variables",
         "responses": {
           "200": {
@@ -498,24 +498,32 @@
         ]
       }
     },
-    "/list_log_streams": {
-      "get": {
+    "/integrations/{id}/rotate_webhook_secret": {
+      "post": {
         "tags": [
-          "Log Streams"
+          "Integrations"
         ],
-        "summary": "List log streams",
-        "description": "List configs for all existing log streams in a deployment.",
-        "operationId": "list_log_streams",
+        "summary": "Rotate webhook integration secret",
+        "description": "Rotate the secret for the webhook integration.",
+        "operationId": "rotate_integration_webhook_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "id of the webhook integration for which to rotate the secret",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/LogStreamConfig"
-                  }
+                  "$ref": "#/components/schemas/RotateLogStreamSecretResponse"
                 }
               }
             }
@@ -537,19 +545,19 @@
         ]
       }
     },
-    "/get_log_stream/{id}": {
+    "/integrations/{id}": {
       "get": {
         "tags": [
-          "Log Streams"
+          "Integrations"
         ],
-        "summary": "Get log stream",
-        "description": "Get the config for a specific log stream by id.",
-        "operationId": "get_log_stream",
+        "summary": "Get integration",
+        "description": "Get the config for a specific integration by id.",
+        "operationId": "get_integration",
         "parameters": [
           {
             "name": "id",
             "in": "path",
-            "description": "id of the log stream to retrieve",
+            "description": "id of the integration to retrieve",
             "required": true,
             "schema": {
               "type": "string"
@@ -582,21 +590,19 @@
             "OAuth Project Token": []
           }
         ]
-      }
-    },
-    "/delete_log_stream/{id}": {
-      "post": {
+      },
+      "delete": {
         "tags": [
-          "Log Streams"
+          "Integrations"
         ],
-        "summary": "Delete log stream",
-        "description": "Delete the deployment's log stream with the given id.",
-        "operationId": "delete_log_stream",
+        "summary": "Delete integration",
+        "description": "Delete the deployment's integration with the given id.",
+        "operationId": "delete_integration",
         "parameters": [
           {
             "name": "id",
             "in": "path",
-            "description": "id of the log stream to delete",
+            "description": "id of the integration to delete",
             "required": true,
             "schema": {
               "type": "string"
@@ -622,16 +628,101 @@
             "OAuth Project Token": []
           }
         ]
+      },
+      "patch": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "Update integration",
+        "description": "Update an existing integration for the deployment. Omit a field to keep the\nexisting value, and use `null` to unset a field. For S3 exports, `null`\nkeeps the existing value too.",
+        "operationId": "update_integration",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "id of the integration to update",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLogStreamArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
       }
     },
-    "/create_log_stream": {
+    "/integrations": {
+      "get": {
+        "tags": [
+          "Integrations"
+        ],
+        "summary": "List integrations",
+        "description": "List configs for all existing integrations in a deployment.",
+        "operationId": "list_integrations",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LogStreamConfig"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      },
       "post": {
         "tags": [
-          "Log Streams"
+          "Integrations"
         ],
-        "summary": "Create log stream",
-        "description": "Create a new log stream for the deployment. Errors if a log stream of the\ngiven type already exists.",
-        "operationId": "create_log_stream",
+        "summary": "Create integration",
+        "description": "Create a new integration for the deployment. Errors if a integration of the\ngiven type already exists.",
+        "operationId": "create_integration",
         "requestBody": {
           "content": {
             "application/json": {
@@ -670,13 +761,189 @@
         ]
       }
     },
+    "/list_log_streams": {
+      "get": {
+        "tags": [
+          "Log Streams"
+        ],
+        "summary": "List log streams",
+        "description": "List configs for all existing log streams in a deployment.\n\nDeprecated: use `GET /integrations` instead.",
+        "operationId": "list_log_streams",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LogStreamConfig"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "deprecated": true,
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/get_log_stream/{id}": {
+      "get": {
+        "tags": [
+          "Log Streams"
+        ],
+        "summary": "Get log stream",
+        "description": "Get the config for a specific log stream by id.\n\nDeprecated: use `GET /integrations/{id}` instead.",
+        "operationId": "get_log_stream",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "id of the log stream to retrieve",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogStreamConfig"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": true,
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/delete_log_stream/{id}": {
+      "post": {
+        "tags": [
+          "Log Streams"
+        ],
+        "summary": "Delete log stream",
+        "description": "Delete the deployment's log stream with the given id.\n\nDeprecated: use `DELETE /integrations/{id}` instead.",
+        "operationId": "delete_log_stream",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "id of the log stream to delete",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "deprecated": true,
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
+    "/create_log_stream": {
+      "post": {
+        "tags": [
+          "Log Streams"
+        ],
+        "summary": "Create log stream",
+        "description": "Create a new log stream for the deployment. Errors if a log stream of the\ngiven type already exists.\n\nDeprecated: use `POST /integrations` instead.",
+        "operationId": "create_log_stream",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLogStreamArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateLogStreamResponse"
+                }
+              }
+            }
+          }
+        },
+        "deprecated": true,
+        "security": [
+          {
+            "Deploy Key": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          },
+          {
+            "OAuth Project Token": []
+          }
+        ]
+      }
+    },
     "/update_log_stream/{id}": {
       "post": {
         "tags": [
           "Log Streams"
         ],
         "summary": "Update log stream",
-        "description": "Update an existing log stream for the deployment. Omit a field to keep the\nexisting value, and use `null` to unset a field.",
+        "description": "Update an existing log stream for the deployment. Omit a field to keep the\nexisting value, and use `null` to unset a field.\n\nDeprecated: use `PATCH /integrations/{id}` instead.",
         "operationId": "update_log_stream",
         "parameters": [
           {
@@ -704,6 +971,7 @@
             "description": ""
           }
         },
+        "deprecated": true,
         "security": [
           {
             "Deploy Key": []
@@ -726,7 +994,7 @@
           "Log Streams"
         ],
         "summary": "Rotate webhook log stream secret",
-        "description": "Rotate the secret for the webhook log stream.",
+        "description": "Rotate the secret for the webhook log stream.\n\nDeprecated: use `POST /integrations/{id}/rotate_webhook_secret` instead.",
         "operationId": "rotate_webhook_secret",
         "parameters": [
           {
@@ -751,6 +1019,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "Deploy Key": []
@@ -832,7 +1101,7 @@
           "pro"
         ],
         "summary": "Data sync",
-        "description": "Paginated streamable export of some or all of a deployment's data.\n\nCall this endpoint repeatedly, passing the opaque `pagination.nextCursor`\nfrom each response back in the next request as `cursor`. Omit `cursor` on\nthe first call.\n\nTo do a one time data sync, keep fetching pages until reaching an `upToDate`\npage. For a continuous streaming export, continue fetching pages\nperiodically. It's recommended to sleep between `upToDate` pages to reduce\noverhead.\n\nThe caller must have the `deployment:data:view` permission.",
+        "description": "Paginated streamable export of some or all of a deployment's data.\n\nCall this endpoint repeatedly, passing the opaque `pagination.nextCursor`\nfrom each response back in the next request as `cursor`. Omit `cursor` on\nthe first call.\n\nApply each page's `truncates` before its `values`, and persist these changes\natomically with `pagination.nextCursor`. Retrying the same input cursor may\nreturn a different page, so non-atomic updates can lead to data\ninconsistency.\n\nTo do a one time data sync, keep fetching pages until reaching an `upToDate`\npage. For a continuous streaming export, continue fetching pages\nperiodically. It's recommended to sleep between `upToDate` pages to reduce\noverhead.\n\nThe caller must have the `deployment:data:view` permission.",
         "operationId": "data_sync",
         "requestBody": {
           "content": {
@@ -1078,7 +1347,7 @@
           "numDocumentsSynced": {
             "type": "integer",
             "format": "int64",
-            "description": "Documents synced over the sync's lifetime, including deletions and\nre-synced revisions of documents that changed mid-sync — so this can\nslightly exceed `totalDocuments`.",
+            "description": "Documents in the selected tables traversed so far, counted as of the\nsame snapshot as `totalDocuments`.",
             "minimum": 0
           },
           "totalDocuments": {
@@ -1091,7 +1360,7 @@
       },
       "ActiveDataSyncStale": {
         "type": "object",
-        "description": "The sync reached a consistent snapshot at `syncedTs`, but newer data is\nalready available; it is streaming later changes (CDC).",
+        "description": "The sync reached a consistent snapshot at `syncedTs`, but its timestamp is\nstale; it is streaming later changes (CDC). Newer data may be available.",
         "required": [
           "type",
           "totalTables",
@@ -1744,11 +2013,16 @@
             "title": "S3Export",
             "required": [
               "id",
+              "roleExternalId",
               "logStreamType"
             ],
             "properties": {
               "id": {
                 "type": "string"
+              },
+              "roleExternalId": {
+                "type": "string",
+                "description": "The role's trust policy must require it as `sts:ExternalId`."
               },
               "logStreamType": {
                 "type": "string",
@@ -1819,10 +2093,7 @@
         "type": "object",
         "required": [
           "bucket",
-          "region",
-          "accessKeyId",
-          "secretAccessKey",
-          "period"
+          "region"
         ],
         "properties": {
           "bucket": {
@@ -1838,13 +2109,11 @@
               "string",
               "null"
             ],
-            "description": "Key prefix within the bucket. Omit to write at the bucket root."
+            "description": "Folder in the bucket to put the export under. Convex writes to\n`<prefix>/<deployment-name>/data-lake/`, or to\n`<deployment-name>/data-lake/` if you omit it."
           },
-          "accessKeyId": {
-            "type": "string"
-          },
-          "secretAccessKey": {
-            "type": "string"
+          "roleArn": {
+            "type": "string",
+            "description": "ARN of the IAM role Convex assumes to write. The role must be named\n`ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Omit it to\ncreate the export first: the response carries the `roleExternalId` the\nrole's name and trust policy need, and the export waits until an update\nsets the ARN."
           },
           "selection": {
             "oneOf": [
@@ -1853,15 +2122,12 @@
               },
               {
                 "$ref": "#/components/schemas/Selection",
-                "description": "The components, tables, and columns to mirror. Defaults to everything."
+                "description": "The components and tables to export. Defaults to everything. Each table\nexports whole documents, so filtering fields within a table is rejected."
               }
             ]
-          },
-          "period": {
-            "$ref": "#/components/schemas/SyncPeriod",
-            "description": "How often the mirror is refreshed."
           }
-        }
+        },
+        "additionalProperties": false
       },
       "CreateSentryLogStreamArgs": {
         "type": "object",
@@ -2237,6 +2503,7 @@
               "cancel_all_scheduled_functions",
               "cancel_scheduled_function",
               "request_export",
+              "download_export",
               "cancel_export",
               "set_export_expiration",
               "create_integration",
@@ -2455,6 +2722,7 @@
         "properties": {
           "environmentVariables": {
             "type": "object",
+            "description": "The value of every environment variable that isn't a secret, by\nname.",
             "additionalProperties": {
               "type": "string"
             },
@@ -2730,7 +2998,8 @@
           "storage_api_bandwidth",
           "ai_gateway_usage",
           "log_stream_egress",
-          "custom_audit"
+          "custom_audit",
+          "s3_export_stats"
         ]
       },
       "MemberId": {
@@ -2891,9 +3160,9 @@
           "status",
           "bucket",
           "region",
-          "accessKeyId",
-          "selection",
-          "period"
+          "roleArn",
+          "roleExternalId",
+          "selection"
         ],
         "properties": {
           "id": {
@@ -2916,19 +3185,19 @@
               "string",
               "null"
             ],
-            "description": "Key prefix within the bucket."
+            "description": "Folder in the bucket the export is under, if any."
           },
-          "accessKeyId": {
+          "roleArn": {
             "type": "string",
-            "description": "AWS access key ID used to write to the bucket. The matching secret\naccess key is write-only and is never returned."
+            "description": "ARN of the role Convex assumes to write. Empty if it hasn't been set\nyet, and the export doesn't sync while it's empty."
+          },
+          "roleExternalId": {
+            "type": "string",
+            "description": "Value the role's trust policy must require as `sts:ExternalId`."
           },
           "selection": {
             "$ref": "#/components/schemas/Selection",
-            "description": "The components, tables, and columns being mirrored."
-          },
-          "period": {
-            "$ref": "#/components/schemas/SyncPeriod",
-            "description": "How often the mirror is refreshed."
+            "description": "The components and tables being exported."
           }
         }
       },
@@ -3004,15 +3273,6 @@
       "SyncId": {
         "type": "string",
         "description": "Unique id of a data sync, assigned by `/api/v1/data/sync` on the sync's\nfirst page and stable across its lifetime."
-      },
-      "SyncPeriod": {
-        "type": "string",
-        "description": "How often the mirror is refreshed from the deployment.",
-        "enum": [
-          "continuous",
-          "hourly",
-          "daily"
-        ]
       },
       "TableSelection": {
         "oneOf": [
@@ -3410,39 +3670,14 @@
       },
       "UpdateS3ExportSinkArgs": {
         "type": "object",
+        "description": "The destination is fixed at creation.",
         "properties": {
-          "bucket": {
+          "roleArn": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Name of the S3 bucket to mirror into."
-          },
-          "region": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "AWS region the bucket lives in, e.g. `us-east-1`."
-          },
-          "prefix": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Key prefix within the bucket."
-          },
-          "accessKeyId": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "secretAccessKey": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "ARN of the IAM role Convex assumes to write. The role must be named\n`ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Set it to\nfinish a pending export, or to switch to a role in another account."
           },
           "selection": {
             "oneOf": [
@@ -3451,22 +3686,12 @@
               },
               {
                 "$ref": "#/components/schemas/Selection",
-                "description": "The components, tables, and columns to mirror."
-              }
-            ]
-          },
-          "period": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/SyncPeriod",
-                "description": "How often the mirror is refreshed."
+                "description": "The components and tables to export. Each table exports whole\ndocuments, so filtering fields within a table is rejected."
               }
             ]
           }
-        }
+        },
+        "additionalProperties": false
       },
       "UpdateSentrySinkArgs": {
         "type": "object",

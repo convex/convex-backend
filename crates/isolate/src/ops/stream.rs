@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use common::runtime::Runtime;
+use common::{
+    runtime::Runtime,
+    sync::spsc,
+};
 use deno_core::{
     serde_v8,
     v8::{
@@ -22,6 +25,18 @@ use crate::{
     execution_scope::ExecutionScope,
     request_scope::StreamListener,
 };
+
+pub type BodyReceiver = spsc::UnboundedReceiver<anyhow::Result<bytes::Bytes>>;
+
+/// Subscribe to a stream by ID from Rust.
+pub(crate) fn listen_to_stream<'b, P: V8OpProvider<'b>>(
+    provider: &mut P,
+    stream_id: Uuid,
+) -> anyhow::Result<BodyReceiver> {
+    let (sender, receiver) = spsc::unbounded_channel();
+    provider.new_stream_listener(stream_id, StreamListener::RustStream(sender))?;
+    Ok(receiver)
+}
 
 pub fn async_op_stream_read_part<'b, P: V8OpProvider<'b>>(
     provider: &mut P,

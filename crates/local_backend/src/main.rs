@@ -34,6 +34,7 @@ use keybroker::{
     KeyBroker,
 };
 use local_backend::{
+    beacon::BuildRevision,
     config::{
         AdminKeyArgs,
         KeygenCommand,
@@ -52,6 +53,13 @@ use tokio::{
         self,
     },
     sync::oneshot,
+};
+
+// Read in the binary target so the library's compiler inputs stay identical
+// across commits, letting sccache reuse it and every crate that depends on it.
+const BUILD_REVISION: BuildRevision = BuildRevision {
+    git_sha: env!("VERGEN_GIT_SHA"),
+    commit_timestamp: env!("VERGEN_GIT_COMMIT_TIMESTAMP"),
 };
 
 fn main() -> Result<(), MainError> {
@@ -167,6 +175,7 @@ async fn run_server_inner(runtime: ProdRuntime, config: LocalConfig) -> anyhow::
         persistence,
         shutdown_rx.clone(),
         preempt_signal.clone(),
+        BUILD_REVISION,
     )
     .await?;
     let router = router(st.clone());

@@ -8,6 +8,7 @@ description: "Validate function arguments and return values for security"
 import ConvexValues from "@site/docs/_convexValues.mdx";
 
 import messages from "!!raw-loader!@site/../demos/args-validation/convex/messages.ts";
+import jobsLib from "!!raw-loader!@site/../private-demos/component-args/jobs/lib.ts";
 
 Argument and return value validators ensure that
 [queries](./query-functions.mdx), [mutations](./mutation-functions.mdx), and
@@ -24,7 +25,7 @@ non-public functions that are not called by clients, we recommend
 validation.
 
 **Example:**
-[Argument Validation](https://github.com/get-convex/convex-demos/tree/main/args-validation)
+[Argument Validation](https://github.com/convex/convex-demos/tree/main/args-validation)
 
 ## Adding validators
 
@@ -166,6 +167,19 @@ export default mutation({
 ```
 
 This corresponds to the `any` type in TypeScript.
+
+### Function handles
+
+[Function handles](/components/authoring.mdx#function-handles) can be
+represented with `v.function()`, optionally describing the function's type,
+arguments, and return value:
+
+<Snippet source={jobsLib} snippet="enqueue" title="jobs/lib.ts" />
+
+`fnType`, `args`, and `returns` are only used for TypeScript typechecking and
+codegen. At runtime, Convex currently only checks that the value is a
+well-formed function handle string, not the signature of the function it points
+to or that the function exists.
 
 ### Optional fields
 

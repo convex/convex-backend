@@ -55,6 +55,7 @@ use crate::{
     },
 };
 
+pub mod index_scan_attribution;
 pub mod row_index_retention;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -340,6 +341,13 @@ pub trait Persistence: Sync + Send + 'static {
         conflict_strategy: ConflictStrategy,
     ) -> anyhow::Result<()>;
 
+    /// Durably invalidates shadow state before administrative writes that may
+    /// bypass normal document/index write pairing, such as restores and
+    /// migration copies.
+    async fn invalidate_shadow(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Persists entries read from an index backfill snapshot at their document
     /// timestamps. Replaying a chunk must be idempotent.
     async fn write_index_backfill(&self, entries: &[IndexBackfillEntry]) -> anyhow::Result<()> {
@@ -391,12 +399,6 @@ pub trait Persistence: Sync + Send + 'static {
         &self,
         request: IndexRetentionRequest<'_>,
     ) -> anyhow::Result<IndexRetentionProgress>;
-
-    /// Whether the database must run the index retention worker. Backends with
-    /// independent index history maintenance return `false`.
-    fn needs_index_retention_deletes(&self) -> bool {
-        true
-    }
 
     // Deletes documents
     async fn delete(
@@ -713,6 +715,13 @@ pub trait PersistenceReader: Send + Sync + 'static {
     }
 
     fn version(&self) -> PersistenceVersion;
+
+    /// Whether the database must run the index retention worker. Backends with
+    /// independent index history maintenance return `false`, and their index
+    /// retention persistence globals are not maintained.
+    fn needs_index_retention_deletes(&self) -> bool {
+        true
+    }
 
     async fn table_size_stats(&self) -> anyhow::Result<Vec<PersistenceTableSize>> {
         Ok(vec![])

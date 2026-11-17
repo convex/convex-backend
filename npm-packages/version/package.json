@@ -16,11 +16,11 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@types/semver": "^7.3.13",
     "convex-test": "^0.0.41",
     "typescript": "^5.9.2",
-    "vite": "^6.4.3",
+    "vite": "^6.4.5",
     "vitest": "^4.1.0"
   }
 }

@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    borrow::Cow,
+    time::Duration,
+};
 
 use metrics::{
     log_counter,
@@ -9,10 +12,71 @@ use metrics::{
     register_convex_gauge,
     register_convex_histogram,
     register_convex_int_gauge,
+    CancelableTimer,
     StaticMetricLabel,
     Timer,
 };
-use prometheus::VMHistogram;
+use prometheus::{
+    IntGauge,
+    VMHistogram,
+};
+use value::TableName;
+
+use crate::persistence::index_scan_attribution::{
+    IndexScanCaller,
+    IndexScanKind,
+};
+
+register_convex_counter!(
+    PERSISTENCE_INDEX_SCANS_TOTAL,
+    "Index scans that read from persistence, by what issued them, the kind of index and the \
+     table: a system table's name, `user` for any user table, or `unknown`. A scan can span \
+     several queries to the database; each page a transaction or function reads is one scan",
+    &["caller", "index_kind", "table"]
+);
+register_convex_counter!(
+    PERSISTENCE_INDEX_SCAN_DOCUMENTS_TOTAL,
+    "Documents index scans read from persistence, by what issued the scan, the kind of index and \
+     the table",
+    &["caller", "index_kind", "table"]
+);
+register_convex_counter!(
+    PERSISTENCE_INDEX_SCAN_WAIT_MICROSECONDS_TOTAL,
+    "Time callers spent waiting on index scans of persistence, by what issued the scan, the kind \
+     of index and the table",
+    &["caller", "index_kind", "table"]
+);
+/// User tables share the `user` label, so the label's values are bounded by
+/// the system tables and no developer's table name is exported.
+pub fn log_index_scan(
+    caller: IndexScanCaller,
+    kind: IndexScanKind,
+    table: Option<&TableName>,
+    documents: u64,
+    waited: Duration,
+) {
+    let table: Cow<'static, str> = match table {
+        Some(table) if table.is_system() => table.to_string().into(),
+        Some(_) => "user".into(),
+        None => "unknown".into(),
+    };
+    let labels = vec![
+        StaticMetricLabel::new("caller", <&'static str>::from(caller)),
+        StaticMetricLabel::new("index_kind", <&'static str>::from(kind)),
+        StaticMetricLabel::new("table", table),
+    ];
+    log_counter_with_labels(&PERSISTENCE_INDEX_SCANS_TOTAL, 1, labels.clone());
+    log_counter_with_labels(
+        &PERSISTENCE_INDEX_SCAN_DOCUMENTS_TOTAL,
+        documents,
+        labels.clone(),
+    );
+    log_counter_with_labels(
+        &PERSISTENCE_INDEX_SCAN_WAIT_MICROSECONDS_TOTAL,
+        waited.as_micros() as u64,
+        labels,
+    );
+}
 
 register_convex_counter!(
     COMMON_UNDEFINED_FILTER_TOTAL,
@@ -97,6 +161,52 @@ pub fn log_http_service_max_concurrent_requests(
     HTTP_SERVICE_MAX_CONCURRENT_REQUESTS
         .with_label_values(&[service_name])
         .set(max_concurrent_requests as i64);
+}
+
+register_convex_int_gauge!(
+    HTTP_SERVICE_PERMIT_WAITING_REQUESTS,
+    "Requests that wait for a concurrency permit on an HTTP service. Waiting requests with no \
+     `success` in http_service_permit_wait_seconds mean that no permit is released",
+    &["service_name"]
+);
+register_convex_histogram!(
+    HTTP_SERVICE_PERMIT_WAIT_SECONDS,
+    "Time a request waited for a concurrency permit on an HTTP service. The status is `success` \
+     if it got the permit and `canceled` if it was dropped first. A request that does not wait is \
+     not recorded",
+    &["service_name", "status"]
+);
+
+/// A request in the queue for an HTTP concurrency permit. It leaves the count
+/// of waiting requests when it is dropped, with or without a permit.
+pub struct HttpPermitWaiter {
+    timer: CancelableTimer,
+    _waiting: WaitingForPermit,
+}
+
+impl HttpPermitWaiter {
+    pub fn new(service_name: &'static str) -> Self {
+        let waiting = HTTP_SERVICE_PERMIT_WAITING_REQUESTS.with_label_values(&[service_name]);
+        waiting.inc();
+        let mut timer = CancelableTimer::new(&HTTP_SERVICE_PERMIT_WAIT_SECONDS);
+        timer.add_label(StaticMetricLabel::new("service_name", service_name));
+        Self {
+            timer,
+            _waiting: WaitingForPermit(waiting),
+        }
+    }
+
+    pub fn acquired(self) {
+        self.timer.finish(true);
+    }
+}
+
+struct WaitingForPermit(IntGauge);
+
+impl Drop for WaitingForPermit {
+    fn drop(&mut self) {
+        self.0.dec();
+    }
 }
 
 register_convex_histogram!(

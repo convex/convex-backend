@@ -201,6 +201,10 @@ export const updateSomething = mutation({
 });
 ```
 
+For why `Date.now()` is frozen, and how it relates to `_creationTime` and
+[commit timestamps](/database/advanced/commit-timestamp), see
+[this whiteboard session](https://www.youtube.com/watch?v=pHrxmSjxLg8).
+
 Likewise, `performance.now()` is fixed to same result during query function
 execution. However, `performance.now()` will increment inside mutations.
 [`Performance.timeOrigin`](https://developer.mozilla.org/en-US/docs/Web/API/Performance/timeOrigin)
@@ -255,14 +259,14 @@ Note that argument size limits are lower (5MiB instead of 16MiB).
 ### Node.js version configuration
 
 By default, all actions ran in the Node.js environment are executed in
-Node.js 20. This version is configurable in the
+Node.js 24. This version is configurable in the
 [convex.json](/config/convex-json.mdx#configuring-the-nodejs-version) file. We
-currently support Node.js 20, 22, and 24.
+currently support Node.js 22 and 24.
 
 When pushing a new Node.js version to the server, the new code for your
 functions may be executed in the old Node.js version for up a few minutes.
 
 Note: This configuration is not supported when running the self-hosted Convex
 backend. The node version that is specified in the
-[.nvmrc](https://github.com/get-convex/convex-backend/blob/main/.nvmrc) will be
-used instead.
+[.nvmrc](https://github.com/convex/convex-backend/blob/main/.nvmrc) will be used
+instead.

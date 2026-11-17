@@ -316,7 +316,7 @@ impl PendingWritesFixture {
                     .await?,
             );
         }
-        db.commit(tx).await?;
+        db.commit(tx, "test").await?;
 
         let read_document = documents.pop().expect("no documents inserted");
         let commits = documents

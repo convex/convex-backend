@@ -87,8 +87,10 @@ export const fetchWithoutRedirect = async function (
     // with an empty stack. Rethrowing here captures the caller's.
     throw fetchFailure(request.url, e);
   }
-  return responseFromConvexObject(responseObject, (e) =>
-    fetchFailure(request.url, e),
+  return responseFromConvexObject(
+    responseObject,
+    (e) => fetchFailure(request.url, e),
+    request.method,
   );
 };
 

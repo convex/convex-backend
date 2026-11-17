@@ -25,6 +25,12 @@ impl TryFrom<&str> for Secret {
     }
 }
 
+impl From<[u8; 32]> for Secret {
+    fn from(key: [u8; 32]) -> Self {
+        Self { key }
+    }
+}
+
 impl TryFrom<Vec<u8>> for Secret {
     type Error = anyhow::Error;
 

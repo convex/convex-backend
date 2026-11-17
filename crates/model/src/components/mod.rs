@@ -13,7 +13,6 @@ use common::{
     bootstrap_model::components::{
         definition::ComponentExport,
         ComponentMetadata,
-        ComponentType,
     },
     components::{
         CanonicalizedComponentFunctionPath,
@@ -68,28 +67,6 @@ impl<'a, RT: Runtime> ComponentsModel<'a, RT> {
         reference: &Reference,
     ) -> anyhow::Result<Resource> {
         let result = match reference {
-            Reference::ComponentArgument { attributes } => {
-                let attribute = match &attributes[..] {
-                    [attribute] => attribute,
-                    _ => anyhow::bail!("Nested component argument references unsupported"),
-                };
-                let component_type = BootstrapComponentsModel::new(self.tx)
-                    .load_component_type(component_id)
-                    .await?;
-                let ComponentType::ChildComponent { ref args, .. } = component_type else {
-                    anyhow::bail!(ErrorMetadata::bad_request(
-                        "InvalidReference",
-                        "Can't use an argument reference in the app"
-                    ))
-                };
-                let resource = args.get(attribute).ok_or_else(|| {
-                    ErrorMetadata::bad_request(
-                        "InvalidReference",
-                        format!("Component argument '{attribute}' not found"),
-                    )
-                })?;
-                resource.clone()
-            },
             Reference::Function(udf_path) => {
                 let mut m = BootstrapComponentsModel::new(self.tx);
                 let component_path = m.must_component_path(component_id)?;
@@ -258,19 +235,9 @@ impl<'a, RT: Runtime> ComponentsModel<'a, RT> {
         component_id: ComponentId,
     ) -> anyhow::Result<BTreeMap<Reference, Resource>> {
         let mut m = BootstrapComponentsModel::new(self.tx);
-        let component_type = m.load_component_type(component_id).await?;
         let component_path = m.must_component_path(component_id)?;
 
         let mut result = BTreeMap::new();
-
-        if let ComponentType::ChildComponent { ref args, .. } = component_type {
-            for (name, resource) in args {
-                let reference = Reference::ComponentArgument {
-                    attributes: vec![name.clone()],
-                };
-                result.insert(reference, resource.clone());
-            }
-        }
 
         let module_metadata = ModuleModel::new(self.tx)
             .get_application_metadata(component_id)

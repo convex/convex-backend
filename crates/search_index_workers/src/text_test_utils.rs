@@ -203,10 +203,13 @@ impl TextFixtures {
     pub async fn enabled_text_index(&self) -> anyhow::Result<TextIndexData> {
         let index_data = self.backfilled_text_index().await?;
         let mut tx = self.db.begin_system().await?;
+        let pending = IndexModel::new(&mut tx)
+            .pending_index_metadata(index_data.namespace, &index_data.index_name)?
+            .context("index should be pending")?;
         IndexModel::new(&mut tx)
-            .enable_index_for_testing(index_data.namespace, &index_data.index_name)
+            .enable_backfilled_indexes(vec![pending])
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(index_data)
     }
 
@@ -214,10 +217,11 @@ impl TextFixtures {
         // Start as enabled -> disable it.
         let index_data = self.enabled_text_index().await?;
         let mut tx = self.db.begin_system().await?;
-        IndexModel::new(&mut tx)
-            .disable_index_for_test(index_data.index_id)
-            .await?;
-        self.db.commit(tx).await?;
+        let enabled = IndexModel::new(&mut tx)
+            .enabled_index_metadata(index_data.namespace, &index_data.index_name)?
+            .context("index should be enabled")?;
+        IndexModel::new(&mut tx).disable_index(enabled).await?;
+        self.db.commit(tx, "test").await?;
         Ok(index_data)
     }
 
@@ -270,7 +274,7 @@ impl TextFixtures {
             .namespace(self.namespace)
             .id(index_name.table())?
             .tablet_id;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
 
         let resolved_index_name = TabletIndexName::new(table_id, index_name.descriptor().clone())?;
         let IndexConfig::Text { ref spec, .. } = index_metadata.config else {
@@ -292,7 +296,7 @@ impl TextFixtures {
         let index_data = self.insert_backfilling_text_index().await?;
         let mut tx = self.db.begin_system().await?;
         add_document(&mut tx, index_data.index_name.table(), "A long text field").await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(index_data)
     }
 
@@ -339,7 +343,7 @@ impl TextFixtures {
         TestFacingModel::new(&mut tx)
             .replace_inner(doc_id, document)
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(())
     }
 
@@ -347,7 +351,7 @@ impl TextFixtures {
         let table_name = TABLE_NAME.parse::<TableName>()?;
         let mut tx = self.db.begin_system().await?;
         let doc_id = add_document(&mut tx, &table_name, text).await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(doc_id)
     }
 
@@ -356,10 +360,13 @@ impl TextFixtures {
         index_name: &GenericIndexName<TableName>,
     ) -> anyhow::Result<()> {
         let mut tx = self.db.begin_system().await?;
+        let pending = IndexModel::new(&mut tx)
+            .pending_index_metadata(self.namespace, index_name)?
+            .context("index should be pending")?;
         IndexModel::new(&mut tx)
-            .enable_index_for_testing(self.namespace, index_name)
+            .enable_backfilled_indexes(vec![pending])
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(())
     }
 
@@ -429,7 +436,7 @@ impl TextFixtures {
         let compactor = self.new_compactor();
         let compact_during_flush = async move {
             if let Some(pause_guard) = hold_guard.wait_for_blocked().await {
-                let (metrics, _) = compactor.step().await?;
+                let (metrics, ..) = compactor.step().await?;
                 for (_index_name, num_segments_compacted) in metrics {
                     assert!(num_segments_compacted > 0);
                 }

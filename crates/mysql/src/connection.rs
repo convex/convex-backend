@@ -1,12 +1,24 @@
 use std::{
     env,
+    io::ErrorKind,
+    marker::PhantomData,
     mem,
     path::PathBuf,
     str::FromStr,
+    sync::{
+        atomic::{
+            AtomicUsize,
+            Ordering,
+        },
+        Arc,
+        OnceLock,
+        Weak,
+    },
     time::Duration,
 };
 
 use ::metrics::StaticMetricLabel;
+use anyhow::Context as _;
 use common::{
     errors::{
         database_deadlock_error,
@@ -18,6 +30,7 @@ use common::{
     },
     fastrace_helpers::FutureExt as _,
     knobs::{
+        DATABASE_USE_PREPARED_STATEMENTS,
         MYSQL_INACTIVE_CONNECTION_LIFETIME,
         MYSQL_MAX_CONNECTIONS,
         MYSQL_MAX_CONNECTION_LIFETIME,
@@ -43,11 +56,13 @@ use dynfmt::{
 };
 use fastrace::func_path;
 use futures::{
+    future,
     pin_mut,
     select_biased,
     Future,
     FutureExt as _,
     Stream,
+    TryFutureExt as _,
     TryStreamExt,
 };
 use metrics::{
@@ -58,25 +73,40 @@ use mysql_async::{
     prelude::Queryable,
     Conn,
     DriverError,
+    IoError,
     IsolationLevel,
     Opts,
     OptsBuilder,
     Params,
-    Pool,
-    PoolConstraints,
-    PoolOpts,
     Row,
     TxOpts,
     Value as MySqlValue,
 };
+use parking_lot::Mutex;
 use prometheus::VMHistogramVec;
-use tokio::time::sleep;
+use rand::Rng as _;
+use scopeguard::ScopeGuard;
+use tokio::{
+    sync::{
+        Notify,
+        Semaphore,
+        SemaphorePermit,
+    },
+    task::JoinHandle,
+    time::{
+        sleep,
+        Instant,
+    },
+};
 use url::Url;
 
 use crate::metrics::{
     begin_transaction_timer,
     connection_lifetime_timer,
     get_connection_timer,
+    log_connection_create_failed,
+    log_connection_returned_to_pool,
+    log_discarded_connection,
     log_execute,
     log_large_statement,
     log_query,
@@ -84,6 +114,7 @@ use crate::metrics::{
     log_transaction,
     new_connection_pool_stats,
     query_progress_counter,
+    DiscardReason,
     LARGE_STATEMENT_THRESHOLD,
 };
 
@@ -92,9 +123,8 @@ fn classify_mysql_error(e: mysql_async::Error) -> anyhow::Error {
         mysql_async::Error::Driver(
             DriverError::PoolDisconnected | DriverError::ConnectionClosed,
         )
-        | mysql_async::Error::Io(_)
         | mysql_async::Error::Server(mysql_async::ServerError {
-            // Expected operational Vitess errors:
+            // Expected operational MySQL/Aurora errors:
             code:
             | 1290 // EROptionPreventsStatement "The MySQL server is running with the --read-only option so it cannot execute this statement"
             | 2013 // CRServerLost
@@ -104,16 +134,15 @@ fn classify_mysql_error(e: mysql_async::Error) -> anyhow::Error {
         }) => {
             database_operational_error(e.into())
         },
+        mysql_async::Error::Io(ref io_error) if is_operational_mysql_io_error(io_error) => {
+            database_operational_error(e.into())
+        },
         mysql_async::Error::Server(mysql_async::ServerError {
             // ERUnknownError
             code: 1105,
             ref message,
             ..
-        }) if message.contains("primary is not serving")
-            || message.contains("for tx killer rollback")
-            || message.contains("connection pool timed out")
-            || message.contains("connection timed out") =>
-        {
+        }) if message.contains("connection timed out") =>         {
             database_operational_error(e.into())
         },
         mysql_async::Error::Server(mysql_async::ServerError {
@@ -134,21 +163,28 @@ fn classify_mysql_error(e: mysql_async::Error) -> anyhow::Error {
     }
 }
 
-const ER_LOCK_DEADLOCK: u16 = 1213;
+fn is_operational_mysql_io_error(error: &IoError) -> bool {
+    let IoError::Io(error) = error else {
+        return false;
+    };
+    matches!(
+        error.kind(),
+        ErrorKind::ConnectionRefused | ErrorKind::ConnectionReset | ErrorKind::UnexpectedEof
+    ) ||
+        // This DNS failure shares an ErrorKind with unrelated errors; match
+        // its exact message to identify temporary resolution failures.
+        error.to_string()
+            == "failed to lookup address information: Temporary failure in name resolution"
+}
 
-/// Recognizes the Vitess error returned when a result exceeds its 64 MiB
-/// message limit, allowing callers to retry with a smaller page.
-pub(crate) fn is_message_too_large_error(
-    error: &anyhow::Error,
-) -> Option<&mysql_async::ServerError> {
+const ER_LOCK_DEADLOCK: u16 = 1213;
+pub(crate) const ER_NO_SUCH_TABLE: u16 = 1146;
+
+pub(crate) fn is_no_such_table_error(error: &anyhow::Error) -> bool {
     error
         .chain()
-        .find_map(|error| error.downcast_ref::<mysql_async::ServerError>())
-        .filter(|database_error| {
-            database_error.state == "HY000"
-                && database_error.code == 1105
-                && database_error.message.contains("message larger than max")
-        })
+        .filter_map(|error| error.downcast_ref::<mysql_async::ServerError>())
+        .any(|database_error| database_error.code == ER_NO_SUCH_TABLE)
 }
 
 // Guard against connections hanging during bootstrapping -- which means
@@ -161,10 +197,12 @@ pub(crate) fn is_message_too_large_error(
 pub(crate) async fn with_timeout<R, Fut: Future<Output = Result<R, mysql_async::Error>>>(
     f: Fut,
 ) -> anyhow::Result<R> {
+    with_anyhow_timeout(f.map_err(classify_mysql_error)).await
+}
+
+async fn with_anyhow_timeout<R>(f: impl Future<Output = anyhow::Result<R>>) -> anyhow::Result<R> {
     select_biased! {
-        r = f.fuse() => {
-            r.map_err(classify_mysql_error)
-        },
+        r = f.fuse() => r,
         _ = sleep(Duration::from_secs(*MYSQL_TIMEOUT)).fuse() => Err(
             anyhow::anyhow!(database_timeout_error("MySQL"))),
     }
@@ -286,83 +324,160 @@ fn format_mysql_binary_protocol(db_name: &str, statement: &str) -> anyhow::Resul
         .to_string())
 }
 
-pub(crate) struct MySqlConnection<'a, RT: Runtime> {
+/// A MySQL connection, owned by either the connection pool
+/// ([`ConvexMySqlPool`]), or by an active connection ([`MySqlConnection`]).
+struct PooledConnection {
     conn: Conn,
-    labels: Vec<StaticMetricLabel>,
+    /// See [`MYSQL_MAX_CONNECTION_LIFETIME`].
+    expires_at: Instant,
+    last_used: Instant,
+    _established: EstablishedGuard,
+}
+
+/// Counts a connection in [`ConvexMySqlPool::established`] until dropped.
+struct EstablishedGuard(Arc<AtomicUsize>);
+
+impl EstablishedGuard {
+    fn new(established: &Arc<AtomicUsize>) -> Self {
+        established.fetch_add(1, Ordering::Relaxed);
+        Self(established.clone())
+    }
+}
+
+impl Drop for EstablishedGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+impl PooledConnection {
+    fn new(conn: Conn, established: &Arc<AtomicUsize>) -> Self {
+        // Jitter by up to 20% so that connections opened together are not all
+        // recycled together.
+        let jitter = rand::rng().random_range(Duration::ZERO..=*MYSQL_MAX_CONNECTION_LIFETIME / 5);
+        let now = Instant::now();
+        Self {
+            conn,
+            expires_at: now + *MYSQL_MAX_CONNECTION_LIFETIME + jitter,
+            last_used: now,
+            _established: EstablishedGuard::new(established),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        Instant::now() >= self.expires_at
+    }
+
+    /// When the idle worker closes this connection if it stays idle.
+    fn idle_deadline(&self) -> Instant {
+        (self.last_used + *MYSQL_INACTIVE_CONNECTION_LIFETIME).min(self.expires_at)
+    }
+}
+
+struct IdleConnections {
+    /// Ordered by `last_used` from oldest to newest.
+    conns: Vec<PooledConnection>,
+    /// When the idle worker next runs [`cleanup_connections`].
+    next_cleanup: Instant,
+}
+
+/// An active MySQL connection from a [`ConvexMySqlPool`].
+///
+/// Returns the underlying connection to the pool when dropped, unless `dirty`
+/// is set.
+pub(crate) struct MySqlConnection<'a, RT: Runtime> {
     pool: &'a ConvexMySqlPool<RT>,
+    _permit: SemaphorePermit<'a>,
+    conn: Option<PooledConnection>,
+    /// Set while a query or transaction has not completed successfully, since
+    /// it may have left an unread result or an open transaction on the
+    /// connection.
+    dirty: bool,
+    labels: Vec<StaticMetricLabel>,
     db_name: &'a str,
     _tracker: ConnectionTracker,
     _timer: Timer<VMHistogramVec>,
 }
 
-async fn handle_errors_with_retries<R, RT: Runtime>(
-    conn: &mut Conn,
-    pool: &ConvexMySqlPool<RT>,
-    mut f: impl AsyncFnMut(&mut Conn) -> anyhow::Result<R>,
-    max_retries: u32,
-) -> anyhow::Result<R> {
-    let mut attempt = 0;
-    loop {
-        let (e, should_retry) = match f(conn).await {
-            Err(e) if e.is::<DatabaseOperationalError>() => (e, attempt < max_retries),
-            Err(e) if e.is::<DatabaseTimeoutError>() => {
-                // Don't retry here as we want the caller to receive some
-                // backpressure.
-                // The mysql protocol doesn't support cancellation, so if a
-                // query times out on the client, the connection can't be reused
-                // until the server responds to the query.
-                // So don't return the connection to the pool.
-                (e, false)
+impl<RT: Runtime> MySqlConnection<'_, RT> {
+    /// Returns the connection in `slot`, first replacing it with a new
+    /// connection if it was discarded or broken.
+    async fn ensure_connected<'c>(
+        slot: &'c mut Option<PooledConnection>,
+        pool: &ConvexMySqlPool<RT>,
+    ) -> anyhow::Result<&'c mut Conn> {
+        let conn = match slot.take() {
+            Some(conn) if !conn.conn.is_disconnected() => conn,
+            Some(_) => {
+                log_discarded_connection(&pool.cluster_name, DiscardReason::Error);
+                pool.create_connection().await?
             },
-            r => return r,
+            None => pool.create_connection().await?,
         };
-        if should_retry {
-            tracing::warn!("Retrying after MySQL error: {e:#}")
-        } else {
-            tracing::warn!("Discarding connection after MySQL error: {e:#}")
-        }
-        let old_conn = mem::replace(conn, pool.acquire_internal().await?);
-        if should_retry {
-            if let Err(e) = old_conn.disconnect().await {
-                tracing::warn!("Error disconnecting MySQL connection: {e}");
+        Ok(&mut slot.insert(conn).conn)
+    }
+
+    async fn handle_errors_with_retries<R>(
+        &mut self,
+        mut f: impl AsyncFnMut(&mut Conn) -> anyhow::Result<R>,
+        max_retries: u32,
+    ) -> anyhow::Result<R> {
+        let mut attempt = 0;
+        loop {
+            self.dirty = true;
+            let (e, should_retry) =
+                match f(Self::ensure_connected(&mut self.conn, self.pool).await?).await {
+                    Ok(r) => {
+                        self.dirty = false;
+                        return Ok(r);
+                    },
+                    Err(e) if e.is::<DatabaseOperationalError>() => (e, attempt < max_retries),
+                    Err(e) if e.is::<DatabaseTimeoutError>() => {
+                        // Don't retry here as we want the caller to receive some
+                        // backpressure.
+                        // The mysql protocol doesn't support cancellation, so if a
+                        // query times out on the client, the connection can't be
+                        // reused until the server responds to the query.
+                        // So don't return the connection to the pool.
+                        (e, false)
+                    },
+                    Err(e) => return Err(e),
+                };
+            if should_retry {
+                tracing::warn!("Retrying after MySQL error: {e:#}")
+            } else {
+                tracing::warn!("Discarding connection after MySQL error: {e:#}")
+            }
+            // Dropping the connection disconnects it in the background, since
+            // that could take a long time as well. Retries use a new
+            // connection in case other pooled connections are also stale.
+            self.conn = None;
+            log_discarded_connection(&self.pool.cluster_name, DiscardReason::Error);
+            if !should_retry {
+                return Err(e);
             }
             attempt += 1;
-            continue;
-        } else {
-            tokio_spawn("disconnect_mysql_conn", async move {
-                // Disconnecting the connection could take a long time as well,
-                // so do it in the background.
-                if let Err(e) = old_conn.disconnect().await {
-                    tracing::warn!("Error disconnecting MySQL connection: {e}");
-                }
-            });
-            return Err(e);
         }
     }
-}
 
-async fn handle_errors<R, RT: Runtime>(
-    conn: &mut Conn,
-    pool: &ConvexMySqlPool<RT>,
-    f: impl AsyncFnOnce(&mut Conn) -> anyhow::Result<R>,
-) -> anyhow::Result<R> {
-    let mut f = Some(f);
-    handle_errors_with_retries(
-        conn,
-        pool,
-        async move |conn| f.take().expect("should never retry")(conn).await,
-        0, /* max_retries */
-    )
-    .await
-}
+    async fn handle_errors<R>(
+        &mut self,
+        f: impl AsyncFnOnce(&mut Conn) -> anyhow::Result<R>,
+    ) -> anyhow::Result<R> {
+        let mut f = Some(f);
+        self.handle_errors_with_retries(
+            async move |conn| f.take().expect("should never retry")(conn).await,
+            0, /* max_retries */
+        )
+        .await
+    }
 
-impl<RT: Runtime> MySqlConnection<'_, RT> {
     /// Executes multiple statements, separated by semicolons.
     #[fastrace::trace]
     pub async fn execute_many(&mut self, query: &str) -> anyhow::Result<()> {
         log_execute(self.labels.clone());
         let statement = format_mysql_text_protocol(self.db_name, query, vec![], &self.labels)?;
-        handle_errors(&mut self.conn, self.pool, async move |conn| {
+        self.handle_errors(async move |conn| {
             // Every statement after the first runs only as its result set is
             // consumed, and reports its error only there. Dropping the result
             // instead leaves them pending on the connection, so they run if it
@@ -382,24 +497,48 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         statement: &str,
         params: Vec<MySqlValue>,
     ) -> anyhow::Result<Option<Row>> {
+        self.query_optional_with_retries(statement, params, *MYSQL_MAX_QUERY_RETRIES)
+            .await
+    }
+
+    /// Use when the result must come from the current database session.
+    #[fastrace::trace]
+    pub async fn query_optional_without_retries(
+        &mut self,
+        statement: &str,
+        params: Vec<MySqlValue>,
+    ) -> anyhow::Result<Option<Row>> {
+        // The retry helper reconnects closed sessions before its first attempt.
+        if !self
+            .conn
+            .as_ref()
+            .is_some_and(|conn| !conn.conn.is_disconnected())
+        {
+            return Err(classify_mysql_error(DriverError::ConnectionClosed.into()));
+        }
+        self.query_optional_with_retries(statement, params, 0).await
+    }
+
+    async fn query_optional_with_retries(
+        &mut self,
+        statement: &str,
+        params: Vec<MySqlValue>,
+        max_retries: u32,
+    ) -> anyhow::Result<Option<Row>> {
         log_query(self.labels.clone());
         let row = if self.pool.use_prepared_statements {
             let statement = format_mysql_binary_protocol(self.db_name, statement)?;
-            handle_errors_with_retries(
-                &mut self.conn,
-                self.pool,
+            self.handle_errors_with_retries(
                 async move |conn| with_timeout(conn.exec_first(&statement, params.clone())).await,
-                *MYSQL_MAX_QUERY_RETRIES,
+                max_retries,
             )
             .await?
         } else {
             let statement =
                 format_mysql_text_protocol(self.db_name, statement, params, &self.labels)?;
-            handle_errors_with_retries(
-                &mut self.conn,
-                self.pool,
+            self.handle_errors_with_retries(
                 async move |conn| with_timeout(conn.query_first(&statement)).await,
-                *MYSQL_MAX_QUERY_RETRIES,
+                max_retries,
             )
             .await?
         };
@@ -422,15 +561,13 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         log_query(labels.clone());
         if self.pool.use_prepared_statements {
             let statement = format_mysql_binary_protocol(self.db_name, statement)?;
-            assert_send(handle_errors_with_retries(
-                &mut self.conn,
-                self.pool,
+            assert_send(self.handle_errors_with_retries(
                 async move |conn| {
                     // Any error or dropped stream after this point leaves the connection
-                    // open with MySQL sending data into it. In the worst case, the data
-                    // will be consumed & dropped by the *next* client.acquire(), which can
-                    // make it hard to attribute latency. Therefore we start a progress
-                    // counter that will log if the stream is dropped before being consumed.
+                    // open with MySQL sending data into it, which is consumed & dropped
+                    // before the connection's next query or disconnect. That can make it
+                    // hard to attribute latency. Therefore we start a progress counter
+                    // that will log if the stream is dropped before being consumed.
                     let progress_counter = query_progress_counter(size_hint, labels.clone());
                     Self::collect_query_stream(
                         with_timeout(
@@ -449,9 +586,7 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         } else {
             let statement =
                 format_mysql_text_protocol(self.db_name, statement, params, &self.labels)?;
-            assert_send(handle_errors_with_retries(
-                &mut self.conn,
-                self.pool,
+            assert_send(self.handle_errors_with_retries(
                 async move |conn| {
                     let progress_counter = query_progress_counter(size_hint, labels.clone());
                     Self::collect_query_stream(
@@ -501,7 +636,7 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         log_execute(self.labels.clone());
         let affected_rows = if self.pool.use_prepared_statements {
             let statement = format_mysql_binary_protocol(self.db_name, statement)?;
-            handle_errors(&mut self.conn, self.pool, async move |conn| {
+            self.handle_errors(async move |conn| {
                 Ok(
                     with_timeout(conn.exec_iter(statement, Params::Positional(params)))
                         .await?
@@ -512,7 +647,7 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         } else {
             let statement =
                 format_mysql_text_protocol(self.db_name, statement, params, &self.labels)?;
-            handle_errors(&mut self.conn, self.pool, async move |conn| {
+            self.handle_errors(async move |conn| {
                 Ok(with_timeout(conn.query_iter(statement))
                     .await?
                     .affected_rows())
@@ -534,18 +669,34 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
         if let Some(isolation) = isolation {
             tx_opts.with_isolation_level(isolation);
         }
-        let inner = with_timeout(self.conn.start_transaction(tx_opts)).await?;
+        self.dirty = true;
+        let conn = Self::ensure_connected(&mut self.conn, self.pool).await?;
+        let inner = with_timeout(conn.start_transaction(tx_opts)).await?;
         timer.finish();
         Ok(MySqlTransaction {
             inner,
             use_prepared_statements: self.pool.use_prepared_statements,
             db_name: self.db_name,
             labels: &self.labels,
+            dirty: &mut self.dirty,
         })
     }
+}
 
-    pub async fn handle_errors<R>(&mut self, r: anyhow::Result<R>) -> anyhow::Result<R> {
-        handle_errors(&mut self.conn, self.pool, async move |_| r).await
+impl<RT: Runtime> Drop for MySqlConnection<'_, RT> {
+    fn drop(&mut self) {
+        let Some(conn) = self.conn.take() else {
+            return;
+        };
+        if self.dirty {
+            // Don't return dirty connections to the pool. Such a connection would only be
+            // cleaned up the next time that it's checked out from the pool and used.
+            // Instead, drop it here; it'll be closed in the background, releasing any held
+            // locks promptly.
+            log_discarded_connection(&self.pool.cluster_name, DiscardReason::Dirty);
+            return;
+        }
+        self.pool.return_connection(conn);
     }
 }
 
@@ -554,6 +705,8 @@ pub(crate) struct MySqlTransaction<'a> {
     use_prepared_statements: bool,
     db_name: &'a str,
     labels: &'a [StaticMetricLabel],
+    /// The [`MySqlConnection`]'s `dirty` flag, cleared on commit
+    dirty: &'a mut bool,
 }
 
 impl MySqlTransaction<'_> {
@@ -630,17 +783,90 @@ impl MySqlTransaction<'_> {
 
     pub async fn commit(self) -> anyhow::Result<()> {
         with_timeout(self.inner.commit()).await?;
+        *self.dirty = false;
         Ok(())
     }
 }
 
+/// How long new connections reuse an RDS IAM auth token. RDS rejects a token
+/// for new logins 15 minutes after it was minted.
+const RDS_IAM_TOKEN_REUSE: Duration = Duration::from_mins(5);
+
+/// Logs new connections in to an RDS endpoint with IAM auth tokens.
+struct RdsIamAuth {
+    cached_opts: Mutex<Option<RdsIamCachedOpts>>,
+}
+
+struct RdsIamCachedOpts {
+    opts: Opts,
+    minted_at: Instant,
+}
+
+impl RdsIamAuth {
+    async fn authed_opts(&self, base_opts: &Opts) -> anyhow::Result<Opts> {
+        if let Some(cached) = self
+            .cached_opts
+            .lock()
+            .as_ref()
+            .filter(|cached| cached.minted_at.elapsed() < RDS_IAM_TOKEN_REUSE)
+        {
+            return Ok(cached.opts.clone());
+        }
+        let minted_at = Instant::now();
+        let token = aws_utils::rds::get_rds_auth_token(
+            base_opts.ip_or_hostname(),
+            base_opts.tcp_port(),
+            base_opts.user().context("user must be set")?,
+        )
+        .await?
+        .to_string();
+        let mut cached_opts = self.cached_opts.lock();
+        // Check again to avoid minting new `Opts` objects if there is a race
+        if let Some(cached) = cached_opts
+            .as_ref()
+            .filter(|cached| cached.minted_at.elapsed() < RDS_IAM_TOKEN_REUSE)
+        {
+            return Ok(cached.opts.clone());
+        }
+        Ok(cached_opts
+            .insert(RdsIamCachedOpts {
+                opts: OptsBuilder::from_opts(base_opts.clone())
+                    .pass(Some(token))
+                    .into(),
+                minted_at,
+            })
+            .opts
+            .clone())
+    }
+}
+
+/// A MySQL connection pool.
 pub struct ConvexMySqlPool<RT: Runtime> {
-    pool: Pool,
+    pub(crate) v6_replica: OnceLock<crate::v6_replica::ReplicaTarget<RT>>,
+    opts: Opts,
+    /// Set when `opts` is for an RDS endpoint and has no password.
+    rds_iam_auth: Option<RdsIamAuth>,
     use_prepared_statements: bool,
-    runtime: Option<RT>,
+    /// Limits the total number of connections that can be handed out
+    /// simultaneously.
+    semaphore: Semaphore,
+    /// Number of connections that exist, whether idle or checked out. Unlike
+    /// the permits held on `semaphore`, this excludes connections that are
+    /// still being created.
+    established: Arc<AtomicUsize>,
+    /// Number of `acquire` calls currently waiting on `semaphore`.
+    waiters: AtomicUsize,
+    /// Shared with the idle worker, which closes connections idle for longer
+    /// than [`MYSQL_INACTIVE_CONNECTION_LIFETIME`].
+    connections: Arc<Mutex<IdleConnections>>,
+    /// Wakes the idle worker when a returned connection must be closed before
+    /// [`IdleConnections::next_cleanup`].
+    idle_worker_wakeup: Arc<Notify>,
     stats: ConnectionPoolStats,
     // Used for metrics
     cluster_name: String,
+    idle_worker: JoinHandle<()>,
+    _runtime: PhantomData<fn() -> RT>,
 }
 
 // Deriving the cluster name from the URL is a bit hacky, but seems cleaner than
@@ -665,26 +891,17 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
         url: &Url,
         use_prepared_statements: bool,
         require_leader: bool,
-        runtime: Option<RT>,
     ) -> anyhow::Result<Self> {
         let cluster_name = derive_cluster_name(url).to_owned();
-        // NOTE: the inactive_connection_ttl only applies to connections > min
-        // constraint. So to make it apply to all connections, set min=0.
-        // Connections are accessed in FIFO order from the pool (not round robin)
-        // so the pool should be kept small by limiting inactive_connection_ttl.
-        let constraints = PoolConstraints::new(0, *MYSQL_MAX_CONNECTIONS).unwrap();
-        let pool_opts = PoolOpts::new()
-            .with_constraints(constraints)
-            // Jitter max connection lifetime with 20%. This is split between
-            // the ttl_check_interval and the per-connection jitter.
-            .with_ttl_check_interval(*MYSQL_MAX_CONNECTION_LIFETIME / 10)
-            .with_inactive_connection_ttl(*MYSQL_INACTIVE_CONNECTION_LIFETIME)
-            .with_abs_conn_ttl(Some(*MYSQL_MAX_CONNECTION_LIFETIME))
-            .with_abs_conn_ttl_jitter(Some(*MYSQL_MAX_CONNECTION_LIFETIME / 10))
-            .with_reset_connection(false); // persist prepared statements
         let opts = Opts::from_str(url.as_ref())?;
         let ssl_opts = opts.ssl_opts().cloned();
-        let mut opts = OptsBuilder::from_opts(opts).pool_opts(pool_opts);
+        let use_rds_iam_auth = opts.pass().is_none()
+            && aws_utils::rds::region_from_rds_hostname(opts.ip_or_hostname()).is_some();
+        let mut opts = OptsBuilder::from_opts(opts);
+        if use_rds_iam_auth {
+            // RDS only accepts IAM auth tokens through `mysql_clear_password`.
+            opts = opts.enable_cleartext_plugin(true);
+        }
         if require_leader {
             opts = opts.after_connect(|conn| {
                 async move {
@@ -726,22 +943,112 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
                 .with_root_certs(vec![ca_file_path.into()]);
             opts = opts.ssl_opts(ssl_opts);
         }
+        let opts = Opts::from(opts);
+        let rds_iam_auth = if use_rds_iam_auth {
+            let user = opts
+                .user()
+                .context("RDS IAM auth requires a username in the MySQL URL")?;
+            anyhow::ensure!(
+                opts.ssl_opts().is_some(),
+                "RDS IAM auth requires TLS: set require_ssl=true in the MySQL URL or set \
+                 MYSQL_CA_FILE"
+            );
+            tracing::info!("Connecting to {cluster_name} with RDS IAM auth as {user}");
+            Some(RdsIamAuth {
+                cached_opts: Mutex::new(None),
+            })
+        } else {
+            None
+        };
+        let connections = Arc::new(Mutex::new(IdleConnections {
+            conns: Vec::new(),
+            // The idle worker's first cleanup runs as soon as it is spawned.
+            next_cleanup: Instant::now(),
+        }));
+        let idle_worker_wakeup = Arc::new(Notify::new());
+        let idle_worker = tokio_spawn(
+            "mysql_idle_worker",
+            idle_worker(
+                Arc::downgrade(&connections),
+                idle_worker_wakeup.clone(),
+                cluster_name.clone(),
+            ),
+        );
         Ok(Self {
-            pool: Pool::new(opts),
+            v6_replica: OnceLock::new(),
+            opts,
+            rds_iam_auth,
             use_prepared_statements,
-            runtime,
+            semaphore: Semaphore::new(*MYSQL_MAX_CONNECTIONS),
+            established: Arc::new(AtomicUsize::new(0)),
+            waiters: AtomicUsize::new(0),
+            connections,
+            idle_worker_wakeup,
             stats: new_connection_pool_stats(cluster_name.as_str()),
             cluster_name,
+            idle_worker,
+            _runtime: PhantomData,
         })
     }
 
-    pub(crate) async fn acquire_internal(&self) -> anyhow::Result<Conn> {
-        let pool_get_timer = get_connection_timer(&self.cluster_name);
-        let conn = with_timeout(self.pool.get_conn())
-            .trace_if_pending(func_path!()) // only trace if slow
-            .await;
-        pool_get_timer.finish(conn.is_ok());
-        conn
+    /// Connects to the cluster leader using a Big Brain database URL.
+    pub fn connect_cluster(cluster_url: &str, require_ssl: bool) -> anyhow::Result<(Self, String)> {
+        let mut url: Url = cluster_url.parse().context("invalid MySQL cluster URL")?;
+        anyhow::ensure!(
+            !url.username().is_empty(),
+            "MySQL cluster URL username must be set"
+        );
+        let db_name = url.path().trim_start_matches('/').to_string();
+        anyhow::ensure!(
+            !db_name.is_empty(),
+            "MySQL cluster URL must contain a database name"
+        );
+        if require_ssl {
+            url.query_pairs_mut().append_pair("require_ssl", "true");
+        }
+        url.query_pairs_mut()
+            .append_pair("enable_cleartext_plugin", "true");
+        let pool = Self::new(
+            &url,
+            *DATABASE_USE_PREPARED_STATEMENTS,
+            true, /* require_leader */
+        )?;
+        Ok((pool, db_name))
+    }
+
+    /// Assumes that we already have a semaphore permit
+    async fn get_connection_internal(&self) -> anyhow::Result<PooledConnection> {
+        {
+            let mut idle = self.connections.lock();
+            // Always reuse the newest connection
+            while let Some(conn) = idle.conns.pop() {
+                if conn.is_expired() {
+                    log_discarded_connection(&self.cluster_name, DiscardReason::Expired);
+                    continue;
+                }
+                return Ok(conn);
+            }
+        }
+        // box this since it is less common
+        Box::pin(self.create_connection()).await
+    }
+
+    #[fastrace::trace]
+    async fn create_connection(&self) -> anyhow::Result<PooledConnection> {
+        // A guard also counts attempts abandoned by a caller's timeout, such
+        // as `acquire`'s, which expires before this one after waiting for a
+        // permit.
+        let failed = scopeguard::guard((), |()| log_connection_create_failed(&self.cluster_name));
+        let mut opts = self.opts.clone();
+        if let Some(rds_iam_auth) = &self.rds_iam_auth {
+            opts = rds_iam_auth
+                .authed_opts(&self.opts)
+                .await
+                .map_err(database_operational_error)?;
+        }
+        let conn = with_timeout(Conn::new(opts)).await?;
+        ScopeGuard::into_inner(failed);
+        Ok(PooledConnection::new(conn, &self.established))
     }
 
     pub(crate) async fn acquire<'a>(
@@ -749,47 +1056,206 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
         name: &'static str,
         db_name: &'a str,
     ) -> anyhow::Result<MySqlConnection<'a, RT>> {
-        let conn = self.acquire_internal().await?;
+        let pool_get_timer = get_connection_timer(&self.cluster_name);
+        let conn = with_anyhow_timeout(async {
+            let permit = {
+                struct WaiterGuard<'a>(&'a AtomicUsize);
+                impl Drop for WaiterGuard<'_> {
+                    fn drop(&mut self) {
+                        self.0.fetch_sub(1, Ordering::Relaxed);
+                    }
+                }
+                self.waiters.fetch_add(1, Ordering::Relaxed);
+                let _waiting = WaiterGuard(&self.waiters);
+                self.semaphore
+                    .acquire()
+                    .trace_if_pending("mysql_semaphore_acquire")
+                    .await
+                    .context("ConvexMySqlPool has been shut down")
+                    .map_err(database_operational_error)?
+            };
+            let conn = self.get_connection_internal().await?;
+            anyhow::Ok((permit, conn))
+        })
+        .trace_if_pending(func_path!()) // only trace if slow
+        .await;
+        pool_get_timer.finish(conn.is_ok());
+        let (permit, conn) = conn?;
         Ok(MySqlConnection {
-            conn,
+            pool: self,
+            _permit: permit,
+            conn: Some(conn),
+            dirty: false,
             labels: vec![
                 StaticMetricLabel::new("name", name),
                 StaticMetricLabel::new("cluster_name", self.cluster_name.clone()),
             ],
-            pool: self,
             db_name,
             _tracker: ConnectionTracker::new(&self.stats),
             _timer: connection_lifetime_timer(name, &self.cluster_name),
         })
     }
 
+    /// Runs a read-only query that returns one or zero rows, retrying on
+    /// operational errors.
+    ///
+    /// The statement runs against the URL's default database and must not
+    /// use `@db_name`. `name` is used for metrics.
+    ///
+    /// # Panics
+    ///
+    /// With prepared statements disabled, only `NULL`, `Bytes`, `Int`, and
+    /// `UInt` parameters are supported. `Float`, `Double`, `Date`, and `Time`
+    /// parameters panic.
+    pub async fn query_optional(
+        &self,
+        name: &'static str,
+        statement: &str,
+        params: Vec<MySqlValue>,
+    ) -> anyhow::Result<Option<Row>> {
+        self.acquire(name, "")
+            .await?
+            .query_optional(statement, params)
+            .await
+    }
+
+    /// Runs a read-only query and maps each row with `f`, retrying on
+    /// operational errors.
+    ///
+    /// The statement runs against the URL's default database and must not
+    /// use `@db_name`. `name` is used for metrics.
+    ///
+    /// # Panics
+    ///
+    /// With prepared statements disabled, only `NULL`, `Bytes`, `Int`, and
+    /// `UInt` parameters are supported. `Float`, `Double`, `Date`, and `Time`
+    /// parameters panic.
+    pub async fn query_collect<R: Send>(
+        &self,
+        name: &'static str,
+        statement: &str,
+        params: Vec<MySqlValue>,
+        f: impl Fn(Row) -> anyhow::Result<R> + Send + Sync + 'static,
+    ) -> anyhow::Result<Vec<R>> {
+        self.acquire(name, "")
+            .await?
+            .query_collect(statement, params, 0 /* size_hint */, f)
+            .await
+    }
+
+    /// Executes one or more statements, separated by semicolons, using the
+    /// text protocol.
+    ///
+    /// The statements run against the URL's default database and must not
+    /// use `@db_name` or `?`. `name` is used for metrics.
+    pub async fn execute(&self, name: &'static str, statement: &str) -> anyhow::Result<()> {
+        self.acquire(name, "").await?.execute_many(statement).await
+    }
+
+    fn return_connection(&self, mut conn: PooledConnection) {
+        if conn.is_expired() {
+            log_discarded_connection(&self.cluster_name, DiscardReason::Expired);
+            return;
+        }
+        conn.last_used = Instant::now();
+        let mut idle = self.connections.lock();
+        // don't return connections to a closed pool
+        if !self.semaphore.is_closed() {
+            let deadline = conn.idle_deadline();
+            idle.conns.push(conn);
+            log_connection_returned_to_pool(&self.cluster_name);
+            if deadline < idle.next_cleanup {
+                idle.next_cleanup = deadline;
+                self.idle_worker_wakeup.notify_one();
+            }
+        }
+    }
+
     pub fn cluster_name(&self) -> &str {
         &self.cluster_name
+    }
+
+    /// Set before opening deployments: each writer keeps its initial target
+    /// for its lifetime.
+    pub fn set_v6_replica(&self, target: crate::V6ReplicaTarget<RT>) -> anyhow::Result<()> {
+        self.v6_replica
+            .set(target)
+            .ok()
+            .context("V6 replica target is already set")
     }
 
     /// Report gauges with information about the MySQL pool.
     /// Note that this only makes sense if there is a single pool for this
     /// cluster in this process.
     pub fn log_pool_metrics(&self) {
-        crate::metrics::log_pool_metrics(&self.cluster_name, &self.pool.metrics());
+        let idle = self.connections.lock().conns.len();
+        crate::metrics::log_pool_metrics(
+            &self.cluster_name,
+            idle,
+            self.established.load(Ordering::Relaxed),
+            self.waiters.load(Ordering::Relaxed),
+        );
     }
 
+    /// Disconnects all pooled connections and makes further `acquire` calls
+    /// fail.
     pub async fn shutdown(&self) -> anyhow::Result<()> {
         tracing::info!("Shutting down ConvexMySqlPool");
-        Ok(self.pool.clone().disconnect().await?)
+        // N.B.: this doesn't close in-use connections, but they won't be
+        // returned to the pool on drop
+        self.semaphore.close();
+        self.idle_worker.abort();
+        let connections = mem::take(&mut self.connections.lock().conns);
+        future::try_join_all(connections.into_iter().map(|c| c.conn.disconnect())).await?;
+        Ok(())
     }
 }
 
 impl<RT: Runtime> Drop for ConvexMySqlPool<RT> {
     fn drop(&mut self) {
+        // Dropping the idle connections disconnects them in the background.
         tracing::info!("ConvexMySqlPool dropped");
-        let Some(runtime) = self.runtime.take() else {
-            return;
-        };
-        let pool = self.pool.clone();
-        runtime.spawn_background("mysql_pool_disconnect", async move {
-            let _ = pool.disconnect().await;
-            tracing::info!("ConvexMySqlPool pool successfully closed");
-        });
+        self.idle_worker.abort();
     }
+}
+
+async fn idle_worker(
+    connections: Weak<Mutex<IdleConnections>>,
+    wakeup: Arc<Notify>,
+    cluster_name: String,
+) {
+    loop {
+        let next_cleanup = if let Some(connections) = connections.upgrade() {
+            cleanup_connections(&connections, &cluster_name)
+        } else {
+            break;
+        };
+        // Either outcome means it is time to clean up again.
+        let _ = tokio::time::timeout_at(next_cleanup, wakeup.notified()).await;
+    }
+}
+
+/// Closes connections that are idle for too long or past their maximum
+/// lifetime. Schedules and returns the next cleanup, for when the next
+/// remaining connection needs to be closed.
+fn cleanup_connections(connections: &Mutex<IdleConnections>, cluster_name: &str) -> Instant {
+    let mut idle = connections.lock();
+    idle.conns.retain(|c| {
+        let reason = if c.is_expired() {
+            DiscardReason::Expired
+        } else if c.last_used.elapsed() >= *MYSQL_INACTIVE_CONNECTION_LIFETIME {
+            DiscardReason::Idle
+        } else {
+            return true;
+        };
+        log_discarded_connection(cluster_name, reason);
+        false
+    });
+    idle.next_cleanup = idle
+        .conns
+        .iter()
+        .map(PooledConnection::idle_deadline)
+        .min()
+        .unwrap_or_else(|| Instant::now() + *MYSQL_INACTIVE_CONNECTION_LIFETIME);
+    idle.next_cleanup
 }

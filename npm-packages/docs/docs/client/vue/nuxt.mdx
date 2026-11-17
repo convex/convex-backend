@@ -5,9 +5,22 @@ sidebar_position: 100
 
 [Nuxt](https://nuxt.com/) is a powerful web framework powered by Vue.
 
-The community-maintained
-[`convex-nuxt` npm package](https://www.npmjs.com/package/convex-nuxt) provides
-deep integration of Convex with the Nuxt 3 ecosystem.
+<Admonition type="info">
+
+The packages below are community-maintained. Thanks to the maintainers for their
+work!
+
+You're welcome to ask questions about them on the
+[Convex Discord](https://convex.dev/community) but opening an issue in the
+package's GitHub repository is a better way to request a new feature or report a
+bug.
+
+</Admonition>
+
+## convex-nuxt
+
+The [`convex-nuxt`](https://www.npmjs.com/package/convex-nuxt) npm package
+provides deep integration of Convex with the Nuxt 3 ecosystem.
 
 It uses [convex-vue](./overview.mdx) under the hood.
 
@@ -15,16 +28,41 @@ See the [Nuxt Quickstart](/quickstart/nuxt.mdx) to get started or the
 [convex-nuxt GitHub page](https://github.com/chris-visser/convex-nuxt) for more
 documentation.
 
-<Admonition type="info">
+Maintained by [Chris Visser](https://github.com/chris-visser).
 
-The
-[`convex-nuxt` library](https://github.com/chris-visser/convex-nuxt/tree/main)
-is community-maintained. Thank you to the maintainer
-[Chris Visser](https://github.com/chris-visser) for his work on this project!
+## nuxt-convex-module
 
-You're welcome to ask questions about the library on the
-[Convex Discord](https://convex.dev/community) but opening a
-[convex-nuxt GitHub](https://github.com/chris-visser/convex-nuxt) issue is a
-better way to request a new feature or report a bug.
+The [`nuxt-convex-module`](https://www.npmjs.com/package/nuxt-convex-module) npm
+package provides integration of Convex with the Nuxt 4 ecosystem.
 
-</Admonition>
+See the
+[installation guide](https://nuxt-convex-module.dev/getting-started/installation)
+to get started, the [nuxt-convex-module docs](https://nuxt-convex-module.dev)
+for more documentation, or its
+[GitHub page](https://github.com/qruto/nuxt-convex-module) for issues.
+
+It ports the official [Convex React](/client/react/overview.mdx) and
+[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients, with some
+additions. The port also covers the [Clerk](/auth/clerk.mdx) and
+[Auth0](/auth/auth0.mdx) adapters and the clients of the
+[Better Auth](https://labs.convex.dev/better-auth) and
+[Polar](https://www.convex.dev/components/polar) components.
+
+Beyond the port, it adds:
+
+- [`useAsyncQuery`](https://nuxt-convex-module.dev/guide/server-and-ssr#useasyncquery-ssr-data-the-nuxt-way)
+  and `useAsyncPaginatedQuery`, which render query data on the server and keep
+  it live in the browser
+- A `<ConvexImage>` component and
+  [file storage](https://nuxt-convex-module.dev/guide/file-storage) composables
+  with upload progress, queues and retries
+- A
+  [route middleware](https://nuxt-convex-module.dev/components/better-auth#use)
+  that protects pages with Better Auth
+- A Convex tab in [Nuxt DevTools](https://nuxt-convex-module.dev/guide/devtools)
+- A
+  [Content Security Policy](https://nuxt-convex-module.dev/getting-started/security)
+  with your Convex URLs, set through
+  [`nuxt-security`](https://nuxt-security.vercel.app)
+
+Maintained by [Slava Razum](https://github.com/slavarazum).

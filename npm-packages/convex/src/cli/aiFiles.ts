@@ -34,9 +34,22 @@ const aiInstall = new Command("install")
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir, aiFilesConfig } =
+    const { ctx, projectDir, convexDir, aiFilesConfig } =
       await resolveProjectPaths();
-    await installAiFiles({ projectDir, convexDir, aiFilesConfig });
+
+    const result = await installAiFiles({
+      projectDir,
+      convexDir,
+      aiFilesConfig,
+    });
+
+    if (result.kind === "error") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: result.message,
+      });
+    }
 
     logMessage(`${chalkStderr.green("✔")} Convex AI files installed.`);
   });
@@ -72,9 +85,22 @@ const aiUpdate = new Command("update")
   )
   .allowExcessArguments(false)
   .action(async () => {
-    const { projectDir, convexDir, aiFilesConfig } =
+    const { ctx, projectDir, convexDir, aiFilesConfig } =
       await resolveProjectPaths();
-    await installAiFiles({ projectDir, convexDir, aiFilesConfig });
+
+    const result = await installAiFiles({
+      projectDir,
+      convexDir,
+      aiFilesConfig,
+    });
+
+    if (result.kind === "error") {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: result.message,
+      });
+    }
 
     logMessage(`${chalkStderr.green("✔")} Convex AI files updated.`);
   });

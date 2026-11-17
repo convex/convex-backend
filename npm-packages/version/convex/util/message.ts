@@ -43,7 +43,7 @@ export function generateMessage(
 
   // Format the message with chalk
   const message = `${chalk.cyan(`A ${updateType} update is available for Convex`)} ${chalk.dim(`(${currentVersion} → ${latestVersion})`)}
-${chalk.dim("Changelog:")} ${chalk.underline("https://github.com/get-convex/convex-js/blob/main/CHANGELOG.md#changelog")}`;
+${chalk.dim("Changelog:")} ${chalk.underline("https://github.com/convex/convex-js/blob/main/CHANGELOG.md#changelog")}`;
 
   return message;
 }

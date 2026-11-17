@@ -31,10 +31,10 @@ pub(crate) use persistence::Persistence;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 pub(crate) use sql::{
-    CHECK_READ_ONLY,
     FIND_TABLE,
     INIT_LEASE,
     LEASE_ACQUIRE,
+    LEASE_ACQUIRE_ALLOW_READ_ONLY,
     LEASE_PRECONDITION,
     READ_PERSISTENCE_GLOBAL,
     READ_V6_SCOPED_TABLES,
@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS @db_name.documents (
 ) ROW_FORMAT=DYNAMIC;
 "#;
 
-const INDEXES_LATEST_DDL: &str = r#"
+pub(crate) const INDEXES_LATEST_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS @db_name.indexes_latest (
     deployment_id INT UNSIGNED NOT NULL,
     index_id INT UNSIGNED NOT NULL,
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS @db_name.indexes_latest (
 
 /// Deletion markers used to reconcile index backfill rows. Each marker records
 /// the latest deletion timestamp for an index key.
-const INDEXES_BACKFILL_DELETES_DDL: &str = r#"
+pub(crate) const INDEXES_BACKFILL_DELETES_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS @db_name.indexes_backfill_deletes (
     deployment_id INT UNSIGNED NOT NULL,
     index_id INT UNSIGNED NOT NULL,

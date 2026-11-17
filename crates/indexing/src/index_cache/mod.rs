@@ -1,7 +1,7 @@
 use std::{
     collections::{
-        hash_map::Entry,
-        HashMap as StdHashMap,
+        btree_map::Entry,
+        BTreeMap,
         HashSet,
     },
     sync::{
@@ -99,31 +99,31 @@ impl CacheKey {
 
 struct IndexIntervalsInner {
     map: IntervalMap,
-    id_to_params: StdHashMap<SubscriberId, (Arc<Interval>, Order, usize)>,
+    id_to_params: BTreeMap<SubscriberId, (Arc<Interval>, Order, usize)>,
     /// Maps each registered (interval, order, max_size) to its (SubscriberId,
     /// refcount). Each call to `insert` increments the refcount; each call to
     /// `remove` decrements it. The entry is only removed from the IntervalMap
     /// when the refcount reaches zero
     /// Refcounting is necessary to prevent the lazy eviction listener
     /// from unregistering an interval that a concurrent populate re-registered.
-    params_to_id: StdHashMap<(Arc<Interval>, Order, usize), (SubscriberId, usize)>,
+    params_to_id: BTreeMap<(Arc<Interval>, Order, usize), (SubscriberId, usize)>,
     next_id: SubscriberId,
 }
 
 /// Tracks which (interval, order, max_size) triples are cached for a given
 /// index, using an IntervalMap for O((k+1) log n) point queries
 #[derive(Clone)]
-struct IndexIntervals {
+pub struct IndexIntervals {
     inner: Arc<Mutex<IndexIntervalsInner>>,
 }
 
 impl IndexIntervals {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(IndexIntervalsInner {
                 map: IntervalMap::new(),
-                id_to_params: StdHashMap::new(),
-                params_to_id: StdHashMap::new(),
+                id_to_params: BTreeMap::new(),
+                params_to_id: BTreeMap::new(),
                 next_id: 0,
             })),
         }
@@ -131,7 +131,7 @@ impl IndexIntervals {
 
     /// Increments the refcount for an (interval, order, max_size) triple,
     /// inserting it into the IntervalMap if this is the first registration.
-    fn insert(&self, interval: Arc<Interval>, order: Order, max_size: usize) {
+    pub fn insert(&self, interval: Arc<Interval>, order: Order, max_size: usize) {
         let mut inner = self.inner.lock();
         if let Some((_, refcount)) =
             inner
@@ -158,7 +158,7 @@ impl IndexIntervals {
     /// Decrements the refcount for an (interval, order, max_size) triple,
     /// removing it from the IntervalMap when the refcount reaches zero.
     /// No-op if not present.
-    fn remove(&self, interval: Arc<Interval>, order: Order, max_size: usize) {
+    pub fn remove(&self, interval: Arc<Interval>, order: Order, max_size: usize) {
         let mut inner = self.inner.lock();
         if let Entry::Occupied(mut e) = inner.params_to_id.entry((interval, order, max_size)) {
             let (id, refcount) = e.get_mut();
@@ -191,7 +191,7 @@ impl IndexIntervals {
 
     /// Returns all (interval, order, max_size) triples whose interval contains
     /// `old` or `new`. Results are deduplicated.
-    fn query_keys(
+    pub fn query_keys(
         &self,
         old: Option<&[u8]>,
         new: Option<&[u8]>,
@@ -298,18 +298,23 @@ impl IndexCache {
                 .collect();
 
             for (index_id, intervals) in entries {
-                for (interval, order, max_size) in intervals.intervals() {
-                    self.cache.remove(CacheKey {
-                        deployment_id,
-                        index_id,
-                        interval,
-                        order,
-                        max_size,
-                    });
-                }
+                self.evict(deployment_id, index_id, &intervals);
             }
         }
         log_index_cache_size(self.cache.weighted_size());
+    }
+
+    /// The caller must release all DashMap locks before evicting cache entries.
+    fn evict(&self, deployment_id: DeploymentId, index_id: IndexId, intervals: &IndexIntervals) {
+        for (interval, order, max_size) in intervals.intervals() {
+            self.cache.remove(CacheKey {
+                deployment_id,
+                index_id,
+                interval,
+                order,
+                max_size,
+            });
+        }
     }
 
     /// Whether `(interval, order, max_size)` is currently registered for this
@@ -376,15 +381,19 @@ impl IndexCacheHandle {
     }
 
     fn remove_index(&self, index_id: &IndexId) {
-        self.shared_cache
+        // Release the DashMap locks before acquiring the cache lock in `evict`.
+        let removed = self
+            .shared_cache
             .index_to_intervals
-            .entry(self.deployment_id)
-            .and_modify(|e| {
-                e.remove(index_id);
-            });
+            .get(&self.deployment_id)
+            .and_then(|d| d.remove(index_id));
+        if let Some((index_id, intervals)) = removed {
+            self.shared_cache
+                .evict(self.deployment_id, index_id, &intervals);
+        }
     }
 
-    pub(crate) fn get(
+    pub fn get(
         &self,
         index_id: IndexId,
         interval: Arc<Interval>,
@@ -448,7 +457,7 @@ impl IndexCacheHandle {
     /// conflicting writes.
     ///
     /// Phase 2: Mark the entry as ready.
-    pub(crate) fn populate(
+    pub fn populate(
         &self,
         index_id: IndexId,
         interval: Arc<Interval>,
@@ -494,6 +503,20 @@ impl IndexCacheHandle {
             begin_ts: ts,
             populate_id,
         };
+        // Moka can evict the entry as soon as it is inserted. Register first so
+        // the eviction listener can decrement the interval's refcount.
+        let intervals = {
+            let deployment_intervals = self
+                .shared_cache
+                .index_to_intervals
+                .entry(deployment_id)
+                .or_default();
+            let intervals = deployment_intervals
+                .entry(index_id)
+                .or_insert_with(IndexIntervals::new);
+            intervals.insert(interval.clone(), order, max_size);
+            intervals.clone()
+        };
         let result = self.shared_cache.cache.compute(key.clone(), |maybe_entry| {
             // Only insert if there's no existing entry — a prior entry with an earlier
             // begin_ts can serve a wider range of reads.
@@ -504,17 +527,10 @@ impl IndexCacheHandle {
             }
         });
         if !matches!(result, CompResult::Inserted(_)) {
+            intervals.remove(interval, order, max_size);
             timer.add_label(StaticMetricLabel::new("result", "already_exists"));
             return;
         }
-
-        self.shared_cache
-            .index_to_intervals
-            .entry(deployment_id)
-            .or_default()
-            .entry(index_id)
-            .or_insert_with(IndexIntervals::new)
-            .insert(interval.clone(), order, max_size);
 
         let (mut s0, mut s1) = (ErasedSlot::new(), ErasedSlot::new());
         let (Ok(mut writes), Ok(index_table_writes)) = (
@@ -613,9 +629,10 @@ impl IndexCacheHandle {
         let _timer = cache_apply_writes_timer();
         let deployment_id = self.deployment_id;
         for (index_name, writes) in writes_by_index {
-            // When an index is modified, we remove it from the index_to_intervals map so it
-            // can't be queried again. Doesn't really matter if it is added, removed, or
-            // updated. If it's added, future populates will populate it.
+            // When an index is modified, we untrack it and evict its cached entries, so
+            // no reader at or after the modification can be served one. This covers
+            // staging, which keeps the IndexId while writes to the staged index skip
+            // apply_writes, so entries kept through a stage/unstage would be stale.
             if &TabletIndexName::by_id(self.index_tablet) == index_name {
                 for write in writes.clone() {
                     self.remove_index(&IndexId(write.document_id.internal_id()))
@@ -708,16 +725,3 @@ impl CachedInterval {
             + self.cursor.heap_size()
     }
 }
-
-// These tests are compiled (so rust-analyzer resolves them) under both the
-// regular and `shuttle-testing` configs, but each `#[test]` is `#[ignore]`d
-// under `shuttle-testing`: that feature swaps in shuttle's synchronization
-// primitives crate-wide, which panic when used outside a shuttle runner. The
-// shuttle suite itself lives in `index_cache/shuttle_tests.rs`.
-//
-// NOTE: any new test added here must carry the same
-// `#[cfg_attr(feature = "shuttle-testing", ignore = ...)]` attribute, or it
-// will panic under `cargo test --features shuttle-testing`.
-/// Shuttle-based concurrency tests. See `index_cache/shuttle_tests.rs`.
-#[cfg(all(test, feature = "shuttle-testing"))]
-mod shuttle_tests;

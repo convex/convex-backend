@@ -5,9 +5,6 @@ authors = ["Convex, Inc. <no-reply@convex.dev>"]
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
-[package.metadata.cargo-machete]
-ignored = ["maplit"]
-
 [lib]
 doctest = false
 
@@ -27,7 +24,6 @@ value = { workspace = true }
 [dev-dependencies]
 cmd_util = { workspace = true }
 criterion = { workspace = true }
-maplit = { workspace = true }
 proptest = { workspace = true }
 value = { workspace = true, features = ["testing"] }
 

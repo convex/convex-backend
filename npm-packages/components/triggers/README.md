@@ -2,7 +2,7 @@
 
 > [!WARNING] This is an internal test project only, not intended for production
 > use. If you're looking for the triggers helper used in production, see
-> [convex-helpers](https://github.com/get-convex/convex-helpers/blob/main/packages/convex-helpers/README.md#triggers).
+> [convex-helpers](https://github.com/convex/convex-helpers/blob/main/packages/convex-helpers/README.md#triggers).
 
 This is a component built for build-on-components-day.
 

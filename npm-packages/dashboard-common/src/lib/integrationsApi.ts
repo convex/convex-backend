@@ -79,7 +79,8 @@ export function useUpdateLogStream(): (
   };
 }
 
-export function useDeleteLogStream(): (id: string) => Promise<void> {
+/** Resolves to whether the delete succeeded; failures are already toasted. */
+export function useDeleteLogStream(): (id: string) => Promise<boolean> {
   const { reportHttpError } = useContext(DeploymentInfoContext);
   const deploymentUrl = useDeploymentUrl();
   const adminKey = useAdminKey();
@@ -97,7 +98,9 @@ export function useDeleteLogStream(): (id: string) => Promise<void> {
       const normalized = normalizeError(error, "Failed to delete log stream.");
       reportHttpError("DELETE", response.url, normalized);
       toast("error", normalized.message);
+      return false;
     }
+    return true;
   };
 }
 

@@ -9,13 +9,13 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SubsequentQueriesRouteImport } from './routes/subsequent-queries'
-import { Route as SimpleSiblingQueriesRouteImport } from './routes/simple-sibling-queries'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SimpleSiblingQueriesRouteImport } from './routes/simple-sibling-queries'
+import { Route as SubsequentQueriesRouteImport } from './routes/subsequent-queries'
 
-const SubsequentQueriesRoute = SubsequentQueriesRouteImport.update({
-  id: '/subsequent-queries',
-  path: '/subsequent-queries',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SimpleSiblingQueriesRoute = SimpleSiblingQueriesRouteImport.update({
@@ -23,9 +23,9 @@ const SimpleSiblingQueriesRoute = SimpleSiblingQueriesRouteImport.update({
   path: '/simple-sibling-queries',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const SubsequentQueriesRoute = SubsequentQueriesRouteImport.update({
+  id: '/subsequent-queries',
+  path: '/subsequent-queries',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -61,11 +61,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/subsequent-queries': {
-      id: '/subsequent-queries'
-      path: '/subsequent-queries'
-      fullPath: '/subsequent-queries'
-      preLoaderRoute: typeof SubsequentQueriesRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/simple-sibling-queries': {
@@ -75,11 +75,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SimpleSiblingQueriesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/subsequent-queries': {
+      id: '/subsequent-queries'
+      path: '/subsequent-queries'
+      fullPath: '/subsequent-queries'
+      preLoaderRoute: typeof SubsequentQueriesRouteImport
       parentRoute: typeof rootRouteImport
     }
   }

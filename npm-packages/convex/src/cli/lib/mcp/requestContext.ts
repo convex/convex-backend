@@ -149,7 +149,13 @@ export function encodeDeploymentSelector(
     projectDir,
     deployment,
   };
-  return `${deployment.kind}:${btoa(JSON.stringify(payload))}`;
+  // ASCII JSON escapes support Unicode paths with the existing Latin-1 decoder.
+  const serialized = JSON.stringify(payload).replace(
+    /[\u0080-\uffff]/g,
+    (character) =>
+      `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+  return `${deployment.kind}:${btoa(serialized)}`;
 }
 
 const payloadSchema = z.object({

@@ -3,15 +3,32 @@
 ## Development workflow
 
 ```sh
-# After each change
-just format-rust
-
 # When a change is ready
-just lint-rust
-cargo build -p <package>
+just lint-rust <package>
 cargo test -p <package>
 cargo test -p <package> "test_name" # for a specific test or test group
 ```
+
+```sh
+# Before committing or presenting the output
+just format-rust
+```
+
+## Compatibility with older clients
+
+Projects keep running old versions of the `convex` npm package and its CLI, and
+of the other client libraries, for months. Some of them validate responses
+strictly, as the CLI does with zod, and fail on a missing field. Any serialized
+type in a response to those clients, such as `SerializedComponentInstantiation`,
+is a wire format shared with every version still in use:
+
+- Keep obsolete fields required only for compatibility, marked `#[deprecated]`
+  and set to an empty value only when older clients accept it; preserve fields
+  they still use. A field validated as `z.nullable(...)` must still be sent as
+  `null`: a missing key fails validation.
+- Before removing or renaming a field, check how older published versions read
+  it (for example with `npm pack convex@<version>`), not only the code in this
+  repository.
 
 ## Rust style
 
@@ -27,8 +44,7 @@ cargo test -p <package> "test_name" # for a specific test or test group
   `.ok_or_else(|| anyhow::anyhow!(...))` or `.map_err(|_| anyhow::anyhow!(...))`
   for attaching a message to a `Result` or `Option`; it says the same thing more
   concisely.
-- Express type conversions as `From`/`TryFrom` impls rather than inherent
-  methods like `into_foo()` or `to_foo()`. The trait impl composes with `?`,
-  generic bounds, and `impl Into<T>` arguments; a bespoke method does not. Reach
-  for an inherent method only when the conversion needs arguments or context the
-  trait signature cannot carry.
+- Express pure type conversions as `From`/`TryFrom` impls rather than inherent
+  methods like `into_foo()` or `to_foo()`. Use an inherent method when the
+  conversion needs arguments or is non-canonical. Avoid using trait impls for
+  complex types like `&'a Foo` or `(Foo, Bar)` unless necessary for generics.

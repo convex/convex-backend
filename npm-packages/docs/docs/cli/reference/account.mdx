@@ -1,0 +1,215 @@
+---
+sidebar_position: 16
+title: "npx convex account"
+sidebar_label: "npx convex account"
+description: "Manage saved accounts and their directory selections"
+---
+
+{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}
+
+# `npx convex account`
+
+Manage saved accounts and their directory selections.
+
+Save logins for multiple Convex accounts under names such as work and personal. `npx convex@latest account login` and `npx convex@latest account logout` are aliases for the top-level login and logout commands, with the same options. Select the appropriate account for each personal, work, or client project.
+
+In your personal project directory, save an account:
+
+- <CodeWithCopyButton text={"npx convex@latest login --account personal --select"} />
+
+In your work project directory, log in with your work account and check its teams:
+
+- <CodeWithCopyButton text={"npx convex@latest login --account work --select"} />
+- <CodeWithCopyButton text={"npx convex@latest login status"} />
+
+Choose the appropriate account in the browser; sign out of the dashboard first if it is using another account. Upgrade each project's `convex` dependency to a version that supports saved accounts, then run `npx convex dev` to develop with its selected account.
+
+`login --account` saves credentials without changing directory selections. Add `--select` to select the account for this directory and its subdirectories after checking deployment access. The first saved account becomes the default if no other account is saved. To select a saved account in another directory, run `npx convex@latest account select work`. Run `npx convex@latest account deselect` to remove this directory's selection and inherit its parent or default. Run `npx convex@latest account default` to show the default, or `npx convex@latest account default work` to change it. The closest directory selection wins. Selections use absolute paths, so select the account again after moving a project.
+
+The first account name is assigned to your existing login if you are already logged in, and becomes the default for directories without a selection. Use `--force` to authenticate another account instead, keeping the existing login as the default. Names start with a lowercase letter or number and contain only lowercase letters, numbers, hyphens, and underscores.
+
+`CONVEX_ACCOUNT` in the shell or project env file overrides directory selections and the default account. Deployment and project keys take priority over saved accounts.
+
+Use `npx convex@latest logout --account work` to remove one account's credentials, or `npx convex@latest logout --all` to remove all saved credentials. Logout preserves directory selections; a logged-out account requires login before use.
+
+After saving accounts, use `npx convex@latest` for login, logout, and account commands in every project directory on this machine. Plain `npx convex` can run the older version installed in that project. Specifying `@latest` runs the latest published CLI without updating the project's dependency.
+
+Older CLIs ignore directory selections and `CONVEX_ACCOUNT`, using the shared login instead (normally the default account). Upgrade the project's `convex` dependency to use saved accounts with project commands such as `npx convex dev` and `npx convex deploy`.
+
+Logging in with an older CLI can change the shared login independently of your saved accounts, or discard account settings if the shared login has been removed. Logging out with an older CLI deletes directory selections and the default selection but leaves named account credentials behind. Recreate any lost selections with `npx convex@latest account select <name>` and `npx convex@latest account default <name>`.
+
+## Syntax
+
+```sh
+npx convex account [options] [command]
+```
+
+## Subcommands
+
+- [`npx convex account list`](#list) — List saved accounts, credential status, and directory selections
+- [`npx convex account select`](#select) — Use a saved account in this directory and its subdirectories
+- [`npx convex account default`](#default) — Show or set the default account for directories without a directory selection
+- [`npx convex account deselect`](#deselect) — Clear this directory's account selection, inheriting its parent's selection or the default
+- [`npx convex account login`](#login) — Login to Convex
+- [`npx convex account logout`](#logout) — Log out of the selected account. Directory selections are preserved.
+
+## `npx convex account list` \{#list}
+
+List saved accounts, credential status, and directory selections
+
+### Syntax
+
+```sh
+npx convex account list [options]
+```
+
+## `npx convex account select` \{#select}
+
+Use a saved account in this directory and its subdirectories
+
+### Syntax
+
+```sh
+npx convex account select [options] <account>
+```
+
+### Arguments
+
+<dl>
+<dt>`<account>`</dt>
+<dd>
+
+Account name, such as work or personal
+
+</dd>
+</dl>
+
+### Options
+
+<dl>
+<dt>`--force`</dt>
+<dd>
+
+Select this account even if deployment access cannot be verified
+
+</dd>
+</dl>
+
+## `npx convex account default` \{#default}
+
+Show or set the default account for directories without a directory selection
+
+### Syntax
+
+```sh
+npx convex account default [options] [account]
+```
+
+### Arguments
+
+<dl>
+<dt>`[account]`</dt>
+<dd>
+
+Account name
+
+</dd>
+</dl>
+
+## `npx convex account deselect` \{#deselect}
+
+Clear this directory's account selection, inheriting its parent's selection or the default
+
+### Syntax
+
+```sh
+npx convex account deselect [options]
+```
+
+## `npx convex account login` \{#login}
+
+Login to Convex
+
+### Syntax
+
+```sh
+npx convex account login [options] [command]
+```
+
+### Options
+
+<dl>
+<dt>`--account <name>`</dt>
+<dd>
+
+Log in to a named account
+
+</dd>
+<dt>`--select`</dt>
+<dd>
+
+Select this account for this directory and its subdirectories
+
+</dd>
+<dt>`--device-name <name>`</dt>
+<dd>
+
+Provide a name for the device being authorized
+
+</dd>
+<dt>`-f, --force`</dt>
+<dd>
+
+Proceed with login even if a valid access token already exists for this device
+
+</dd>
+<dt>`--no-open`</dt>
+<dd>
+
+Don't automatically open the login link in the default browser
+
+</dd>
+<dt>`--login-flow <mode>`</dt>
+<dd>
+
+How to log in; defaults to guessing based on the environment.
+
+</dd>
+</dl>
+
+### `npx convex account login status` \{#login-status}
+
+Check login status and list accessible teams. Exits with code 1 when not logged in.
+
+#### Syntax
+
+```sh
+npx convex account login status [options]
+```
+
+## `npx convex account logout` \{#logout}
+
+Log out of the selected account. Directory selections are preserved.
+
+### Syntax
+
+```sh
+npx convex account logout [options]
+```
+
+### Options
+
+<dl>
+<dt>`--account <name>`</dt>
+<dd>
+
+Remove only this account's saved credentials
+
+</dd>
+<dt>`--all`</dt>
+<dd>
+
+Remove all saved account credentials, preserving account selections
+
+</dd>
+</dl>

@@ -1,0 +1,414 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 1
+title: Setting up Next.js
+description:
+  Use Convex Auth with server-side rendering in a Next.js App Router app.
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+Convex Auth supports server-side rendering (SSR) with the Next.js App Router. In
+an SSR app, sign-in, refresh, and sign-out run on your Next.js server rather
+than in the browser:
+
+- The **refresh token** is stored in an `httpOnly` cookie, so it never reaches
+  client JavaScript.
+- The **access token** is available to both sides: Server Components use it to
+  run authenticated Convex queries during rendering, and the browser uses it to
+  authenticate the Convex client.
+
+The sign-in method guides still apply. Your Convex backend and the method hooks
+you call from your UI are the same as in a single-page app. What changes is how
+the frontend connects to Convex Auth. This guide covers that wiring.
+[Sign-in methods with Next.js](./methods.mdx) covers the method-specific
+differences.
+
+The code below comes from the
+[Next.js example](https://github.com/convex/convex-auth/tree/reboot/examples/nextjs),
+which supports username + password and GitHub sign-in.
+
+## Setting up Convex Auth in a Next.js app
+
+<StepByStep>
+
+<Step title="Follow the “Getting started” guide">
+
+Start from a Next.js App Router project. Then install Convex Auth and set up the
+core as described in the [Getting started](../getting-started.mdx) guide.
+
+</Step>
+
+<Step title="Set up the backend for your sign-in methods">
+
+Follow the backend steps of the guide for each sign-in method you want to use:
+install the components, add the `users` table, set up user creation, and export
+the public functions from `convex/auth.ts`.
+
+:::info
+
+Don't follow the frontend steps (“Set up the provider on the client” and the
+steps that set up the authentication UI). The rest of this guide replaces them.
+
+:::
+
+The SSR helpers need one more function from the core than a single-page app
+does. Export `isAuthenticated` next to `signOut` and `refreshSession`. The
+server uses it to check access tokens with your deployment, so it doesn't trust
+a cookie only because it can decode it.
+
+```ts title="convex/auth.ts"
+import { components, internal } from "./_generated/api";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+import { setupGithub } from "@convex-dev/auth/methods/github/server";
+import { setupUsernamePassword } from "@convex-dev/auth/methods/username-password/server";
+
+// The core owns sessions and JWT minting. Each sign-in method is wired to it
+// with its own setup function, and only hands back its functions once the app
+// attaches the callbacks that create its user rows. Each sign-in method
+// exposes the functions its client hooks call, like
+// `signUpWithUsernamePassword` / `signInWithUsernamePassword` for the password
+// one.
+// Under SSR those calls get proxied to Convex via the SSR host. The sign-in
+// functions exposed here are wired up to be proxied in src/lib/serverAuth.ts.
+const auth = setupConvexAuth({ component: components.auth });
+// highlight-next-line
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+// `onSignIn` is optional, and runs on every sign-in including the first. This
+// app uses it to stamp the user's last sign-in.
+export const { signUpWithUsernamePassword, signInWithUsernamePassword } =
+  setupUsernamePassword(auth, {
+    component: components.authPassword,
+    usernameComponent: components.authUsername,
+  }).attachUserCallbacks({
+    createUser: internal.users.createUser,
+    onSignIn: internal.users.onSignIn,
+  });
+
+export const { startSignInWithGithub, completeSignInWithGithub } = setupGithub(
+  auth,
+  {
+    component: components.authGithub,
+    allowedRedirectOrigins: ["http://localhost:3000"],
+  },
+).attachUserCallbacks({
+  createUser: internal.users.createUser,
+  onSignIn: internal.users.onSignIn,
+});
+```
+
+</Step>
+
+<Step title="Set up the auth route handlers">
+
+Create `src/lib/serverAuth.ts` and call `setupConvexAuthServer`. It returns the
+handlers that sign users in, refresh the session, and sign them out.
+
+The `signIn` list says which Convex functions the browser can call through the
+sign-in route. The route refuses any function that isn't listed. Add every
+function in your app that creates a session, like signing up or signing in. See
+[Sign-in methods with Next.js](./methods.mdx) for the functions each method
+needs.
+
+```ts title="src/lib/serverAuth.ts"
+import { setupConvexAuthServer } from "@convex-dev/auth/ssr";
+import { api } from "@/convex/_generated/api";
+
+// The framework-agnostic auth handlers, configured once. The `secure` cookie
+// flag is decided here (HTTPS-only in production) and applies to every handler,
+// including sign-in. Route files under app/auth/ mount what this returns.
+export const auth = setupConvexAuthServer({
+  convexUrl: process.env.NEXT_PUBLIC_CONVEX_URL!,
+  refreshSession: api.auth.refreshSession,
+  signOut: api.auth.signOut,
+  // Every function that signs a user in, meaning it creates a session and
+  // returns its tokens, must be listed here. The sign-in route refuses
+  // anything else.
+  // highlight-start
+  signIn: [
+    api.auth.signInWithUsernamePassword,
+    api.auth.signUpWithUsernamePassword,
+    api.auth.completeSignInWithGithub,
+  ],
+  // highlight-end
+  cookieOptions: { secure: process.env.NODE_ENV === "production" },
+});
+```
+
+</Step>
+
+<Step title="Mount the auth routes">
+
+Mount each handler as a route under `app/auth/`. The client posts to
+`/auth/signin`, `/auth/refresh`, and `/auth/signout`, so mount the handlers at
+exactly these paths.
+
+{/* prettier-ignore-start */}
+
+<Tabs>
+  <TabItem value="signin" label="signin">
+    ```ts title="app/auth/signin/route.ts"
+    import { auth } from "@/src/lib/serverAuth";
+
+    // The sign-in route. It serves every sign-in function listed in serverAuth.ts,
+    // forwarding each call to the deployment. Instead of sending all resulting
+    // tokens as part of the response body (as calling the Convex function directly
+    // would do), it moves the minted refresh token into an httpOnly cookie on the
+    // way back.
+    //
+    // Adding an auth method means adding its function to that allowlist. There is
+    // no per-method route or client code.
+    export const POST = auth.convexProxyHandler;
+    ```
+  </TabItem>
+  <TabItem value="refresh" label="refresh">
+    ```ts title="app/auth/refresh/route.ts"
+    import { auth } from "@/src/lib/serverAuth";
+
+    export const POST = auth.refreshHandler;
+    ```
+  </TabItem>
+  <TabItem value="signout" label="signout">
+    ```ts title="app/auth/signout/route.ts"
+    import { auth } from "@/src/lib/serverAuth";
+
+    export const POST = auth.signOutHandler;
+    ```
+  </TabItem>
+</Tabs>
+
+{/* prettier-ignore-end */}
+
+</Step>
+
+<Step title="Set up the Next.js helpers">
+
+Create `src/lib/convexAuth.tsx` and call `setupConvexAuthNextjs`. It returns the
+parts of the integration that are specific to Next.js:
+
+- `convexAuthNextjsProxy` builds the Next.js proxy (`proxy.ts`).
+- `nextjsProxyRedirect` redirects a request from inside the proxy.
+- `convexAuthNextjsAccessToken` reads the access token in a Server Component.
+- `isAuthenticatedNextjs` checks whether the current request is signed in.
+- `ConvexAuthNextjsServerProvider` replaces `ConvexAuthProvider`.
+
+```tsx title="src/lib/convexAuth.tsx"
+import { setupConvexAuthNextjs } from "@convex-dev/auth/ssr/nextjs";
+import { api } from "@/convex/_generated/api";
+
+// The Next-specific server helpers: proxy (up-front refresh + redirects),
+// the Server-Component token accessor, and the provider that hydrates the
+// client. The sign-in / refresh / sign-out *route handlers* are mounted
+// separately under app/auth/ from the framework-agnostic handlers.
+export const {
+  convexAuthNextjsProxy,
+  nextjsProxyRedirect,
+  convexAuthNextjsAccessToken,
+  isAuthenticatedNextjs,
+  ConvexAuthNextjsServerProvider,
+} = setupConvexAuthNextjs({
+  convexUrl: process.env.NEXT_PUBLIC_CONVEX_URL!,
+  refreshSession: api.auth.refreshSession,
+  isAuthenticated: api.auth.isAuthenticated,
+});
+```
+
+</Step>
+
+<Step title="Set up the proxy">
+
+Create `proxy.ts` next to your `app/` directory: at the project root, or at
+`src/proxy.ts` if your app uses a `src/` directory. Next.js ignores a proxy
+anywhere else, without a warning.
+
+The proxy runs before each page request. It refreshes the session if the access
+token is about to expire, so Server Components always see a current token. It
+also lets you redirect requests based on whether the user is signed in.
+
+:::warning
+
+Keep the `/auth` routes out of the `matcher`. Those routes set their own
+cookies.
+
+:::
+
+```ts title="proxy.ts"
+import {
+  convexAuthNextjsProxy,
+  nextjsProxyRedirect,
+} from "@/src/lib/convexAuth";
+
+// Uses the provided convexAuthNextjsProxy function to build a custom proxy handler
+// for this example application. As seen here, you supply a custom function that makes
+// routing decisions, which gets called with an `isAuthenticated` helper. That allows
+// checking to see if the browser request is currently authenticated and thus which
+// page should be rendered based on that state and the requested page.
+export default convexAuthNextjsProxy(async (request, { isAuthenticated }) => {
+  const isAuthPage = ["/signin", "/signup"].includes(request.nextUrl.pathname);
+  const authed = await isAuthenticated();
+  if (!isAuthPage && !authed) {
+    return nextjsProxyRedirect(request, "/signin");
+  }
+  if (isAuthPage && authed) {
+    return nextjsProxyRedirect(request, "/");
+  }
+});
+
+export const config = {
+  // Run on everything except the /auth handlers (they own their own cookies)
+  // and Next internals.
+  matcher: ["/((?!auth(?:/|$)|_next/static|_next/image|favicon.ico).*)"],
+};
+```
+
+</Step>
+
+<Step title="Set up the provider">
+
+Wrap your app in `ConvexAuthNextjsServerProvider` in the root layout. It is a
+Server Component that reads the access token from the cookie and renders the
+client-side `ConvexAuthNextjsProvider`, so the Convex client is ready to
+authenticate when the page loads. Use it in place of `ConvexAuthProvider` and
+`ConvexProvider`.
+
+```tsx title="app/layout.tsx"
+import { Suspense, type ReactNode } from "react";
+// highlight-next-line
+import { ConvexAuthNextjsServerProvider } from "@/src/lib/convexAuth";
+
+export const metadata = {
+  title: "Convex Auth — Next.js SSR",
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <body style={{ fontFamily: "system-ui, sans-serif", margin: 0 }}>
+        {/* The provider reads the auth cookies, so with Cache Components it
+            has to render inside a Suspense boundary. */}
+        // highlight-start
+        <Suspense>
+          <ConvexAuthNextjsServerProvider>
+            {children}
+          </ConvexAuthNextjsServerProvider>
+        </Suspense>
+        // highlight-end
+      </body>
+    </html>
+  );
+}
+```
+
+</Step>
+
+<Step title="Render authenticated data on the server">
+
+In a Server Component, get the access token with `convexAuthNextjsAccessToken`
+and pass it to `preloadQuery` from `convex/nextjs`. The page renders with the
+signed-in user's data, and the client continues the query live with
+`usePreloadedQuery`.
+
+To decide on the server whether the user is signed in, use
+`isAuthenticatedNextjs()` and not the presence of a token.
+`convexAuthNextjsAccessToken` only checks that the token hasn't expired.
+`isAuthenticatedNextjs` checks the token's signature with your deployment.
+
+```tsx title="app/page.tsx"
+import { preloadQuery } from "convex/nextjs";
+import { api } from "@/convex/_generated/api";
+import { convexAuthNextjsAccessToken } from "@/src/lib/convexAuth";
+import { Dashboard } from "./Dashboard";
+
+// Server Component: read the access token from the cookie and preload the
+// authenticated query so the page renders signed-in on first paint (SSR).
+export default async function Home() {
+  // highlight-next-line
+  const token = await convexAuthNextjsAccessToken();
+  const preloaded = await preloadQuery(
+    api.users.loggedInUser,
+    {},
+    // highlight-next-line
+    { token: token ?? undefined },
+  );
+  return <Dashboard preloaded={preloaded} />;
+}
+```
+
+</Step>
+
+<Step title="Use Convex Auth in Client Components">
+
+Import `useAuthActions` and `useAuthToken` from `@convex-dev/auth/react`, the
+same as in a single-page app. Import `useConvexAuth` and the `Authenticated`,
+`Unauthenticated`, and `AuthLoading` components from `convex/react`. After you
+call `signOut`, navigate away from the page so the proxy can apply your
+redirects.
+
+For your sign-in and sign-up pages, use the hooks of each sign-in method. See
+[Sign-in methods with Next.js](./methods.mdx).
+
+```tsx title="app/Dashboard.tsx"
+"use client";
+
+// highlight-next-line
+import { useAuthActions, useAuthToken } from "@convex-dev/auth/react";
+import { Preloaded, usePreloadedQuery } from "convex/react";
+import { useRouter } from "next/navigation";
+import { api } from "@/convex/_generated/api";
+
+export function Dashboard({
+  preloaded,
+}: {
+  preloaded: Preloaded<typeof api.users.loggedInUser>;
+}) {
+  const user = usePreloadedQuery(preloaded);
+  const token = useAuthToken();
+  const { signOut } = useAuthActions();
+  const router = useRouter();
+
+  return (
+    <main style={{ padding: 24, maxWidth: 640 }}>
+      <h1>Next.js SSR + Convex Auth</h1>
+      <p>
+        Signed in as <strong>{user?.name ?? "(loading)"}</strong> (user{" "}
+        <code>{user?.id ?? "…"}</code>).
+      </p>
+      <p style={{ color: "#666" }}>
+        Access token (JS-readable):{" "}
+        <code>{token?.slice(0, 24) ?? "none"}…</code>
+        <br />
+        The refresh token is in an httpOnly cookie — it is never in JS.
+      </p>
+      <button
+        onClick={async () => {
+          // highlight-next-line
+          await signOut();
+          router.push("/signin");
+        }}
+      >
+        Sign out
+      </button>
+    </main>
+  );
+}
+```
+
+</Step>
+
+</StepByStep>
+
+## Deploying
+
+The auth cookies are marked `Secure` (sent only over HTTPS) when `NODE_ENV` is
+`production`. That is the case for `next build` and `next start`, but not for
+`next dev`, so the cookies also work on `http://localhost`.
+
+The auth routes reject cross-site requests by comparing the request's `Origin`
+with its `Host`. If your app runs behind a proxy that rewrites `Host`, add your
+public origin to `allowedOrigins` in `setupConvexAuthServer`.

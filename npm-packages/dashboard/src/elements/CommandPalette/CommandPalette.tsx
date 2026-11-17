@@ -7,6 +7,7 @@ import { useRouter } from "next/router";
 import { useHotkeys } from "react-hotkeys-hook";
 import { createGlobalState, useClickAway, useWindowSize } from "react-use";
 import { cn } from "@ui/cn";
+import { isApplePlatform } from "@ui/KeyboardShortcut";
 import { useCurrentTeam } from "api/teams";
 import { useCurrentProject } from "api/projects";
 import { toast } from "@common/lib/utils";
@@ -39,6 +40,7 @@ import { ThemeCommands } from "./ThemeCommands";
 import { TeamsCommands } from "./TeamsCommands";
 import { handlePaletteKeyDown } from "./keyboard";
 import { createPaletteCopyRegistry, PaletteCopyContext } from "./copy";
+import { createPaletteLinkRegistry, PaletteLinkContext } from "./newTab";
 import { usePaletteAnalytics } from "./analytics";
 
 export const useCommandPaletteOpen = createGlobalState(false);
@@ -298,9 +300,9 @@ function CommandPaletteDialog({
         // destination has rendered. This also covers re-selecting the section
         // you're already on, which is a no-op for the router.
         const hash =
-          typeof to === "string" && to.includes("#")
+          typeof to === "string"
             ? to.split("#")[1]
-            : undefined;
+            : to.hash?.replace(/^#/, "");
         if (hash) {
           setTimeout(() => {
             document
@@ -327,6 +329,7 @@ function CommandPaletteDialog({
   };
 
   const copyRegistry = useRef(createPaletteCopyRegistry()).current;
+  const linkRegistry = useRef(createPaletteLinkRegistry()).current;
 
   const handleKeyDown = (event: React.KeyboardEvent) =>
     handlePaletteKeyDown(event, {
@@ -337,6 +340,8 @@ function CommandPaletteDialog({
       armDrillModifier,
       confirmAction: confirmAction.current,
       copySelection: copyRegistry.copySelected,
+      newTabOpenerForSelection: linkRegistry.newTabOpenerForSelection,
+      isApple: isApplePlatform(),
     });
 
   return (
@@ -345,193 +350,200 @@ function CommandPaletteDialog({
         <PaletteStatusContext.Provider value={setFooterStatus}>
           <PaletteConfirmContext.Provider value={setConfirmAction}>
             <PaletteCopyContext.Provider value={copyRegistry}>
-              <Command.Dialog
-                open
-                ref={ref}
-                label="Convex Command Palette"
-                // No `loop`: with infinite-scroll lists, wrapping from the last
-                // loaded item back to the first snaps past not-yet-loaded pages,
-                // so arrow/Tab navigation stops at the ends instead.
-                filter={paletteFilter}
-                onKeyDown={handleKeyDown}
-                // When launched from a trigger, drop the centered layout and
-                // attach a compact menu just below it (see commandPalette.css).
-                // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- custom class defined in commandPalette.css
-                className={anchor ? "command-palette--anchored" : undefined}
-                style={anchorStyle}
-              >
-                {/* cmdk renders a Radix Dialog with only an aria-label; Radix still
+              <PaletteLinkContext.Provider value={linkRegistry}>
+                <Command.Dialog
+                  open
+                  ref={ref}
+                  label="Convex Command Palette"
+                  // No `loop`: with infinite-scroll lists, wrapping from the last
+                  // loaded item back to the first snaps past not-yet-loaded pages,
+                  // so arrow/Tab navigation stops at the ends instead.
+                  filter={paletteFilter}
+                  onKeyDown={handleKeyDown}
+                  // When launched from a trigger, drop the centered layout and
+                  // attach a compact menu just below it (see commandPalette.css).
+                  // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- custom class defined in commandPalette.css
+                  className={anchor ? "command-palette--anchored" : undefined}
+                  style={anchorStyle}
+                >
+                  {/* cmdk renders a Radix Dialog with only an aria-label; Radix still
             requires a Dialog.Title inside the content for screen readers, so
             provide a visually hidden one. */}
-                <DialogTitle className="sr-only">
-                  Convex Command Palette
-                </DialogTitle>
-                {inSubPage && (
-                  <Breadcrumbs
-                    pages={pages}
-                    baseDepth={baseDepth}
-                    onNavigate={goToDepth}
-                  />
-                )}
-                <div
-                  className={cn(
-                    "relative -mx-1 -mt-1.5 mb-1.5 flex items-center",
+                  <DialogTitle className="sr-only">
+                    Convex Command Palette
+                  </DialogTitle>
+                  {inSubPage && (
+                    <Breadcrumbs
+                      pages={pages}
+                      baseDepth={baseDepth}
+                      onNavigate={goToDepth}
+                    />
                   )}
-                >
-                  {/* The input's top padding is larger than its bottom, so
+                  <div
+                    className={cn(
+                      "relative -mx-1 -mt-1.5 mb-1.5 flex items-center",
+                    )}
+                  >
+                    {/* The input's top padding is larger than its bottom, so
                     center these on its text line (pt-4 + half of the 20px
                     line box, less half the icon) rather than on its box. */}
-                  <MagnifyingGlassIcon className="pointer-events-none absolute top-4.5 left-3 size-4 text-content-tertiary" />
-                  <Command.Input
-                    ref={inputRef}
-                    autoFocus
-                    placeholder={placeholder}
-                    value={search}
-                    onValueChange={(value) => {
-                      setSearch(value);
-                      scrollListToTop();
-                    }}
-                  />
-                  {isSearchPending && (
-                    <div
-                      role="progressbar"
-                      aria-label="Loading results"
-                      className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 animate-fadeInFromLoading overflow-hidden"
-                    >
-                      <div className="h-full w-1/5 animate-indeterminateBar rounded-full bg-util-accent/70" />
-                    </div>
-                  )}
-                </div>
-                {/* While searching, cmdk re-sorts and reparents every group/item on
+                    <MagnifyingGlassIcon className="pointer-events-none absolute top-4.5 left-3 size-4 text-content-tertiary" />
+                    <Command.Input
+                      ref={inputRef}
+                      autoFocus
+                      placeholder={placeholder}
+                      value={search}
+                      onValueChange={(value) => {
+                        setSearch(value);
+                        scrollListToTop();
+                      }}
+                    />
+                    {isSearchPending && (
+                      <div
+                        role="progressbar"
+                        aria-label="Loading results"
+                        className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 animate-fadeInFromLoading overflow-hidden"
+                      >
+                        <div className="h-full w-1/5 animate-indeterminateBar rounded-full bg-util-accent/70" />
+                      </div>
+                    )}
+                  </div>
+                  {/* While searching, cmdk re-sorts and reparents every group/item on
                 each keystroke, which restarts their load-in fade animation. This
                 attribute drives the CSS rule that suppresses that fade so results
                 don't flash on every character. */}
-                {/* Bleed the list to the palette's edges (its content is padded
+                  {/* Bleed the list to the palette's edges (its content is padded
                   back by px-1) so a pinned bar inside it can span the full
                   width; without this the list's overflow clips the bleed. */}
-                <Command.List
-                  ref={listRef}
-                  className={cn(
-                    "-mx-1 scrollbar px-1",
-                    !hasPinnedActions && "pb-2",
-                    // Flex-fills the sizer so the pinned create bar sits at the
-                    // list bottom (see commandPalette.css).
-                    // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- custom class defined in commandPalette.css
-                    hasPinnedActions && "command-palette-list--pinned",
-                  )}
-                  // Clear the sticky create bar (~44px + a little gap); overrides
-                  // the stylesheet's scroll-pb-2 only while the bar is up.
-                  style={
-                    hasPinnedActions
-                      ? { scrollPaddingBottom: "3.5rem" }
-                      : undefined
-                  }
-                  data-searching={search ? "" : undefined}
-                >
-                  {!isSearchPending && (
-                    <Command.Empty>
-                      <NoResultsMessage onClose={onClose} />
-                    </Command.Empty>
-                  )}
-                  {drillPage === undefined && (
-                    <>
-                      <RootCommands
+                  <Command.List
+                    ref={listRef}
+                    className={cn(
+                      "-mx-1 scrollbar px-1",
+                      !hasPinnedActions && "pb-2",
+                      // Flex-fills the sizer so the pinned create bar sits at the
+                      // list bottom (see commandPalette.css).
+                      // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- custom class defined in commandPalette.css
+                      hasPinnedActions && "command-palette-list--pinned",
+                    )}
+                    // Clear the sticky create bar (~44px + a little gap); overrides
+                    // the stylesheet's scroll-pb-2 only while the bar is up.
+                    style={
+                      hasPinnedActions
+                        ? { scrollPaddingBottom: "3.5rem" }
+                        : undefined
+                    }
+                    data-searching={search ? "" : undefined}
+                  >
+                    {!isSearchPending && (
+                      <Command.Empty>
+                        <NoResultsMessage onClose={onClose} />
+                      </Command.Empty>
+                    )}
+                    {drillPage === undefined && (
+                      <>
+                        <RootCommands
+                          search={search}
+                          onNavigate={onNavigate}
+                          onOpenDetail={onOpenDetail}
+                          pushPage={pushPage}
+                          onClose={onClose}
+                        />
+                        {!isSearchPending && (
+                          <AskAIQueryItem onClose={onClose} />
+                        )}
+                      </>
+                    )}
+                    {drillPage?.type === "teams" && (
+                      <TeamsCommands
+                        onNavigate={onNavigate}
+                        onClose={onClose}
+                        contextual={contextual}
+                      />
+                    )}
+                    {drillPage?.type === "projects" && (
+                      <SwitchProjectCommands
                         search={search}
                         onNavigate={onNavigate}
-                        onOpenDetail={onOpenDetail}
                         pushPage={pushPage}
                         onClose={onClose}
                       />
-                      {!isSearchPending && <AskAIQueryItem onClose={onClose} />}
-                    </>
-                  )}
-                  {drillPage?.type === "teams" && (
-                    <TeamsCommands
-                      onNavigate={onNavigate}
-                      onClose={onClose}
-                      contextual={contextual}
-                    />
-                  )}
-                  {drillPage?.type === "projects" && (
-                    <SwitchProjectCommands
-                      search={search}
-                      onNavigate={onNavigate}
-                      pushPage={pushPage}
-                      onClose={onClose}
-                    />
-                  )}
-                  {drillPage?.type === "components" && (
-                    <ComponentsCommands onClose={onClose} />
-                  )}
-                  {drillPage?.type === "theme" && (
-                    <ThemeCommands onClose={onClose} />
-                  )}
-                  {drillPage?.type === "deleteProjects" && (
-                    <DeleteProjectsCommands search={search} onClose={onClose} />
-                  )}
-                  {drillPage?.type === "project" && (
-                    <ProjectCommands
-                      project={drillPage.project}
-                      onNavigate={onNavigate}
-                      onSelectDeployment={(deployment) =>
-                        pushPage({
-                          type: "deployment",
-                          deployment,
-                          projectSlug: drillPage.project.slug,
-                        })
-                      }
-                    />
-                  )}
-                  {drillPage?.type === "deployments" && (
-                    <SwitchDeploymentCommands
-                      project={drillPage.project}
-                      onNavigate={onNavigate}
-                      contextual={contextual}
-                      onSelectDeployment={(deployment) =>
-                        pushPage({
-                          type: "deployment",
-                          deployment,
-                          projectSlug: drillPage.project.slug,
-                        })
-                      }
-                    />
-                  )}
-                  {drillPage?.type === "teamDeployments" && (
-                    <TeamDeploymentsCommands
-                      search={search}
-                      onNavigate={onNavigate}
-                      pushPage={pushPage}
-                    />
-                  )}
-                  {drillPage?.type === "deployment" && (
-                    <DeploymentCommands
-                      deployment={drillPage.deployment}
-                      projectSlug={drillPage.projectSlug}
-                      onNavigate={onNavigate}
-                    />
-                  )}
-                  {drillPage?.type === "pickDeployment" && picker && (
-                    <PickDeploymentCommands
-                      project={drillPage.project}
-                      picker={picker}
-                      onSelect={(deployment) => {
-                        onClose();
-                        picker.onSelect(deployment);
-                      }}
-                    />
-                  )}
-                  {drillPage?.type === "pickProject" && (
-                    <PickProjectCommands
-                      search={search}
-                      pinnedProject={picker?.selectedProject}
-                      onSelectProject={(project) =>
-                        pushPage({ type: "pickDeployment", project })
-                      }
-                    />
-                  )}
-                </Command.List>
-                <Footer inSubPage={inSubPage} status={footerStatus} />
-              </Command.Dialog>
+                    )}
+                    {drillPage?.type === "components" && (
+                      <ComponentsCommands onClose={onClose} />
+                    )}
+                    {drillPage?.type === "theme" && (
+                      <ThemeCommands onClose={onClose} />
+                    )}
+                    {drillPage?.type === "deleteProjects" && (
+                      <DeleteProjectsCommands
+                        search={search}
+                        onClose={onClose}
+                      />
+                    )}
+                    {drillPage?.type === "project" && (
+                      <ProjectCommands
+                        project={drillPage.project}
+                        onNavigate={onNavigate}
+                        onSelectDeployment={(deployment) =>
+                          pushPage({
+                            type: "deployment",
+                            deployment,
+                            projectSlug: drillPage.project.slug,
+                          })
+                        }
+                      />
+                    )}
+                    {drillPage?.type === "deployments" && (
+                      <SwitchDeploymentCommands
+                        project={drillPage.project}
+                        onNavigate={onNavigate}
+                        contextual={contextual}
+                        onSelectDeployment={(deployment) =>
+                          pushPage({
+                            type: "deployment",
+                            deployment,
+                            projectSlug: drillPage.project.slug,
+                          })
+                        }
+                      />
+                    )}
+                    {drillPage?.type === "teamDeployments" && (
+                      <TeamDeploymentsCommands
+                        search={search}
+                        onNavigate={onNavigate}
+                        pushPage={pushPage}
+                      />
+                    )}
+                    {drillPage?.type === "deployment" && (
+                      <DeploymentCommands
+                        deployment={drillPage.deployment}
+                        projectSlug={drillPage.projectSlug}
+                        onNavigate={onNavigate}
+                      />
+                    )}
+                    {drillPage?.type === "pickDeployment" && picker && (
+                      <PickDeploymentCommands
+                        project={drillPage.project}
+                        picker={picker}
+                        onSelect={(deployment) => {
+                          onClose();
+                          picker.onSelect(deployment);
+                        }}
+                      />
+                    )}
+                    {drillPage?.type === "pickProject" && (
+                      <PickProjectCommands
+                        search={search}
+                        pinnedProject={picker?.selectedProject}
+                        onSelectProject={(project) =>
+                          pushPage({ type: "pickDeployment", project })
+                        }
+                      />
+                    )}
+                  </Command.List>
+                  <Footer inSubPage={inSubPage} status={footerStatus} />
+                </Command.Dialog>
+              </PaletteLinkContext.Provider>
             </PaletteCopyContext.Provider>
           </PaletteConfirmContext.Provider>
         </PaletteStatusContext.Provider>

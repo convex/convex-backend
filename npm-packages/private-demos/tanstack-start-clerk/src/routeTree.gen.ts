@@ -9,26 +9,26 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ConvexpostsRouteImport } from './routes/convexposts'
-import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuthedRouteImport } from './routes/_authed'
+import { Route as ConvexpostsRouteImport } from './routes/convexposts'
 import { Route as AuthedPostsRouteImport } from './routes/_authed/posts'
 import { Route as AuthedPostsIndexRouteImport } from './routes/_authed/posts.index'
-import { Route as AuthedProfileSplatRouteImport } from './routes/_authed/profile.$'
 import { Route as AuthedPostsPostIdRouteImport } from './routes/_authed/posts.$postId'
+import { Route as AuthedProfileSplatRouteImport } from './routes/_authed/profile.$'
 
-const ConvexpostsRoute = ConvexpostsRouteImport.update({
-  id: '/convexposts',
-  path: '/convexposts',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthedRoute = AuthedRouteImport.update({
   id: '/_authed',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const ConvexpostsRoute = ConvexpostsRouteImport.update({
+  id: '/convexposts',
+  path: '/convexposts',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthedPostsRoute = AuthedPostsRouteImport.update({
@@ -41,15 +41,15 @@ const AuthedPostsIndexRoute = AuthedPostsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthedPostsRoute,
 } as any)
-const AuthedProfileSplatRoute = AuthedProfileSplatRouteImport.update({
-  id: '/profile/$',
-  path: '/profile/$',
-  getParentRoute: () => AuthedRoute,
-} as any)
 const AuthedPostsPostIdRoute = AuthedPostsPostIdRouteImport.update({
   id: '/$postId',
   path: '/$postId',
   getParentRoute: () => AuthedPostsRoute,
+} as any)
+const AuthedProfileSplatRoute = AuthedProfileSplatRouteImport.update({
+  id: '/profile/$',
+  path: '/profile/$',
+  getParentRoute: () => AuthedRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -107,11 +107,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/convexposts': {
-      id: '/convexposts'
-      path: '/convexposts'
-      fullPath: '/convexposts'
-      preLoaderRoute: typeof ConvexpostsRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authed': {
@@ -121,11 +121,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/convexposts': {
+      id: '/convexposts'
+      path: '/convexposts'
+      fullPath: '/convexposts'
+      preLoaderRoute: typeof ConvexpostsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authed/posts': {
@@ -142,19 +142,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedPostsIndexRouteImport
       parentRoute: typeof AuthedPostsRoute
     }
-    '/_authed/profile/$': {
-      id: '/_authed/profile/$'
-      path: '/profile/$'
-      fullPath: '/profile/$'
-      preLoaderRoute: typeof AuthedProfileSplatRouteImport
-      parentRoute: typeof AuthedRoute
-    }
     '/_authed/posts/$postId': {
       id: '/_authed/posts/$postId'
       path: '/$postId'
       fullPath: '/posts/$postId'
       preLoaderRoute: typeof AuthedPostsPostIdRouteImport
       parentRoute: typeof AuthedPostsRoute
+    }
+    '/_authed/profile/$': {
+      id: '/_authed/profile/$'
+      path: '/profile/$'
+      fullPath: '/profile/$'
+      preLoaderRoute: typeof AuthedProfileSplatRouteImport
+      parentRoute: typeof AuthedRoute
     }
   }
 }

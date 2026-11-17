@@ -3,10 +3,7 @@ use std::{
     str::FromStr,
 };
 
-use common::{
-    knobs::MAX_ZIPPED_PACKAGES_SIZE,
-    types::ObjectKey,
-};
+use common::types::ObjectKey;
 use errors::ErrorMetadata;
 use humansize::{
     FormatSize,
@@ -26,16 +23,84 @@ use value::{
 
 use crate::external_packages::types::ExternalDepsPackageId;
 
+/// Memory sizes, in MB, that a deployment may set for its Node actions. Each
+/// size must be a valid AWS Lambda memory size.
+pub const NODE_MEMORY_MB_OPTIONS: [u32; 2] = [512, 2048];
+
+/// Rejects a `node.defaultMemoryMb` from `convex.json` that isn't a size we
+/// offer.
+pub fn check_node_default_memory_mb_for_push(memory_mb: u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        NODE_MEMORY_MB_OPTIONS.contains(&memory_mb),
+        ErrorMetadata::bad_request(
+            "InvalidNodeMemory",
+            format!(
+                "node.defaultMemoryMb must be one of {} (got {memory_mb}).",
+                NODE_MEMORY_MB_OPTIONS.map(|mb| mb.to_string()).join(", ")
+            ),
+        )
+    );
+    Ok(())
+}
+
+/// Rejects a `node.defaultMemoryMb` that this backend's Node executor can't
+/// run. Only the AWS Lambda executor supports sizes above the smallest.
+pub fn check_node_default_memory_mb_supported(
+    memory_mb: u32,
+    supported_memory_mb: &[u32],
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        supported_memory_mb.contains(&memory_mb),
+        ErrorMetadata::bad_request(
+            "NodeMemoryNotAvailable",
+            format!(
+                "node.defaultMemoryMb {memory_mb} is not supported by this backend. It supports \
+                 {}.",
+                supported_memory_mb
+                    .iter()
+                    .map(|mb| mb.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    );
+    Ok(())
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum NodeVersion {
     /// Node 18 is deprecated in AWS, so customers with it set will
     /// no longer be able to update their static lambdas. This is okay because
-    /// users can update their Node version to unblock themselves. This also
-    /// means that new deployments with Node 18 will fail.
+    /// users can update their Node version to unblock themselves. New pushes
+    /// with Node 18 are rejected by [`NodeVersion::check_supported_for_push`].
     V18x,
+    /// Node 20 is end-of-life. Existing source packages keep running on it,
+    /// but new pushes with Node 20 are rejected by
+    /// [`NodeVersion::check_supported_for_push`].
     V20x,
     V22x,
     V24x,
+    V26x,
+}
+
+impl NodeVersion {
+    /// Rejects end-of-life versions so that new code can't be pushed with
+    /// them. Versions stay parseable so existing source packages still load.
+    pub fn check_supported_for_push(self) -> anyhow::Result<()> {
+        match self {
+            NodeVersion::V18x | NodeVersion::V20x => {
+                let version = String::from(self);
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "NodeVersionNotSupported",
+                    format!(
+                        "Node {version} is no longer supported. Upgrade to a newer Node version \
+                         (https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version)."
+                    )
+                ));
+            },
+            NodeVersion::V22x | NodeVersion::V24x | NodeVersion::V26x => Ok(()),
+        }
+    }
 }
 
 impl FromStr for NodeVersion {
@@ -47,6 +112,7 @@ impl FromStr for NodeVersion {
             "20" => Ok(NodeVersion::V20x),
             "22" => Ok(NodeVersion::V22x),
             "24" => Ok(NodeVersion::V24x),
+            "26" => Ok(NodeVersion::V26x),
             _ => anyhow::bail!("Invalid node version: {value}"),
         }
     }
@@ -59,6 +125,7 @@ impl From<NodeVersion> for String {
             NodeVersion::V20x => "20".to_string(),
             NodeVersion::V22x => "22".to_string(),
             NodeVersion::V24x => "24".to_string(),
+            NodeVersion::V26x => "26".to_string(),
         }
     }
 }
@@ -108,6 +175,13 @@ pub struct SourcePackage {
     pub external_deps_package_id: Option<ExternalDepsPackageId>,
     pub package_size: PackageSize,
     pub node_version: Option<NodeVersion>,
+    /// Memory size of the Lambda that runs this package's Node actions. `None`
+    /// means the static Lambda's default size.
+    ///
+    /// TODO(andy): Store this in deployment-level config. It is a deployment
+    /// setting and not part of the code, so `upload_package` should not
+    /// take it.
+    pub node_default_memory_mb: Option<u32>,
 }
 
 impl SourcePackage {
@@ -115,6 +189,7 @@ impl SourcePackage {
         // We explicitly do not compare the sha256 because it also includes creation
         // time in the hash
         self.node_version == other.node_version
+            && self.node_default_memory_mb == other.node_default_memory_mb
             && self.external_deps_package_id == other.external_deps_package_id
     }
 }
@@ -157,16 +232,6 @@ const MAX_UNZIPPED_PACKAGES_SIZE: usize = 230_000_000; // 230 MB - Lambda gives 
 
 impl PackageSize {
     pub fn verify_size(&self) -> anyhow::Result<()> {
-        if self.zipped_size_bytes >= *MAX_ZIPPED_PACKAGES_SIZE {
-            anyhow::bail!(ErrorMetadata::bad_request(
-                "ModulesTooLarge",
-                format!(
-                    "Total module size exceeded the zipped maximum ({} > maximum size {})",
-                    self.zipped_size_bytes.format_size(BINARY),
-                    MAX_ZIPPED_PACKAGES_SIZE.format_size(BINARY)
-                ),
-            ),);
-        }
         if self.unzipped_size_bytes >= MAX_UNZIPPED_PACKAGES_SIZE {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "ModulesTooLarge",
@@ -258,6 +323,8 @@ pub struct SerializedSourcePackage {
     external_package_id: Option<String>,
     package_size: Option<SerializedPackageSize>,
     node_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    node_default_memory_mb: Option<u32>,
 }
 
 impl TryFrom<SourcePackage> for SerializedSourcePackage {
@@ -272,6 +339,7 @@ impl TryFrom<SourcePackage> for SerializedSourcePackage {
                 .map(|id| DeveloperDocumentId::from(id).encode()),
             package_size: Some(value.package_size.try_into()?),
             node_version: value.node_version.map(String::from),
+            node_default_memory_mb: value.node_default_memory_mb,
         })
     }
 }
@@ -300,6 +368,7 @@ impl TryFrom<SerializedSourcePackage> for SourcePackage {
             external_deps_package_id: external_package_id,
             package_size,
             node_version,
+            node_default_memory_mb: value.node_default_memory_mb,
         })
     }
 }

@@ -7,6 +7,7 @@ import {
   useBBQuery,
   useManagementApiQuery,
   useMutateManagementApi,
+  useSSOLoginRequired,
 } from "./api";
 import { useCallback } from "react";
 
@@ -64,6 +65,21 @@ export function useCurrentTeam() {
   return currentTeam;
 }
 
+export function useIsCurrentTeamSSOLocked() {
+  const router = useRouter();
+  const [{ teamIds, teamSlugs }] = useSSOLoginRequired();
+  const { teams } = useTeams();
+  const teamSlug = router.query.team;
+  if (typeof teamSlug !== "string") {
+    return false;
+  }
+  if (teamSlugs.includes(teamSlug)) {
+    return true;
+  }
+  const team = teams?.find((t) => t.slug === teamSlug);
+  return team !== undefined && teamIds.includes(team.id.toString());
+}
+
 export function useTeamMembers(teamId: number | undefined) {
   const { data } = useManagementApiQuery({
     path: "/teams/{team_id}/list_members",
@@ -72,6 +88,16 @@ export function useTeamMembers(teamId: number | undefined) {
     },
   });
   return data?.items;
+}
+
+export function useTeamDirectorySynced(teamId: number | undefined) {
+  const { data } = useManagementApiQuery({
+    path: "/teams/{team_id}/list_members",
+    pathParams: {
+      team_id: teamId?.toString() ?? "",
+    },
+  });
+  return data && data.directorySynced === true;
 }
 
 export function useTeamEntitlements(teamId: number | undefined) {
@@ -168,20 +194,6 @@ export function useGetSSO(
     },
   });
   return { data: ssoOrganization, isLoading, error };
-}
-
-export function useEnableSSO(teamId: number) {
-  return useBBMutation({
-    path: `/teams/{team_id}/enable_sso`,
-    pathParams: {
-      team_id: teamId.toString(),
-    },
-    mutateKey: "/teams/{team_id}/get_sso",
-    mutatePathParams: {
-      team_id: teamId.toString(),
-    },
-    successToast: "SSO has been enabled for your team.",
-  });
 }
 
 export function useDisableSSO(teamId: number) {

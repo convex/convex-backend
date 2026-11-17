@@ -30,7 +30,7 @@ export function Footer({
   const selectedValue = useCommandState((state) => state.value);
   const copyAction = useContext(PaletteCopyContext)?.actionFor(selectedValue);
   return (
-    <div className="-mx-1 flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 pt-2 pb-1.5 text-xs text-content-tertiary select-none">
+    <div className="-mx-1 flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-3 pt-2 pb-1.5 text-xs text-content-secondary select-none">
       <span className="flex items-center gap-1">
         <KeyboardShortcut value={["Up", "Down"]} className={KEYCAP_CLASSES} />
         Navigate

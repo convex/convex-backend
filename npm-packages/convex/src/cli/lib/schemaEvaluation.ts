@@ -28,6 +28,19 @@ export type SchemaEvaluation = (
  * per check would add that work and a round trip to the deploy's critical
  * path for every check.
  */
+/**
+ * Whether a schema module in the push calls `.staged(`. Bundles aren't
+ * minified, so the call survives bundling. A false positive from a comment or
+ * string costs one evaluation, while a push without staged validators skips
+ * the evaluation round trip on its critical path.
+ */
+export function pushStagesValidators(request: StartPushRequest): boolean {
+  return [
+    request.appDefinition.schema,
+    ...request.componentDefinitions.map((definition) => definition.schema),
+  ].some((schema) => schema?.source.includes(".staged(") ?? false);
+}
+
 export function sharedSchemaEvaluation(
   ctx: Context,
   request: StartPushRequest,

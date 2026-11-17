@@ -2,7 +2,6 @@ import { Command } from "@commander-js/extra-typings";
 import { WebSocket } from "ws";
 import { RunFunction } from "./scenarios/run_function.js";
 import { ObserveInsert } from "./scenarios/observe_insert.js";
-import "@sentry/tracing";
 import * as Sentry from "@sentry/node";
 import { SnapshotExport } from "./scenarios/snapshot_export.js";
 import { CloudBackup } from "./scenarios/cloud_backup.js";

@@ -22,10 +22,7 @@ use crate::{
         action::ActionEnvironment,
         analyze::AnalyzeEnvironment,
         auth_config::AuthConfigEnvironment,
-        component_definitions::{
-            AppDefinitionEvaluator,
-            ComponentInitializerEvaluator,
-        },
+        component_definitions::AppDefinitionEvaluator,
         schema::SchemaEnvironment,
         udf::DatabaseUdfEnvironment,
     },
@@ -309,25 +306,6 @@ impl<RT: Runtime> IsolateWorker<RT> for FunctionRunnerIsolateWorker<RT> {
                 let r = env.evaluate(context_cache, permit, isolate).await;
                 let _ = response.send(r);
                 "EvaluateAppDefinitions".to_string()
-            },
-            RequestType::EvaluateComponentInitializer {
-                evaluated_definitions,
-                path,
-                definition,
-                args,
-                name,
-                response,
-            } => {
-                let env = ComponentInitializerEvaluator::new(
-                    evaluated_definitions,
-                    path,
-                    definition,
-                    args,
-                    name,
-                );
-                let r = env.evaluate(context_cache, permit, isolate).await;
-                let _ = response.send(r);
-                "EvaluateComponentInitializer".to_string()
             },
         };
         if isolate_clean && should_recreate_isolate(isolate, context_cache, &debug_str) {

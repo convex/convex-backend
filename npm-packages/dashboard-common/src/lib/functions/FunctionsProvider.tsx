@@ -64,12 +64,30 @@ export function displayNameToIdentifier(path: string) {
 
 export const useFunctionSearchTerm = createGlobalState("");
 
+type ModuleFunctionsIndex = {
+  functions: ModuleFunction[];
+  // Keyed by `itemIdentifier`.
+  byItemIdentifier: Map<string, ModuleFunction>;
+};
+
+const [ModuleFunctionsContext, useModuleFunctionsIndex] =
+  createContextHook<ModuleFunctionsIndex>({
+    name: "ModuleFunctions",
+  });
+
+// Every row of the functions sidebar reads the flat function list, so it is
+// built here once rather than in each row, which cost (rows × functions) memory
+// and crashed the tab on deployments with thousands of functions.
 function FunctionsProvider({ children }: { children: ReactNode }) {
-  // Get functions
   const modules = useListModulesAllNents();
   const { nents } = useNents();
+  const index = useMemo(
+    () =>
+      modules && nents ? buildModuleFunctionsIndex(modules, nents) : undefined,
+    [modules, nents],
+  );
 
-  if (!modules || !nents) {
+  if (!modules || !index) {
     return (
       <div className={cn("flex size-full items-center justify-center")}>
         <LoadingLogo />
@@ -79,22 +97,37 @@ function FunctionsProvider({ children }: { children: ReactNode }) {
 
   return (
     <FunctionsContext.Provider value={modules}>
-      {children}
+      <ModuleFunctionsContext.Provider value={index}>
+        {children}
+      </ModuleFunctionsContext.Provider>
     </FunctionsContext.Provider>
   );
 }
 
-// For mocking in tests only
-export { FunctionsContext };
-
 export { FunctionsProvider };
+
+function buildModuleFunctionsIndex(
+  modules: Map<ComponentId, Map<string, Module>>,
+  nents: Nent[],
+): ModuleFunctionsIndex {
+  const functions = modulesToModuleFunctions(modules, nents);
+  const byItemIdentifier = new Map<string, ModuleFunction>();
+  for (const f of functions) {
+    const key = itemIdentifier(f);
+    if (!byItemIdentifier.has(key)) {
+      byItemIdentifier.set(key, f);
+    }
+  }
+  return { functions, byItemIdentifier };
+}
 
 // Returns the currently open function, or null if none is open
 // The currently open function refers to the function that is currently being viewed
 // on the functions page
 export function useCurrentOpenFunction() {
   const router = useRouter();
-  const moduleFunctions = useModuleFunctions();
+  const { functions: moduleFunctions, byItemIdentifier } =
+    useModuleFunctionsIndex();
   const { selectedNent, nents } = useNents();
 
   const selectedModule = useMemo(() => {
@@ -121,11 +154,9 @@ export function useCurrentOpenFunction() {
       componentId || undefined,
     );
 
-    const currentOpenFunction = selectedFunctionIdentifier
-      ? moduleFunctions.find(
-          (f) => itemIdentifier(f) === selectedFunctionIdentifier,
-        )
-      : undefined;
+    const currentOpenFunction = byItemIdentifier.get(
+      selectedFunctionIdentifier,
+    );
 
     if (
       router.query.function &&
@@ -140,28 +171,14 @@ export function useCurrentOpenFunction() {
     }
 
     return currentOpenFunction;
-  }, [router, selectedNent?.id, nents, moduleFunctions]);
+  }, [router, selectedNent?.id, nents, moduleFunctions, byItemIdentifier]);
 
   return selectedModule;
 }
 
 // Returns a flat list of the functions across all components.
 export function useModuleFunctions(): ModuleFunction[] {
-  const modules = useFunctions();
-  const { nents } = useNents();
-  const { captureMessage } = useContext(DeploymentInfoContext);
-
-  return useMemo(() => {
-    if (!nents) {
-      captureMessage(
-        "File tree map called before modules or nents were loaded",
-        "error",
-      );
-      return [];
-    }
-
-    return modulesToModuleFunctions(modules, nents);
-  }, [captureMessage, modules, nents]);
+  return useModuleFunctionsIndex().functions;
 }
 
 // Exported for testing only
@@ -171,6 +188,7 @@ export function modulesToModuleFunctions(
 ) {
   const moduleFunctions: ModuleFunction[] = [];
   for (const [componentId, componentModules] of modules.entries()) {
+    const componentPath = nents.find((n) => n.id === componentId)?.path ?? null;
     for (const [filePath, { functions }] of componentModules.entries()) {
       for (const moduleFunction of functions) {
         moduleFunctions.push(
@@ -178,7 +196,7 @@ export function modulesToModuleFunctions(
             moduleFunction,
             filePath,
             componentId,
-            nents.find((n) => n.id === componentId)?.path ?? null,
+            componentPath,
           ),
         );
       }

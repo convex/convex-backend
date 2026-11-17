@@ -58,6 +58,8 @@ export const TextInput = forwardRef<
   ) => {
     const leftAddonRef = useRef<HTMLDivElement>(null);
     const [leftPadding, setLeftPadding] = useState<number | null>(null);
+    const rightAddonRef = useRef<HTMLDivElement>(null);
+    const [rightPadding, setRightPadding] = useState<number | null>(null);
 
     useLayoutEffect(() => {
       if (leftAddonRef.current && leftAddon !== undefined) {
@@ -73,6 +75,16 @@ export const TextInput = forwardRef<
         setLeftPadding(null);
       }
     }, [leftAddon, type]);
+
+    // Reserve the right addon's width so typed text never runs underneath it.
+    // The addon starts at right-3 = 12px.
+    useLayoutEffect(() => {
+      if (rightAddonRef.current && rightAddon !== undefined) {
+        setRightPadding(12 + rightAddonRef.current.offsetWidth + 4);
+      } else {
+        setRightPadding(null);
+      }
+    }, [rightAddon]);
 
     return (
       <div ref={ref} className="flex w-full flex-col gap-1">
@@ -119,11 +131,12 @@ export const TextInput = forwardRef<
             spellCheck={false}
             id={id}
             name={id}
-            style={
-              leftPadding !== null
-                ? { paddingLeft: `${leftPadding}px` }
-                : undefined
-            }
+            style={{
+              ...(leftPadding !== null && { paddingLeft: `${leftPadding}px` }),
+              // An interactive Icon reserves its own space with pr-10.
+              ...(rightPadding !== null &&
+                !Icon && { paddingRight: `${rightPadding}px` }),
+            }}
             className={cn(
               error && "focus:border-content-error",
               !error && "text-content-primary focus:border-border-selected",
@@ -141,7 +154,10 @@ export const TextInput = forwardRef<
             {...rest}
           />
           {rightAddon !== undefined && (
-            <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+            <div
+              ref={rightAddonRef}
+              className="pointer-events-none absolute inset-y-0 right-3 flex items-center"
+            >
               {rightAddon}
             </div>
           )}

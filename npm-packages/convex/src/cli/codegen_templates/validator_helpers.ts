@@ -27,6 +27,15 @@ export function validatorToType(
     // same-mutation read-backs yield the placeholder. The inline import keeps
     // this valid in every generated file regardless of its header imports.
     return 'bigint | import("convex/values").CommitTsPlaceholder';
+  } else if (validator.type === "function") {
+    const fnType = validator.fnType ? `"${validator.fnType}"` : "any";
+    const args = validator.args
+      ? validatorToType(validator.args, useIdType)
+      : "any";
+    const returns = validator.returns
+      ? validatorToType(validator.returns, useIdType)
+      : "any";
+    return `import("convex/server").FunctionHandle_future<${fnType}, ${args}, ${returns}>`;
   } else if (validator.type === "boolean") {
     return "boolean";
   } else if (validator.type === "string") {

@@ -8,6 +8,11 @@ import { hasUncommittedChanges } from "./git";
 import { version } from "./version";
 import { checkConvexVersion, findTsconfig } from "./load";
 import { diffProjects } from "./diff";
+import chalk from "chalk";
+import * as Sentry from "@sentry/node";
+import { initSentry } from "./sentry";
+
+initSentry(version);
 
 const program = new Command();
 
@@ -112,4 +117,16 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
-program.parse();
+async function main() {
+  try {
+    await program.parseAsync();
+  } catch (e) {
+    Sentry.captureException(e);
+    process.exitCode = 1;
+    console.error(chalk.red("Unexpected Error: " + e));
+  } finally {
+    await Sentry.close();
+  }
+}
+
+void main();

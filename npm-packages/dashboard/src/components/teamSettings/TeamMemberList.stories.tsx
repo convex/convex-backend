@@ -56,6 +56,7 @@ export const Primary: Story = {
     members,
     invites,
     team,
+    hasSyncedDirectory: false,
   },
 };
 
@@ -64,5 +65,15 @@ export const LoadingState: Story = {
     members: undefined,
     invites: undefined,
     team,
+    hasSyncedDirectory: false,
+  },
+};
+
+export const DirectorySynced: Story = {
+  args: {
+    members: members.map((member) => ({ ...member, directoryManaged: true })),
+    invites,
+    team,
+    hasSyncedDirectory: true,
   },
 };

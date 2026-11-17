@@ -20,8 +20,8 @@ use super::meter::UsageMeter;
 /// batch of usage events, mirroring the pipeline rollups that
 /// [`UsageLimitMetric::from_seed_metric`] maps.
 pub fn usage_deltas(events: &[UsageEvent]) -> Vec<(UsageLimitMetric, f64)> {
-    fn gb_s(memory_megabytes: u64, duration_millis: u64) -> f64 {
-        memory_megabytes as f64 / 1024.0 * (duration_millis as f64 / 1000.0)
+    fn gb_s(compute_mb_ms: u64) -> f64 {
+        compute_mb_ms as f64 / 1024.0 / 1000.0
     }
     let mut deltas = Vec::new();
     for event in events {
@@ -29,12 +29,12 @@ pub fn usage_deltas(events: &[UsageEvent]) -> Vec<(UsageLimitMetric, f64)> {
         match event {
             UsageEvent::FunctionCall { fields } => {
                 if fields.is_tracked {
-                    deltas.push((UsageLimitMetric::FunctionCalls, 1.0));
+                    deltas.push((UsageLimitMetric::FunctionCalls, fields.calls as f64));
                 }
                 // Compute in GB·s; the GB-hour limit converts to GB·s at
                 // evaluation via `limit_in_raw_units`. Zero for calls not
                 // charged for compute, e.g. cache hits.
-                let compute = gb_s(fields.memory_megabytes, fields.duration_millis);
+                let compute = gb_s(fields.compute_mb_ms);
                 match fields.tag.as_str() {
                     "action" | "http_action" => {
                         // Match the runtime exhaustively so a new one is a
@@ -50,10 +50,10 @@ pub fn usage_deltas(events: &[UsageEvent]) -> Vec<(UsageLimitMetric, f64)> {
                                 // CPU compute (user-execution time, excluding
                                 // time blocked on I/O) is charged for the
                                 // Convex runtime only.
-                                if let Some(user_ms) = fields.user_execution_millis {
+                                if let Some(user_mb_ms) = fields.user_compute_mb_ms {
                                     deltas.push((
                                         UsageLimitMetric::ActionComputeCpuGBHours,
-                                        gb_s(fields.memory_megabytes, user_ms),
+                                        gb_s(user_mb_ms),
                                     ));
                                 }
                             },
@@ -71,8 +71,8 @@ pub fn usage_deltas(events: &[UsageEvent]) -> Vec<(UsageLimitMetric, f64)> {
             UsageEvent::FunctionStorageCalls { count, .. } => {
                 deltas.push((UsageLimitMetric::FunctionCalls, *count as f64));
             },
-            UsageEvent::StorageCall { .. } => {
-                deltas.push((UsageLimitMetric::FunctionCalls, 1.0));
+            UsageEvent::StorageCall { count, .. } => {
+                deltas.push((UsageLimitMetric::FunctionCalls, *count as f64));
             },
             UsageEvent::DatabaseBandwidth {
                 ingress_v2,

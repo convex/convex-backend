@@ -6,10 +6,12 @@ mod chunks;
 mod connection;
 mod deployment_deletion;
 mod document_encoding;
+mod leases;
 mod metrics;
 mod sql;
 mod v5;
 mod v6;
+mod v6_replica;
 use std::{
     ops::Deref,
     sync::Arc,
@@ -28,9 +30,21 @@ use common::{
     },
 };
 pub use connection::ConvexMySqlPool;
+pub use leases::ClusterLeases;
+pub use mysql_async::{
+    Row,
+    Value as MySqlValue,
+};
 pub use v6::maintenance::{
     IndexesLogMaintenance,
+    MaintenanceLease,
+    MaintenancePlan,
     MaintenanceRound,
+    MaintenanceState,
+};
+pub use v6_replica::{
+    maintenance as v6_replica_maintenance,
+    ReplicaTarget as V6ReplicaTarget,
 };
 
 /// Maximum number of documents in one write: the sum of
@@ -73,14 +87,6 @@ impl MySqlInstanceName {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum ConnectError {
-    #[error("persistence is read-only, data migration in progress")]
-    ReadOnly,
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-
 #[derive(Clone, Debug)]
 pub struct MySqlOptions {
     pub allow_read_only: bool,
@@ -92,7 +98,6 @@ pub struct MySqlOptions {
 
 #[derive(Debug)]
 pub struct MySqlReaderOptions {
-    pub db_should_be_leader: bool,
     pub version: PersistenceVersion,
     pub instance_name: MySqlInstanceName,
     pub multitenant: bool,
@@ -106,7 +111,19 @@ pub async fn connect_persistence<RT: Runtime>(
     lease_lost_shutdown: ShutdownSignal,
 ) -> anyhow::Result<Arc<dyn Persistence>> {
     match options.version {
-        PersistenceVersion::V5 => v5::connect(pool, db_name, options, lease_lost_shutdown).await,
+        PersistenceVersion::V5 => {
+            if options.multitenant
+                && let Some(target) = pool.v6_replica.get().cloned()
+            {
+                Ok(Arc::new(
+                    v6_replica::ReplicatedV5PersistenceFactory::configured(target)
+                        .open(pool, db_name, options, lease_lost_shutdown)
+                        .await?,
+                ))
+            } else {
+                v5::connect(pool, db_name, options, lease_lost_shutdown).await
+            }
+        },
         PersistenceVersion::V6 => v6::connect(pool, db_name, options, lease_lost_shutdown).await,
     }
 }

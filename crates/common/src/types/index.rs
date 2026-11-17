@@ -443,7 +443,8 @@ impl FromStr for IndexId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum IndexWriteMode {
     /// Index backfill has inserted all existing index entries. In persistence
     /// v6, `DatabaseIndexUpdate::prev` (copied to

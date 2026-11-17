@@ -73,12 +73,13 @@ struct WebSocketInternal {
 }
 struct WebSocketWorker {
     ws_url: Url,
-    on_response: mpsc::Sender<ProtocolResponse>,
+    on_response: mpsc::UnboundedSender<ProtocolResponse>,
     on_state_change: Option<mpsc::Sender<WebSocketState>>,
     internal_receiver: Fuse<UnboundedReceiverStream<WebSocketRequest>>,
     ping_ticker: Interval,
     connection_count: u32,
     backoff: Backoff,
+    session_id: SessionId,
 }
 
 pub struct WebSocketManager {
@@ -95,7 +96,7 @@ impl Drop for WebSocketManager {
 impl SyncProtocol for WebSocketManager {
     async fn open(
         ws_url: Url,
-        on_response: mpsc::Sender<ProtocolResponse>,
+        on_response: mpsc::UnboundedSender<ProtocolResponse>,
         on_state_change: Option<mpsc::Sender<WebSocketState>>,
         client_id: &str,
     ) -> anyhow::Result<Self> {
@@ -137,7 +138,7 @@ impl WebSocketWorker {
 
     async fn run(
         ws_url: Url,
-        on_response: mpsc::Sender<ProtocolResponse>,
+        on_response: mpsc::UnboundedSender<ProtocolResponse>,
         on_state_change: Option<mpsc::Sender<WebSocketState>>,
         internal_receiver: mpsc::UnboundedReceiver<WebSocketRequest>,
         client_id: String,
@@ -153,6 +154,9 @@ impl WebSocketWorker {
             ping_ticker,
             connection_count: 0,
             backoff,
+            // N.B.: session ID is shared across reconnects, which lets the server identify retried
+            // mutations and deduplicate them
+            session_id: SessionId::new(Uuid::new_v4()),
         };
 
         let mut last_close_reason = "InitialConnect".to_string();
@@ -175,6 +179,7 @@ impl WebSocketWorker {
                     tracing::debug!("Reconnecting websocket due to {}", reconnect.reason);
                     last_close_reason = reconnect.reason;
                     max_observed_timestamp = reconnect.max_observed_timestamp;
+                    let _ = worker.on_response.send(ProtocolResponse::ReconnectStarted);
                     continue;
                 },
                 Err(e) => e,
@@ -190,7 +195,7 @@ impl WebSocketWorker {
             // The worker will send a Reconnect message and the new query set all together.
             // Drain the input request queue until we get that reconnect message - which
             // will be followed by the refreshed query set.
-            let _ = worker.on_response.send(ProtocolResponse::Failure).await;
+            let _ = worker.on_response.send(ProtocolResponse::Failure);
             tracing::debug!("Waiting for base client to acknowledge reconnect");
             loop {
                 let request = worker.internal_receiver.next().await;
@@ -200,6 +205,7 @@ impl WebSocketWorker {
                 // when we restructure the wider protocol to be a single routine.
                 if let Some(WebSocketRequest::Reconnect(reconnect)) = request {
                     max_observed_timestamp = reconnect.max_observed_timestamp;
+                    let _ = worker.on_response.send(ProtocolResponse::ReconnectStarted);
                     break;
                 }
             }
@@ -225,6 +231,7 @@ impl WebSocketWorker {
         tracing::debug!("trying to {verb} to {}", self.ws_url);
         let mut internal = WebSocketInternal::new(
             self.ws_url.clone(),
+            self.session_id,
             self.connection_count,
             last_close_reason,
             max_seen_transition,
@@ -262,7 +269,7 @@ impl WebSocketWorker {
                             };
 
                             let resp = ProtocolResponse::ServerMessage(server_message);
-                            let _ = self.on_response.send(resp).await;
+                            let _ = self.on_response.send(resp);
 
                             // TODO: Similar to JS, we should ideally only reset backoff if we get
                             // the client gets into a correct state, where we have Connected and
@@ -302,6 +309,7 @@ fn deprecation_message(headers: &HeaderMap) -> Option<String> {
 impl WebSocketInternal {
     async fn new(
         ws_url: Url,
+        session_id: SessionId,
         connection_count: u32,
         last_close_reason: String,
         max_observed_timestamp: Option<Timestamp>,
@@ -335,9 +343,8 @@ impl WebSocketInternal {
         };
 
         // Send an initial connect message on the new websocket
-        let session_id = Uuid::new_v4();
         let message = ClientMessage::Connect {
-            session_id: SessionId::new(session_id),
+            session_id,
             connection_count,
             last_close_reason,
             max_observed_timestamp,

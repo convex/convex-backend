@@ -42,6 +42,7 @@ export function Combobox<T>({
   innerButtonClasses,
   className,
   allowCustomValue = false,
+  customValueLabel = (value) => `Unknown option: "${value}"`,
   label,
   Option,
   searchPlaceholder = "Search...",
@@ -77,6 +78,8 @@ export function Combobox<T>({
   buttonProps?: Omit<ButtonProps, "href">;
   innerButtonClasses?: string;
   allowCustomValue?: boolean;
+  /** The label of the row that picks the typed text as a custom value. */
+  customValueLabel?: (value: string) => React.ReactNode;
   Option?: React.ComponentType<{
     label: string;
     value: T;
@@ -397,7 +400,7 @@ export function Combobox<T>({
                                 }`
                               }
                             >
-                              Unknown option: "{query}"
+                              {customValueLabel(query)}
                             </HeadlessComboboxOption>
                           )}
 

@@ -34,22 +34,9 @@ use database::{
     UserFacingModel,
 };
 use errors::ErrorMetadata;
-use fivetran_destination::{
-    api_types::{
-        BatchWriteOperation,
-        BatchWriteRow,
-        DeleteType,
-    },
-    constants::{
-        FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR,
-        FIVETRAN_SYNCED_INDEX_DESCRIPTOR,
-        FIVETRAN_SYNC_INDEX_WITHOUT_SOFT_DELETE_FIELDS,
-        FIVETRAN_SYNC_INDEX_WITH_SOFT_DELETE_FIELDS,
-        METADATA_CONVEX_FIELD_NAME,
-        SOFT_DELETE_CONVEX_FIELD_NAME,
-        SOFT_DELETE_FIELD_PATH,
-        SYNCED_FIELD_PATH,
-    },
+use serde::{
+    Deserialize,
+    Serialize,
 };
 use value::{
     ConvexObject,
@@ -58,6 +45,40 @@ use value::{
     TableName,
     TableNamespace,
 };
+
+use self::constants::{
+    FIVETRAN_PRIMARY_KEY_INDEX_DESCRIPTOR,
+    FIVETRAN_SYNCED_INDEX_DESCRIPTOR,
+    FIVETRAN_SYNC_INDEX_WITHOUT_SOFT_DELETE_FIELDS,
+    FIVETRAN_SYNC_INDEX_WITH_SOFT_DELETE_FIELDS,
+    METADATA_CONVEX_FIELD_NAME,
+    SOFT_DELETE_CONVEX_FIELD_NAME,
+    SOFT_DELETE_FIELD_PATH,
+    SYNCED_FIELD_PATH,
+};
+
+pub mod constants;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub enum BatchWriteOperation {
+    Upsert,
+    Update,
+    HardDelete,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BatchWriteRow {
+    pub table: String,
+    pub operation: BatchWriteOperation,
+    #[serde(with = "common::value::json_object")]
+    pub row: ConvexObject,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteType {
+    SoftDelete,
+    HardDelete,
+}
 
 pub struct FivetranImportModel<'a, RT: Runtime> {
     tx: &'a mut Transaction<RT>,

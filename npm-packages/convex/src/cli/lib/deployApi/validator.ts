@@ -23,6 +23,12 @@ export type ConvexValidator =
     }
   | { type: "union"; value: ConvexValidator[] }
   | {
+      type: "function";
+      fnType?: "query" | "mutation" | "action" | undefined;
+      args?: ConvexValidator | undefined;
+      returns?: ConvexValidator | undefined;
+    }
+  | {
       type: "object";
       value: Record<string, { fieldType: ConvexValidator; optional: boolean }>;
     };
@@ -41,6 +47,14 @@ export const convexValidator: z.ZodType<ConvexValidator> = z.lazy(() =>
     looseObject({
       type: z.literal("union"),
       value: z.array(convexValidator),
+    }),
+    looseObject({
+      type: z.literal("function"),
+      fnType: z
+        .union([z.literal("query"), z.literal("mutation"), z.literal("action")])
+        .optional(),
+      args: convexValidator.optional(),
+      returns: convexValidator.optional(),
     }),
     looseObject({
       type: z.literal("object"),

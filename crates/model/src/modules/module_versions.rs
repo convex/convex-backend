@@ -538,7 +538,7 @@ impl Deref for AnalyzedHttpRoutes {
 // TODO: consider denormalizing SerializedMappedModule into
 // SerializedAnalyzedModule and  instead just include source information. This
 // requires a decent migration from Dashboard  schema.
-//  See https://github.com/get-convex/convex/pull/14382/files#r1252372646 for further discussion.
+//  See https://github.com/convex/convex/pull/14382/files#r1252372646 for further discussion.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SerializedMappedModule {

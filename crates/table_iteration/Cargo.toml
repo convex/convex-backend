@@ -9,7 +9,7 @@ license = "LicenseRef-FSL-1.1-Apache-2.0"
 doctest = false
 
 [features]
-testing = ["common/testing", "errors/testing", "value/testing"]
+testing = ["common/testing", "errors/testing", "metrics/testing", "value/testing"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -18,6 +18,8 @@ errors = { workspace = true }
 fastrace = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
+metrics = { workspace = true }
+prometheus = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 value = { workspace = true }
@@ -25,6 +27,7 @@ value = { workspace = true }
 [dev-dependencies]
 common = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
+metrics = { workspace = true, features = ["testing"] }
 value = { workspace = true, features = ["testing"] }
 
 [lints]

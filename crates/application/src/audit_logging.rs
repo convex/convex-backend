@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use ::integrations::LogManagerClient;
 use aws_utils::firehose::{
     AwsFirehose,
     Firehose,
@@ -15,7 +16,6 @@ use common::{
     },
 };
 use errors::ErrorMetadata;
-use log_streaming::LogManagerClient;
 use model::audit_log_config::validate_audit_log_firehose_stream_name;
 use usage_tracking::FunctionUsageTracker;
 

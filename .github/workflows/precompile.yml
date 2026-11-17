@@ -37,7 +37,7 @@ jobs:
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # Restore-only: OSS can't write this cache (cache-write role is get-convex/convex-only).
+      # Restore-only: OSS can't write this cache (cache-write role is convex/convex-only).
       - name: Restore pnpm artifacts
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         env:
@@ -99,6 +99,7 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: "['self-hosted', 'aws', 'x64', 'xlarge']"
+            container: public.ecr.aws/docker/library/ubuntu:22.04
           - target: x86_64-apple-darwin
             # large are on intel
             os: "'macos-latest-large'"
@@ -111,9 +112,33 @@ jobs:
             # xlarge-c8g: precompiled binaries run on arbitrary user hardware,
             # so build on the oldest-generation arm64 pool.
             os: "['self-hosted', 'aws', 'arm64', 'xlarge-c8g']"
+            container: public.ecr.aws/docker/library/ubuntu:22.04
     name: Build Convex Backend
     runs-on: ${{ fromJSON(matrix.os) }}
+    # Linux binaries run on arbitrary user machines, and glibc is only
+    # backwards-compatible, so build them against an older distro than the
+    # runner image: Ubuntu 22.04 (glibc 2.35, libstdc++ GLIBCXX_3.4.30).
+    # The container can't reach the instance profile, so it skips the in-VPC
+    # S3 caches (see setup-rust's in-vpc-cache).
+    container:
+      image: ${{ matrix.container }}
     steps:
+      - name: Install build dependencies (container)
+        if: matrix.container
+        shell: bash
+        run: |
+          set -ex
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            binutils build-essential ca-certificates cmake curl g++-12 gcc-12 \
+            git libclang-dev libsnappy-dev libsodium-dev libssl-dev pkg-config \
+            python3 sudo unzip wget xz-utils zip
+          # ada-url needs C++20 support beyond jammy's default gcc 11.
+          echo "CC=gcc-12" >> "$GITHUB_ENV"
+          echo "CXX=g++-12" >> "$GITHUB_ENV"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Check out code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -143,9 +168,11 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           r2-access-key: ${{ secrets.R2_ACCESS_KEY_ID }}
           r2-secret-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          in-vpc-cache: ${{ !matrix.container }}
 
-      # Restore-only: OSS can't write this cache (cache-write role is get-convex/convex-only).
+      # Restore-only: OSS can't write this cache (cache-write role is convex/convex-only).
       - name: Restore pnpm artifacts
+        if: ${{ !matrix.container }}
         uses: runs-on/cache/restore@88d90644011a3a9957fd141a106f5a94f9794203 # v5.0.7
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
@@ -160,6 +187,11 @@ jobs:
 
       - name: Install mise tools
         uses: jdx/mise-action@dba19683ed58901619b14f395a24841710cb4925 # v4.1.0
+        env:
+          # Lint-only tools. cargo-sort has no aarch64 prebuilt, and its
+          # cargo-install fallback fails in the job container, where rustup
+          # has no default toolchain outside the repo.
+          MISE_DISABLE_TOOLS: cargo-binstall,cargo:cargo-machete,cargo:cargo-sort
         with:
           cache: true
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -203,6 +235,26 @@ jobs:
           if [ "$RUNNER_OS" = "Windows" ]; then export CMAKE_GENERATOR=Ninja; fi
           cargo build --release -p local_backend --bin convex-local-backend
           mv target/release/${{ steps.artifact_names.outputs.BINARY_NAME }} .
+
+      - name: Check glibc and libstdc++ symbol versions
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BINARY_NAME: ${{ steps.artifact_names.outputs.BINARY_NAME }}
+        run: |
+          set -euo pipefail
+          check() {
+            local prefix=$1 max=$2 newest
+            newest=$(objdump -T "$BINARY_NAME" | grep -o "${prefix}_[0-9.]*" |
+              sed "s/^${prefix}_//" | sort -uV | tail -1)
+            echo "newest ${prefix} symbol version: ${newest}"
+            if [ "$(printf '%s\n%s\n' "$newest" "$max" | sort -V | tail -1)" != "$max" ]; then
+              echo "::error::$BINARY_NAME needs ${prefix}_${newest}, newer than ${prefix}_${max}"
+              exit 1
+            fi
+          }
+          check GLIBC 2.35
+          check GLIBCXX 3.4.30
 
       - name: Zip backend into arch
         uses: thedoctor0/zip-release@7fddfdd07cadb5b8c6c0dbcdcec17f8cd7784b80 # 0.7.5

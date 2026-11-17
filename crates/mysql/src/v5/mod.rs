@@ -16,6 +16,11 @@ use common::{
     shutdown::ShutdownSignal,
 };
 use const_format::formatcp;
+#[allow(
+    unused_imports,
+    reason = "Consumed by the opt-in shadow implementation in the follow-up PR"
+)]
+pub(crate) use persistence::Lease;
 pub(super) use persistence::{
     internal_doc_id_param,
     internal_id_param,
@@ -25,7 +30,6 @@ pub use persistence::{
     Reader,
 };
 pub(crate) use sql::{
-    check_is_read_only,
     get_persistence_global,
     lease_acquire,
     lease_precond,

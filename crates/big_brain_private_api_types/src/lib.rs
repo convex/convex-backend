@@ -24,6 +24,7 @@ use utoipa::ToSchema;
 use crate::types::AccessToken;
 pub use crate::{
     slugs::{
+        validate_project_tag,
         validate_slug,
         validate_team_slug,
     },
@@ -133,6 +134,18 @@ pub struct AccessTokenDeploymentAuthResponse {
     pub token_id: Option<AccessTokenId>,
     #[serde(default)]
     pub app_client_id: Option<String>,
+    #[serde(default)]
+    pub legacy_admin_key: Option<LegacyAdminKeyOutcome>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum LegacyAdminKeyOutcome {
+    Accepted,
+    /// The deployment's team opted out of legacy admin keys.
+    DisabledForTeam,
+    /// Legacy admin keys are no longer available to the deployment's team.
+    Obsolete,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]

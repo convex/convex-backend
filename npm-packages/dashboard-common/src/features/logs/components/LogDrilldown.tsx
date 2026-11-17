@@ -228,9 +228,9 @@ function KeyboardShortcutsSection({
                 onClick={() => setIsOpen(!isOpen)}
               >
                 <KeyboardIcon className="relative -left-0.5 text-content-secondary" />
-                <h6 className="font-semibold text-content-secondary">
+                <span className="font-semibold text-content-secondary">
                   Keyboard Shortcuts
-                </h6>
+                </span>
                 {open ? (
                   <ChevronUpIcon className="size-3" />
                 ) : (

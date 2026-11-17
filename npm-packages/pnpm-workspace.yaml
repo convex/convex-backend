@@ -70,6 +70,7 @@ packages:
   - "private-demos/cjs-typescript"
   - "private-demos/clerk-initial-auth"
   - "private-demos/commit-timestamp"
+  - "private-demos/component-args"
   - "private-demos/components-api-import"
   - "private-demos/components-api-import-ts"
   - "private-demos/components-legacy"
@@ -104,7 +105,6 @@ packages:
   - "private-demos/quickstarts/nuxt"
   - "private-demos/quickstarts/react-vite"
   - "private-demos/quickstarts/react-vite-ts"
-  - "private-demos/quickstarts/remix"
   - "private-demos/quickstarts/sveltekit"
   - "private-demos/quickstarts/tanstack-start"
   - "private-demos/quickstarts/vue"
@@ -159,21 +159,13 @@ publishBranch: release
 minimumReleaseAge: 10080
 
 minimumReleaseAgeExclude:
+  # First-party package, thus the delay protects nothing here.
+  - convex-helpers
   # AI SDK's experimental evaluation interface for Jev.
   - ai@7.0.105
   - "@ai-sdk/gateway@4.0.85"
   - "@ai-sdk/provider@4.0.17"
   - "@ai-sdk/provider-utils@5.0.43"
-  - next@16.3.8
-  - "@next/env@16.3.8"
-  - "@next/swc-darwin-arm64@16.3.8"
-  - "@next/swc-darwin-x64@16.3.8"
-  - "@next/swc-linux-arm64-gnu@16.3.8"
-  - "@next/swc-linux-arm64-musl@16.3.8"
-  - "@next/swc-linux-x64-gnu@16.3.8"
-  - "@next/swc-linux-x64-musl@16.3.8"
-  - "@next/swc-win32-arm64-msvc@16.3.8"
-  - "@next/swc-win32-x64-msvc@16.3.8"
   - next@15.5.27
   - "@next/env@15.5.27"
   - "@next/swc-darwin-arm64@15.5.27"
@@ -199,9 +191,19 @@ minimumReleaseAgeExclude:
   - adm-zip@0.6.1
   # First-party publish; the convex-test docs often reference new features
   - convex-test
+  - "@convex-dev/workpool@0.4.14"
   # First-party publish; the CLI can't use workspace:* because copy.bara.sky
   # mirrors it to convex-js.
   - "@convex-dev/platform"
+  # Security fix for RSA PKCS#1 v1.5 signature verification.
+  - node-forge@1.4.1
+  # Pulled in alongside the Dependabot vite 6.4.5 bump, which re-resolved the
+  # vite 7 line too.
+  - vite@7.3.8
+  # Renovate security update: toml@5.0.1
+  - toml@5.0.1
+  # Renovate security update: happy-dom@21.0.4
+  - happy-dom@21.0.4
 
 # Keep react and react-dom out of pnpm's hoisted fallback layer. The workspace
 # has both React 18 (the demos) and React 19 (the dashboards), and
@@ -223,6 +225,19 @@ hoistPattern:
 # Declaring @types/react as an optional peer links the consumer's own types
 # version next to each package instance instead.
 packageExtensions:
+  # These /test entrypoints need the consuming app's convex-test types.
+  "@convex-dev/workpool@0.4.14":
+    peerDependencies:
+      convex-test: "^0.0.61"
+    peerDependenciesMeta:
+      convex-test:
+        optional: true
+  "@convex-dev/batch-worker@0.2.2":
+    peerDependencies:
+      convex-test: "*"
+    peerDependenciesMeta:
+      convex-test:
+        optional: true
   "@headlessui/react":
     peerDependencies:
       "@types/react": "*"
@@ -302,66 +317,69 @@ overrides:
   "@humanfs/node@>=0.16.0 <0.16.8": ^0.16.8
   "@opentelemetry/core@>=2.0.0 <2.8.0": ^2.8.0
   "@isaacs/brace-expansion@<=5.0.0": ^5.0.1
-  "@nuxt/nitro-server@>=4.0.0 <4.4.6": ^4.4.6
+  "@nuxt/nitro-server@>=4.0.0 <4.6.3": ^4.6.3
+  "@nuxt/vite-builder@>=4.0.0 <4.6.3": ^4.6.3
   "@protobufjs/utf8@>=1.0.0 <1.1.1": ^1.1.1
   "@remix-run/router@<=1.23.1": ^1.23.2
   "@sveltejs/kit@>=2.0.0 <2.70.2": ^2.70.2
   "@swc/html@>=1.0.0 <1.15.47": ^1.15.47
   "@tootallnate/once@2.0.0": 2.0.1
-  "@vitest/browser@>=4.0.0 <4.1.11": ^4.1.11
+  "@vitest/browser@>=4.0.0 <4.1.12": ^4.1.12
   "@xmldom/xmldom@>=0.8.0 <0.8.15": ^0.8.15
   "ajv@>=8.0.0 <8.18.0": ^8.18.0
   "ajv@>=6.0.0 <6.14.0": ^6.14.0
   "axios@>=1.0.0 <1.20.0": ^1.20.0
-  "basic-ftp@>=5.0.0 <5.3.1": ^5.3.1
+  "basic-ftp@>=5.0.0 <6.2.3": ^6.2.3
   "@auth/core@>=0.0.0 <0.41.3": ^0.41.3
   "baseline-browser-mapping@>=2.0.0 <2.11.0": ^2.11.0
-  "body-parser@>=1.0.0 <1.20.6": ^1.20.6
-  "body-parser@>=2.0.0 <2.3.0": ^2.3.0
+  "body-parser@>=1.0.0 <1.20.9": ^1.20.9
+  "body-parser@>=2.0.0 <2.4.0": ^2.4.0
   "brace-expansion@>=1.0.0 <1.1.21": 1.1.21
   "brace-expansion@>=2.0.0 <2.1.7": 2.1.7
   "brace-expansion@>=5.0.0 <5.0.12": 5.0.12
   "browserslist@>=4.0.0 <4.28.7": ^4.28.7
   "websocket-driver@0.7.4": ^0.7.5
   "colord@>=2.0.0 <2.9.4": ^2.9.4
+  "compression@>=1.0.0 <1.8.2": ^1.8.2
   "cookie@<0.7.0": ^0.7.2
   "degit@>=2.0.0 <2.8.6": ^2.8.6
   "devalue@>=5.0.0 <5.9.2": ^5.9.2
   "diff@>=8.0.0 <8.0.3": ^8.0.3
   "diff@>=4.0.0 <4.0.4": ^4.0.4
-  "dompurify@>=3.0.0 <3.4.16": ^3.4.16
+  "dompurify@>=3.0.0 <3.4.17": ^3.4.17
   "effect@>=3.0.0 <3.20.0": ^3.20.0
   "esbuild@<=0.24.2": 0.25.0
   "estree-util-value-to-estree@>=3.0.0 <3.3.3": ^3.3.3
-  "follow-redirects@1.15.11": 1.16.0
+  "follow-redirects@>=1.15.0 <1.16.2": ^1.16.2
   "glob@>=10.2.0 <10.5.0": ^10.5.0
   "express-rate-limit@>=8.0.0 <8.2.2": ^8.2.2
-  "fast-uri@>=3.0.0 <3.1.8": ^3.1.8
+  "fast-uri@>=3.0.0 <3.1.9": ^3.1.9
   "fast-xml-builder@>=1.0.0 <1.1.7": ^1.1.7
-  "fast-xml-parser@>=4.3.6 <5.7.0": ^5.7.0
+  "fast-xml-parser@>=4.3.6 <5.12.0": ^5.12.0
   "fflate@>=0.4.0 <0.4.9": ^0.4.9
   "flatted@>=3.0.0 <3.4.2": ^3.4.2
   "form-data@>=2.5.0 <2.5.6": 2.5.6
   "form-data@>=4.0.0 <4.0.6": 4.0.6
   "glob@>=11.0.0 <11.1.0": ^11.1.0
   "h3@<=1.15.4": ^1.15.5
-  "hono@>=4.0.0 <4.13.5": ^4.13.5
+  "hono@>=4.0.0 <4.13.11": ^4.13.11
   "h3@>=2.0.0-0 <2.0.1-rc.18": 2.0.1-rc.22
   "h3@2.0.1-rc.14": 2.0.1-rc.22
   "h3-v2@2.0.1-rc.20": "npm:h3@2.0.1-rc.22"
-  "handlebars@>=4.0.0 <4.7.9": ^4.7.9
+  "handlebars@>=4.0.0 <4.7.10": ^4.7.10
   "http-proxy-middleware@>=2.0.0 <2.0.10": ^2.0.10
   "http-proxy@1.11.1": ^1.18.1
+  "http-cache-semantics@>=4.0.0 <4.3.0": ^4.3.0
   "image-size@>=2.0.0 <2.0.3": ^2.0.3
   "immutable@>=5.0.0 <5.1.8": ^5.1.8
-  "ip-address@>=10.0.0 <10.7.1": ^10.7.1
+  "ip-address@>=10.0.0 <10.7.4": ^10.7.4
   "js-cookie@<3.0.7": ^3.0.7
   "js-yaml@>=3.0.0 <3.15.2": ^3.15.2
   "js-yaml@>=4.0.0 <4.3.2": ^4.3.2
-  "joi@>=17.0.0 <17.13.6": ^17.13.6
+  "joi@>=17.0.0 <17.13.9": ^17.13.9
   "jws@4.0.0": ^4.0.1
   "jws@<3.2.3": ^3.2.3
-  "launch-editor@>=2.0.0 <2.14.1": ^2.14.1
+  "launch-editor@>=2.0.0 <2.14.2": ^2.14.2
   "langsmith@<0.6.0": ^0.6.0
   "lodash@>=4.0.0 <=4.17.23": ^4.18.1
   "mdast-util-to-hast@>=13.0.0 <13.2.1": ^13.2.1
@@ -373,37 +391,38 @@ overrides:
   "moment@>=2.0.0 <2.31.0": ^2.31.0
   "morgan@>=1.0.0 <1.12.1": ^1.12.1
   "nanoid@>=3.0.0 <3.3.18": ^3.3.18
-  "next@>=15.0.0 <15.5.27": ^15.5.27
-  "next@>=16.0.0 <16.3.8": ^16.3.8
+  "next@>=15.0.0 <15.5.28": ^15.5.28
+  "next@>=16.0.0 <16.4.6": ^16.4.6
   "nitropack@>=2.0.0 <2.13.4": 2.13.4
-  "node-forge@1.3.1": ^1.3.2
-  "node-forge@>=1.3.2 <1.4.0": ^1.4.0
-  "nuxt@>=4.0.0 <4.5.1": ^4.5.1
+  "node-forge@<1.4.3": ^1.4.3
+  "nuxt@>=4.0.0 <4.6.3": ^4.6.3
   "path-to-regexp@^0.1.10": ^0.1.13
   "path-to-regexp@^3": ^3.3.0
   "path-to-regexp@^6": ^6.3.0
   "path-to-regexp@>=8.0.0 <8.4.0": ^8.4.0
-  "pbkdf2@3.1.2": ^3.1.3
+  "pbkdf2@>=3.0.0 <3.1.7": ^3.1.7
   "picomatch@2.3.1": ^2.3.2
   "picomatch@>=4.0.0 <4.0.4": ^4.0.4
-  "postcss-selector-parser@>=6.0.0 <6.1.3": ^6.1.3
-  "postcss-selector-parser@>=7.0.0 <7.1.3": ^7.1.3
+  "postcss-selector-parser@>=6.0.0 <6.1.5": ^6.1.5
+  "postcss-selector-parser@>=7.0.0 <7.1.6": ^7.1.6
   "postcss@>=8.0.0 <8.5.18": ^8.5.18
   "preact@>=10.27.0 <10.27.3": ^10.27.3
   "prismjs@1.29.0": ^1.30.0
   "protobufjs@>=7.0.0 <7.6.3": ^7.6.3
-  "qs@>=6.0.0 <6.16.0": ^6.16.0
+  "proxy-addr@>=2.0.0 <2.0.8": ^2.0.8
+  "qs@>=6.0.0 <6.16.1": ^6.16.1
   "react-router-dom@>=6.0.0 <6.30.6": ^6.30.6
   "rollup@2.79.2": ^2.80.0
   "semver@7.3.5": ^7.5.2
-  "serialize-javascript@>=6.0.0 <7.0.5": ^7.0.5
-  "sharp@>=0.35.0 <0.35.4": ^0.35.4
-  "shell-quote@1.8.3": 1.8.4
-  "seroval@<=1.4.0": ^1.4.1
+  "serialize-javascript@>=6.0.0 <7.1.3": ^7.1.3
+  "sharp@>=0.35.0 <0.35.5": ^0.35.5
+  "shell-quote@>=1.8.3 <1.11.0": ^1.11.0
+  "seroval@<1.6.11": ^1.6.11
   "seroval-plugins@<=1.4.0": ^1.4.1
   "sha.js@2.4.11": ^2.4.12
   "simple-git@>=3.0.0 <3.36.0": ^3.36.0
-  "smol-toml@>=1.0.0 <1.7.1": ^1.7.1
+  "smol-toml@>=1.0.0 <1.9.0": ^1.9.0
+  "source-map-js@>=1.0.0 <1.2.2": ^1.2.2
   "srvx@>=0.8.0 <0.11.13": ^0.11.13
   "svelte@>=5.0.0 <5.55.7": ^5.55.7
   "svgo@>=3.0.0 <3.3.3": ^4.1.0
@@ -412,30 +431,33 @@ overrides:
   "tar-fs@>=3.0.0 <3.0.9": 3.0.9
   "tar@>=6.0.0 <7.5.7": ^7.5.21
   "tar@>=7.5.7 <7.5.21": ^7.5.21
+  "tinypool@>=1.0.0 <2.1.2": ^2.1.2
   "valibot@>=1.0.0 <1.4.2": ^1.4.2
-  "toml@>=3.0.0 <4.2.0": ^4.2.0
+  "toml@>=3.0.0 <4.2.0": ^5.0.0
   "trim@<0.0.3": ^0.0.3
-  "undici@5.28.4": ^6.28.1
-  "undici@>=5.29.0 <6.0.0": ^6.28.1
-  "undici@>=6.0.0 <6.28.1": ^6.28.1
-  "undici@>=7.0.0 <7.29.1": ^7.29.1
+  "undici@5.28.4": ^6.29.1
+  "undici@>=5.29.0 <6.0.0": ^6.29.1
+  "undici@>=6.0.0 <6.29.1": ^6.29.1
+  "undici@>=7.0.0 <7.30.1": ^7.30.1
   "undici@>=8.0.0 <8.10.2": ^8.10.2
   "validator@13.15.15": ^13.15.22
-  "vitest@>=4.0.0 <4.1.11": ^4.1.11
-  "@vitest/browser-playwright@>=4.0.0 <4.1.11": ^4.1.11
+  "vitest@>=4.0.0 <4.1.12": ^4.1.12
+  "@vitest/browser-playwright@>=4.0.0 <4.1.12": ^4.1.12
   "vinxi@0.5.3": ^0.5.6
   "webpack-dev-server@>=5.0.0 <5.2.5": ^5.2.5
-  "vite@5.4.14": ^5.4.19
-  "vite@>=6.0.0 <6.4.3": ^6.4.3
-  "vite@>=7.0.0 <7.3.5": ^7.3.5
+  "webpack-dev-middleware@>=7.0.0 <7.4.6": ^7.4.6
+  "vite@>=6.0.0 <6.4.5": ^6.4.5
+  "vite@>=7.0.0 <7.3.7": ^7.3.7
+  "vite@>=8.0.0 <8.2.4": ^8.2.4
   "ws@>=7.0.0 <7.5.11": ^7.5.11
   "ws@>=8.0.0 <8.21.0": ^8.21.0
   "yaml@>=1.0.0 <1.10.3": ^1.10.3
   "yaml@>=2.0.0 <2.8.3": ^2.8.3
+  "zod@>=4.0.0 <4.6.6": ^4.6.6
 # Workspace scripts run after an explicit install. Avoid pnpm 11 racing installs
 # from concurrent Turbo tasks when it detects transient node_modules changes.
 verifyDepsBeforeRun: false
-# We use git dependencies, in particular get-convex/saffron
+# We use git dependencies, in particular convex/saffron
 blockExoticSubdeps: false
 # pnpm 10 denied dependency lifecycle scripts by default. Keep that policy
 # explicit under pnpm 11, which otherwise fails and scaffolds undecided entries.

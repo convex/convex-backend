@@ -23,6 +23,8 @@ export const defaultValueForValidator = (
       return validator.value;
     case "id":
       return "";
+    case "function":
+      return "";
     case "object":
       return Object.fromEntries(
         Object.entries(validator.value)

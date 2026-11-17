@@ -192,6 +192,8 @@ function displayValidator(validator: ValidatorJSON): string {
       return `v.int64()`;
     case "commitTs":
       return `v.commitTs()`;
+    case "function":
+      return `v.function()`;
     case "boolean":
       return `v.boolean()`;
     case "string":
@@ -506,13 +508,6 @@ export function toDateTimeLocalValue(
 
 export function toDateInputValue(d: Date): string {
   return toDateTimeLocalValue(d).slice(0, 10);
-}
-
-export function parseDateInputValue(value: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return null;
-  const [, year, month, day] = match;
-  return new Date(Number(year), Number(month) - 1, Number(day));
 }
 
 export const timeLabelForMinute = (value: string | number | undefined) => {

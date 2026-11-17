@@ -11,10 +11,12 @@ export const convexExport = new Command("export")
   .summary("Export data from your deployment to a ZIP file")
   .description(
     [
-      "Export data, and optionally file storage, from your Convex deployment to a ZIP file.",
+      "Export data, and optionally file storage, from your Convex deployment to a ZIP file downloadable from Convex.",
+      "Without --path, create an export and download it later from the dashboard link.",
       "",
-      "• Export to a directory: `npx convex export --path dir/`",
-      "• Export to a ZIP file: `npx convex export --path snapshot.zip`",
+      "• Create an export without downloading: `npx convex export`",
+      "• Download to a directory: `npx convex export --path dir/`",
+      "• Download as a ZIP file: `npx convex export --path snapshot.zip`",
       "• Include file storage: `npx convex export --include-file-storage --path dir/`",
       "",
       "By default, this exports from your dev deployment.",

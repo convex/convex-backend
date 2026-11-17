@@ -98,3 +98,7 @@ export const LOCAL_BACKEND_INSTANCE_SECRET =
 export function releaseDate(version: string): string | null {
   return /^precompiled-(\d{4}-\d{2}-\d{2})-/.exec(version)?.[1] ?? null;
 }
+
+export function isValidBackendVersion(version: string): boolean {
+  return /^precompiled-\d{4}-\d{2}-\d{2}-[\w.-]+$/.test(version);
+}

@@ -6,7 +6,7 @@ services and how to use environment variables.
 It allows the user to type a chat message, like `/giphy wombat`, query
 [GIPHY](https://giphy.com/) for a wombat GIF, and have an animated GIF of a
 wombat show up in the chat stream. It builds on the Convex
-[tutorial](https://github.com/get-convex/convex/tree/main/npm-packages/demos/tutorial).
+[tutorial](https://github.com/convex/convex/tree/main/npm-packages/demos/tutorial).
 
 ## Running the App
 

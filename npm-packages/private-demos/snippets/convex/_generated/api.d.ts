@@ -36,6 +36,7 @@ import type * as counter from "../counter.js";
 import type * as crons from "../crons.js";
 import type * as deletingFiles from "../deletingFiles.js";
 import type * as fileMetadata from "../fileMetadata.js";
+import type * as filesInMutations from "../filesInMutations.js";
 import type * as foods from "../foods.js";
 import type * as functions from "../functions.js";
 import type * as goClientExample from "../goClientExample.js";
@@ -129,6 +130,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   deletingFiles: typeof deletingFiles;
   fileMetadata: typeof fileMetadata;
+  filesInMutations: typeof filesInMutations;
   foods: typeof foods;
   functions: typeof functions;
   goClientExample: typeof goClientExample;

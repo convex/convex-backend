@@ -4,6 +4,7 @@
 mod action_callbacks;
 mod action_outcome;
 mod client;
+pub mod deployment_jwt;
 pub mod environment;
 mod function_outcome;
 pub mod helpers;

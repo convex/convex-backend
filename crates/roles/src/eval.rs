@@ -47,6 +47,7 @@ impl ProjectSelector {
             ProjectSelector::Any => true,
             ProjectSelector::Id(id) => project.id == *id,
             ProjectSelector::Slug(slug) => project.slug == *slug,
+            ProjectSelector::Tag(tag) => project.tags.contains(tag),
         }
     }
 }
@@ -99,13 +100,15 @@ impl ResourceSegment {
             (ResourceSegment::Project(selectors), ConcreteSegment::Project(project)) => {
                 selectors.iter().any(|s| s.matches(project))
             },
-            (ResourceSegment::Project(selectors), ConcreteSegment::ProposedProject { slug }) => {
-                selectors.iter().any(|s| match s {
-                    ProjectSelector::Any => true,
-                    ProjectSelector::Id(_) => false,
-                    ProjectSelector::Slug(s) => s == slug,
-                })
-            },
+            (
+                ResourceSegment::Project(selectors),
+                ConcreteSegment::ProposedProject { slug, tags },
+            ) => selectors.iter().any(|s| match s {
+                ProjectSelector::Any => true,
+                ProjectSelector::Id(_) => false,
+                ProjectSelector::Slug(s) => s == slug,
+                ProjectSelector::Tag(t) => tags.contains(t),
+            }),
             (ResourceSegment::Deployment(selectors), ConcreteSegment::Deployment(deployment)) => {
                 selectors.iter().any(|s| s.matches(deployment, actor))
             },
@@ -206,6 +209,20 @@ impl CustomRole {
             return AccessDecision::Denied;
         };
         evaluate_statements(self.statements.iter(), stmt_action, resource, actor)
+    }
+
+    /// Whether any statement targets projects by `tag=`, i.e. whether
+    /// evaluating this role needs the project's tags loaded.
+    pub fn selects_project_tags(&self) -> bool {
+        self.statements.iter().any(|stmt| {
+            stmt.resource.segments.iter().any(|segment| {
+                matches!(
+                    segment,
+                    ResourceSegment::Project(selectors)
+                        if selectors.iter().any(|s| matches!(s, ProjectSelector::Tag(_)))
+                )
+            })
+        })
     }
 }
 

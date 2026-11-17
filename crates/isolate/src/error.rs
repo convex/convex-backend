@@ -88,6 +88,7 @@ impl<RT: Runtime, E: V8IsolateEnvironment<RT>> ExecutionScope<'_, '_, '_, RT, E>
             && let (line, col) = token.get_src()
             && let Some(source_view) = token.get_source_view()
             && let Some(ctx) = source_view.get_line(line)
+            && (col as usize) <= ctx.len()
         {
             Err(e.wrap_error_message(|m| {
                 format!(

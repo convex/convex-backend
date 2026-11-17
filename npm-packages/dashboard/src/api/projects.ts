@@ -77,6 +77,8 @@ export function usePaginatedProjects(
   options: {
     cursor?: string;
     q?: string;
+    /** Projects with any of these tags. */
+    tags?: string[];
     limitOverride?: number;
   },
   refreshInterval?: SWRConfiguration["refreshInterval"],
@@ -88,6 +90,7 @@ export function usePaginatedProjects(
       cursor: options.cursor,
       limit: options.limitOverride || pageSize,
       q: options.q,
+      tag: options.tags?.length ? options.tags : undefined,
     }),
     [options, pageSize],
   );
@@ -189,10 +192,8 @@ export function useInfiniteProjects(
     }
   }, [debouncedQuery, setSize]);
 
-  const projects = useMemo(
-    () => flatMap(data?.map((page) => page.items)),
-    [data],
-  );
+  const pages = useMemo(() => data?.map((page) => page.items) ?? [], [data]);
+  const projects = useMemo(() => flatMap(pages), [pages]);
 
   const hasMore = data?.[data.length - 1]?.pagination.hasMore ?? false;
 
@@ -209,6 +210,8 @@ export function useInfiniteProjects(
 
   return {
     projects,
+    // The raw pages, for callers that transform each page separately.
+    pages,
     isLoading,
     isLoadingMore,
     hasMore,
@@ -216,6 +219,21 @@ export function useInfiniteProjects(
     debouncedQuery,
     pageSize,
   };
+}
+
+/**
+ * The first 100 distinct tags on the team's projects, in name order, or
+ * undefined while loading. Pass an undefined `teamId` to skip the request.
+ */
+export function useTeamProjectTags(
+  teamId: number | undefined,
+): string[] | undefined {
+  const { data } = useManagementApiQuery({
+    path: "/teams/{team_id}/list_project_tags",
+    pathParams: { team_id: teamId ?? 0 },
+    queryParams: { limit: 100 },
+  });
+  return useMemo(() => data?.items.map((tag) => tag.name), [data]);
 }
 
 export function useCreateProject(teamId?: number) {

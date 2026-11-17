@@ -24,7 +24,7 @@ import {
 } from "../registration.js";
 import { setupActionCalls } from "./actions_impl.js";
 import { setupActionVectorSearch } from "./vector_search_impl.js";
-import { setupAuth } from "./authentication_impl.js";
+import { setupAuth, setupMutationAuth } from "./authentication_impl.js";
 import { setupReader, setupWriter } from "./database_impl.js";
 import { QueryImpl, QueryInitializerImpl } from "./query_impl.js";
 import {
@@ -55,7 +55,7 @@ async function invokeMutation<
   const args = jsonToConvex(JSON.parse(argsStr));
   const mutationCtx = {
     db: setupWriter(),
-    auth: setupAuth(requestId),
+    auth: setupMutationAuth(requestId),
     storage: setupStorageWriter(requestId),
     scheduler: setupMutationScheduler(),
     meta: setupMutationMeta(visibility),

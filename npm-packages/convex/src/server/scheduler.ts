@@ -150,6 +150,11 @@ export interface Scheduler {
    * if it has committed. It is a transaction that will either run to
    * completion and commit or fully roll back.
    *
+   * Starting with `convex` 1.50.0, a scheduled mutation that cancels its own
+   * scheduled function ID throws `ScheduledFunctionCancelingItself`. If uncaught,
+   * this rolls back the mutation and marks the scheduled function as failed.
+   * Return from the mutation to finish it instead.
+   *
    * @example
    * ```typescript
    * // Cancel a scheduled function:

@@ -13,7 +13,7 @@ export const chatCompletion = actionGeneric({
   returns: v.string(),
   handler: async (_ctx, { prompt }) => {
     const { text } = await generateText({
-      model: convexGateway("openai/gpt-4o-mini"),
+      model: convexGateway("~anthropic/claude-sonnet-latest"),
       prompt,
     });
     if (!text) {

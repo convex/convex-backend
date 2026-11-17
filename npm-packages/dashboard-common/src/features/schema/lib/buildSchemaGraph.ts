@@ -111,6 +111,8 @@ function validatorToLabel(validator: ValidatorJSON, expand = false): string {
       return "bigint";
     case "commitTs":
       return "commitTs";
+    case "function":
+      return "FunctionHandle";
     case "boolean":
       return "boolean";
     case "string":

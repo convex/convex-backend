@@ -1720,7 +1720,8 @@ async fn backfill_and_enable_indexes_on_table<RT: Runtime>(
         let token = tx.into_token()?;
         database.subscribe_and_wait_for_invalidation(token).await?;
     }
-    // Enable the indexes now that they are backfilled.
+    // Enable the indexes now that they are backfilled. Staged indexes stay
+    // staged until a push enables them.
     database
         .execute_with_overloaded_retries(
             identity.clone(),
@@ -1731,7 +1732,7 @@ async fn backfill_and_enable_indexes_on_table<RT: Runtime>(
                     let mut index_model = IndexModel::new(tx);
                     let mut backfilled_indexes = vec![];
                     for index in index_model.all_indexes_on_table(tablet_id).await? {
-                        if !index.config.is_enabled() {
+                        if !index.config.is_enabled() && !index.config.is_staged() {
                             backfilled_indexes.push(index);
                         }
                     }

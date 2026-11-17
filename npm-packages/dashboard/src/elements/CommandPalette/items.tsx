@@ -1,5 +1,6 @@
 import { Command, useCommandState } from "cmdk";
 import React, { useContext } from "react";
+import Link from "next/link";
 import { useRouter } from "next/router";
 import { CaretRightIcon, Pencil2Icon, StackIcon } from "@radix-ui/react-icons";
 import {
@@ -23,9 +24,11 @@ import { useMyCustomRoles } from "api/roles";
 import { useDeploymentUris } from "hooks/useDeploymentUris";
 import { useLastViewedDeploymentForProject } from "hooks/useLastViewed";
 import type { PlatformDeploymentResponse, ProjectDetails } from "generatedApi";
-import type { NavigationTarget } from "./navigation";
+import type { NavigationDestination, NavigationTarget } from "./navigation";
 import { REMOTE_VALUE_PREFIX } from "./navigation";
+import { matchedIndices } from "./matchRank";
 import { useCopyAction } from "./copy";
+import { useLinkRegistration } from "./newTab";
 import type { DeploymentPicker } from "./picker";
 import { usePaletteAnalytics } from "./analytics";
 
@@ -43,27 +46,6 @@ export function useConsumeDrillModifier() {
     flag.current = false;
     return active;
   };
-}
-
-// Indices of `text` covered by an occurrence of any whitespace-separated
-// token of `query`, case-insensitively. Mirrors the palette filter's
-// substring-token matching.
-function matchedIndices(query: string, text: string): Set<number> {
-  const indices = new Set<number>();
-  const lowerText = text.toLowerCase();
-  for (const token of query.trim().toLowerCase().split(/\s+/)) {
-    if (!token) {
-      continue;
-    }
-    let idx = lowerText.indexOf(token);
-    while (idx !== -1) {
-      for (let i = idx; i < idx + token.length; i++) {
-        indices.add(i);
-      }
-      idx = lowerText.indexOf(token, idx + 1);
-    }
-  }
-  return indices;
 }
 
 // Renders text with the characters matching the current palette search
@@ -122,32 +104,35 @@ export function NavigationItem({
   const { label, href, Icon, parent, keywords } = target;
   const searchKeywords = keywords ?? [label];
   const { trackSelected } = usePaletteAnalytics();
+  const track = () => trackSelected(`navigate:${label}`);
   return (
     <Command.Item
       value={`nav:${href}:${label}`}
       keywords={parent ? [...searchKeywords, parent] : searchKeywords}
       onSelect={() => {
-        trackSelected(`navigate:${label}`);
+        track();
         onNavigate(href);
       }}
     >
-      <Icon className="text-content-secondary" />
-      {/* Two lines: the page/section itself, then where it lives. */}
-      <span className="flex min-w-0 flex-col">
-        <span className="truncate">
-          <HighlightedText text={label} />
+      <ItemPrimary href={href} onModifiedClick={track}>
+        <Icon className="text-content-secondary" />
+        {/* Two lines: the page/section itself, then where it lives. */}
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate">
+            <HighlightedText text={label} />
+          </span>
+          {parent && (
+            <span className="truncate text-xs text-content-tertiary">
+              <HighlightedText text={parent} />
+            </span>
+          )}
         </span>
-        {parent && (
-          <span className="truncate text-xs text-content-tertiary">
-            <HighlightedText text={parent} />
+        {hint && (
+          <span className="ml-auto shrink-0 text-xs text-content-tertiary">
+            {hint}
           </span>
         )}
-      </span>
-      {hint && (
-        <span className="ml-auto shrink-0 text-xs text-content-tertiary">
-          {hint}
-        </span>
-      )}
+      </ItemPrimary>
     </Command.Item>
   );
 }
@@ -294,8 +279,99 @@ export function CurrentBadge({ label = "Current" }: { label?: string }) {
   return <span className="rounded-sm border px-1.5 py-0.5">{label}</span>;
 }
 
-function ItemPrimary({ children }: { children: React.ReactNode }) {
-  return <span data-item-primary="">{children}</span>;
+// Mirrors next/link's own unexported predicate, so exactly one of the anchor
+// and cmdk reacts to any click that reaches a row.
+function isModifiedEvent(event: React.MouseEvent) {
+  return (
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  );
+}
+
+// Plain left click: suppress the anchor's navigation and let the click bubble
+// to cmdk's row handler, so mouse and Enter share one navigation path
+// (analytics, closing the dialog, scrolling to sections).
+// Modified or non-primary click: the browser owns it, so stop the row handler
+// from also navigating this tab — which also skips the `trackSelected` it makes,
+// hence `onModifiedClick`. (Middle click reaches neither: it fires `auxclick`,
+// which the anchor and cmdk both ignore, and the browser opens the tab on its
+// own; `onItemLinkAuxClick` reports it. The context menu's "Open link in a new
+// tab" dispatches no event to the page, so it goes unreported.)
+function onItemLinkClick(
+  event: React.MouseEvent,
+  onModifiedClick: (() => void) | undefined,
+) {
+  if (isModifiedEvent(event)) {
+    event.stopPropagation();
+    onModifiedClick?.();
+    return;
+  }
+  event.preventDefault();
+}
+
+// `auxclick` also fires for the secondary button, which only opens the context
+// menu; button 1 is the middle button, which opens the link in a new tab.
+function onItemLinkAuxClick(
+  event: React.MouseEvent,
+  onModifiedClick: (() => void) | undefined,
+) {
+  if (event.button === 1) {
+    onModifiedClick?.();
+  }
+}
+
+// The body of a row, holding everything but a trailing secondary action. Rows
+// that navigate render it as a real anchor, so ⌘-click, middle click and "Open
+// link in a new tab" work on them; the stylesheet moves the row's padding and
+// selected background onto it so it covers the whole row. The anchor stays out
+// of the tab order, and assistive tech flattens it into the enclosing option,
+// which is what cmdk navigates; the keyboard reaches it through the palette
+// instead, whose ⌘/Ctrl+Enter opens the selected row's anchor (see `newTab.ts`).
+export function ItemPrimary({
+  href,
+  onModifiedClick,
+  children,
+}: {
+  // Must lead where the row's `onSelect` navigates: a plain click cancels the
+  // anchor and defers to that handler, so the two disagreeing would make
+  // "open in a new tab" land somewhere else than selecting the row. May be
+  // `undefined` while the destination is still loading, which falls back to a
+  // plain span.
+  href?: NavigationDestination;
+  // The analytics the row's `onSelect` would have reported. Only a plain click
+  // reaches `onSelect`, so without this, selections would undercount by exactly
+  // the ⌘-clicks, middle clicks and ⌘/Ctrl+Enters this component exists to
+  // enable.
+  onModifiedClick?: () => void;
+  children: React.ReactNode;
+}) {
+  const registerLink = useLinkRegistration(onModifiedClick);
+  return href === undefined ? (
+    <span data-item-primary="">{children}</span>
+  ) : (
+    <Link
+      ref={registerLink}
+      href={href}
+      data-item-primary=""
+      // Drops the viewport prefetch, which would fire for every row the list
+      // scrolls past. Hovering a row still prefetches it — that one is a fair
+      // signal of intent, and next/link gives no way to opt out of it anyway.
+      prefetch={false}
+      // Anchors take focus on click in Chromium and Firefox, and `tabIndex={-1}`
+      // only removes them from the tab order. A modified click leaves the
+      // palette open, so without this the search input silently loses focus and
+      // stops receiving the user's next keystrokes.
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={(event) => onItemLinkClick(event, onModifiedClick)}
+      onAuxClick={(event) => onItemLinkAuxClick(event, onModifiedClick)}
+      tabIndex={-1}
+    >
+      {children}
+    </Link>
+  );
 }
 
 function DrillButton({ onDrill }: { onDrill: () => void }) {
@@ -303,18 +379,14 @@ function DrillButton({ onDrill }: { onDrill: () => void }) {
     <Button
       variant="unstyled"
       aria-label="Browse"
+      data-drill-button=""
       tip={
         <span className="flex items-center gap-1">
           Browse
           <KeyboardShortcut value={["Right"]} className={KEYCAP_CLASSES} />
         </span>
       }
-      data-secondary-action=""
-      className={cn(
-        "mr-1 ml-1.5 shrink-0 rounded-lg p-1.5 text-content-tertiary",
-        "hover:bg-background-secondary hover:text-content-primary",
-        "dark:hover:bg-background-tertiary",
-      )}
+      className="flex shrink-0 items-center self-stretch rounded-r-lg px-3 text-content-tertiary hover:text-content-primary"
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -351,6 +423,7 @@ export function ProjectItem({
 }) {
   const consumeDrillModifier = useConsumeDrillModifier();
   const { trackSelected } = usePaletteAnalytics();
+  const track = () => trackSelected("switch-project");
   const router = useRouter();
   const isCurrent = router.query.project === project.slug;
   const team = useCurrentTeam();
@@ -358,8 +431,11 @@ export function ProjectItem({
   // Prefer the project's last-viewed deployment (and current subpage) like the
   // old header menu; `/t/team/project` would instead redirect to the default
   // dev/prod deployment, dropping that context and bouncing you off the
-  // deployment you're already on. Custom-role members go to the deployments
-  // list instead, since they may not be able to view the default deployment.
+  // deployment you're already on. Custom-role members go to the default
+  // deployment the backend returned for them, falling back to the deployments
+  // list when they can't view either default deployment. That reads the
+  // project list's deployment names rather than `useDeploymentUris`, which
+  // reports neither default while its own fetch is in flight.
   const { generateHref, defaultHref } = useDeploymentUris(
     project.id,
     project.slug,
@@ -368,8 +444,12 @@ export function ProjectItem({
   const [lastViewedDeployment] = useLastViewedDeploymentForProject(
     project.slug,
   );
+  const visibleDefaultDeployment =
+    project.devDeploymentName ?? project.prodDeploymentName;
   const projectHref = isCustomRoleMember
-    ? `/t/${teamSlug}?view=deployments&projectId=${project.id}`
+    ? visibleDefaultDeployment
+      ? generateHref(visibleDefaultDeployment)
+      : `/t/${teamSlug}?view=deployments&projectId=${project.id}`
     : lastViewedDeployment
       ? generateHref(lastViewedDeployment)
       : defaultHref;
@@ -380,14 +460,14 @@ export function ProjectItem({
       value={value}
       className="animate-fadeInFromLoading"
       onSelect={() => {
-        trackSelected("switch-project");
+        track();
         if (consumeDrillModifier()) {
           return onDrill();
         }
         return onNavigate(projectHref);
       }}
     >
-      <ItemPrimary>
+      <ItemPrimary href={projectHref} onModifiedClick={track}>
         <ProjectRowBody project={project} />
         {isCurrent && (
           <span className="ml-auto shrink-0 text-xs text-content-tertiary">
@@ -429,6 +509,7 @@ export function DeploymentItem({
   const typeLabel = deploymentTypeLabel(deployment.deploymentType);
   const { primary } = deploymentRowText(deployment);
   const { trackSelected } = usePaletteAnalytics();
+  const track = () => trackSelected("switch-deployment");
   // When switching straight to another deployment, keep whatever subpage the
   // user is on (Data, Logs, a settings tab, …) instead of resetting to Health.
   // Only meaningful while already viewing a deployment.
@@ -437,6 +518,9 @@ export function DeploymentItem({
       ? router.asPath.split(/[?#]/)[0].split("/").slice(5).join("/")
       : "";
   const isCurrent = router.query.deploymentName === deployment.name;
+  const href = projectSlug
+    ? `/t/${teamSlug}/${projectSlug}/${deployment.name}${currentView ? `/${currentView}` : ""}`
+    : undefined;
   const value = `${remote ? REMOTE_VALUE_PREFIX : ""}deployment:${deployment.name}`;
   useCopyAction(
     value,
@@ -450,15 +534,14 @@ export function DeploymentItem({
       className="animate-fadeInFromLoading"
       keywords={remote ? undefined : [primary, deployment.name, typeLabel]}
       onSelect={() => {
-        trackSelected("switch-deployment");
-        if (consumeDrillModifier() || !projectSlug) {
+        track();
+        if (consumeDrillModifier() || !href) {
           return onDrill();
         }
-        const base = `/t/${teamSlug}/${projectSlug}/${deployment.name}`;
-        return onNavigate(currentView ? `${base}/${currentView}` : base);
+        return onNavigate(href);
       }}
     >
-      <ItemPrimary>
+      <ItemPrimary href={href} onModifiedClick={track}>
         <DeploymentRowBody
           deployment={deployment}
           projectName={showProject ? project?.name || project?.slug : undefined}

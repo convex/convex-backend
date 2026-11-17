@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2024"
 license = "LicenseRef-FSL-1.1-Apache-2.0"
 
-[package.metadata.cargo-machete]
-ignored = ["libc", "pretty_assertions"]
-
 [lib]
 doctest = false
 
@@ -17,12 +14,11 @@ testing = [
     "database/testing",
     "errors/testing",
     "events/testing",
-    "fivetran_destination/testing",
     "function_runner/testing",
     "indexing/testing",
     "isolate/testing",
     "keybroker/testing",
-    "log_streaming/testing",
+    "integrations/testing",
     "metrics/testing",
     "model/testing",
     "node_executor/testing",
@@ -61,6 +57,7 @@ const-hex = { workspace = true }
 const_format = { workspace = true }
 convex_macro = { workspace = true }
 csv-async = { workspace = true }
+csv-core = { workspace = true }
 database = { workspace = true }
 either = { workspace = true }
 errors = { workspace = true }
@@ -68,7 +65,6 @@ events = { workspace = true }
 exports = { workspace = true }
 fastrace = { workspace = true }
 file_storage = { workspace = true }
-fivetran_destination = { workspace = true }
 function_runner = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
@@ -78,11 +74,12 @@ http = { workspace = true }
 http_client = { workspace = true }
 humansize = { workspace = true }
 indexing = { workspace = true }
+integrations = { workspace = true }
 isolate = { workspace = true }
 itertools = { workspace = true }
 keybroker = { workspace = true }
-log_streaming = { workspace = true }
 lru = { workspace = true }
+managed_export_worker = { workspace = true }
 maplit = { workspace = true }
 metrics = { workspace = true }
 model = { workspace = true }
@@ -126,7 +123,6 @@ value = { workspace = true }
 vector = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = { workspace = true }
 
 [dev-dependencies]
 async_zip = { workspace = true }
@@ -137,18 +133,16 @@ database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
 events = { workspace = true, features = ["testing"] }
 exports = { workspace = true, features = ["testing"] }
-fivetran_destination = { workspace = true, features = ["testing"] }
 function_runner = { workspace = true, features = ["testing"] }
 indexing = { workspace = true, features = ["testing"] }
+integrations = { workspace = true, features = ["testing"] }
 isolate = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }
-log_streaming = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }
 model = { workspace = true, features = ["testing"] }
 must-let = { workspace = true }
 node_executor = { workspace = true, features = ["testing"] }
 openidconnect = { workspace = true }
-pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 proptest-derive = { workspace = true }
 roles = { workspace = true, features = ["testing"] }

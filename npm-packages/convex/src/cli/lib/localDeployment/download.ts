@@ -27,6 +27,7 @@ import { recursivelyDelete, recursivelyCopy } from "../fsUtils.js";
 import { LocalDeploymentError } from "./errors.js";
 import type { ProgressBarInstance } from "../../../vendor/progress/index.js";
 import path from "path";
+import { isValidBackendVersion } from "./utils.js";
 
 async function makeExecutable(p: string) {
   switch (process.platform) {
@@ -67,6 +68,7 @@ async function _ensureBackendBinaryDownloaded(
   ctx: Context,
   version: string,
 ): Promise<{ binaryPath: string; version: string }> {
+  await assertValidBackendVersion(ctx, version);
   logVerbose(`Ensuring backend binary downloaded for version ${version}`);
   const existingDownload = await checkForExistingDownload(ctx, version);
   if (existingDownload !== null) {
@@ -78,6 +80,19 @@ async function _ensureBackendBinaryDownloaded(
   }
   const binaryPath = await downloadBackendBinary(ctx, version);
   return { version, binaryPath };
+}
+
+async function assertValidBackendVersion(ctx: Context, version: string) {
+  if (!isValidBackendVersion(version)) {
+    return await ctx.crash({
+      exitCode: 1,
+      errorType: "fatal",
+      printedMessage: "Invalid local backend version",
+      errForSentry: new LocalDeploymentError(
+        `Invalid local backend version: ${JSON.stringify(version)}`,
+      ),
+    });
+  }
 }
 
 let cachedLatestVersion: string | null = null;
@@ -259,7 +274,7 @@ function getDownloadPath() {
 }
 
 function getGithubDownloadUrl(version: string, filename: string) {
-  return `https://github.com/get-convex/convex-backend/releases/download/${version}/${filename}`;
+  return `https://github.com/convex/convex-backend/releases/download/${version}/${filename}`;
 }
 
 async function downloadZipFile(
@@ -326,6 +341,7 @@ async function downloadZipFile(
 }
 
 export async function ensureDashboardDownloaded(ctx: Context, version: string) {
+  await assertValidBackendVersion(ctx, version);
   const config = loadGlobalDashboardConfig(ctx);
   if (config !== null && config.version === version) {
     return;

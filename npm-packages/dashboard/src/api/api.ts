@@ -16,7 +16,11 @@ import { fireGoogleAnalyticsEvent } from "elements/GoogleAnalytics";
 import { toast } from "@common/lib/utils";
 import type { paths as BigBrainPaths } from "generatedApi";
 import type { paths as ManagementApiPaths } from "@convex-dev/platform/managementApi";
-import { SWRConfiguration, SWRResponse, mutate as globalMutate } from "swr";
+import useSWR, {
+  SWRConfiguration,
+  SWRResponse,
+  mutate as globalMutate,
+} from "swr";
 import { useAccessToken } from "hooks/useServerSideData";
 import { useRouter } from "next/router";
 import { useCallback, useEffect } from "react";
@@ -45,8 +49,6 @@ const useQuery = createQueryHook(client, "big-brain");
 
 export const useMutate = createMutateHook(client, "big-brain", isMatch);
 
-export const useBBInfiniteQuery = createInfiniteHook(client, "big-brain");
-
 // Management API hooks
 const useManagementQuery = createQueryHook(
   managementApiClient,
@@ -71,7 +73,43 @@ type Path<M extends "post" | "put" | "get" | "delete"> = PathsWithMethod<
 type ManagementPath<M extends "post" | "put" | "get" | "delete" | "patch"> =
   PathsWithMethod<ManagementApiPaths, M>;
 
-export const useSSOLoginRequired = createGlobalState<string>();
+// Teams that rejected a query because they require SSO login and this
+// session isn't SSO-authenticated for them. A query whose path has a
+// `team_id` records that team, which can differ from the page's team (e.g.
+// the destination team when transferring a project); any other query records
+// the page's team slug. Logging in with SSO is a full page load, which resets
+// this state.
+export const useSSOLoginRequired = createGlobalState<{
+  teamIds: string[];
+  teamSlugs: string[];
+}>({ teamIds: [], teamSlugs: [] });
+
+function teamIdOf(pathParams: unknown): string | undefined {
+  const teamId = (pathParams as { team_id?: string | number } | undefined)
+    ?.team_id;
+  return teamId === undefined ? undefined : String(teamId);
+}
+
+function useOnSSORequiredError(teamId: string | undefined) {
+  const router = useRouter();
+  const [, setSSOLoginRequired] = useSSOLoginRequired();
+  return (e: unknown) => {
+    if ((e as any)?.code !== "SSORequired") {
+      return;
+    }
+    const teamSlug =
+      typeof router.query.team === "string" ? router.query.team : undefined;
+    setSSOLoginRequired((prev) =>
+      teamId !== undefined
+        ? prev.teamIds.includes(teamId)
+          ? prev
+          : { ...prev, teamIds: [...prev.teamIds, teamId] }
+        : teamSlug === undefined || prev.teamSlugs.includes(teamSlug)
+          ? prev
+          : { ...prev, teamSlugs: [...prev.teamSlugs, teamSlug] },
+    );
+  };
+}
 
 // Helper to build API request headers
 function useApiHeaders() {
@@ -230,8 +268,7 @@ export function useBBQuery<QueryPath extends Path<"get">>({
   TypesForGetRequest<BigBrainPaths, QueryPath>["Data"],
   TypesForGetRequest<BigBrainPaths, QueryPath>["Error"]
 > {
-  const router = useRouter();
-  const [ssoLoginRequired, setSSOLoginRequired] = useSSOLoginRequired();
+  const onSSORequiredError = useOnSSORequiredError(teamIdOf(pathParams));
   const { headers, accessToken } = useApiHeaders();
 
   // Don't include headers in requestOptions - they'll be injected by middleware
@@ -263,16 +300,70 @@ export function useBBQuery<QueryPath extends Path<"get">>({
   const res = useQuery(path, requestOptions, {
     keepPreviousData: true,
     isPaused: () => paused,
-    onError: (e) => {
-      if ((e as any).code === "SSORequired" && !ssoLoginRequired) {
-        setSSOLoginRequired(router.query.team as string);
-      }
-    },
+    onError: onSSORequiredError,
     ...swrOptions,
     // Inject headers at fetch time via middleware, not in cache key
     use: [createHeaderInjectionMiddleware(headers), ...(swrOptions?.use || [])],
   });
 
+  handleQueryError(res, path);
+  return res;
+}
+
+export function useBBQueries<QueryPath extends Path<"get">>({
+  path,
+  requests,
+  swrOptions,
+}: {
+  path: QueryPath;
+  requests: {
+    pathParams: BigBrainPaths[QueryPath]["get"]["parameters"]["path"];
+    queryParams?: BigBrainPaths[QueryPath]["get"]["parameters"]["query"];
+  }[];
+  swrOptions?: Omit<SWRConfiguration, "onError" | "keepPreviousData">;
+}): SWRResponse<
+  TypesForGetRequest<BigBrainPaths, QueryPath>["Data"][],
+  TypesForGetRequest<BigBrainPaths, QueryPath>["Error"]
+> {
+  // The batch fails as a whole, so attribute the error to a team only when
+  // every request targets the same one.
+  const requestTeamIds = new Set(
+    requests.map(({ pathParams }) => teamIdOf(pathParams)),
+  );
+  const onSSORequiredError = useOnSSORequiredError(
+    requestTeamIds.size === 1 ? [...requestTeamIds][0] : undefined,
+  );
+  const { headers, accessToken } = useApiHeaders();
+  const paused =
+    !accessToken ||
+    requests.some(
+      ({ pathParams }) =>
+        pathParams && Object.values(pathParams).some((p) => !p),
+    );
+  const res = useSWR<
+    TypesForGetRequest<BigBrainPaths, QueryPath>["Data"][],
+    TypesForGetRequest<BigBrainPaths, QueryPath>["Error"]
+  >(
+    // A null key hides cached batch data while authentication or parameters are missing.
+    paused ? null : ["big-brain-queries", path, requests],
+    async () =>
+      Promise.all(
+        requests.map(async ({ pathParams, queryParams }) => {
+          // @ts-expect-error OpenAPI cannot resolve the generic init tuple; parameters are checked at the hook boundary.
+          const { data, error, response } = await client.GET(path, {
+            headers,
+            params: { path: pathParams, query: queryParams },
+          });
+          if (!response.ok) throw error;
+          return data!;
+        }),
+      ),
+    {
+      ...swrOptions,
+      keepPreviousData: false,
+      onError: onSSORequiredError,
+    },
+  );
   handleQueryError(res, path);
   return res;
 }
@@ -392,8 +483,7 @@ export function useManagementApiQuery<QueryPath extends ManagementPath<"get">>({
   queryParams?: ManagementApiPaths[QueryPath]["get"]["parameters"]["query"];
   swrOptions?: Omit<SWRConfiguration, "onError">;
 }) {
-  const router = useRouter();
-  const [ssoLoginRequired, setSSOLoginRequired] = useSSOLoginRequired();
+  const onSSORequiredError = useOnSSORequiredError(teamIdOf(pathParams));
   const { headers, accessToken } = useApiHeaders();
 
   // Don't include headers in requestOptions - they'll be injected by middleware
@@ -428,11 +518,7 @@ export function useManagementApiQuery<QueryPath extends ManagementPath<"get">>({
   const res = useManagementQuery(path, requestOptions, {
     keepPreviousData: true,
     isPaused: () => paused,
-    onError: (e) => {
-      if ((e as any).code === "SSORequired" && !ssoLoginRequired) {
-        setSSOLoginRequired(router.query.team as string);
-      }
-    },
+    onError: onSSORequiredError,
     ...swrOptions,
     // Inject headers at fetch time via middleware, not in cache key
     use: [createHeaderInjectionMiddleware(headers), ...(swrOptions?.use || [])],

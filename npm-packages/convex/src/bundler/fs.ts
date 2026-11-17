@@ -63,6 +63,7 @@ export interface Filesystem {
 
   exists(path: string): boolean;
   stat(path: string): Stats;
+  lstat(path: string): Stats;
   readUtf8File(path: string): string;
   // createReadStream returns a stream for which [Symbol.asyncIterator]
   // yields chunks of size highWaterMark (until the last one), or 64KB if
@@ -81,6 +82,7 @@ export interface Filesystem {
   ): void;
   rmdir(path: string): void;
   unlink(path: string): void;
+  chmod(path: string, mode: Mode): void;
   swapTmpFile(fromPath: TempPath, toPath: string): void;
 
   registerPath(path: string, st: Stats | null): void;
@@ -153,6 +155,9 @@ export class NodeFs implements Filesystem {
   stat(path: string) {
     return stdFs.statSync(path);
   }
+  lstat(path: string) {
+    return stdFs.lstatSync(path);
+  }
   readUtf8File(path: string) {
     return stdFs.readFileSync(path, { encoding: "utf-8" });
   }
@@ -192,6 +197,16 @@ export class NodeFs implements Filesystem {
   writeUtf8File(path: string, contents: string, mode?: Mode) {
     const fd = stdFs.openSync(path, "w", mode);
     try {
+      // openSync only applies `mode` when it creates the file, so also
+      // tighten an existing file. Intersect with the current mode so this
+      // only removes bits and never undoes the umask or widens a file.
+      if (mode !== undefined) {
+        const current = stdFs.fstatSync(fd).mode & 0o777;
+        const restricted = current & Number(mode);
+        if (restricted !== current) {
+          stdFs.fchmodSync(fd, restricted);
+        }
+      }
       stdFs.writeFileSync(fd, contents, { encoding: "utf-8" });
       try {
         stdFs.fsyncSync(fd);
@@ -228,6 +243,9 @@ export class NodeFs implements Filesystem {
   unlink(path: string) {
     return stdFs.unlinkSync(path);
   }
+  chmod(path: string, mode: Mode) {
+    stdFs.chmodSync(path, mode);
+  }
   swapTmpFile(fromPath: TempPath, toPath: string) {
     try {
       return stdFs.renameSync(fromPath, toPath);
@@ -259,6 +277,9 @@ export class RecordingFs implements Filesystem {
 
   // Absolute path -> observed stat (or null if observed nonexistent)
   private observedFiles: Map<string, Stats | null> = new Map();
+
+  // lstat observes the link itself, while stat observes its target.
+  private observedLstats: Map<string, Stats | null> = new Map();
 
   // Have we noticed that files have changed while recording?
   private invalidated = false;
@@ -303,6 +324,20 @@ export class RecordingFs implements Filesystem {
     this.observedDirectories.set(absDirPath, observedNames);
 
     return entries;
+  }
+
+  lstat(filePath: string): Stats {
+    const absPath = path.resolve(filePath);
+    try {
+      const st = nodeFs.lstat(filePath);
+      this.registerNormalized(absPath, st, this.observedLstats);
+      return st;
+    } catch (err: any) {
+      if (err.code === "ENOENT") {
+        this.registerNormalized(absPath, null, this.observedLstats);
+      }
+      throw err;
+    }
   }
 
   exists(path: string): boolean {
@@ -406,6 +441,11 @@ export class RecordingFs implements Filesystem {
     stdFs.unlinkSync(absPath);
     this.updateOnDelete(absPath);
   }
+  chmod(filePath: string, mode: Mode) {
+    const absPath = path.resolve(filePath);
+    nodeFs.chmod(absPath, mode);
+    this.updateOnWrite(absPath);
+  }
   swapTmpFile(fromPath: TempPath, toPath: string) {
     const absToPath = path.resolve(toPath);
     nodeFs.swapTmpFile(fromPath, absToPath);
@@ -419,6 +459,8 @@ export class RecordingFs implements Filesystem {
     const newSt = nodeFs.stat(absPath);
     // Skip invalidation checking since we don't want to conflict if we previously read this file.
     this.observedFiles.set(absPath, newSt);
+    if (this.observedLstats.has(absPath))
+      this.observedLstats.set(absPath, nodeFs.lstat(absPath));
 
     // If we observed the parent, add our newly created file.
     const parentPath = path.resolve(path.dirname(absPath));
@@ -430,6 +472,8 @@ export class RecordingFs implements Filesystem {
   private updateOnDelete(absPath: string) {
     // Expect this file to be gone.
     this.observedFiles.set(absPath, null);
+    if (this.observedLstats.has(absPath))
+      this.observedLstats.set(absPath, null);
 
     // Unlink it from our parent if observed.
     const parentPath = path.resolve(path.dirname(absPath));
@@ -448,8 +492,12 @@ export class RecordingFs implements Filesystem {
     this.invalidated = true;
   }
 
-  registerNormalized(absPath: string, observed: Stats | null): void {
-    const existing = this.observedFiles.get(absPath);
+  registerNormalized(
+    absPath: string,
+    observed: Stats | null,
+    observations = this.observedFiles,
+  ): void {
+    const existing = observations.get(absPath);
     if (existing !== undefined) {
       const stMatch = stMatches(observed, existing);
       if (!stMatch.matches) {
@@ -466,14 +514,18 @@ export class RecordingFs implements Filesystem {
         this.invalidated = true;
       }
     }
-    this.observedFiles.set(absPath, observed);
+    observations.set(absPath, observed);
   }
 
   finalize(): Observations | "invalidated" {
     if (this.invalidated) {
       return "invalidated";
     }
-    return new Observations(this.observedDirectories, this.observedFiles);
+    return new Observations(
+      this.observedDirectories,
+      this.observedFiles,
+      this.observedLstats,
+    );
   }
 }
 
@@ -489,6 +541,7 @@ export class Observations {
   constructor(
     directories: Map<string, Set<string>>,
     files: Map<string, Stats | null>,
+    private lstats: Map<string, Stats | null> = new Map(),
   ) {
     this.directories = directories;
     this.files = files;
@@ -502,7 +555,8 @@ export class Observations {
     for (const path of this.files.keys()) {
       out.push(path);
     }
-    return out;
+    for (const path of this.lstats.keys()) out.push(path);
+    return [...new Set(out)];
   }
 
   overlaps({
@@ -527,6 +581,20 @@ export class Observations {
         const reason = `modified (${stMatch.reason})`;
         return { overlaps: true, reason };
       }
+    }
+
+    const observedLstat = this.lstats.get(absPath);
+    if (observedLstat !== undefined) {
+      let currentLstat: Stats | null;
+      try {
+        currentLstat = nodeFs.lstat(absPath);
+      } catch (err: any) {
+        if (err.code !== "ENOENT") throw err;
+        currentLstat = null;
+      }
+      const match = stMatches(observedLstat, currentLstat);
+      if (!match.matches)
+        return { overlaps: true, reason: `modified (${match.reason})` };
     }
 
     // Second, check if we listed the directory this file is in.

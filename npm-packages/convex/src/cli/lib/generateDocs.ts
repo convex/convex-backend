@@ -299,7 +299,7 @@ function renderCopyableCommands(text: string): string {
     .map((line) =>
       /^- /.test(line)
         ? line.replace(
-            /`(npx convex [^`]*)`/g,
+            /`(npx convex(?:@[^\s`]+)? [^`]*)`/g,
             (_, command) =>
               `<CodeWithCopyButton text={${JSON.stringify(command)}} />`,
           )

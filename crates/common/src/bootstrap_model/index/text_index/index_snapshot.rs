@@ -22,8 +22,7 @@ pub struct TextIndexSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextIndexSnapshotData {
-    /// The new (currently unused) multi segment format that can be built
-    /// incrementally.
+    /// Multi-segment format that supports incremental builds.
     MultiSegment(Vec<FragmentedTextSegment>),
     /// An unrecognized format that can be round tripped without being modified.
     /// Same as a proto with unknown fields.

@@ -1,3 +1,4 @@
+import { IntegrationAuditDetails } from "./IntegrationAuditDetails";
 import {
   ChevronUpIcon,
   ChevronDownIcon,
@@ -111,6 +112,24 @@ export function DeploymentEventContent({
       body = UsageLimitUpdateBody({ event });
       break;
 
+    case "create_integration":
+    case "delete_integration":
+      body = event.metadata.config ? (
+        <IntegrationAuditDetails config={event.metadata.config} />
+      ) : null;
+      break;
+
+    case "update_integration":
+      body =
+        event.metadata.current || event.metadata.credential_changes ? (
+          <IntegrationAuditDetails
+            config={event.metadata.current}
+            previous={event.metadata.previous}
+            credentialChanges={event.metadata.credential_changes}
+          />
+        ) : null;
+      break;
+
     case "create_environment_variable":
     case "delete_environment_variable":
     case "update_environment_variable":
@@ -129,11 +148,9 @@ export function DeploymentEventContent({
     case "cancel_all_scheduled_functions":
     case "cancel_scheduled_function":
     case "request_export":
+    case "download_export":
     case "cancel_export":
     case "set_export_expiration":
-    case "create_integration":
-    case "update_integration":
-    case "delete_integration":
     case "add_documents":
     case "delete_documents":
     case "update_documents":
@@ -407,6 +424,27 @@ export function ActionText({ event }: { event: DeploymentAuditLogEvent }) {
       return (
         <>
           <span>requested a </span>
+          <span className="font-mono font-semibold">
+            {event.metadata.format}
+          </span>
+          <span> </span>
+          <Tooltip
+            tip={<span className="font-mono">{event.metadata.id}</span>}
+            maxWidthClassName="max-w-md"
+          >
+            <span className="underline decoration-dotted">export</span>
+          </Tooltip>
+          <ComponentSuffix
+            component={event.metadata.component}
+            componentId={event.metadata.component_id}
+          />
+        </>
+      );
+
+    case "download_export":
+      return (
+        <>
+          <span>downloaded a </span>
           <span className="font-mono font-semibold">
             {event.metadata.format}
           </span>

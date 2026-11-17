@@ -16,7 +16,7 @@ const baseOccInsight: Insight = {
   componentPath: null,
   kind: "occRetried",
   details: {
-    occCalls: 5,
+    occCalls: 8,
     occTableName: "users",
     hourlyCounts: [
       {
@@ -25,17 +25,21 @@ const baseOccInsight: Insight = {
       },
       {
         hour: new Date(now.getTime() - 1 * 60 * 60 * 1000).toISOString(),
-        count: 3,
+        count: 6,
       },
     ],
     recentEvents: [
       {
-        timestamp: new Date(now.getTime() - 30 * 60 * 1000).toISOString(),
+        // Per-minute summaries carry the minute start as their timestamp.
+        timestamp: new Date(
+          Math.floor((now.getTime() - 30 * 60 * 1000) / 60000) * 60000,
+        ).toISOString(),
         id: "exec1",
         request_id: "req1",
         occ_document_id: "doc123",
         occ_write_source: "otherFunction",
         occ_retry_count: 1,
+        calls: 7,
       },
       {
         timestamp: new Date(now.getTime() - 60 * 60 * 1000).toISOString(),

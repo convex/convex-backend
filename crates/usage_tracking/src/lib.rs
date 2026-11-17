@@ -3,7 +3,6 @@
 use std::{
     collections::BTreeMap,
     fmt::Debug,
-    ops::Add,
     sync::Arc,
     time::Duration,
 };
@@ -21,7 +20,6 @@ use common::{
     types::{
         IndexName,
         ModuleEnvironment,
-        StorageUuid,
         UdfIdentifier,
     },
     RequestId,
@@ -31,8 +29,10 @@ use derive_more::{
     AddAssign,
 };
 use events::usage::{
+    FunctionCallSample,
     FunctionCallUsageFields,
     InsightReadLimitCall,
+    StorageCallSample,
     UsageEvent,
     UsageEventLogger,
 };
@@ -250,26 +250,33 @@ impl UsageCounter {
         };
 
         let (component_path, udf_id) = udf_path.clone().into_component_and_udf_path();
+        let memory_megabytes = call_type.memory_megabytes();
+        let user_execution_millis = call_type.user_execution_millis();
         usage_metrics.push(UsageEvent::FunctionCall {
             fields: FunctionCallUsageFields {
-                id: execution_id.to_string(),
-                request_id: request_id.to_string(),
-                status: if success { "success" } else { "failure" }.to_string(),
                 component_path,
                 udf_id,
                 udf_id_type: udf_id_type.to_string(),
                 tag: call_type.tag().to_string(),
-                memory_megabytes: call_type.memory_megabytes(),
-                duration_millis: call_type.duration_millis(),
-                user_execution_millis: call_type.user_execution_millis(),
                 environment: call_type.environment(),
                 is_tracked: should_track_calls,
-                response_sha256: call_type.response_sha256(),
                 is_occ: call_type.is_occ(),
                 occ_table_name: call_type.occ_table_name(),
-                occ_document_id: call_type.occ_document_id(),
-                occ_write_source: call_type.occ_write_source(),
                 occ_retry_count: call_type.occ_retry_count(),
+                calls: 1,
+                duration_millis: call_type.duration_millis(),
+                user_execution_millis,
+                compute_mb_ms: memory_megabytes * call_type.duration_millis(),
+                user_compute_mb_ms: user_execution_millis.map(|millis| memory_megabytes * millis),
+                sample: FunctionCallSample {
+                    id: execution_id.to_string(),
+                    request_id: request_id.to_string(),
+                    memory_megabytes,
+                    occ_document_id: call_type.occ_document_id(),
+                    occ_write_source: call_type.occ_write_source(),
+                    status: if success { "success" } else { "failure" }.to_string(),
+                    response_sha256: call_type.response_sha256(),
+                },
             },
         });
 
@@ -527,7 +534,6 @@ impl UsageCounter {
             VectorIndexQueryUsage {
                 num_searches,
                 bytes_searched,
-                dimensions,
             },
         ) in stats.vector_query_usage
         {
@@ -539,7 +545,6 @@ impl UsageCounter {
                 index_name: index_name.to_string(),
                 num_searches,
                 bytes_searched,
-                dimensions,
             })
         }
 
@@ -574,9 +579,7 @@ pub trait StorageUsageTracker: Send + Sync {
         &self,
         component_path: ComponentPath,
         storage_api: &'static str,
-        storage_id: StorageUuid,
         content_type: Option<ContentType>,
-        sha256: Sha256Digest,
     ) -> Box<dyn StorageCallTracker>;
 }
 
@@ -640,9 +643,7 @@ impl StorageUsageTracker for UsageCounter {
         &self,
         component_path: ComponentPath,
         storage_api: &'static str,
-        storage_id: StorageUuid,
         content_type: Option<ContentType>,
-        sha256: Sha256Digest,
     ) -> Box<dyn StorageCallTracker> {
         let execution_id = ExecutionId::new();
         metrics::storage::log_storage_call();
@@ -650,12 +651,11 @@ impl StorageUsageTracker for UsageCounter {
             .record_async(vec![UsageEvent::StorageCall {
                 id: execution_id.to_string(),
                 component_path: component_path.serialize(),
-                // Ideally we would track the Id<_storage> instead of the StorageUuid
-                // but it's a bit annoying for now, so just going with this.
-                storage_id: storage_id.to_string(),
                 call: storage_api.to_string(),
-                content_type: content_type.map(|c| c.to_string()),
-                sha256: sha256.as_hex(),
+                sample: StorageCallSample {
+                    content_type: content_type.map(|c| c.to_string()),
+                },
+                count: 1,
             }])
             .await;
 
@@ -913,14 +913,12 @@ impl FunctionUsageTracker {
         component_path: ComponentPath,
         index_name: IndexName,
         index_size: u64,
-        dimensions: u64,
     ) {
         let mut state = self.state.lock();
         let key = (component_path, index_name);
         *state.vector_query_usage.entry(key).or_default() += VectorIndexQueryUsage {
             num_searches: 1,
             bytes_searched: index_size,
-            dimensions,
         };
     }
 
@@ -1013,9 +1011,7 @@ impl StorageUsageTracker for FunctionUsageTracker {
         &self,
         component_path: ComponentPath,
         storage_api: &'static str,
-        _storage_id: StorageUuid,
         _content_type: Option<ContentType>,
-        _sha256: Sha256Digest,
     ) -> Box<dyn StorageCallTracker> {
         let mut state = self.state.lock();
         metrics::storage::log_storage_call();
@@ -1041,27 +1037,10 @@ pub struct TextIndexQueryUsage {
     pub filtered_bytes_searched: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, AddAssign)]
+#[derive(Debug, Clone, PartialEq, Eq, Add, Default, AddAssign)]
 pub struct VectorIndexQueryUsage {
     pub num_searches: u64,
     pub bytes_searched: u64,
-    pub dimensions: u64,
-}
-
-impl Add for VectorIndexQueryUsage {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self {
-            num_searches: self.num_searches + other.num_searches,
-            // Take the max of the index_size
-            bytes_searched: self.bytes_searched + other.bytes_searched,
-            // Take the max of the num_dimensions. num_dimensions shouldn't usually change, but if
-            // there is some change to the index that commits in the middle of an action
-            // between two vector searches, just take the max dimensions.
-            dimensions: self.dimensions.max(other.dimensions),
-        }
-    }
 }
 
 /// User-facing UDF stats, built
@@ -1322,7 +1301,6 @@ fn to_vector_query_usage(
                 index_name: Some(index_name.to_string()),
                 num_searches: Some(usage.num_searches),
                 bytes_searched: Some(usage.bytes_searched),
-                dimensions: Some(usage.dimensions),
             },
         )
         .collect()
@@ -1373,13 +1351,11 @@ fn from_vector_query_usage(
             let bytes_searched = u
                 .bytes_searched
                 .context("Missing `num_segment_searches` field")?;
-            let dimensions = u.dimensions.context("Missing `num_dimensions` field")?;
             Ok((
                 (component_path, index_name),
                 VectorIndexQueryUsage {
                     num_searches,
                     bytes_searched,
-                    dimensions,
                 },
             ))
         })

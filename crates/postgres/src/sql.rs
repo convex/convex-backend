@@ -678,22 +678,6 @@ pub const fn check_newly_created(multitenant: bool) -> &'static str {
     )
 }
 
-// This table has no rows (not read_only) or 1 row (read_only), so if this query
-// returns any results, the persistence is read_only.
-pub const fn check_is_read_only(multitenant: bool) -> &'static str {
-    tableify!(
-        multitenant,
-        formatcp!(
-            "SELECT 1 FROM @db_name.read_only{where_clause} LIMIT 1",
-            where_clause = if multitenant {
-                " WHERE instance_name = $1"
-            } else {
-                ""
-            }
-        )
-    )
-}
-
 pub const fn set_read_only(multitenant: bool) -> &'static str {
     tableify!(
         multitenant,
@@ -743,13 +727,20 @@ pub const fn advisory_lease_check(multitenant: bool) -> &'static str {
 }
 
 // Acquire the lease unless acquire by someone with a higher timestamp.
-pub const fn lease_acquire(multitenant: bool) -> &'static str {
+pub const fn lease_acquire(multitenant: bool, allow_read_only: bool) -> &'static str {
     tableify!(
-        multitenant,
+        [multitenant, allow_read_only],
         formatcp!(
-            "UPDATE @db_name.leases SET ts=$1 WHERE {column}={value} AND ts<$1",
+            "UPDATE @db_name.leases SET ts=$1 WHERE {column}={value} AND ts<$1 {ro_cond}",
             column = if multitenant { "instance_name" } else { "id" },
-            value = if multitenant { "$2" } else { "1" }
+            value = if multitenant { "$2" } else { "1" },
+            ro_cond = if allow_read_only {
+                ""
+            } else if multitenant {
+                "AND NOT EXISTS (SELECT 1 FROM @db_name.read_only WHERE instance_name = $2)"
+            } else {
+                "AND NOT EXISTS (SELECT 1 FROM @db_name.read_only WHERE id = 1)"
+            },
         )
     )
 }

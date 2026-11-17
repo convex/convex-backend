@@ -28,7 +28,11 @@ use tower::ServiceBuilder;
 
 use crate::{
     http::MakeSocket,
-    knobs::HTTP_SERVER_TCP_BACKLOG,
+    knobs::{
+        GRPC_KEEPALIVE_INTERVAL,
+        GRPC_KEEPALIVE_TIMEOUT,
+        HTTP_SERVER_TCP_BACKLOG,
+    },
 };
 
 mod middleware;
@@ -107,14 +111,11 @@ impl ConvexGrpcService {
         let listener = socket.listen(*HTTP_SERVER_TCP_BACKLOG)?;
         let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
         tonic::transport::Server::builder()
-            // Internal Convex gRPC clients can validly cancel many streams on
-            // long-lived connections; don't let h2's external-peer abuse
-            // heuristic close those trusted connections.
-            // TODO: Apply the same policy to internal gRPC clients once tonic
-            // exposes h2's client-side max_local_error_reset_streams setting.
-            // The Sentry "too_many_internal_resets" issues are likely from
-            // client-side channels, so this server setting alone is incomplete.
+            // Internal clients can validly cancel many streams on long-lived
+            // connections. See `internal_grpc_endpoint` for h2's reset accounting.
             .http2_max_local_error_reset_streams(None)
+            .http2_keepalive_interval(Some(*GRPC_KEEPALIVE_INTERVAL))
+            .http2_keepalive_timeout(Some(*GRPC_KEEPALIVE_TIMEOUT))
             .layer(convex_layers)
             .add_routes(self.routes)
             .serve_with_incoming_shutdown(incoming, shutdown)
@@ -122,6 +123,22 @@ impl ConvexGrpcService {
         tracing::info!("GRPC server shutdown complete");
         Ok(())
     }
+}
+
+/// Idle keepalive PINGs detect silently dropped connections in roughly
+/// GRPC_KEEPALIVE_INTERVAL + GRPC_KEEPALIVE_TIMEOUT, even between requests.
+/// Internal h2 servers accept idle PINGs at this interval.
+///
+/// h2 counts each late DATA frame on a cancelled stream toward a cumulative
+/// local-error reset limit. At the default of 1024, it sends
+/// GOAWAY("too_many_internal_resets") and fails every in-flight RPC on the
+/// connection. Internal peers are trusted, so local-error resets are unlimited.
+pub fn internal_grpc_endpoint(endpoint: tonic::transport::Endpoint) -> tonic::transport::Endpoint {
+    endpoint
+        .http2_keep_alive_interval(*GRPC_KEEPALIVE_INTERVAL)
+        .keep_alive_timeout(*GRPC_KEEPALIVE_TIMEOUT)
+        .keep_alive_while_idle(true)
+        .http2_max_local_error_reset_streams(None)
 }
 
 pub fn handle_response<T>(response: Result<Response<T>, Status>) -> anyhow::Result<T> {

@@ -102,8 +102,8 @@ the `_generated/api.js` file via the `generateCommonJSApi` field.
 ## Configuring the Node.js version
 
 You can specify which Node.js version is used by Node actions via the
-`node.nodeVersion` field. The currently supported values are `"20"`, `"22"`, and
-`"24"`. [Read more](/functions/runtimes.mdx#nodejs-version-configuration).
+`node.nodeVersion` field. The currently supported values are `"22"` and `"24"`.
+[Read more](/functions/runtimes.mdx#nodejs-version-configuration).
 
 <Admonition type="info" title="Convex version requirement">
 
@@ -123,8 +123,8 @@ NPM package version 1.27.0 or later.
 
 Note: This configuration is not supported when running the self-hosted Convex
 backend. The Node version that is specified in the
-[.nvmrc](https://github.com/get-convex/convex-backend/blob/main/.nvmrc) will be
-used instead.
+[.nvmrc](https://github.com/convex/convex-backend/blob/main/.nvmrc) will be used
+instead.
 
 When pushing a new Node.js version to the server, the new code for your
 functions may be executed in the old Node.js version for up a few minutes.

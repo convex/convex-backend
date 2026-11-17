@@ -148,6 +148,7 @@ type StoredIntegration = Doc<"_log_sinks">;
 // the fields below, which are accepted on create/update but never returned.
 export type Integration = Omit<StoredIntegration, "config"> & {
   config: IntegrationConfig;
+  exportProgress?: Doc<"_s3_export_state">["checkpoint"]["progress"];
 };
 
 // The AWS secret access key stays on the deployment. Callers omit it on update
@@ -186,7 +187,5 @@ export type PostHogErrorTrackingConfig = Infer<
 >;
 
 export type S3ExportConfig = Infer<typeof s3ExportConfig>;
-
-export type SyncPeriod = S3ExportConfig["period"];
 
 export type SyncSelection = S3ExportConfig["selection"];

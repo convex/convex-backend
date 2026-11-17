@@ -2,13 +2,20 @@ import { useProfile } from "api/profile";
 import { useCurrentProject, useTransferProject } from "api/projects";
 import { useTeams, useCurrentTeam, useTeamMembers } from "api/teams";
 import { useHasCustomRolePermission } from "api/roles";
+import { useTeamOrbSubscription } from "api/billing";
+import { useSSOLoginRequired } from "api/api";
+import { ssoLoginPath } from "lib/ssoLogin";
+import { useSupportFormOpen } from "elements/SupportWidget";
 import { projectResource } from "lib/permissions";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { Sheet } from "@ui/Sheet";
 import { Combobox } from "@ui/Combobox";
 import { Button } from "@ui/Button";
+import { Callout } from "@ui/Callout";
+import { Link } from "@ui/Link";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { useRouter } from "next/router";
+import { EnvelopeClosedIcon, LockClosedIcon } from "@radix-ui/react-icons";
 import { useState } from "react";
 
 export function TransferProject() {
@@ -56,10 +63,50 @@ export function TransferProject() {
   );
   const canTransferFromOrigin = isAdminOfOldTeam || canTransferCustom === true;
 
-  const loading = destinationTeamId
-    ? !originTeamMembers || !destinationTeamMembers
-    : false;
-  const canTransfer = canTransferFromOrigin && isAdminOfNewTeam;
+  const originSubscription = useTeamOrbSubscription(originTeam?.id);
+  const destinationSubscription = useTeamOrbSubscription(
+    destinationTeamId ?? undefined,
+  );
+  const bothTeamsOnFreePlan =
+    destinationTeamId !== null &&
+    [originSubscription, destinationSubscription].every(
+      ({ subscription, hasError }) => !hasError && subscription === null,
+    );
+  const subscriptionsLoading =
+    destinationTeamId !== null &&
+    [originSubscription, destinationSubscription].some(
+      ({ subscription, hasError }) => !hasError && subscription === undefined,
+    );
+
+  // When the destination team requires SSO login and this session isn't
+  // SSO-authenticated for it, its members and plan never load.
+  const [{ teamIds: ssoLockedTeamIds }] = useSSOLoginRequired();
+  const destinationRequiresSSOLogin =
+    destinationTeamId !== null &&
+    ssoLockedTeamIds.includes(destinationTeamId.toString());
+  // A session is SSO-authenticated for at most one team, so no dashboard
+  // session can act on both teams when each one requires SSO login.
+  // `ssoLoginId` is set only on teams that require it.
+  const bothTeamsRequireSSOLogin =
+    !!originTeam?.ssoLoginId && !!destinationTeam?.ssoLoginId;
+  const destinationSSOLoginId =
+    destinationRequiresSSOLogin && !bothTeamsRequireSSOLogin
+      ? destinationTeam?.ssoLoginId
+      : undefined;
+  const [, setSupportFormOpen] = useSupportFormOpen();
+
+  const loading =
+    destinationTeamId &&
+    !destinationRequiresSSOLogin &&
+    !bothTeamsRequireSSOLogin
+      ? !originTeamMembers || !destinationTeamMembers || subscriptionsLoading
+      : false;
+  const canTransfer =
+    canTransferFromOrigin &&
+    !bothTeamsRequireSSOLogin &&
+    !destinationRequiresSSOLogin &&
+    isAdminOfNewTeam &&
+    !bothTeamsOnFreePlan;
 
   const [showConfirmation, setShowConfirmation] = useState(false);
   const validationError =
@@ -67,14 +114,21 @@ export function TransferProject() {
       ? undefined
       : !canTransferFromOrigin
         ? `You do not have permission to transfer this project from ${originTeam?.name}.`
-        : `You must be an admin of ${destinationTeam?.name} to transfer this project to ${destinationTeam?.name}.`;
+        : bothTeamsRequireSSOLogin
+          ? `${originTeam?.name} and ${destinationTeam?.name} both require Single Sign-On login, so this project can't currently be transferred from the dashboard. Contact support to transfer it.`
+          : destinationRequiresSSOLogin
+            ? `${destinationTeam?.name} requires you to log in with Single Sign-On to transfer projects to it.`
+            : !isAdminOfNewTeam
+              ? `You must be an admin of ${destinationTeam?.name} to transfer this project to ${destinationTeam?.name}.`
+              : undefined;
   const router = useRouter();
 
   return (
     <Sheet>
       <h3 className="mb-4">Transfer Project</h3>
       <p className="mb-5 max-w-prose text-sm text-content-primary">
-        Transfer this project to another team.
+        Transfer this project to another team. At least one of the two teams
+        must be on a paid plan.
       </p>
       {hasEligibleDestinationTeam && (
         <div className="mb-4 flex flex-col gap-1">
@@ -113,6 +167,67 @@ export function TransferProject() {
               {validationError}
             </p>
           )}
+          {canTransferFromOrigin &&
+            destinationTeam &&
+            destinationSSOLoginId && (
+              <Button
+                className="w-fit"
+                variant="neutral"
+                size="sm"
+                icon={<LockClosedIcon />}
+                onClick={() => {
+                  // A full navigation, because `/api/auth/login` is an API
+                  // route that redirects to AuthKit.
+                  window.location.href = ssoLoginPath(
+                    destinationSSOLoginId,
+                    router.asPath,
+                  );
+                }}
+              >
+                Log in with SSO for {destinationTeam.name}
+              </Button>
+            )}
+          {canTransferFromOrigin &&
+            bothTeamsRequireSSOLogin &&
+            project &&
+            originTeam &&
+            destinationTeam && (
+              <Button
+                className="w-fit"
+                variant="neutral"
+                size="sm"
+                icon={<EnvelopeClosedIcon />}
+                onClick={() =>
+                  setSupportFormOpen({
+                    defaultSubject: `Transfer project ${project.slug} to team ${destinationTeam.slug}`,
+                    defaultMessage: `Please transfer the project ${project.slug} from team ${originTeam.slug} to team ${destinationTeam.slug}. Both teams require Single Sign-On login.`,
+                  })
+                }
+              >
+                Contact support
+              </Button>
+            )}
+          {!loading &&
+            !validationError &&
+            bothTeamsOnFreePlan &&
+            originTeam &&
+            destinationTeam && (
+              <Callout variant="upsell" className="max-w-prose">
+                <div>
+                  {originTeam.name} and {destinationTeam.name} are both on the
+                  Free plan. Upgrade either team to a paid plan, such as
+                  Starter, to transfer this project:{" "}
+                  <Link href={`/t/${originTeam.slug}/settings/billing`}>
+                    upgrade {originTeam.name}
+                  </Link>{" "}
+                  or{" "}
+                  <Link href={`/t/${destinationTeam.slug}/settings/billing`}>
+                    upgrade {destinationTeam.name}
+                  </Link>
+                  .
+                </div>
+              </Callout>
+            )}
         </div>
       )}
       <Button

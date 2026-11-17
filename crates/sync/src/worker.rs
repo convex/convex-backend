@@ -373,7 +373,7 @@ impl<RT: Runtime> SyncWorker<RT> {
             update_scheduled: false,
             unavailable_query_retry_future: None,
             modify_query_to_transition_timers: BTreeMap::new(),
-            on_connect: Some((connect_timer(partition_id), on_connect)),
+            on_connect: Some((connect_timer(), on_connect)),
             partition_id,
             request_metadata,
             client_clock_skew: None,
@@ -432,7 +432,7 @@ impl<RT: Runtime> SyncWorker<RT> {
                     };
                     self.handle_message(message).await?;
                     let delay = self.rt.monotonic_now() - received_time;
-                    metrics::log_process_client_message_delay(self.partition_id, delay);
+                    metrics::log_process_client_message_delay(delay);
                     None
                 },
                 // TODO(presley): If I swap this with futures below, tests break.
@@ -489,7 +489,7 @@ impl<RT: Runtime> SyncWorker<RT> {
                 // Break and exit cleanly if the websocket is dead.
                 ping_timeout = self.rt.wait(HEARTBEAT_INTERVAL);
                 let transition_heap_size = response.heap_size();
-                metrics::log_transition_size(self.partition_id, transition_heap_size);
+                metrics::log_transition_size(transition_heap_size);
                 if self.tx.send((response, self.rt.monotonic_now())).is_err() {
                     break 'top;
                 }
@@ -596,7 +596,7 @@ impl<RT: Runtime> SyncWorker<RT> {
     }
 
     async fn handle_message(&mut self, message: ClientMessage) -> anyhow::Result<()> {
-        let timer = metrics::handle_message_timer(self.partition_id, &message);
+        let timer = metrics::handle_message_timer(&message);
         match message {
             ClientMessage::Connect {
                 session_id,
@@ -611,8 +611,11 @@ impl<RT: Runtime> SyncWorker<RT> {
                 }
 
                 if let Some(ts) = client_ts {
-                    self.client_clock_skew =
-                        Some(ts as i64 - self.rt.unix_timestamp().as_ms_since_epoch()? as i64);
+                    let server_ts = self.rt.unix_timestamp().as_ms_since_epoch()?;
+                    self.client_clock_skew = i64::try_from(ts)
+                        .ok()
+                        .zip(i64::try_from(server_ts).ok())
+                        .and_then(|(client_ts, server_ts)| client_ts.checked_sub(server_ts));
                 }
 
                 self.state.set_session_id(session_id);
@@ -629,7 +632,6 @@ impl<RT: Runtime> SyncWorker<RT> {
                         // into a client error if there are bogus custom client implementations
                         // but lets keep it as server one for now.
                         metrics::log_linearizability_violation(
-                            self.partition_id,
                             max_observed_timestamp.secs_since_f64(latest_timestamp),
                         );
                         anyhow::bail!(
@@ -652,14 +654,12 @@ impl<RT: Runtime> SyncWorker<RT> {
                         QuerySetModification::Remove { .. } => None,
                     })
                     .sum();
-                log_query_modification_args_size(self.partition_id, total_args_size);
+                log_query_modification_args_size(total_args_size);
                 self.state
                     .modify_query_set(base_version, new_version, modifications)?;
                 self.schedule_update();
-                self.modify_query_to_transition_timers.insert(
-                    new_version,
-                    modify_query_to_transition_timer(self.partition_id),
-                );
+                self.modify_query_to_transition_timers
+                    .insert(new_version, modify_query_to_transition_timer());
             },
             ClientMessage::Mutation {
                 request_id,
@@ -667,7 +667,7 @@ impl<RT: Runtime> SyncWorker<RT> {
                 args,
                 component_path,
             } => {
-                log_mutation_args_size(self.partition_id, args.get().len());
+                log_mutation_args_size(args.get().len());
                 let identity = self.revalidate_identity().await?;
                 let mutation_identifier =
                     self.state.session_id().map(|id| SessionRequestIdentifier {
@@ -687,7 +687,7 @@ impl<RT: Runtime> SyncWorker<RT> {
                 .with_property(|| ("udf_path", udf_path.to_string()));
                 let rt = self.rt.clone();
                 let client_version = self.config.client_version.clone();
-                let timer = mutation_queue_timer(self.partition_id);
+                let timer = mutation_queue_timer();
                 let api = self.api.clone();
                 let host = self.host.clone();
                 let caller = FunctionCaller::SyncWorker(client_version);
@@ -777,7 +777,7 @@ impl<RT: Runtime> SyncWorker<RT> {
                 args,
                 component_path,
             } => {
-                log_action_args_size(self.partition_id, args.get().len());
+                log_action_args_size(args.get().len());
                 let identity = self.revalidate_identity().await?;
 
                 let api = self.api.clone();
@@ -877,11 +877,9 @@ impl<RT: Runtime> SyncWorker<RT> {
                         TypedClientEvent::ClientReceivedTransition {
                             transition_transit_time,
                             message_length,
-                        } => metrics::log_client_transition(
-                            self.partition_id,
-                            transition_transit_time,
-                            message_length,
-                        ),
+                        } => {
+                            metrics::log_client_transition(transition_transit_time, message_length)
+                        },
                         TypedClientEvent::NetworkRecoveryReconnect { time_saved_ms } => {
                             tracing::info!(
                                 "Network recovery reconnect saved {:.1}s of waiting",
@@ -944,7 +942,7 @@ impl<RT: Runtime> SyncWorker<RT> {
         )
         .with_property(|| ("udf_type", UdfType::Query.to_lowercase_string()));
         let _guard = root.set_local_parent();
-        let timer = metrics::update_queries_timer(self.partition_id);
+        let timer = metrics::update_queries_timer();
         let current_version = self.state.current_version();
 
         let (modifications, new_query_version, new_identity_version) =

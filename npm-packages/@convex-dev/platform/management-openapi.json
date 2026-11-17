@@ -121,7 +121,7 @@
           "Projects"
         ],
         "summary": "Update project",
-        "description": "Update a project's name and/or slug. Returns the updated project.",
+        "description": "Update a project's name, slug, and/or tags. Returns the updated project.",
         "operationId": "update project",
         "parameters": [
           {
@@ -214,6 +214,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "description": "Only return projects with this tag. This parameter can be provided more than once to match projects with any of several tags",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         ],
         "responses": {
@@ -223,6 +235,69 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PlatformPaginatedProjectsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/list_project_tags": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "List project tags",
+        "description": "List a page of the distinct tags used by a team's projects, ordered by tag\nname. Pass the `nextCursor` from the previous response as `cursor` to fetch\nthe next page.",
+        "operationId": "list project tags",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor for pagination",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of tags to return (default: 100, max: 100)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectTagsResponse"
                 }
               }
             }
@@ -2380,7 +2455,7 @@
           "Environment Variables"
         ],
         "summary": "Update default environment variables",
-        "description": "Creates, updates, or deletes default environment variables for the specified\nproject. When `value` is a string, the variable is upserted. When `value` is\nnull, the variable is deleted.",
+        "description": "Creates, updates, or deletes default environment variables for the specified\nproject. When `value` is a string, the variable is upserted. When `value` is\nnull, the variable is deleted. Each item in `changes` can set\n`applyToExistingDeployments` to true to asynchronously upsert or delete the\nvariable on every existing cloud deployment of that item's `deploymentType`.",
         "operationId": "update default environment variables",
         "parameters": [
           {
@@ -3149,6 +3224,10 @@
               "null"
             ],
             "description": "Set to a value to upsert the default environment variable\nwith the given name and type. If null, will delete the\nenvironment variable with the given name and deployment\ntype if it exists (and do nothing if it doesn’t exist)."
+          },
+          "applyToExistingDeployments": {
+            "type": "boolean",
+            "description": "Apply this change to every existing cloud deployment of the selected\ntype, overwriting/deleting any existing values. Defaults to false."
           }
         },
         "additionalProperties": false
@@ -3220,7 +3299,8 @@
           "s16",
           "s256",
           "d1024",
-          "d2048"
+          "d2048",
+          "p256"
         ]
       },
       "DeploymentClassMetadata": {
@@ -3615,7 +3695,8 @@
                 "deployment:usage:view",
                 "deployment:aiGateway:use"
               ]
-            }
+            },
+            "description": "Optional list of allowed operations for this deploy key. If omitted, the key is allowed every action the caller is currently allowed to perform on this deployment. Must contain at least one action if provided."
           },
           "expiresAt": {
             "type": [
@@ -3761,6 +3842,15 @@
                 "description": "When creating a deployment, the hosting region to use for the\ndeployment. If not provided, the default deployment region for your\nteam will be used."
               }
             ]
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
@@ -3986,7 +4076,8 @@
                 "deployment:usage:view",
                 "deployment:aiGateway:use"
               ]
-            }
+            },
+            "description": "The same operations as `allowedOperations`, in the colon-based action format (e.g. `\"deployment:data:view\"`). Unlike `allowedOperations`, this is always present: an unrestricted key (where `allowedOperations` is omitted) lists every deployment action here."
           }
         }
       },
@@ -4233,6 +4324,12 @@
             "items": {
               "$ref": "#/components/schemas/TeamMember"
             }
+          },
+          "directorySynced": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         }
       },
@@ -4424,6 +4521,16 @@
                 "description": "New slug for the project. If omitted, the slug is left unchanged."
               }
             ]
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Replaces the project's full set of tags; `[]` clears them. If omitted,\nthe tags are left unchanged."
           }
         },
         "additionalProperties": false
@@ -4447,7 +4554,8 @@
           "slug",
           "teamId",
           "teamSlug",
-          "createTime"
+          "createTime",
+          "tags"
         ],
         "properties": {
           "id": {
@@ -4486,11 +4594,60 @@
               "null"
             ],
             "description": "The name of the requesting member's default development deployment for\nthis project, if one exists (an active local deployment or default\ncloud dev deployment)."
+          },
+          "prodDeploymentReference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reference of the default production deployment for this project,\nif one exists (e.g. \"production\")."
+          },
+          "devDeploymentReference": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The reference of the requesting member's default development deployment\nfor this project, if one exists and is a cloud deployment (e.g.\n\"dev/jane-doe\")."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
       "ProjectSlug": {
         "type": "string"
+      },
+      "ProjectTagResponse": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectTagsResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectTagResponse"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
       },
       "ProposedTeamName": {
         "type": "string"
@@ -4539,7 +4696,7 @@
           },
           "resource": {
             "type": "string",
-            "description": "Resource path like `project:*`, `project:slug=my-app`, or\n`project:*:deployment:type=prod`.",
+            "description": "Resource path like `project:*`, `project:slug=my-app`,\n`project:tag=prod`, or `project:*:deployment:type=prod`.",
             "example": "project:*"
           }
         }
@@ -4594,6 +4751,7 @@
           "team:domain:create",
           "team:domain:delete",
           "team:domain:view",
+          "team:projectTags:view",
           "team:token:create",
           "team:token:update",
           "team:token:delete",
@@ -4772,6 +4930,12 @@
               "$ref": "#/components/schemas/TeamMemberCustomRole"
             },
             "description": "The custom roles attached to this team member. Present iff\n`role` is `custom`."
+          },
+          "directoryManaged": {
+            "type": [
+              "boolean",
+              "null"
+            ]
           }
         }
       },

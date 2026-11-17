@@ -30,6 +30,6 @@
     "@types/jest": "^30.0.0",
     "ts-jest": "^29.1.1",
     "@jest/globals": "^30.0.0",
-    "@types/node": "^18.17.0"
+    "@types/node": "^22.0.0"
   }
 }

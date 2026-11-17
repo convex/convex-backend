@@ -154,6 +154,11 @@ export const CUSTOM_ROLE_TEMPLATES: CustomRoleTemplate[] = [
       },
       {
         effect: "allow",
+        resource: "team:*",
+        actions: ["team:projectTags:view"],
+      },
+      {
+        effect: "allow",
         resource: "project:*",
         actions: ACTIONS_BY_CATEGORY.project,
       },
@@ -195,6 +200,11 @@ export const CUSTOM_ROLE_TEMPLATES: CustomRoleTemplate[] = [
       },
       {
         effect: "allow",
+        resource: "team:*",
+        actions: ["team:projectTags:view"],
+      },
+      {
+        effect: "allow",
         resource: "project:*",
         actions: ["project:view"],
       },
@@ -223,6 +233,11 @@ export const CUSTOM_ROLE_TEMPLATES: CustomRoleTemplate[] = [
         effect: "allow",
         resource: "member:*",
         actions: ["member:view"],
+      },
+      {
+        effect: "allow",
+        resource: "team:*",
+        actions: ["team:projectTags:view"],
       },
       {
         effect: "allow",

@@ -1,0 +1,108 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 1
+title: Convex Auth
+description: The best way to add authentication to your Convex app.
+---
+
+Convex Auth is the best way to add authentication to your
+[Convex](https://www.convex.dev) app.
+
+- ✅ Runs inside of your app, no external auth service required.
+- ✅ Passwords, passkeys, and OAuth logins out of the box.
+- ✅ 100% free and open source.
+
+## Frequently Asked Questions
+
+### What's the status of Convex Auth?
+
+These are the docs for Convex Auth v2, the current stable release. It is built
+on [Convex Components](https://www.convex.dev/components) and includes features
+to build user sign-up/sign-in using passwords, passkeys, and Apple, Google, or
+GitHub OAuth.
+
+Convex Auth v1 will receive security updates while we work to close some feature
+gaps in v2 and unlock the ability for more applications to migrate.
+
+### How much does it cost?
+
+Convex Auth is **100% free and open source** (Apache-2.0 license).
+
+If you host your Convex deployment on Convex Cloud, the standard
+[resource pricing](https://www.convex.dev/pricing) applies.
+
+### Does Convex Auth support what my app needs?
+
+Convex Auth supports several login methods out of the box:
+
+- [Username + Password](./methods/username-password.mdx)
+- [Email + Password](./methods/email-password.mdx)
+- [Username + Passkey](./methods/username-passkey.mdx)
+- [OAuth](./methods/oauth.mdx) (Apple, Google, and GitHub)
+
+### Should I use Convex Auth or another auth provider?
+
+**Convex Auth is the officially recommended auth solution for new Convex
+projects.** If your app needs enterprise identity features, such as SAML SSO or
+SCIM provisioning, use another auth provider instead. See
+[How is it different compared to WorkOS/Clerk/Auth0?](#workosclerkauth0)
+
+### Will my app be secure?
+
+Convex Auth gives you **secure defaults**. Its features are carefully designed
+to avoid common security pitfalls.
+
+When using Convex Auth, the most sensitive data is stored in
+[components](https://www.convex.dev/components) that are isolated from the rest
+of your app. This ensures that sensitive data is never exposed, and that it is
+always accessed in ways that are safe (e.g. using hashes, salts, and rate limits
+where necessary). The components are designed so that they can only be used
+safely.
+
+### Do I keep control of my user data?
+
+**Absolutely.** All the data in Convex Auth is stored inside of your app’s
+database. You stay in control of the user data, and you can
+[export](https://docs.convex.dev/database/import-export/export) it at any time.
+
+### Which front-end libraries or frameworks can I use Convex Auth with?
+
+Convex Auth comes with support for React SPAs and SSR apps built with Next.js.
+
+The code was designed with extension to other frameworks in mind though, so let
+us know on [Ship](https://ship.convex.dev/) if there are other frameworks you'd
+like to see supported!
+
+### How is it different compared to…
+
+#### …WorkOS/Clerk/Auth0?
+
+There are a few major differences:
+
+- The entire auth system is transactional and reactive within your application
+- There's no third-party system to integrate with to get authentication in your
+  application
+- All of your user data is stored in your application
+- All setup/configuration is done via code - agents love Convex Auth!
+- These established providers offer enterprise identity features that Convex
+  Auth does not, such as SAML single sign-on (SSO) and SCIM user provisioning.
+  If your app needs them, use one of these providers. Convex works with them
+  too: see [Authentication](https://docs.convex.dev/auth) in the Convex docs.
+
+#### …Convex + Better Auth?
+
+Convex Auth was built by Convex engineers for Convex applications. Better Auth
+is a flexible framework that targets traditional relational database systems.
+There are numerous integration points that don't fit quite right when using
+Better Auth with Convex. We encourage anyone starting a new application to use
+Convex Auth and will be providing migration guides and/or tooling for existing
+users of the Convex Better Auth component.
+
+#### …Convex Auth v1?
+
+See:
+[What’s new in Convex Auth v2?](./migrating/from-convex-auth-v1.mdx#whats-new-in-convex-auth-v2)

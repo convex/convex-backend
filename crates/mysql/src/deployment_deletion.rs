@@ -9,10 +9,7 @@ use std::{
 
 use anyhow::Context;
 use common::{
-    knobs::{
-        DATABASE_USE_PREPARED_STATEMENTS,
-        DEPLOYMENT_DELETION_BATCH_SIZE,
-    },
+    knobs::DEPLOYMENT_DELETION_BATCH_SIZE,
     persistence::PersistenceGlobalKey,
     runtime::Runtime,
     types::{
@@ -28,10 +25,12 @@ use mysql_async::{
     Row,
     Value,
 };
-use url::Url;
 
 use crate::{
-    connection::MySqlConnection,
+    connection::{
+        MySqlConnection,
+        ER_NO_SUCH_TABLE,
+    },
     v6::{
         sql::{
             LogBucket,
@@ -47,8 +46,6 @@ const DOCUMENT_KEY: &[&str] = &["ts", "table_id", "id"];
 const V5_INDEX_KEY: &[&str] = &["index_id", "key_prefix", "key_sha256", "ts"];
 const V6_INDEX_KEY: &[&str] = &["index_id", "key_prefix", "key_suffix_hash"];
 const V6_LOG_KEY: &[&str] = &["index_id", "key_prefix", "key_suffix_hash", "ts"];
-
-const ER_NO_SUCH_TABLE: u16 = 1146;
 
 #[derive(Clone, Debug)]
 pub enum DeploymentDeletionTarget {
@@ -149,35 +146,26 @@ impl<RT: Runtime> DeploymentDeletionPool<RT> {
     pub fn connect(
         cluster_url: &str,
         require_ssl: bool,
-        runtime: RT,
         version: PersistenceVersion,
     ) -> anyhow::Result<Self> {
-        let mut url: Url = cluster_url.parse().context("invalid MySQL cluster URL")?;
-        anyhow::ensure!(
-            !url.username().is_empty(),
-            "MySQL cluster URL username must be set"
-        );
-        let db_name = url.path().trim_start_matches('/').to_string();
-        anyhow::ensure!(
-            !db_name.is_empty(),
-            "MySQL cluster URL must contain a database name"
-        );
-        if require_ssl {
-            url.query_pairs_mut().append_pair("require_ssl", "true");
-        }
-        url.query_pairs_mut()
-            .append_pair("enable_cleartext_plugin", "true");
-        let pool = Arc::new(ConvexMySqlPool::new(
-            &url,
-            *DATABASE_USE_PREPARED_STATEMENTS,
-            true, /* require_leader */
-            Some(runtime),
-        )?);
+        let (pool, db_name) = ConvexMySqlPool::connect_cluster(cluster_url, require_ssl)?;
         Ok(Self {
-            pool,
+            pool: Arc::new(pool),
             db_name,
             version,
         })
+    }
+
+    pub(crate) fn from_pool(
+        pool: Arc<ConvexMySqlPool<RT>>,
+        db_name: String,
+        version: PersistenceVersion,
+    ) -> Self {
+        Self {
+            pool,
+            db_name,
+            version,
+        }
     }
 
     pub fn target(&self, name: MySqlInstanceName, id: DeploymentId) -> DeploymentDeletionTarget {
@@ -501,6 +489,21 @@ impl<RT: Runtime> DeploymentDeleter<RT> {
         )
         .await?;
         Ok(globals_deleted)
+    }
+
+    /// Pauses between batches to let MySQL replication catch up.
+    pub async fn delete_all(&self) -> anyhow::Result<()> {
+        let mut cursor = self.begin().await?;
+        loop {
+            let batch = self.delete_batch(&cursor).await?;
+            let Some(next) = batch.next_cursor else {
+                break;
+            };
+            cursor = next;
+            tokio::time::sleep(batch.replication_delay).await;
+        }
+        self.finish().await?;
+        Ok(())
     }
 }
 

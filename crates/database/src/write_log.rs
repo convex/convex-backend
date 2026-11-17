@@ -59,6 +59,7 @@ use indexing::{
     index_cache::WriteLogIndexReader,
     index_registry::IndexRegistry,
 };
+use itertools::Itertools;
 use parking_lot::Mutex;
 use search::query::tokenize;
 use tokio::sync::oneshot;
@@ -552,6 +553,28 @@ impl<T: HeapSize> WritesByIndex<T> {
     fn iter(&self) -> impl Iterator<Item = (&TabletIndexName, &OrdSet<ArcWriteInIndex<T>>)> {
         self.0.iter()
     }
+
+    /// `subscriptions` must be sorted by index name. Checking each index's
+    /// timestamp bounds before seeking avoids range cursors for indexes whose
+    /// writes are all outside [from, to].
+    fn join_in_range<'a, 's, S>(
+        &'a self,
+        subscriptions: impl IntoIterator<Item = (&'s TabletIndexName, S)>,
+        from: Timestamp,
+        to: Timestamp,
+    ) -> impl Iterator<Item = (&'a TabletIndexName, S, &'a OrdSet<ArcWriteInIndex<T>>)> {
+        self.0
+            .iter()
+            .merge_join_by(subscriptions, |(writes_index, _), (sub_index, _)| {
+                (*writes_index).cmp(*sub_index)
+            })
+            .filter_map(move |entry| {
+                let ((index_name, updates), (_, subscription)) = entry.both()?;
+                let in_window = updates.get_max().is_some_and(|u| u.ts >= from)
+                    && updates.get_min().is_some_and(|u| u.ts <= to);
+                in_window.then_some((index_name, subscription, updates))
+            })
+    }
 }
 
 /// WriteLog holds recent commits that have been written to persistence and
@@ -715,16 +738,20 @@ impl LogReader {
         result
     }
 
-    /// Iterates over all index write log entries in the range [from, to]
-    /// (inclusive), calling `f` for each database (index_name, updates) pair
-    /// and `g` for each text index (index_name, updates) pair.
+    /// Iterates over the write log entries in the range [from, to]
+    /// (inclusive) for the indexes in `database_subscriptions` and
+    /// `text_subscriptions`, calling `f` for each database index and `g` for
+    /// each text index whose timestamp bounds overlap the range. Both
+    /// subscription iterators must be sorted by index name.
     ///
     /// Entries are yielded per-index (not per-document or per-commit). The same
     /// commit may produce entries across multiple index vectors.
-    pub fn for_each_index<F, G>(
+    pub fn for_each_index<'s, D, T, F, G>(
         &self,
         from: Timestamp,
         to: Timestamp,
+        database_subscriptions: impl IntoIterator<Item = (&'s TabletIndexName, D)>,
+        text_subscriptions: impl IntoIterator<Item = (&'s TabletIndexName, T)>,
         to_notify: &mut BTreeMap<SubscriberId, (Timestamp, Option<WriteSource>, TabletId)>,
         num_index_updates: &mut usize,
         mut f: F,
@@ -733,12 +760,14 @@ impl LogReader {
     where
         F: for<'a> FnMut(
             &'a TabletIndexName,
+            D,
             Box<dyn Iterator<Item = &'a WriteInIndex<DatabaseIndexWrite>> + 'a>,
             &'a mut BTreeMap<SubscriberId, (Timestamp, Option<WriteSource>, TabletId)>,
             &'a mut usize,
         ),
         G: for<'a> FnMut(
             &'a TabletIndexName,
+            T,
             Box<dyn Iterator<Item = &'a WriteInIndex<TextIndexWrite>> + 'a>,
             &'a mut BTreeMap<SubscriberId, (Timestamp, Option<WriteSource>, TabletId)>,
             &'a mut usize,
@@ -755,17 +784,27 @@ impl LogReader {
                 )
                 .context(ErrorMetadata::out_of_retention())
             );
-            for (index_name, updates) in snapshot.by_database_index.iter() {
+            for (index_name, subscription, updates) in
+                snapshot
+                    .by_database_index
+                    .join_in_range(database_subscriptions, from, to)
+            {
                 f(
                     index_name,
+                    subscription,
                     Box::new(updates.range(from..=to).map(|u| &*u.0)),
                     to_notify,
                     num_index_updates,
                 );
             }
-            for (index_name, updates) in snapshot.by_text_index.iter() {
+            for (index_name, subscription, updates) in
+                snapshot
+                    .by_text_index
+                    .join_in_range(text_subscriptions, from, to)
+            {
                 g(
                     index_name,
+                    subscription,
                     Box::new(updates.range(from..=to).map(|u| &*u.0)),
                     to_notify,
                     num_index_updates,

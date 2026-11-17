@@ -341,7 +341,7 @@ impl TextIndexManager {
                         ..
                     } = &next_metadata.config
                         && let Some(cursor) = &next_backfill_state.cursor
-                        && let Some(index) = indexes.get_mut(&id.internal_id().into())
+                        && let Some(index) = indexes.get_mut(&IndexId::from(id.internal_id()))
                     {
                         index
                             .memory_index_mut()
@@ -511,7 +511,7 @@ impl TextIndexManager {
                 (Some(deletion), None) => {
                     let metadata: ParsedDocument<IndexMetadata<_>> = deletion.parse()?;
                     if metadata.is_text_index() {
-                        indexes.remove(&deletion.id().internal_id().into());
+                        indexes.remove(&IndexId::from(deletion.id().internal_id()));
                         metrics::log_index_deleted();
                     }
                 },

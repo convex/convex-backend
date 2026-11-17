@@ -47,6 +47,7 @@ const project: ProjectDetails = {
   slug: "my-project",
   name: "My Project",
   createTime: 0,
+  tags: [],
 };
 
 const deployments: PlatformDeploymentResponse[] = [

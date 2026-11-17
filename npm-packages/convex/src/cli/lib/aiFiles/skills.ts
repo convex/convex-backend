@@ -4,7 +4,11 @@ import path from "path";
 import { promises as fs } from "fs";
 import { chalkStderr } from "chalk";
 import { logMessage } from "../../../bundler/log.js";
-import { getVersion, fetchAgentSkillsSha } from "../versionApi.js";
+import {
+  getVersion,
+  fetchAgentSkillsSha,
+  fetchAgentSkillsCatalog,
+} from "../versionApi.js";
 import { type AiFilesState } from "./state.js";
 import { exhaustiveCheck } from "./utils.js";
 
@@ -23,11 +27,11 @@ function configuredSkillAgents(
 }
 
 /**
- * Runs `npx skills add get-convex/agent-skills --yes --copy` in the given directory.
+ * Runs `npx skills add convex/agent-skills --yes --copy` in the given directory.
  * Returns true on success, false if the process fails or cannot be started.
  */
 function runSkillsAdd(cwd: string, agents: string[]): Promise<boolean> {
-  const args = ["add", "get-convex/agent-skills", "--yes", "--copy"];
+  const args = ["add", "convex/agent-skills", "--yes", "--copy"];
   for (const agent of agents) {
     args.push("--agent", agent);
   }
@@ -114,8 +118,30 @@ async function removeSkillsLockIfEmpty({
 }
 
 /**
+ * Remove the skills that the Convex catalog marks as deleted from
+ * convex/agent-skills. `npx skills add` only adds and refreshes skills, so
+ * without this a skill that was deleted upstream stays installed forever.
+ *
+ * Best effort: if the catalog cannot be fetched, nothing is removed.
+ */
+async function removeDeletedSkills(projectDir: string): Promise<void> {
+  const catalog = await fetchAgentSkillsCatalog();
+  if (catalog.kind === "error") return;
+
+  const skillNames = catalog.data.skills
+    .filter(({ status }) => status.kind === "deleted")
+    .map(({ skillName }) => skillName);
+  if (skillNames.length === 0) return;
+
+  await runSkillsRemove({ cwd: projectDir, skillNames });
+}
+
+/**
  * Install Convex agent skills and record the SHA into the state.
  * Handles the kill-switch check and all logging internally.
+ *
+ * Returns false if the skills CLI failed. Skipping skills because no agents
+ * are configured or the kill switch is on counts as success.
  */
 export async function installSkills({
   projectDir,
@@ -125,26 +151,29 @@ export async function installSkills({
   projectDir: string;
   state: AiFilesState;
   aiFilesConfig?: AiFilesProjectConfig | undefined;
-}): Promise<void> {
+}): Promise<boolean> {
   const agents = configuredSkillAgents(aiFilesConfig);
-  if (agents.length === 0) return;
-  if (!(await shouldRunSkillsCli())) return;
+  if (agents.length === 0) return true;
+  if (!(await shouldRunSkillsCli())) return true;
 
   logMessage("Installing Convex agent skills...");
   const skillsOk = await runSkillsAdd(projectDir, agents);
   if (!skillsOk) {
     logMessage(
       chalkStderr.yellow(
-        "Could not install agent skills. You can retry manually with: npx skills add get-convex/agent-skills --copy",
+        "Could not install agent skills. You can retry manually with: npx skills add convex/agent-skills --copy",
       ),
     );
-    return;
+    return false;
   }
+
+  await removeDeletedSkills(projectDir);
 
   const sha = await fetchAgentSkillsSha();
   if (sha) state.agentSkillsSha = sha;
 
   logMessage(`${chalkStderr.green("✔")} Skills installed`);
+  return true;
 }
 
 export type RemoveInstalledSkillsStatus = "unchanged" | "removed" | "failed";

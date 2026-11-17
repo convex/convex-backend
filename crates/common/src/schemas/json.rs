@@ -27,6 +27,8 @@ use value::{
 use super::{
     validator::{
         FieldValidator,
+        FunctionHandleType,
+        FunctionValidator,
         LiteralValidator,
         ObjectValidator,
         Validator,
@@ -663,6 +665,15 @@ pub enum ValidatorJson {
     Boolean,
     String,
     Bytes,
+    #[serde(rename_all = "camelCase")]
+    Function {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fn_type: Option<FunctionHandleType>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<Box<ValidatorJson>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        returns: Option<Box<ValidatorJson>>,
+    },
     #[serde(alias = "map")]
     #[serde(alias = "set")]
     Any,
@@ -704,6 +715,19 @@ impl TryFrom<ValidatorJson> for Validator {
             ValidatorJson::Boolean => Ok(Validator::Boolean),
             ValidatorJson::String => Ok(Validator::String),
             ValidatorJson::Bytes => Ok(Validator::Bytes),
+            ValidatorJson::Function {
+                fn_type,
+                args,
+                returns,
+            } => Ok(Validator::Function(FunctionValidator {
+                fn_type,
+                args: args
+                    .map(|a| Validator::try_from(*a).map(Box::new))
+                    .transpose()?,
+                returns: returns
+                    .map(|r| Validator::try_from(*r).map(Box::new))
+                    .transpose()?,
+            })),
             ValidatorJson::Any => Ok(Validator::Any),
             ValidatorJson::Literal { value } => Ok(Validator::Literal(value.try_into()?)),
             ValidatorJson::Id { table_name } => Ok(Validator::Id(table_name.parse()?)),
@@ -766,6 +790,19 @@ impl TryFrom<Validator> for ValidatorJson {
             Validator::Boolean => ValidatorJson::Boolean,
             Validator::String => ValidatorJson::String,
             Validator::Bytes => ValidatorJson::Bytes,
+            Validator::Function(FunctionValidator {
+                fn_type,
+                args,
+                returns,
+            }) => ValidatorJson::Function {
+                fn_type,
+                args: args
+                    .map(|a| ValidatorJson::try_from(*a).map(Box::new))
+                    .transpose()?,
+                returns: returns
+                    .map(|r| ValidatorJson::try_from(*r).map(Box::new))
+                    .transpose()?,
+            },
             Validator::Literal(literal) => ValidatorJson::Literal {
                 value: literal.try_into()?,
             },

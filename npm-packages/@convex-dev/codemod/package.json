@@ -5,7 +5,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/@convex-dev/codemod"
   },
   "main": "./dist/index.cjs",
@@ -26,16 +26,17 @@
     "prepack": "node src/scripts/dont-publish-alpha-as-latest.mjs"
   },
   "devDependencies": {
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@types/progress": "~2.0.7",
     "@types/semver": "^7.3.13",
+    "convex": "workspace:*",
     "typescript": "^5.9.2",
     "vitest": "^4.1.0",
     "zshy": "0.7.0"
   },
   "dependencies": {
     "@babel/code-frame": "^7.27.1",
-    "@sentry/node": "^7.23.0",
+    "@sentry/node": "^10.76.2",
     "@types/babel__code-frame": "^7.0.6",
     "chalk": "5",
     "commander": "^14.0.3",
@@ -48,7 +49,7 @@
     "tsc-alias": "~1.9.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "module": "./dist/index.js",
   "types": "./dist/index.d.cts",

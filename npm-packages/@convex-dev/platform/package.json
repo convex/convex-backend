@@ -6,7 +6,7 @@
   "homepage": "https://docs.convex.dev/platform-apis",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/@convex-dev/platform"
   },
   "scripts": {
@@ -28,7 +28,7 @@
   "author": "Convex, Inc. <no-reply@convex.dev>",
   "license": "Apache-2.0",
   "devDependencies": {
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "typescript": "^5.9.2",
     "openapi-typescript": "~7.8.0",
     "openapi-typescript-helpers": "~0.1.0",

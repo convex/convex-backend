@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
         &ProvisionRequest::NewProject,
         &package_dir,
         StaticMetricLabel::new("load_description", "backend-harness"),
-        |host, admin_key, _| async move {
+        |host, admin_key| async move {
             if cmd.is_empty() {
                 println!("Provisioned {host}. Ctrl-C to quit");
                 rx.recv()?;

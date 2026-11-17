@@ -14,6 +14,16 @@ Alternatively, you can export the same data with the
 [command line](/cli/reference/export.mdx):
 
 ```sh
+npx convex export
+```
+
+This creates an export without downloading it. As soon as the export starts, the
+command prints a dashboard link where you can view its progress and download it
+when ready.
+
+To also download the export from the command line, provide `--path`:
+
+```sh
 npx convex export --path ~/Downloads
 ```
 
@@ -22,3 +32,5 @@ npx convex export --path ~/Downloads
 You can programmatically do a paginated streaming export by using the
 [Data Sync API](https://docs.convex.dev/deployment-api/data-sync) or with an
 [integration with a third party provider](https://docs.convex.dev/production/integrations/streaming-import-export).
+To stream your tables into your own S3 bucket as Apache Iceberg tables, see
+[S3 Export](/production/integrations/s3-export.mdx) (beta).

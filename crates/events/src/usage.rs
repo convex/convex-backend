@@ -11,14 +11,12 @@ pub enum UdfType {
     Mutation,
 }
 
+/// Usage of one function execution, or of several that conductors merge into a
+/// per-minute summary. Executions with the same grouping fields merge: counters
+/// are summed, and `sample` holds the details of one of them. A raw event is
+/// the case of a single execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionCallUsageFields {
-    /// The ExecutionId of a particular UDF
-    pub id: String,
-    /// The RequestId of a particular UDF
-    pub request_id: String,
-    /// Whether the request succeeded or failed
-    pub status: String,
     /// The path of a component. Uniquely identifies a component in a
     /// project.
     pub component_path: Option<String>,
@@ -28,16 +26,6 @@ pub struct FunctionCallUsageFields {
     pub udf_id_type: String,
     /// "storage", "mutation", "cached_query" etc.
     pub tag: String,
-    /// The memory used in megabytes by the UDF, or 0 if we don't track
-    /// memory for this tag type.
-    pub memory_megabytes: u64,
-    /// The duration in milliseconds of the UDF, or 0 if we don't track
-    /// execution time for this tag type.
-    pub duration_millis: u64,
-    /// The duration in milliseconds of user execution time in the isolate.
-    /// Excludes syscalls.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user_execution_millis: Option<u64>,
     /// Whether this was run in V8 or Node, or "unknown".
     pub environment: String,
     /// True if we think it's a call we should track in usage. Right now
@@ -46,20 +34,68 @@ pub struct FunctionCallUsageFields {
     /// This could be derived from path and
     /// udf type, but it seems better to be explicit)
     pub is_tracked: bool,
-    /// The sha256 of the response body. Only set for HTTP actions.
-    pub response_sha256: Option<String>,
     /// Whether this function call resulted in an OCC.
     pub is_occ: bool,
     /// The name of the table that the OCC occurred on. Only set if is_occ is
     /// true.
     pub occ_table_name: Option<String>,
+    /// The retry number of the OCC. Only set if is_occ is true.
+    pub occ_retry_count: Option<u64>,
+
+    /// Executions this event covers.
+    pub calls: u64,
+    /// The duration in milliseconds summed over the covered executions, or 0
+    /// if we don't track execution time for this tag type.
+    pub duration_millis: u64,
+    /// The duration in milliseconds of user execution time in the isolate,
+    /// summed over the covered executions. Excludes syscalls.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_execution_millis: Option<u64>,
+    /// Compute consumed, as `memory_megabytes * duration_millis` summed over
+    /// the covered executions. Billing and limits read this rather than
+    /// multiplying the two fields, which on a summary come from different
+    /// executions.
+    pub compute_mb_ms: u64,
+    /// `memory_megabytes * user_execution_millis` summed over the covered
+    /// executions; unset when none reported user execution time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_compute_mb_ms: Option<u64>,
+
+    /// Flattened so the payload keeps one flat schema for raw events and
+    /// summaries.
+    #[serde(flatten)]
+    pub sample: FunctionCallSample,
+}
+
+/// One execution covered by a [`FunctionCallUsageFields`], every field from
+/// that same execution. A summary's sample is an arbitrary one of its
+/// executions, e.g. some document that caused an OCC rather than all of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FunctionCallSample {
+    /// The ExecutionId of a particular UDF
+    pub id: String,
+    /// The RequestId of a particular UDF
+    pub request_id: String,
+    /// The memory allocated in megabytes to the UDF, or 0 if we don't track
+    /// memory for this tag type.
+    pub memory_megabytes: u64,
     /// The document ID of the document that the OCC occurred on. Only set if
     /// is_occ is true.
     pub occ_document_id: Option<String>,
-    // The source of the OCC. Only set if is_occ is true.
+    /// The source of the OCC. Only set if is_occ is true.
     pub occ_write_source: Option<String>,
-    /// The retry number of the OCC. Only set if is_occ is true.
-    pub occ_retry_count: Option<u64>,
+    /// Whether the request succeeded or failed.
+    pub status: String,
+    /// The sha256 of the response body. Only set for HTTP actions.
+    pub response_sha256: Option<String>,
+}
+
+/// One storage call covered by a [`UsageEvent::StorageCall`]. A summary's
+/// sample is an arbitrary one of its calls, since content type is not part of
+/// the summary's grouping key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageCallSample {
+    pub content_type: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,10 +147,14 @@ pub enum UsageEvent {
     StorageCall {
         id: String,
         component_path: Option<String>,
-        storage_id: String,
         call: String,
-        content_type: Option<String>,
-        sha256: String,
+        /// Flattened so the payload keeps one flat schema for raw events and
+        /// summaries.
+        #[serde(flatten)]
+        sample: StorageCallSample,
+        /// Calls this event covers: one for a raw event, the minute's total for
+        /// a summary.
+        count: u64,
     },
     /// Bandwidth from a storage call outside of a user function (e.g. snapshot
     /// import/export).
@@ -202,7 +242,6 @@ pub enum UsageEvent {
         index_name: String,
         num_searches: u64,
         bytes_searched: u64,
-        dimensions: u64,
     },
     AuditLogBandwidth {
         id: String,

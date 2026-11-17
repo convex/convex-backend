@@ -14,7 +14,7 @@
     "@eslint/eslintrc": "^3",
     "eslint": "^9.37.0",
     "eslint-config-next": "^15.5.4",
-    "next": "^15.5.27",
+    "next": "^15.5.28",
     "postcss": "^8.5.18",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",

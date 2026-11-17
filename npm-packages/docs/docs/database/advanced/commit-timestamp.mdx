@@ -20,7 +20,23 @@ could define an index on a field that captures the commit time, then use that to
 iterate over new or updated documents without worrying about missing changes due
 to out-of-order commits. For tips on using CommitTs for efficient iteration, see
 the notes in the
-[Batch Worker Component README](https://github.com/get-convex/batch-worker).
+[Batch Worker Component README](https://github.com/convex/batch-worker).
+
+For a whiteboard walkthrough of why commit timestamps exist, and how they differ
+from `Date.now()` and `_creationTime`, watch this video:
+
+<div className="center-image" style={{ maxWidth: "560px" }}>
+  <iframe
+    width="560"
+    height="315"
+    src="https://www.youtube.com/embed/pHrxmSjxLg8"
+    title="Your database is lying to you about time"
+    frameborder="0"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    referrerpolicy="strict-origin-when-cross-origin"
+    allowfullscreen
+  ></iframe>
+</div>
 
 <Snippet source={commitTsExample} snippet="insert" title="convex/work.ts" />
 

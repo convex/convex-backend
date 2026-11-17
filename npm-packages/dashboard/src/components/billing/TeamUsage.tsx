@@ -1,4 +1,6 @@
 import { BusinessPlanSummary } from "components/billing/PlanSummary";
+import { useUsageByPricingPeriod } from "hooks/useUsageByPricingPeriod";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { Sheet } from "@ui/Sheet";
 import { Spinner } from "@ui/Spinner";
 import { Button } from "@ui/Button";
@@ -12,7 +14,11 @@ import { useTeamEntitlements } from "api/teams";
 import { NoPermissionMessage } from "elements/NoPermissionMessage";
 import { TEAM_RESOURCE } from "lib/permissions";
 import { useProjectById, useProjectBySlug } from "api/projects";
-import { useTeamOrbSubscription } from "api/billing";
+import { useTeamOrbSubscription, useTeamPrices } from "api/billing";
+import {
+  getUsagePricing,
+  isCurrentBillingPeriodRange,
+} from "./lib/usagePrices";
 import groupBy from "lodash/groupBy";
 import sumBy from "lodash/sumBy";
 import { Period } from "elements/UsagePeriodSelector";
@@ -200,19 +206,34 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
         } as const)
       : selectedBillingPeriod;
 
-  const dateRange =
-    shownBillingPeriod !== null &&
-    shownBillingPeriod.type !== "currentBillingPeriod"
-      ? { from: shownBillingPeriod.from, to: shownBillingPeriod.to }
-      : null;
+  const billingPeriodRange = shownBillingPeriod
+    ? { from: shownBillingPeriod.from, to: shownBillingPeriod.to }
+    : null;
+  const isCurrentBillingPeriod = isCurrentBillingPeriodRange(
+    billingPeriodRange,
+    currentBillingPeriod,
+  );
+  const dateRange = isCurrentBillingPeriod ? null : billingPeriodRange;
 
   const { subscription } = useTeamOrbSubscription(team?.id);
 
   const isBusinessPlanType = subscription?.plan.planType === "CONVEX_BUSINESS";
 
-  const billingPeriodRange = shownBillingPeriod
-    ? { from: shownBillingPeriod.from, to: shownBillingPeriod.to }
-    : null;
+  const prices = useTeamPrices(team.id, billingPeriodRange);
+  const pricing = getUsagePricing(prices, billingPeriodRange);
+  const isFiltered =
+    !!query.projectSlug || projectId !== null || !!componentPrefix;
+  // A project slug resolves to its ID asynchronously; until then, usage
+  // queries would read the whole team's usage.
+  const projectPending = !!query.projectSlug && projectId === null;
+  const { dashboardShowCashUsage } = useLaunchDarkly();
+  const pricedUsage = useUsageByPricingPeriod({
+    teamId: team.id,
+    pricing,
+    enabled: dashboardShowCashUsage && !projectPending,
+    projectId,
+    componentPrefix,
+  });
 
   const { data: aiGatewayCostByDay, error: aiGatewayCostError } =
     useAiGatewayCostPerDayByProject(
@@ -226,10 +247,10 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
   // already returns. Adding the column to the Summary query in
   // databricks-workbooks (like Function Breakdown gained one in #35) would let
   // this card read AI cost like every other metric and delete this reduce.
-  const aiGatewayCost = aiGatewayCostByDay?.reduce(
-    (sum, row) => sum + row.value,
-    0,
-  );
+  // Until the project slug resolves, the query reads the whole team's cost.
+  const aiGatewayCost = projectPending
+    ? undefined
+    : aiGatewayCostByDay?.reduce((sum, row) => sum + row.value, 0);
 
   const { data: summary, error: summaryError } = useUsageTeamSummary(
     team?.id,
@@ -243,17 +264,13 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
   const hasOrbSubscription = useHasSubscription(team?.id);
 
   const hasSubscription =
-    (!shownBillingPeriod ||
-      shownBillingPeriod.type === "currentBillingPeriod") &&
+    isCurrentBillingPeriod &&
     (hasOrbSubscription || hasOrbSubscription === undefined) &&
-    projectId === null &&
     !isBusinessPlanType;
 
+  // Included limits are team-wide, so they only describe unfiltered usage.
   const showEntitlements =
-    (!shownBillingPeriod ||
-      shownBillingPeriod.type === "currentBillingPeriod") &&
-    projectId === null &&
-    !isBusinessPlanType;
+    isCurrentBillingPeriod && !isFiltered && !isBusinessPlanType;
 
   return (
     <div className="flex min-w-160 flex-col gap-2 [--team-usage-toolbar-height:--spacing(32)] md:[--team-usage-toolbar-height:--spacing(28)] lg:[--team-usage-toolbar-height:--spacing(20)]">
@@ -272,19 +289,28 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
           )}
         </h2>
         {subscription !== undefined && (
-          <Button
-            href={`/t/${team?.slug}/settings/billing`}
-            variant="neutral"
-            icon={<ExternalLinkIcon />}
-            className="animate-fadeInFromLoading"
-            size="xs"
-          >
-            {subscription
-              ? team.managedBy === "vercel"
-                ? "View Subscription"
-                : "View Subscription & Invoices"
-              : "Upgrade Subscription"}
-          </Button>
+          <div className="flex gap-2">
+            {subscription && team.managedBy !== "vercel" && (
+              <Button
+                href={`/t/${team?.slug}/settings/invoices`}
+                variant="neutral"
+                icon={<ExternalLinkIcon />}
+                className="animate-fadeInFromLoading"
+                size="xs"
+              >
+                View Invoices
+              </Button>
+            )}
+            <Button
+              href={`/t/${team?.slug}/settings/billing`}
+              variant="neutral"
+              icon={<ExternalLinkIcon />}
+              className="animate-fadeInFromLoading"
+              size="xs"
+            >
+              {subscription ? "View Subscription" : "Upgrade Subscription"}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -321,12 +347,19 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
                 <BusinessPlanSummary
                   summary={summary}
                   error={summaryError}
+                  pricing={pricing}
+                  pricedUsage={pricedUsage}
+                  isFiltered={isFiltered}
                   aiGatewayCost={aiGatewayCost}
-                  aiGatewayCostError={aiGatewayCostError}
+                  aiGatewayCostError={
+                    projectPending ? undefined : aiGatewayCostError
+                  }
                   isBusinessPlan={isBusinessPlanType}
                   entitlements={entitlements}
                   hasSubscription={hasSubscription}
+                  subscriptionLoading={subscription === undefined}
                   showEntitlements={showEntitlements}
+                  isCurrentBillingPeriod={isCurrentBillingPeriod}
                 />
                 <FunctionBreakdownSection
                   team={team}

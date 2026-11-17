@@ -123,8 +123,7 @@
         },
         "nodeVersion": {
           "type": "string",
-          "description": "The Node.js version to use for Node.js actions. The currently supported values are '20', '22', and '24'.\n\nDocumentation: https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version",
-          "default": "20"
+          "description": "The Node.js version to use for Node.js actions. The currently supported values are '22' and '24'.\n\nAfter you push a new Node.js version, your functions may keep running on the previous version for a few minutes.\n\nDocumentation: https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version"
         }
       }
     },

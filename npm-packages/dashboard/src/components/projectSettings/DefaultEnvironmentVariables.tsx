@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useFormikContext } from "formik";
 import { Sheet } from "@ui/Sheet";
 import { Checkbox } from "@ui/Checkbox";
+import { Button } from "@ui/Button";
 import {
   useProjectEnvironmentVariables,
   useUpdateProjectEnvVars,
@@ -21,6 +22,11 @@ import { permissionDeniedTip } from "elements/permissionDeniedTip";
 import { EnvironmentVariables } from "@common/features/settings/components/EnvironmentVariables";
 import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
 import { deploymentTypeLabel } from "@common/lib/deploymentTypeColorClasses";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+import {
+  DefaultEnvironmentVariablesRolloutDialog,
+  RolloutEntry,
+} from "./DefaultEnvironmentVariablesRolloutDialog";
 
 // Deployment types that can be selected via checkboxes (excludes "custom" for now)
 const SELECTABLE_DEPLOYMENT_TYPES: DeploymentTypeType[] = [
@@ -157,18 +163,49 @@ export function DefaultEnvironmentVariablesInner({
   disabledTipForEdit?: React.ReactNode;
   disabledTipForDelete?: React.ReactNode;
 }) {
+  const { allowDefaultEnvRollout } = useLaunchDarkly();
   const [initialValues, setInitialValues] = useState<
     ProjectEnvVarConfig[] | undefined
   >(undefined);
 
+  const [rollout, setRollout] = useState<RolloutEntry[]>();
+  const resolveConfirmation = useRef<
+    ((selected: RolloutEntry[] | undefined) => void) | undefined
+  >(undefined);
+  const submitting = useRef(false);
+  const finishConfirmation = (selected?: RolloutEntry[]) => {
+    resolveConfirmation.current?.(selected);
+    resolveConfirmation.current = undefined;
+    setRollout(undefined);
+  };
+
   return (
     <Sheet className="flex flex-col gap-4 text-sm">
       <h3>Default Environment Variables</h3>
+      {rollout && (
+        <DefaultEnvironmentVariablesRolloutDialog
+          rollout={rollout}
+          onClose={() => finishConfirmation()}
+          onConfirm={finishConfirmation}
+        />
+      )}
       <div className="flex flex-col gap-2">
         <p className="max-w-prose text-sm text-content-primary">
-          These values will be used when creating new deployments. Changing
-          these values <span className="font-semibold">does not</span> affect
-          existing deployments.{" "}
+          These values will be used when creating new deployments.{" "}
+          {allowDefaultEnvRollout ? (
+            <>
+              You can also select changes to apply for existing cloud
+              deployments of the selected types, overwriting existing values and
+              removing deleted variables. Otherwise, changing these values does
+              not affect existing deployments.
+            </>
+          ) : (
+            <>
+              Changing these values{" "}
+              <span className="font-semibold">does not</span> affect existing
+              deployments.
+            </>
+          )}{" "}
           <Link
             passHref
             href="https://docs.convex.dev/production/hosting/environment-variables#project-environment-variable-defaults"
@@ -182,7 +219,7 @@ export function DefaultEnvironmentVariablesInner({
           managed from the deployment settings.
         </p>
       </div>
-      <EnvironmentVariables
+      <EnvironmentVariables<ProjectEnvVarConfig>
         hasAdminPermissions={hasAdminPermissions ?? false}
         disabledTip={disabledTip}
         canCreate={canCreate}
@@ -197,77 +234,140 @@ export function DefaultEnvironmentVariablesInner({
           modifications,
           deletions,
         ) => {
-          const forEachDtype = (
-            name: string,
-            deploymentTypes: readonly DeploymentTypeType[],
-            value: string | null,
-          ) =>
-            deploymentTypes.map((deploymentType) => ({
-              name,
-              deploymentType,
-              value,
-            }));
+          if (submitting.current) return false;
+          submitting.current = true;
+          try {
+            const forEachDtype = (
+              name: string,
+              deploymentTypes: readonly DeploymentTypeType[],
+              value: string | null,
+            ) =>
+              deploymentTypes.map((deploymentType) => ({
+                name,
+                deploymentType,
+                value,
+              }));
 
-          const changes: UpdateDefaultEnvironmentVariablesArgs["changes"] = [];
+            const changes: (UpdateDefaultEnvironmentVariablesArgs["changes"][number] & {
+              value: string | null;
+            })[] = [];
 
-          for (const newEnvVar of creations) {
-            changes.push(
-              ...forEachDtype(
-                newEnvVar.name,
-                newEnvVar.deploymentTypes,
-                newEnvVar.value,
-              ),
-            );
-          }
-
-          for (const { oldEnvVar, newEnvVar } of modifications) {
-            if (oldEnvVar.name !== newEnvVar.name) {
-              // Name changed: delete old, create new
+            for (const newEnvVar of creations) {
               changes.push(
                 ...forEachDtype(
-                  oldEnvVar.name,
-                  oldEnvVar.deploymentTypes,
+                  newEnvVar.name,
+                  newEnvVar.deploymentTypes,
+                  newEnvVar.value,
+                ),
+              );
+            }
+
+            for (const { oldEnvVar, newEnvVar } of modifications) {
+              if (oldEnvVar.name !== newEnvVar.name) {
+                // Name changed: delete old, create new
+                changes.push(
+                  ...forEachDtype(
+                    oldEnvVar.name,
+                    oldEnvVar.deploymentTypes,
+                    null,
+                  ),
+                  ...forEachDtype(
+                    newEnvVar.name,
+                    newEnvVar.deploymentTypes,
+                    newEnvVar.value,
+                  ),
+                );
+              } else {
+                // Upsert current deployment types
+                changes.push(
+                  ...forEachDtype(
+                    newEnvVar.name,
+                    newEnvVar.deploymentTypes,
+                    newEnvVar.value,
+                  ),
+                );
+                // Delete removed deployment types
+                const removed = oldEnvVar.deploymentTypes.filter(
+                  (dt) => !newEnvVar.deploymentTypes.includes(dt),
+                );
+                changes.push(...forEachDtype(oldEnvVar.name, removed, null));
+              }
+            }
+
+            for (const oldVariable of deletions) {
+              changes.push(
+                ...forEachDtype(
+                  oldVariable.name,
+                  oldVariable.deploymentTypes,
                   null,
                 ),
-                ...forEachDtype(
-                  newEnvVar.name,
-                  newEnvVar.deploymentTypes,
-                  newEnvVar.value,
-                ),
               );
-            } else {
-              // Upsert current deployment types
-              changes.push(
-                ...forEachDtype(
-                  newEnvVar.name,
-                  newEnvVar.deploymentTypes,
-                  newEnvVar.value,
-                ),
-              );
-              // Delete removed deployment types
-              const removed = oldEnvVar.deploymentTypes.filter(
-                (dt) => !newEnvVar.deploymentTypes.includes(dt),
-              );
-              changes.push(...forEachDtype(oldEnvVar.name, removed, null));
             }
-          }
 
-          for (const oldVariable of deletions) {
-            changes.push(
-              ...forEachDtype(
-                oldVariable.name,
-                oldVariable.deploymentTypes,
-                null,
-              ),
+            const upsertKeys = new Set(
+              changes
+                .filter(({ value }) => value !== null)
+                .map(({ name, deploymentType }) => `${name}:${deploymentType}`),
             );
+            const finalChanges = changes.filter(
+              ({ name, deploymentType, value }) =>
+                value !== null || !upsertKeys.has(`${name}:${deploymentType}`),
+            );
+            if (allowDefaultEnvRollout) {
+              const breakdown = new Map<string, RolloutEntry>();
+              for (const { name, deploymentType, value } of finalChanges) {
+                const operation = value === null ? "delete" : "set";
+                const key = JSON.stringify([name, value]);
+                const entry: RolloutEntry = breakdown.get(key) ?? {
+                  name,
+                  operation,
+                  value,
+                  deploymentTypes: [],
+                };
+                if (!entry.deploymentTypes.includes(deploymentType)) {
+                  entry.deploymentTypes.push(deploymentType);
+                }
+                breakdown.set(key, entry);
+              }
+              const selected = await new Promise<RolloutEntry[] | undefined>(
+                (resolve) => {
+                  resolveConfirmation.current = resolve;
+                  setRollout([...breakdown.values()]);
+                },
+              );
+              if (!selected) return false;
+              for (const change of finalChanges) {
+                if (
+                  selected.some(
+                    ({ name, deploymentTypes, value }) =>
+                      name === change.name &&
+                      value === change.value &&
+                      deploymentTypes.includes(change.deploymentType),
+                  )
+                ) {
+                  change.applyToExistingDeployments = true;
+                }
+              }
+            }
+            await onUpdate({ changes: finalChanges });
+            setInitialValues(undefined);
+            return true;
+          } finally {
+            submitting.current = false;
           }
-
-          await onUpdate({ changes });
-          setInitialValues(undefined);
         }}
         initialFormValues={initialValues}
         renderDisplayExtra={DeploymentTypeLabels}
         renderEditExtra={DeploymentTypeCheckboxes}
+        renderSaveButton={
+          allowDefaultEnvRollout
+            ? ({ isSubmitting, isValid }) => (
+                <Button type="submit" disabled={isSubmitting || !isValid}>
+                  Review changes
+                </Button>
+              )
+            : undefined
+        }
         validateNameUniqueness={validateProjectEnvVarUniqueness}
         initEnvVar={(envVar) => ({
           ...envVar,
@@ -389,6 +489,7 @@ function DeploymentTypeCheckboxes({
                 className="flex cursor-pointer items-center gap-1.5 text-sm text-content-primary"
               >
                 <Checkbox
+                  aria-label={deploymentTypeLabel(type)}
                   checked={isChecked}
                   onChange={() => handleToggle(type)}
                   disabled={formState.isSubmitting}
@@ -413,14 +514,16 @@ function DeploymentTypeCheckboxes({
   );
 }
 
+// The dark checked fills need 3:1 against the card background
+// (`background-secondary`) and against the white checkmark (WCAG 1.4.11).
 function deploymentTypeCheckedBackground(dtype: DeploymentTypeType) {
   switch (dtype) {
     case "prod":
-      return "checked:bg-purple-700 text-purple-700 enabled:hover:checked:bg-purple-800 dark:checked:bg-purple-500 dark:enabled:hover:bg-purple-500 dark:text-purple-500";
+      return "checked:bg-purple-700 text-purple-700 enabled:hover:checked:bg-purple-800 dark:checked:bg-fuchsia-600 dark:enabled:hover:bg-fuchsia-500 dark:text-purple-500";
     case "preview":
-      return "checked:bg-orange-700 text-orange-700 enabled:hover:checked:bg-orange-800 dark:checked:bg-orange-700 dark:enabled:hover:bg-orange-600 dark:text-orange-400";
+      return "checked:bg-orange-700 text-orange-700 enabled:hover:checked:bg-orange-800 dark:checked:bg-orange-600 dark:enabled:hover:bg-orange-500 dark:text-orange-400";
     case "dev":
-      return "checked:bg-green-700 text-green-700 enabled:hover:checked:bg-green-800 dark:checked:bg-green-700 dark:enabled:hover:bg-green-600 dark:text-green-400";
+      return "checked:bg-green-700 text-green-700 enabled:hover:checked:bg-green-800 dark:checked:bg-green-600 dark:enabled:hover:bg-green-500 dark:text-green-400";
     case "custom":
       return "checked:bg-neutral-8 text-neutral-8 enabled:hover:checked:bg-neutral-9 dark:checked:bg-neutral-6 dark:enabled:hover:bg-neutral-5 dark:text-neutral-5";
     default: {

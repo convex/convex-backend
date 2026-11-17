@@ -183,10 +183,13 @@ impl VectorFixtures {
         )
         .await?;
         let mut tx = self.db.begin_system().await?;
+        let pending = IndexModel::new(&mut tx)
+            .pending_index_metadata(index_data.namespace, &index_data.index_name)?
+            .context("index should be pending")?;
         IndexModel::new(&mut tx)
-            .enable_index_for_testing(index_data.namespace, &index_data.index_name)
+            .enable_backfilled_indexes(vec![pending])
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(index_data)
     }
 
@@ -204,10 +207,11 @@ impl VectorFixtures {
         // Start as enabled -> disable it.
         let index_data = self.enabled_vector_index().await?;
         let mut tx = self.db.begin_system().await?;
-        IndexModel::new(&mut tx)
-            .disable_index_for_test(index_data.index_id)
-            .await?;
-        self.db.commit(tx).await?;
+        let enabled = IndexModel::new(&mut tx)
+            .enabled_index_metadata(index_data.namespace, &index_data.index_name)?
+            .context("index should be enabled")?;
+        IndexModel::new(&mut tx).disable_index(enabled).await?;
+        self.db.commit(tx, "test").await?;
         Ok(index_data)
     }
 
@@ -236,7 +240,7 @@ impl VectorFixtures {
     ) -> anyhow::Result<ResolvedDocumentId> {
         let mut tx = self.db.begin_system().await?;
         let result = add_document_vec_array(&mut tx, table_name, vector).await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         Ok(result)
     }
 
@@ -474,7 +478,7 @@ pub async fn backfilling_vector_index(
         .namespace(namespace)
         .id(index_name.table())?
         .tablet_id;
-    db.commit(tx).await?;
+    db.commit(tx, "test").await?;
     let resolved_index_name = TabletIndexName::new(table_id, index_name.descriptor().clone())?;
 
     let IndexConfig::Vector { ref spec, .. } = index_metadata.config else {
@@ -498,7 +502,7 @@ pub async fn backfilling_vector_index_with_doc(
     let index_data = backfilling_vector_index(db).await?;
     let mut tx = db.begin_system().await?;
     add_document_vec_array(&mut tx, index_data.index_name.table(), [1f64, 2f64]).await?;
-    db.commit(tx).await?;
+    db.commit(tx, "test").await?;
 
     Ok(index_data)
 }
@@ -512,7 +516,7 @@ pub async fn backfilled_vector_index_with_doc(
     let result = backfilled_vector_index(rt, db.clone(), reader, storage).await?;
     let mut tx = db.begin_system().await?;
     add_document_vec_array(&mut tx, result.index_name.table(), [1f64, 2f64]).await?;
-    db.commit(tx).await?;
+    db.commit(tx, "test").await?;
 
     Ok(result)
 }
@@ -637,7 +641,7 @@ impl<RT: Runtime> VectorSearcher for DeleteOnCompactSearchlight<RT> {
         UserFacingModel::new_root_for_test(&mut tx)
             .delete(self.to_delete.into())
             .await?;
-        self.db.commit(tx).await?;
+        self.db.commit(tx, "test").await?;
         backfill_vector_indexes(
             self.rt.clone(),
             self.db.clone(),

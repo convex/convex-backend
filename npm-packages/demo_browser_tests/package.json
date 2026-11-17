@@ -23,7 +23,7 @@
     "test-platform": "node ./dist/test_platform.js"
   },
   "devDependencies": {
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "typescript": "^5.9.2"
   },
   "overrides": {

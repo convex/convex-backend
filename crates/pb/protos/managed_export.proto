@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package managed_export;
+
+// One managed S3 export's progress, sealed at
+// `<root>/_convex/exports/<export id>/state` in the customer's bucket.
+// Only Porter reads or writes it.
+message ExportState {
+  reserved 1;
+  reserved "format";
+  // Number of pages committed by this export.
+  uint64 page = 2;
+  // Base64 `SyncCursor` after `page`; absent before the first page.
+  optional string cursor = 3;
+  // Every Iceberg table the export has created, live and retired, by Glue
+  // table name.
+  map<string, TableState> tables = 4;
+}
+
+message TableState {
+  // Component path and table name when the tablet was first exported.
+  string component = 1;
+  string table = 2;
+  // The tablet in base32, as in the Glue name.
+  string tablet = 3;
+  // Current metadata file location; moves with every commit to the table.
+  string metadata = 4;
+  // Set while the Convex table is not selected for export.
+  bool retired = 5;
+}

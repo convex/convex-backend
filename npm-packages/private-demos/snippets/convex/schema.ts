@@ -70,6 +70,9 @@ export default defineSchema({
     storageId: v.string(),
     prompt: v.string(),
   }),
+  exports: defineTable({
+    storageId: v.id("_storage"),
+  }),
   plans: defineTable({
     planType: v.string(),
   }),

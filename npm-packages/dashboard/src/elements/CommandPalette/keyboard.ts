@@ -16,12 +16,31 @@ export type PaletteKeyDownContext = {
   // page has nothing to confirm.
   confirmAction: (() => void) | null;
   copySelection: () => boolean;
+  // Opens the selected row in a new tab; null when the row isn't a link.
+  newTabOpenerForSelection: () => (() => void) | null;
+  // Whether the platform's link-opening modifier is ⌘ (Apple) or Ctrl.
+  isApple: boolean;
 };
 
 function hasSelectedInputText(event: React.KeyboardEvent): boolean {
   const target = event.target as HTMLInputElement;
   return (
     target.tagName === "INPUT" && target.selectionStart !== target.selectionEnd
+  );
+}
+
+// ⌘+Enter on Apple platforms, Ctrl+Enter elsewhere: the modifier that makes a
+// click open a link in a new tab there. The other one is left alone, as the
+// browser leaves it alone on links (Ctrl-click on a Mac opens the context
+// menu).
+function isOpenInNewTabChord(event: React.KeyboardEvent, isApple: boolean) {
+  return (
+    event.key === "Enter" &&
+    (isApple
+      ? event.metaKey && !event.ctrlKey
+      : event.ctrlKey && !event.metaKey) &&
+    !event.shiftKey &&
+    !event.altKey
   );
 }
 
@@ -37,6 +56,8 @@ export function handlePaletteKeyDown(
     armDrillModifier,
     confirmAction,
     copySelection,
+    newTabOpenerForSelection,
+    isApple,
   }: PaletteKeyDownContext,
 ) {
   if (
@@ -61,6 +82,24 @@ export function handlePaletteKeyDown(
     if (!hasSelectedInputText(event) && copySelection()) {
       event.preventDefault();
       event.stopPropagation();
+    }
+  } else if (
+    isOpenInNewTabChord(event, isApple) &&
+    !event.nativeEvent.isComposing
+  ) {
+    // Like ⌘/Ctrl-clicking the row: the palette stays open, so several results
+    // can be opened in a row. Rows that aren't links get a plain selection, as
+    // ⌘/Ctrl-clicking them does.
+    const openInNewTab = newTabOpenerForSelection();
+    if (openInNewTab) {
+      event.preventDefault();
+      event.stopPropagation();
+      // Holding the chord down would otherwise open a tab per key repeat.
+      if (!event.repeat) {
+        openInNewTab();
+      }
+    } else {
+      armDrillModifier(false);
     }
   } else if (event.key === "Escape") {
     event.preventDefault();

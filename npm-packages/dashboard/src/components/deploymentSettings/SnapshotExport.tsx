@@ -135,8 +135,18 @@ export function SnapshotExport() {
           {["requested", "in_progress"].some(
             (s) => s === existingExport.state,
           ) ? (
-            <div className="float-left flex items-center gap-2">
-              <Spinner /> Export in progress
+            <div className="flex items-start gap-4">
+              <div className="flex min-w-0 flex-col gap-1" aria-live="polite">
+                <div className="flex items-center gap-2">
+                  <Spinner className="ml-0" /> Export in progress
+                </div>
+                {existingExport.state === "in_progress" &&
+                  existingExport.progress_message && (
+                    <p className="text-sm wrap-break-word text-content-secondary">
+                      {existingExport.progress_message}
+                    </p>
+                  )}
+              </div>
               <CancelExportButton snapshotId={existingExport._id} />
             </div>
           ) : existingExport.state === "failed" ? (

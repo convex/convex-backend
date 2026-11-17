@@ -1,21 +1,34 @@
-import { Button } from "@ui/Button";
 import { Sheet } from "@ui/Sheet";
 import { Tooltip } from "@ui/Tooltip";
 import { Spinner } from "@ui/Spinner";
 import { formatBytes, formatNumberCompact } from "@common/lib/format";
 import { UsageSummaryRow } from "hooks/usageMetrics";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { formatQuantity } from "./lib/formatQuantity";
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
+import { captureException } from "@sentry/nextjs";
 import { TeamEntitlementsResponse } from "generatedApi";
+
 import {
   QuestionMarkCircledIcon,
   CrossCircledIcon,
   ChevronRightIcon,
 } from "@radix-ui/react-icons";
 import { cn } from "@ui/cn";
+import Link from "next/link";
 import { useRouter } from "next/router";
 import { Donut } from "@ui/Donut";
 import { Loading } from "@ui/Loading";
+import type { UsagePricing } from "./lib/usagePrices";
+import {
+  getMultiPeriodUsageSpend,
+  getUsageSpend,
+  getIncludedUsage,
+  hasIncludedUsage,
+  isGaugeMetric,
+  formatSpend,
+} from "./lib/usageSpend";
+import type { PricedUsageState, UsageSpend } from "./lib/usageSpend";
 
 const BUSINESS_METRIC_TO_SECTION: Record<string, string> = {
   functionCalls: "functionCalls",
@@ -54,12 +67,17 @@ type BusinessMetricKey =
 
 type Section = {
   metric: BusinessMetricKey;
-  // TODO: Remove string fallback once teamMaxSearchQueries is in generated types
-  entitlement?: keyof TeamEntitlementsResponse | string;
+  entitlement?: {
+    [K in keyof TeamEntitlementsResponse]: TeamEntitlementsResponse[K] extends number
+      ? K
+      : never;
+  }[keyof TeamEntitlementsResponse];
   format: (value: number) => string;
   detail: string;
   title: string;
   suffix?: string;
+  // The plan caps usage at the included limit instead of billing beyond it, so
+  // the metric has no spend.
   noOnDemand?: boolean;
   // The plan includes none of this metric; the whole amount bills on demand.
   allOnDemand?: boolean;
@@ -233,7 +251,12 @@ export function BusinessPlanSummary({
   isBusinessPlan = true,
   entitlements,
   hasSubscription = false,
+  subscriptionLoading = false,
   showEntitlements = false,
+  isCurrentBillingPeriod = true,
+  pricing = { status: "unavailable", reason: "unsupported-period" },
+  isFiltered = false,
+  pricedUsage = { status: "loading" },
 }: {
   summary?: UsageSummaryRow[];
   error?: any;
@@ -242,10 +265,98 @@ export function BusinessPlanSummary({
   isBusinessPlan?: boolean;
   entitlements?: TeamEntitlementsResponse;
   hasSubscription?: boolean;
+  subscriptionLoading?: boolean;
   showEntitlements?: boolean;
+  isCurrentBillingPeriod?: boolean;
+  pricing?: UsagePricing;
+  // Usage is filtered to a project or component.
+  isFiltered?: boolean;
+  pricedUsage?: PricedUsageState;
 }) {
   const router = useRouter();
+  const { dashboardShowCashUsage } = useLaunchDarkly();
+  const showSpend =
+    dashboardShowCashUsage &&
+    (pricing.status === "ready" || pricing.status === "loading");
   const activeSections = isBusinessPlan ? businessSections : selfServeSections;
+  // Only show the audit log egress section for teams that can configure custom audit logs.
+  const visibleSections = activeSections.filter(
+    (section) =>
+      section.metric !== "auditLogBandwidth" ||
+      entitlements?.customAuditLogsInLogStreamsConfigEnabled === true,
+  );
+  const sharesTeamSpend =
+    isFiltered &&
+    pricing.status === "ready" &&
+    hasIncludedUsage(pricing.periods.map(({ period }) => period));
+  // Unfiltered current-period included usage comes from the plan's limits.
+  // Filtered usage can't be compared with team-wide limits, so in every period
+  // its included amounts are its share of the team's ledger, which needs the
+  // per-period team usage that comes with priced usage.
+  const ledgerPeriods = isFiltered
+    ? pricedUsage.status === "ready" &&
+      pricedUsage.summaries.every(({ teamSummary }) => teamSummary)
+      ? pricedUsage.summaries
+      : undefined
+    : !isCurrentBillingPeriod && pricing.status === "ready"
+      ? pricing.periods
+      : undefined;
+  const ledgerIncludedUsage = ledgerPeriods
+    ? Object.fromEntries(
+        visibleSections.map((section) => [
+          section.metric,
+          section.metric === "deploymentCount"
+            ? undefined
+            : getIncludedUsage(ledgerPeriods, section.metric),
+        ]),
+      )
+    : undefined;
+  const ledgerHasIncludedUsage =
+    ledgerIncludedUsage !== undefined &&
+    Object.values(ledgerIncludedUsage).some(
+      (usage) => usage !== undefined && usage > 0,
+    );
+  // Without recorded consumption, as when a full discount means the allowance
+  // is never drawn down, the ledger can't say what was included. In the current
+  // period, filtered usage also follows the team view, which shows the Included
+  // column only for subscriptions.
+  const showLedgerIncluded =
+    ledgerHasIncludedUsage && (!isCurrentBillingPeriod || hasSubscription);
+  const showIncluded = (hasSubscription && !isFiltered) || showLedgerIncluded;
+  const showIncludedLimits = showEntitlements && isCurrentBillingPeriod;
+
+  // Filtered included usage comes from per-period usage, so the Included
+  // column waits for it too.
+  const includedUsagePending =
+    isFiltered &&
+    pricing.status === "ready" &&
+    pricedUsage.status === "loading";
+  const layoutDecided =
+    !subscriptionLoading &&
+    (!dashboardShowCashUsage ||
+      (pricing.status !== "loading" && !includedUsagePending));
+  const [settledColumns, setSettledColumns] = useState<{
+    showIncluded: boolean;
+    showSpend: boolean;
+  }>();
+  if (
+    layoutDecided &&
+    (settledColumns?.showIncluded !== showIncluded ||
+      settledColumns?.showSpend !== showSpend)
+  ) {
+    setSettledColumns({ showIncluded, showSpend });
+  }
+  const columns = (!layoutDecided && settledColumns) || {
+    showIncluded,
+    showSpend,
+  };
+  const gridColumns = columns.showIncluded
+    ? columns.showSpend
+      ? "grid-cols-[4fr_3fr_2fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_2fr_auto]"
+      : "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
+    : columns.showSpend
+      ? "grid-cols-[5fr_4fr_2fr_auto]"
+      : "grid-cols-[5fr_4fr_auto]";
 
   // Deployment counts live on the summary rows but are team-wide (the gauge has
   // no project/component dimension we filter on), so sum across every row.
@@ -288,13 +399,6 @@ export function BusinessPlanSummary({
   // Aggregate across deployment classes and regions
   const aggregated = summary ? aggregateRows(summary) : undefined;
 
-  // Only show the audit log egress section for teams that can configure custom audit logs.
-  const visibleSections = activeSections.filter(
-    (section) =>
-      section.metric !== "auditLogBandwidth" ||
-      entitlements?.customAuditLogsInLogStreamsConfigEnabled === true,
-  );
-
   // Apply the team-wide deployment count to the aggregate.
   if (aggregated && deploymentCount !== undefined) {
     aggregated.deploymentCount = deploymentCount;
@@ -312,22 +416,21 @@ export function BusinessPlanSummary({
       className="animate-fadeInFromLoading overflow-hidden"
       padding={false}
     >
-      <div className="flex flex-col gap-1 overflow-x-clip">
-        <div
-          className={cn(
-            "grid items-center gap-2 rounded-t border-b px-4 py-2 text-sm text-content-secondary",
-            hasSubscription
-              ? "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
-              : "grid-cols-[5fr_4fr_auto]",
-          )}
-        >
+      {/* Rows are subgrids of one shared grid, so a wide value in any row
+          widens its column for every row instead of shifting just its own. */}
+      <div className={cn("grid gap-x-2 gap-y-1 overflow-x-clip", gridColumns)}>
+        <div className="col-span-full grid grid-cols-subgrid items-center rounded-t border-b px-4 py-2 text-sm text-content-secondary">
           <div>Resource</div>
           <div>
-            {hasSubscription ? (
+            {columns.showIncluded ? (
               <div className="flex items-center gap-1">
                 Included{" "}
                 <Tooltip
-                  tip="The amount of usage used within the included limits of your plan."
+                  tip={
+                    isFiltered
+                      ? "This selection's share of the usage within the included limits of your plan. Included usage is shared across the team, so it is split in proportion to usage in each deployment class and region."
+                      : "The amount of usage used within the included limits of your plan."
+                  }
                   side="right"
                   className="hidden sm:block"
                 >
@@ -338,13 +441,28 @@ export function BusinessPlanSummary({
               "Usage"
             )}
           </div>
-          {hasSubscription && (
+          {columns.showIncluded && (
             <div className="flex items-center gap-1">
               On-demand{" "}
               <Tooltip
                 tip="Usage beyond your plan's included limits."
                 side="right"
                 className="hidden sm:block"
+              >
+                <QuestionMarkCircledIcon />
+              </Tooltip>
+            </div>
+          )}
+          {columns.showSpend && (
+            <div className="flex items-center gap-1">
+              Spend
+              <Tooltip
+                tip={
+                  sharesTeamSpend
+                    ? "Included usage is shared across the team, so filtered usage is credited with a share of it in proportion to its usage in each deployment class and region. Storage metrics show estimated monthly prices based on the most recent usage in the selected period."
+                    : "Usage is rounded up to the nearest whole unit before calculating spend. Storage and deployment metrics show estimated monthly prices based on the most recent usage in the selected period."
+                }
+                side="right"
               >
                 <QuestionMarkCircledIcon />
               </Tooltip>
@@ -359,7 +477,7 @@ export function BusinessPlanSummary({
         </div>
         {error ? (
           <PlanSummaryError />
-        ) : !aggregated ? (
+        ) : !aggregated || !layoutDecided ? (
           <PlanSummaryLoading />
         ) : (
           visibleSections.map((section, index) => {
@@ -380,49 +498,100 @@ export function BusinessPlanSummary({
               !aiCostFailed;
             const entitlement =
               section.entitlement && entitlements
-                ? ((entitlements as Record<string, unknown>)[
-                    section.entitlement
-                  ] as number | undefined)
+                ? entitlements[section.entitlement]
                 : undefined;
 
+            const recordedIncluded = ledgerIncludedUsage?.[section.metric];
+            // Orb rounds some metrics up to whole units before drawing on the
+            // allowance, so the ledger can record more than was used.
+            const ledgerIncluded =
+              recordedIncluded === undefined
+                ? undefined
+                : Math.min(recordedIncluded, metric);
             const includedAmount = section.allOnDemand
               ? 0
-              : entitlement !== undefined
-                ? Math.min(metric, entitlement)
-                : undefined;
+              : showLedgerIncluded
+                ? ledgerIncluded
+                : entitlement !== undefined
+                  ? Math.min(metric, entitlement)
+                  : undefined;
             const onDemandAmount =
               metric !== undefined && includedAmount !== undefined
-                ? metric - includedAmount
+                ? Math.max(0, metric - includedAmount)
                 : undefined;
 
             const displayedUsage =
-              hasSubscription &&
-              !section.noOnDemand &&
+              showIncluded &&
+              (showLedgerIncluded || !section.noOnDemand) &&
               includedAmount !== undefined
                 ? includedAmount
                 : metric;
 
+            // Deployment counts are only recorded team-wide, so they have no
+            // value for filtered usage.
+            const unavailableWhenFiltered =
+              isFiltered && section.metric === "deploymentCount";
+            const isGauge = isGaugeMetric(section.metric);
+            // Unfiltered gauges price the whole-range summary at the latest
+            // prices. Filtered gauges price the latest period's usage instead,
+            // which comes with the team-wide usage their share is taken of.
+            const usesPricedUsage =
+              section.metric !== "aiGatewayCost" && (!isGauge || isFiltered);
+            const pricedSummaryFailed =
+              usesPricedUsage && pricedUsage.status === "error";
+            const pricedSummaryPending =
+              usesPricedUsage && pricedUsage.status === "loading";
+            const latestPricedUsage =
+              pricedUsage.status === "ready"
+                ? pricedUsage.summaries.at(-1)
+                : undefined;
+
+            const spend =
+              showSpend &&
+              pricing.status === "ready" &&
+              !unavailableWhenFiltered
+                ? section.metric === "aiGatewayCost"
+                  ? aiCostFailed || aiGatewayCost === undefined
+                    ? undefined
+                    : {
+                        amount: aiGatewayCost,
+                        includedAmount: 0,
+                        missingDimensions: [],
+                      }
+                  : isGauge && !isFiltered
+                    ? getUsageSpend(
+                        summary,
+                        section.metric,
+                        pricing.periods.at(-1)?.period,
+                      )
+                    : isGauge
+                      ? getUsageSpend(
+                          latestPricedUsage?.summary,
+                          section.metric,
+                          latestPricedUsage?.period,
+                          latestPricedUsage?.teamSummary,
+                        )
+                      : pricedUsage.status === "ready"
+                        ? getMultiPeriodUsageSpend(
+                            pricedUsage.summaries,
+                            section.metric,
+                          )
+                        : undefined
+                : undefined;
+
             return (
-              <Button
+              <div
                 key={index}
-                variant="unstyled"
-                onClick={() => {
-                  void router.push(linkHref, undefined, { shallow: true });
-                }}
-                className={cn(
-                  "group grid min-h-10 items-center gap-2 rounded-sm px-4 py-2 text-left transition-colors hover:bg-background-primary focus-visible:bg-background-primary focus-visible:outline-2 focus-visible:outline-border-selected",
-                  hasSubscription
-                    ? "grid-cols-[4fr_3fr_2fr_auto] sm:grid-cols-[4fr_3fr_3fr_auto]"
-                    : "grid-cols-[5fr_4fr_auto]",
-                )}
+                className="group relative col-span-full grid min-h-10 grid-cols-subgrid items-center rounded-sm px-4 py-2 text-left transition-colors focus-within:bg-background-primary hover:bg-background-primary"
               >
                 <div className="flex items-center gap-2">
-                  {showEntitlements &&
+                  {showIncludedLimits &&
                     (entitlement !== undefined ? (
                       <Tooltip
+                        aria-label={`${section.title} included usage`}
                         side="bottom"
                         tip={`Your team has used ${(100 * (displayedUsage / entitlement)).toFixed(2)}% of the included amount of ${section.title}.`}
-                        className="flex animate-fadeInFromLoading items-center"
+                        className="relative z-10 flex animate-fadeInFromLoading items-center rounded-sm focus-visible:ring-2 focus-visible:ring-border-selected"
                       >
                         <Donut current={displayedUsage} max={entitlement} />
                       </Tooltip>
@@ -431,32 +600,44 @@ export function BusinessPlanSummary({
                       // the gauged ones.
                       <div className="hidden size-6 sm:block" />
                     ))}
-                  <SectionLabel detail={section.detail}>
-                    {section.title}
-                  </SectionLabel>
+                  <SectionLabel title={section.title} detail={section.detail} />
                 </div>
                 <div className="animate-fadeInFromLoading">
-                  {hasSubscription && section.allOnDemand ? (
-                    <span className="text-content-secondary">–</span>
+                  {unavailableWhenFiltered ||
+                  (showIncluded &&
+                    (section.allOnDemand ||
+                      (showLedgerIncluded &&
+                        includedAmount === undefined &&
+                        section.metric !== "deploymentCount"))) ? (
+                    <EmptyValue />
                   ) : aiCostFailed ? (
                     <span className="text-content-secondary">Unavailable</span>
                   ) : aiCostPending ? (
                     <Loading fullHeight={false} className="h-4 w-16" />
+                  ) : showIncluded &&
+                    displayedUsage === 0 &&
+                    !(showIncludedLimits && entitlement !== undefined) ? (
+                    // "0 / limit" reads fine next to a cap, but a bare zero
+                    // looks like missing data.
+                    <EmptyValue />
                   ) : (
                     <span>
                       {section.format(displayedUsage)}
                       {section.suffix &&
-                        (!showEntitlements ? ` ${section.suffix}` : "")}
+                        (!showIncludedLimits ? ` ${section.suffix}` : "")}
                     </span>
                   )}
-                  {showEntitlements && entitlement !== undefined && (
-                    <span>
-                      {" "}
-                      / {section.format(entitlement)}
-                      {section.suffix ? ` ${section.suffix}` : ""}
-                    </span>
-                  )}
+                  {showIncludedLimits &&
+                    entitlement !== undefined &&
+                    !unavailableWhenFiltered && (
+                      <span>
+                        {" "}
+                        / {section.format(entitlement)}
+                        {section.suffix ? ` ${section.suffix}` : ""}
+                      </span>
+                    )}
                   {section.metric === "deploymentCount" &&
+                    !unavailableWhenFiltered &&
                     isBusinessPlan &&
                     pausedDeploymentCount !== undefined &&
                     idleDeploymentCount !== undefined && (
@@ -476,9 +657,11 @@ export function BusinessPlanSummary({
                       </span>
                     )}
                 </div>
-                {hasSubscription && (
+                {showIncluded && (
                   <div className="animate-fadeInFromLoading">
-                    {section.allOnDemand ? (
+                    {section.metric === "deploymentCount" ? (
+                      <EmptyValue />
+                    ) : section.allOnDemand ? (
                       aiCostFailed ? (
                         <span className="text-content-secondary">
                           Unavailable
@@ -490,21 +673,52 @@ export function BusinessPlanSummary({
                         // increment over an included amount.
                         `${section.format(metric)}${section.suffix ? ` ${section.suffix}` : ""}`
                       )
+                    ) : section.noOnDemand ||
+                      onDemandAmount === undefined ? null : onDemandAmount ===
+                      0 ? (
+                      <EmptyValue />
                     ) : (
-                      !section.noOnDemand &&
-                      onDemandAmount !== undefined &&
-                      onDemandAmount > 0 &&
                       `+${section.format(onDemandAmount)}${section.suffix ? ` ${section.suffix}` : ""}`
                     )}
                   </div>
                 )}
-                <span className="flex items-center gap-1 text-xs text-content-secondary">
-                  <span className="hidden whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 sm:inline">
+                {showSpend && (
+                  <div className="animate-fadeInFromLoading tabular-nums">
+                    {unavailableWhenFiltered || section.noOnDemand ? (
+                      <EmptyValue />
+                    ) : aiCostFailed || pricedSummaryFailed ? (
+                      <span className="text-content-secondary">
+                        Unavailable
+                      </span>
+                    ) : pricing.status === "loading" ||
+                      aiCostPending ||
+                      pricedSummaryPending ? (
+                      <Loading fullHeight={false} className="h-4 w-16" />
+                    ) : (
+                      <SpendValue
+                        spend={spend}
+                        sectionTitle={section.title}
+                        estimatedMonthly={isGauge}
+                        reportUnavailable={
+                          pricing.status === "ready" &&
+                          section.metric !== "aiGatewayCost"
+                        }
+                      />
+                    )}
+                  </div>
+                )}
+                <Link
+                  href={linkHref}
+                  shallow
+                  aria-label={`View ${section.title} breakdown by day`}
+                  className="flex items-center gap-1 text-xs text-content-secondary group-hover:text-content-primary after:absolute after:inset-0 after:rounded-sm focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-border-selected"
+                >
+                  <span className="hidden whitespace-nowrap opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 sm:inline">
                     View breakdown by day
                   </span>
                   <ChevronRightIcon className="size-4" />
-                </span>
-              </Button>
+                </Link>
+              </div>
             );
           })
         )}
@@ -513,9 +727,57 @@ export function BusinessPlanSummary({
   );
 }
 
+// Fills cells with no value to show (zero, not applicable, or missing
+// billing information) so the table doesn't read as missing data.
+function EmptyValue() {
+  return <span className="text-content-secondary">—</span>;
+}
+
+function SpendValue({
+  spend,
+  sectionTitle,
+  reportUnavailable,
+  estimatedMonthly,
+}: {
+  spend: UsageSpend | undefined;
+  sectionTitle: string;
+  reportUnavailable: boolean;
+  estimatedMonthly: boolean;
+}) {
+  const missingDimensions = spend?.missingDimensions.join(", ");
+  const missingBillingInformation =
+    spend === undefined
+      ? reportUnavailable
+      : spend.missingDimensions.length > 0;
+
+  useEffect(() => {
+    if (missingBillingInformation) {
+      captureException(
+        new Error(
+          `Spend unavailable: missing billing information for ${sectionTitle}`,
+        ),
+        { extra: { sectionTitle, missingDimensions } },
+      );
+    }
+  }, [missingBillingInformation, sectionTitle, missingDimensions]);
+
+  if (spend === undefined || spend.missingDimensions.length > 0) {
+    return <EmptyValue />;
+  }
+
+  return (
+    <span className="whitespace-nowrap">
+      {formatSpend(Math.max(0, spend.amount - spend.includedAmount))}
+      {estimatedMonthly && (
+        <span className="ml-1 text-content-secondary">/ month</span>
+      )}
+    </span>
+  );
+}
+
 function PlanSummaryError() {
   return (
-    <div className="flex h-56 flex-col items-center justify-center p-4 text-center">
+    <div className="col-span-full flex h-56 flex-col items-center justify-center p-4 text-center">
       <CrossCircledIcon className="size-6 text-content-error" />
       <h5 className="mt-2">Error fetching Usage summary data</h5>
       <p className="mt-1 text-sm text-content-secondary">
@@ -528,7 +790,7 @@ function PlanSummaryError() {
 
 function PlanSummaryLoading() {
   return (
-    <div className="flex h-100 items-center justify-center p-4">
+    <div className="col-span-full flex h-100 items-center justify-center p-4">
       <div className="flex items-center justify-center">
         <Spinner className="size-12" />
       </div>
@@ -538,16 +800,21 @@ function PlanSummaryLoading() {
 
 function SectionLabel({
   detail,
-  children,
+  title,
 }: {
   detail?: ReactNode;
-  children: ReactNode;
+  title: string;
 }) {
   return (
     <p className="flex animate-fadeInFromLoading items-center text-sm">
-      {children}
+      {title}
       {detail !== null && detail !== undefined ? (
-        <Tooltip tip={detail} side="right" className="hidden sm:block">
+        <Tooltip
+          aria-label={`${title} details`}
+          tip={detail}
+          side="right"
+          className="relative z-10 hidden rounded-sm focus-visible:ring-2 focus-visible:ring-border-selected sm:block"
+        >
           <QuestionMarkCircledIcon className="ml-1" />
         </Tooltip>
       ) : null}

@@ -31,6 +31,7 @@
 /hosting                            /production/hosting
 /quick-start                        /tutorial/overview
 /quickstart                         /quickstart/overview
+/quickstart/remix                   /quickstart/react
 /text_search                        /text-search
 /text-search                        /search/text-search
 /tutorial/1_reactor                 /tutorial/overview

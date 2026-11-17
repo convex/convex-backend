@@ -371,7 +371,7 @@ impl Snapshot {
             .iter()
             .filter(|(table_id, _)| {
                 matches!(
-                    self.table_registry.tablet_states().get(table_id),
+                    self.table_registry.tablet_states().get(*table_id),
                     Some(TableState::Active)
                 )
             })

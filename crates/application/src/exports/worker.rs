@@ -143,7 +143,7 @@ impl<RT: Runtime> ExportWorker<RT> {
                     .await?
                     .parse()?;
                 self.database
-                    .commit_with_write_source(tx, "export_worker_export_requested")
+                    .commit(tx, "export_worker_export_requested")
                     .await?;
                 self.export(in_progress_export_doc).await?;
                 return Ok(None);

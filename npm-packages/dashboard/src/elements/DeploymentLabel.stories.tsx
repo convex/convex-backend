@@ -26,6 +26,7 @@ const mockProject: ProjectResponse = {
   teamId: 1,
   teamSlug: "test-team",
   createTime: Date.now(),
+  tags: [],
 };
 
 function createCloudDeployment(

@@ -21,7 +21,7 @@ async function processFiles(dirPath, repo) {
       let content = fs.readFileSync(filePath, "utf8");
 
       // Replace patterns like ](../ with ](https://github.com/${repo}/blob/main/
-      // e.g. for agent: [somefile](../foo/bar.ts) -> [somefile](https://github.com/get-convex/agent/blob/main/foo/bar.ts)
+      // e.g. for agent: [somefile](../foo/bar.ts) -> [somefile](https://github.com/convex/agent/blob/main/foo/bar.ts)
       content = content.replace(
         /\]\(\.\.\//g,
         `](https://github.com/${repo}/blob/main/`,
@@ -35,7 +35,7 @@ async function processFiles(dirPath, repo) {
 
 const repos = [
   {
-    repo: "get-convex/agent",
+    repo: "convex/agent",
     fromDir: "docs",
     toDir: "agents",
   },

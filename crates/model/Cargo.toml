@@ -13,7 +13,6 @@ testing = [
     "common/testing",
     "database/testing",
     "errors/testing",
-    "fivetran_destination/testing",
     "keybroker/testing",
     "metrics/testing",
     "migrations_model/testing",
@@ -44,7 +43,6 @@ database = { workspace = true }
 derive_more = { workspace = true }
 errors = { workspace = true }
 fastrace = { workspace = true }
-fivetran_destination = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
 humansize = { workspace = true }
@@ -86,7 +84,6 @@ common = { workspace = true, features = ["testing"] }
 convex_macro = { workspace = true, features = ["testing"] }
 database = { workspace = true, features = ["testing"] }
 errors = { workspace = true, features = ["testing"] }
-fivetran_destination = { workspace = true, features = ["testing"] }
 keybroker = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }
 migrations_model = { workspace = true, features = ["testing"] }

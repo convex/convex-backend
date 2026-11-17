@@ -1,21 +1,11 @@
 use std::{
     cell::RefCell,
     collections::BTreeMap,
-    fs::{
-        self,
-        File,
-    },
-    io::{
-        BufRead,
-        BufReader,
-    },
-    path::PathBuf,
     rc::Rc,
     time::Duration,
 };
 
 use performance_stats::performance::print_histogram;
-use serde_json::Value;
 
 use crate::event_receiver::{
     Event,
@@ -24,16 +14,10 @@ use crate::event_receiver::{
     MetricType,
 };
 
-/// Corresponds to the number of logs emitted in log.ts
-const LOG_LINES_PER_LOG_ACTION: usize = 256;
-/// Corresponds to the length of a log line emitted in log.ts
-const LOG_LINE_LENGTH: usize = 512;
-
 #[derive(Clone)]
 pub struct Stats {
     duration: Duration,
     inner: Rc<RefCell<StatsInner>>,
-    local_log_sink: Option<PathBuf>,
 }
 
 struct StatsInner {
@@ -43,7 +27,7 @@ struct StatsInner {
 }
 
 impl Stats {
-    pub fn new(duration: Duration, local_log_sink: Option<PathBuf>) -> Self {
+    pub fn new(duration: Duration) -> Self {
         Self {
             duration,
             inner: Rc::new(RefCell::new(StatsInner {
@@ -51,7 +35,6 @@ impl Stats {
                 latencies: BTreeMap::new(),
                 errors: BTreeMap::new(),
             })),
-            local_log_sink,
         }
     }
 
@@ -182,60 +165,6 @@ impl Stats {
         println!();
         println!();
 
-        let log_event_metadata = EventMetadata {
-            name: "action".to_string(),
-            scenario: "RunFunction".to_string(),
-            path: Some("log".to_string()),
-        };
-        if let Some(log_action_latencies) = inner.latencies.get(&log_event_metadata)
-            && let Some(local_log_sink) = self.local_log_sink.as_ref()
-        {
-            let log_action_count = log_action_latencies.len();
-            let log_sink_metadata = fs::metadata(local_log_sink).unwrap_or_else(|_| {
-                panic!(
-                    "Failed to get metadata from local log sink at {}",
-                    local_log_sink.to_string_lossy()
-                )
-            });
-            // Count log lines in `_console` and `_execution_record` topic
-            let expected_log_lines = log_action_count * LOG_LINES_PER_LOG_ACTION + log_action_count;
-            let file = File::open(local_log_sink).unwrap();
-            let buf_reader = BufReader::new(file);
-            let mut log_lines = 0;
-
-            for line in buf_reader.lines() {
-                let line = line.unwrap();
-                let json: Value = serde_json::from_str(&line).unwrap();
-                let object = json.as_object().unwrap();
-                let topic = object.get("topic").unwrap();
-                if topic != "function_execution" && topic != "console" {
-                    continue;
-                }
-                let path = object
-                    .get("function")
-                    .unwrap()
-                    .get("path")
-                    .unwrap()
-                    .as_str()
-                    .unwrap();
-                if !path.contains("log") {
-                    continue;
-                }
-                log_lines += 1;
-            }
-            println!("Logs");
-            println!("======");
-            if log_sink_metadata.len() < log_lines as u64 * LOG_LINE_LENGTH as u64 {
-                println!("WARNING: Log sink size is less than expected!");
-            }
-            println!("Expected: {expected_log_lines} lines");
-            println!("Received: {log_lines} lines");
-            println!(
-                "Drop rate: {:.2}%",
-                100.0 * (1.0 - (log_lines as f64) / (expected_log_lines as f64))
-            );
-        }
-        println!();
         println!("Stats report complete!");
     }
 }

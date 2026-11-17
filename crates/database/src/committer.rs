@@ -26,6 +26,7 @@ use common::{
         ComponentPath,
     },
     document::{
+        CreationTime,
         DocumentUpdateWithPrevTs,
         ParseDocument,
         ParsedDocument,
@@ -50,6 +51,7 @@ use common::{
         TRANSACTION_WARN_READ_SET_INTERVALS,
     },
     persistence::{
+        index_scan_attribution::IndexScanCaller,
         DocumentLogEntry,
         Persistence,
         PersistenceGlobalKey,
@@ -104,12 +106,15 @@ use parking_lot::Mutex;
 use prometheus::VMHistogram;
 use rand::Rng;
 use search::TextIndexWriteSize;
-use tokio::sync::{
-    mpsc::{
-        self,
-        error::TrySendError,
+use tokio::{
+    sync::{
+        mpsc::{
+            self,
+            error::TrySendError,
+        },
+        oneshot,
     },
-    oneshot,
+    time::Instant,
 };
 use tokio_util::task::AbortOnDropHandle;
 use usage_tracking::FunctionUsageTracker;
@@ -206,7 +211,7 @@ pub const AFTER_COMMIT_PRE_VALIDATE: &str = "after_commit_pre_validate";
 /// A commit that has been taken off the queue but whose read set has not been
 /// conflict-checked yet.
 struct CommitRequest {
-    queue_timer: Timer<VMHistogram>,
+    submitted_at: Instant,
     transaction: FinalTransaction,
     result: oneshot::Sender<anyhow::Result<Timestamp>>,
     write_source: WriteSource,
@@ -520,20 +525,29 @@ impl<RT: Runtime> Committer<RT> {
                                 (request, validated_through)
                             },
                             PreValidation::Failed { request, error } => {
-                                let CommitRequest { transaction, result, .. } = request;
+                                let CommitRequest {
+                                    submitted_at,
+                                    transaction,
+                                    result,
+                                    ..
+                                } = request;
                                 // A commit failed off-thread never reaches
                                 // `start_commit`, which is where a commit records these.
                                 // `commit_timer` is labeled `status=error` unless
                                 // `finish()` is called, so dropping it records the
                                 // failure.
                                 let _commit_timer = metrics::commit_timer();
+                                metrics::log_commit_dequeued(submitted_at.elapsed());
                                 metrics::log_write_tx(&transaction);
+                                // Release the read set before replying. See
+                                // `CommitterClient::_commit`.
+                                drop(transaction);
                                 let _ = result.send(Err(error));
                                 continue;
                             },
                         };
                         let CommitRequest {
-                            queue_timer,
+                            submitted_at,
                             transaction,
                             result,
                             write_source,
@@ -543,6 +557,7 @@ impl<RT: Runtime> Committer<RT> {
                             span_commit_id = Some(commit_id);
                             get_sampled_span(&self.deployment_name, "commit", &mut self.runtime.rng())
                         });
+                        let time_in_queue = submitted_at.elapsed();
                         let start_commit_span = make_committer_span(
                             "handle_commit_message",
                             Some(committer_span_ref),
@@ -550,11 +565,11 @@ impl<RT: Runtime> Committer<RT> {
                         ).with_property(|| {
                             (
                                 "time_in_queue_ms",
-                                format!("{}", queue_timer.elapsed().as_secs_f64() * 1000.0),
+                                format!("{}", time_in_queue.as_secs_f64() * 1000.0),
                             )
                         });
                         let _guard = start_commit_span.set_local_parent();
-                        drop(queue_timer);
+                        metrics::log_commit_dequeued(time_in_queue);
                         if let Some(persistence_write_future) = self.start_commit(
                             transaction,
                             result,
@@ -563,6 +578,7 @@ impl<RT: Runtime> Committer<RT> {
                             commit_id,
                             committer_span_ref,
                             validated_through,
+                            submitted_at,
                         ) {
                             self.persistence_writes.push_back(persistence_write_future);
                             commit_id += 1;
@@ -589,23 +605,19 @@ impl<RT: Runtime> Committer<RT> {
                             return Ok(());
                         },
                         Some(CommitterMessage::Commit {
-                            queue_timer,
+                            submitted_at,
                             transaction,
                             result,
                             write_source,
                             parent_trace,
                         }) => {
-                            if transaction.is_readonly() {
-                                let _ = result.send(Ok(*transaction.begin_timestamp));
-                            } else {
-                                awaiting_pre_validation.push_back(CommitRequest {
-                                    queue_timer,
-                                    transaction,
-                                    result,
-                                    write_source,
-                                    parent_trace,
-                                });
-                            }
+                            awaiting_pre_validation.push_back(CommitRequest {
+                                submitted_at,
+                                transaction,
+                                result,
+                                write_source,
+                                parent_trace,
+                            });
                         },
                         Some(CommitterMessage::FinishTextAndVectorBootstrap {
                             bootstrapped_indexes,
@@ -746,6 +758,7 @@ impl<RT: Runtime> Committer<RT> {
             self.retention_validator.clone(),
             latest_ts,
             table_summary::BootstrapKind::FromCheckpoint,
+            IndexScanCaller::Bootstrap,
         )
         .await;
         let (table_summary_snapshot, _) = match bootstrap_result {
@@ -1011,6 +1024,13 @@ impl<RT: Runtime> Committer<RT> {
                 vector_index_write_size,
                 text_index_write_size,
                 prev_ts: document_update.old_document.as_ref().map(|&(_, ts)| ts),
+                deleted_creation_time: match (
+                    &document_update.old_document,
+                    &document_update.new_document,
+                ) {
+                    (Some((old_document, _)), None) => Some(old_document.creation_time()),
+                    _ => None,
+                },
             });
         }
         timer.finish();
@@ -1057,6 +1077,7 @@ impl<RT: Runtime> Committer<RT> {
         component_registry: ComponentRegistry,
         virtual_system_mapping: VirtualSystemMapping,
         write_source: WriteSource,
+        submitted_at: Instant,
     ) -> anyhow::Result<(WriteVolume, IndexKeyWrites)> {
         Self::track_commit(
             usage_tracking,
@@ -1075,9 +1096,16 @@ impl<RT: Runtime> Committer<RT> {
         );
 
         let mut write_bytes: u64 = 0;
+        let mut document_delete_metrics = metrics::CommitDocumentDeleteMetrics::default();
         let document_writes = document_writes
             .into_iter()
             .map(|write| {
+                if let Some(created) = write.deleted_creation_time {
+                    let is_system_table = table_mapping
+                        .tablet_name(write.id.table())
+                        .is_ok_and(|name| name.is_system());
+                    document_delete_metrics.record(created, write.commit_ts, is_system_table);
+                }
                 let entry = DocumentLogEntry {
                     ts: write.commit_ts,
                     id: write.id,
@@ -1088,10 +1116,12 @@ impl<RT: Runtime> Committer<RT> {
                 entry
             })
             .collect_vec();
+        let mut index_write_metrics = metrics::CommitIndexWriteMetrics::default();
         let index_writes = index_writes
             .into_iter()
             .map(|update| {
                 let entry = PersistenceIndexEntry::from_index_update(commit_ts, &update);
+                index_write_metrics.record(&entry, update.is_system_index);
                 write_bytes += entry.size();
                 entry
             })
@@ -1105,6 +1135,9 @@ impl<RT: Runtime> Committer<RT> {
             .write(document_writes, index_writes, write_bytes)
             .await
             .with_context(|| format!("Commit ({write_source:?}) failed to write to persistence"))?;
+        metrics::log_commit_persisted(submitted_at.elapsed());
+        index_write_metrics.log();
+        document_delete_metrics.log();
         Ok((write_volume, index_key_writes))
     }
 
@@ -1197,6 +1230,7 @@ impl<RT: Runtime> Committer<RT> {
         commit_id: usize,
         root_span: &Span,
         validated_through: Timestamp,
+        submitted_at: Instant,
     ) -> Option<BoxFuture<'static, anyhow::Result<PersistenceWrite>>> {
         let commit_timer = metrics::commit_timer();
         metrics::log_write_tx(&transaction);
@@ -1258,6 +1292,7 @@ impl<RT: Runtime> Committer<RT> {
                         component_registry,
                         virtual_system_mapping,
                         write_source,
+                        submitted_at,
                     )
                     .in_span(Span::enter_with_local_parent(name)),
                 ));
@@ -1472,6 +1507,8 @@ struct ValidatedDocumentWrite {
     vector_index_write_size: VectorIndexWriteSize,
     text_index_write_size: TextIndexWriteSize,
     prev_ts: Option<Timestamp>,
+    /// The deleted document's `_creationTime`, when this write deletes one.
+    deleted_creation_time: Option<CreationTime>,
 }
 
 #[derive(Clone)]
@@ -1556,16 +1593,27 @@ impl CommitterClient {
         // Finish reading everything from persistence.
         let transaction = transaction.finalize()?;
 
+        if transaction.is_readonly() {
+            // If there is nothing to write, skip the roundtrip through the
+            // committer. The transaction is serialized at the _begin_ timestamp
+            // rather than a freshly allocated one.
+            return Ok(*transaction.begin_timestamp);
+        }
+
         // Note that we do a best effort validation for memory index sizes. We
         // use the latest snapshot instead of the transaction base snapshot. This
         // is both more accurate and also avoids pedant hitting transient errors.
         let latest_snapshot = self.snapshot_reader.lock().latest_snapshot();
         transaction.validate_memory_index_sizes(&latest_snapshot, &self.search_flusher_wake)?;
 
-        let queue_timer = metrics::commit_queue_timer();
+        // Freeing a large read set is expensive, so it should happen on this
+        // task rather than the single committer thread. The committer releases
+        // its reference before replying, so holding this one until the reply
+        // makes this task free the read set.
+        let reads = transaction.reads.clone();
         let (tx, rx) = oneshot::channel();
         let message = CommitterMessage::Commit {
-            queue_timer,
+            submitted_at: rt.monotonic_now(),
             transaction,
             result: tx,
             write_source,
@@ -1586,6 +1634,7 @@ impl CommitterClient {
         let Ok(result) = rx.await else {
             anyhow::bail!(metrics::shutdown_error());
         };
+        drop(reads);
         if let Err(e) = result {
             return Err(recapture_stacktrace(e).await);
         }
@@ -1658,7 +1707,7 @@ impl CommitterClient {
 
 enum CommitterMessage {
     Commit {
-        queue_timer: Timer<VMHistogram>,
+        submitted_at: Instant,
         transaction: FinalTransaction,
         result: oneshot::Sender<anyhow::Result<Timestamp>>,
         write_source: WriteSource,

@@ -1,12 +1,12 @@
 {
   "name": "@convex-dev/eslint-plugin",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "license": "Apache-2.0",
   "type": "module",
   "homepage": "https://docs.convex.dev/eslint",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/@convex-dev/eslint-plugin"
   },
   "scripts": {
@@ -29,7 +29,7 @@
   "devDependencies": {
     "@eslint/js": "~9.39.0",
     "@types/eslint": "~9.6.1",
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@typescript-eslint/rule-tester": "~8.58.0",
     "convex": "workspace:*",
     "eslint": "^9.37.0",
@@ -49,6 +49,7 @@
     },
     "exclude": [
       "src/**/*.test.ts",
+      "src/test/helpers.ts",
       "src/test/fixtures/**"
     ],
     "selfLink": false

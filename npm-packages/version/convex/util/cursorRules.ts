@@ -7,7 +7,7 @@ import {
 const CURSOR_RULES_FILE_NAME = "convex_rules.mdc";
 
 export async function getLatestCursorRules() {
-  const repoPath = "get-convex/convex-evals";
+  const repoPath = "convex/convex-evals";
 
   // Fetch all releases from GitHub
   const releases = await fetchAllGitHubReleases(repoPath);

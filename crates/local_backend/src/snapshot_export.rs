@@ -135,23 +135,24 @@ pub struct GetZipExportQueryArgs {
 pub async fn get_zip_export(
     MtState(st): MtState<LocalAppState>,
     ExtractIdentity(identity): ExtractIdentity,
+    ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Path(ZipExportRequest { id }): Path<ZipExportRequest>,
     Query(GetZipExportQueryArgs { token }): Query<GetZipExportQueryArgs>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
     let identity = match token {
         Some(token) => {
-            let _actor = st.application.key_broker().check_export_download_token(
+            let actor = st.application.key_broker().check_export_download_token(
                 &token,
                 &id,
                 EXPORT_DOWNLOAD_TOKEN_VALIDITY,
             )?;
-            keybroker::Identity::system()
+            st.application
+                .export_download_identity(actor, token)
+                .await?
         },
-        None => {
-            identity.require_operation(keybroker::DeploymentOp::DownloadBackups)?;
-            identity
-        },
+        None => identity,
     };
+    identity.require_operation(keybroker::DeploymentOp::DownloadBackups)?;
     let id: Either<DeveloperDocumentId, Timestamp> = match id.parse() {
         Ok(id) => Either::Left(id),
         Err(_) => Either::Right(id.parse().context(ErrorMetadata::bad_request(
@@ -165,7 +166,10 @@ pub async fn get_zip_export(
             stream,
         },
         filename,
-    ) = st.application.get_zip_export(identity, id).await?;
+    ) = st
+        .application
+        .get_zip_export(identity, request_metadata, id)
+        .await?;
     let content_length = ContentLength(content_length as u64);
     Ok((
         TypedHeader(content_length),

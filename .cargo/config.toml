@@ -20,10 +20,10 @@ CHRONO_TZ_TIMEZONE_FILTER = "US/Pacific"
 #     — acquire-load map read on the TurboFan background thread
 # NB: we stay on the .26 base rather than bumping to 14.9.207.39 — the .39 v8 tree
 # collides with this rusty_v8 build harness (duplicate gn arg cppgc_enable_api_checks);
-# a base bump needs a matching harness and is deferred. Built by get-convex/rusty_v8
+# a base bump needs a matching harness and is deferred. Built by convex/rusty_v8
 # @ tag v149.2.11; pinned by rev via [patch.crates-io] so the mirror download URL
 # (…/v149.2.11/…) is content-stable and reproducible.
-RUSTY_V8_MIRROR = "https://github.com/get-convex/rusty_v8/releases/download"
+RUSTY_V8_MIRROR = "https://github.com/convex/rusty_v8/releases/download"
 # ada-url's build script compiles Ada with the static CRT (/MT) under MSVC, but
 # V8 and the other C++ dependencies link the dynamic CRT (/MD), and the linker
 # rejects the mix. cc-rs passes CXXFLAGS after its own CRT flag, so this /MD wins.

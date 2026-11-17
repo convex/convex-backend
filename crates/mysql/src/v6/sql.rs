@@ -2,6 +2,7 @@
 //! read-only and persistence-globals tables.
 
 use std::{
+    borrow::Cow,
     fmt::Write,
     iter,
     ops::Bound,
@@ -35,13 +36,14 @@ use mysql_async::{
 
 use super::{
     column,
+    reader::DocumentScope,
     PersistenceDeploymentId,
 };
 use crate::chunks::ApproxSize;
 
 pub(crate) const LATEST_TABLE: &str = "indexes_latest";
 pub(crate) const BACKFILL_DELETES_TABLE: &str = "indexes_backfill_deletes";
-pub(crate) const LOG_BUCKET_SIZE_NANOS: i64 = 10 * 60 * 1_000_000_000;
+pub const LOG_BUCKET_SIZE_NANOS: i64 = 10 * 60 * 1_000_000_000;
 pub(crate) const LIST_LOG_TABLES: &str = r#"
 SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = ? AND TABLE_NAME LIKE 'indexes\_log\_%'
@@ -87,10 +89,10 @@ impl IndexKey {
 
 /// A ten-minute successor-timestamp bucket used in a V6 log table name.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct LogBucket(i64);
+pub struct LogBucket(i64);
 
 impl LogBucket {
-    pub(crate) fn from_successor_ts(successor_ts: Timestamp) -> Self {
+    pub fn from_successor_ts(successor_ts: Timestamp) -> Self {
         Self(i64::from(successor_ts).div_euclid(LOG_BUCKET_SIZE_NANOS))
     }
 
@@ -114,7 +116,7 @@ impl LogBucket {
     /// The bucket `buckets` positions after this one. Fallible so that an
     /// absurd lookahead surfaces as an error rather than a wrapped bucket that
     /// names a table on the wrong side of the timeline.
-    pub(crate) fn offset(self, buckets: i64) -> anyhow::Result<Self> {
+    pub fn offset(self, buckets: i64) -> anyhow::Result<Self> {
         let bucket = self
             .0
             .checked_add(buckets)
@@ -537,12 +539,26 @@ fn union_arms(
     (arms.join("\nUNION ALL\n"), params)
 }
 
+/// Joining documents saves a round trip for small reads. Index-only pages
+/// enable parallel document fetches for larger scans.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IndexQueryType {
+    JoinDocuments,
+    IndexOnly,
+}
+
 /// Builds the V6 range query over `indexes_latest` and the supplied log
 /// buckets; each key has one revision visible at a snapshot across the tables,
 /// so the union is duplicate-free. Rows are ordered by `key_suffix_hash`, which
 /// past the prefix limit is not key order; the cursor follows that order, so
 /// pagination is consistent, and the index scan sorts each equal-prefix run by
 /// the reconstructed key.
+///
+/// Each result row ends with the `indexes_maintenance_state` columns of
+/// [`READ_LOG_BUCKET_BOUNDS`], read in the same statement as the page. The
+/// LEFT JOIN yields one row of NULL index columns when the page is empty, so
+/// the bounds are reported either way. The union is limited to one page before
+/// joining documents to bound document lookups by `batch_size`.
 pub(crate) fn index_query(
     deployment_id: PersistenceDeploymentId,
     index_id: PersistenceIndexId,
@@ -552,6 +568,8 @@ pub(crate) fn index_query(
     order: Order,
     batch_size: usize,
     log_buckets: &[LogBucket],
+    documents: &DocumentScope,
+    query_type: IndexQueryType,
 ) -> (String, Vec<Value>) {
     let order = match order {
         Order::Asc => "ASC",
@@ -562,7 +580,7 @@ pub(crate) fn index_query(
     append_bound_clause(&mut where_clause, &mut bounds, &lower, BoundSide::Lower);
     append_bound_clause(&mut where_clause, &mut bounds, &upper, BoundSide::Upper);
 
-    let (arms, params) = union_arms(
+    let (arms, mut params) = union_arms(
         log_buckets,
         |table, successor_filter| {
             format!(
@@ -583,14 +601,35 @@ LIMIT {batch_size})"#
             )
         },
     );
+    let (document_columns, document_join) = match query_type {
+        IndexQueryType::JoinDocuments => {
+            let join = match documents {
+                DocumentScope::DeploymentId => Cow::Borrowed(DOCUMENT_JOIN),
+                DocumentScope::InstanceName(instance) => {
+                    params.push(instance.clone().into());
+                    Cow::Owned(
+                        DOCUMENT_JOIN
+                            .replace("D.deployment_id = U.deployment_id", "D.instance_name = ?"),
+                    )
+                },
+            };
+            ("D.json_value, D.prev_ts", join)
+        },
+        // Keep the maintenance-state column positions shared by both query paths.
+        IndexQueryType::IndexOnly => ("NULL AS json_value, NULL AS prev_ts", Cow::Borrowed("")),
+    };
     (
         format!(
             r#"
-SELECT U.index_id, U.key_prefix, U.key_suffix_hash, U.key_suffix, U.ts, U.table_id, U.document_id, D.json_value, D.prev_ts
-FROM (
+SELECT U.index_id, U.key_prefix, U.key_suffix_hash, U.key_suffix, U.ts, U.table_id, U.document_id, {document_columns}, S.created_through_ts, S.oldest_kept_ts
+FROM @db_name.indexes_maintenance_state S
+LEFT JOIN (
 {arms}
-) U
-{DOCUMENT_JOIN}
+ORDER BY key_prefix {order}, key_suffix_hash {order}
+LIMIT {batch_size}
+) U ON TRUE
+{document_join}
+WHERE S.id = 1
 ORDER BY U.key_prefix {order}, U.key_suffix_hash {order}
 LIMIT {batch_size}
 "#
@@ -660,6 +699,12 @@ pub(crate) fn insert_backfill_marker_chunk(chunk_size: usize) -> String {
     )
 }
 
+/// Primary-key range scans avoid the full-table next-key locking that can
+/// deadlock with concurrent commit batches and lock other deployments' rows.
+/// Index hints require multi-table `DELETE` syntax.
+const DELETE_LATEST_BY_PRIMARY: &str =
+    "DELETE @db_name.indexes_latest FROM @db_name.indexes_latest FORCE INDEX (PRIMARY)";
+
 /// Evaluates the timestamp predicate while holding each key's record lock, so
 /// a newer live write survives either transaction order.
 pub(crate) fn delete_stale_chunk(chunk_size: usize) -> String {
@@ -669,7 +714,7 @@ pub(crate) fn delete_stale_chunk(chunk_size: usize) -> String {
         chunk_size,
     )
     .join(" OR ");
-    format!("DELETE FROM @db_name.indexes_latest WHERE {predicates}")
+    format!("{DELETE_LATEST_BY_PRIMARY} WHERE {predicates}")
 }
 
 pub(crate) fn backfill_markers_page(
@@ -720,7 +765,7 @@ pub(crate) fn delete_latest_chunk(chunk_size: usize) -> String {
         chunk_size,
     )
     .join(" OR ");
-    format!("DELETE FROM @db_name.indexes_latest WHERE {predicates}")
+    format!("{DELETE_LATEST_BY_PRIMARY} WHERE {predicates}")
 }
 
 /// `STRAIGHT_JOIN` prevents MySQL from locking an entire deployment when it
@@ -789,8 +834,13 @@ AND TABLE_NAME IN ('documents', 'leases', 'read_only', 'persistence_globals', 'i
 AND COLUMN_NAME = 'deployment_id'
 "#;
 
+pub(crate) const LEASE_ACQUIRE_ALLOW_READ_ONLY: &str = r#"
+UPDATE @db_name.leases SET ts = ? WHERE ? > ts AND deployment_id = ?
+"#;
+
 pub(crate) const LEASE_ACQUIRE: &str = r#"
 UPDATE @db_name.leases SET ts = ? WHERE ? > ts AND deployment_id = ?
+AND NOT EXISTS (SELECT 1 FROM @db_name.read_only WHERE deployment_id = ?)
 "#;
 
 pub(crate) const LEASE_PRECONDITION: &str = r#"
@@ -802,8 +852,6 @@ SELECT json_value FROM @db_name.persistence_globals
 WHERE deployment_id = ? AND `key` = ?
 "#;
 
-pub(crate) const CHECK_READ_ONLY: &str =
-    "SELECT deployment_id FROM @db_name.read_only WHERE deployment_id = ?";
 pub(crate) const SET_READ_ONLY: &str =
     "INSERT IGNORE INTO @db_name.read_only (deployment_id) VALUES (?)";
 pub(crate) const UNSET_READ_ONLY: &str = "DELETE FROM @db_name.read_only WHERE deployment_id = ?";

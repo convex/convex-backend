@@ -7,14 +7,20 @@ export function TimestampDistance({
   prefix = "",
   date,
   className = "",
+  delayDuration,
 }: {
   prefix?: string;
 
   date: Date;
   className?: string;
+  // Milliseconds before the tooltip with the full timestamp opens.
+  delayDuration?: number;
 }) {
   return (
-    <Tooltip tip={date.toLocaleString(undefined, { timeZoneName: "short" })}>
+    <Tooltip
+      tip={date.toLocaleString(undefined, { timeZoneName: "short" })}
+      delayDuration={delayDuration}
+    >
       <div className={cn("text-xs text-content-secondary", className)}>
         {`${prefix} ${formatDistanceToNow(date, {
           addSuffix: true,

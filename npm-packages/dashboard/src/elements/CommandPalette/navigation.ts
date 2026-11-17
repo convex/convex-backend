@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import type { UrlObject } from "url";
 import {
   PieChartIcon,
   ClockIcon,
@@ -18,7 +19,7 @@ import {
   TrashIcon,
 } from "@radix-ui/react-icons";
 import { ArrowsRightLeftIcon, KeyIcon } from "@heroicons/react/24/outline";
-import { PulseIcon } from "@common/elements/icons";
+import { TachometerIcon } from "@common/elements/icons";
 import { DEPLOYMENT_SETTINGS_PAGE_ICONS } from "@common/layouts/deploymentSettingsPages";
 import { TEAM_SETTINGS_PAGE_ICONS } from "layouts/teamSettingsPages";
 import {
@@ -27,12 +28,20 @@ import {
   PROJECT_SETTINGS_SECTIONS,
   TEAM_SETTINGS_SECTIONS,
 } from "lib/sectionAnchors";
+import { normalizeForSearch } from "./matchRank";
 
-// Where a command can navigate: a plain href, or a pathname + query object
-// (the form next/router.push accepts) for destinations with encoded params.
-export type NavigationDestination =
-  | string
-  | { pathname: string; query: Record<string, string> };
+// Where a command can navigate: a plain href, or the URL object form that
+// next/router.push and next/link both take, for destinations with encoded
+// params. Rows render these as anchors, so the object form has to stay
+// Link-compatible.
+export type NavigationDestination = string | UrlObject;
+
+// The query params that scope a deployment page to a component. `component` is
+// the component ID, which is what useNents and the rest of the page key off of;
+// the root app has no ID and so needs no param.
+export function componentQuery(componentId: string | null | undefined) {
+  return componentId ? { component: componentId } : {};
+}
 
 export type NavigationTarget = {
   label: string;
@@ -54,7 +63,7 @@ export function deploymentNavigation(uriPrefix: string): {
   settings: NavigationTarget[];
 } {
   const pages: NavigationTarget[] = [
-    { label: "Health", href: `${uriPrefix}/`, Icon: PulseIcon },
+    { label: "Health", href: `${uriPrefix}/`, Icon: TachometerIcon },
     { label: "Data", href: `${uriPrefix}/data`, Icon: TableIcon },
     { label: "Schema", href: `${uriPrefix}/schema`, Icon: CubeIcon },
     { label: "Functions", href: `${uriPrefix}/functions`, Icon: CodeIcon },
@@ -258,6 +267,12 @@ export function teamNavigation(
       Icon: TEAM_SETTINGS_PAGE_ICONS.billing,
     },
     {
+      label: "Invoices",
+      parent: "Team Settings",
+      href: `${uriPrefix}/settings/invoices`,
+      Icon: TEAM_SETTINGS_PAGE_ICONS.invoices,
+    },
+    {
       label: "Audit Log",
       parent: "Team Settings",
       href: `${uriPrefix}/settings/audit-log`,
@@ -370,14 +385,20 @@ export function findCurrentPage(
 export const REMOTE_VALUE_PREFIX = "remote:";
 
 // Every whitespace-separated token of the search must appear somewhere in the
-// haystack, case-insensitively.
+// haystack, ignoring case, accents, and `-`/`_` separators (see
+// normalizeForSearch). A search made only of separators has no tokens, so it
+// matches as typed instead: "-" keeps the results that contain a hyphen.
 export function matchesSearch(search: string, haystack: string): boolean {
-  const needle = search.trim().toLowerCase();
-  if (!needle) {
+  const typed = search.trim().toLowerCase();
+  if (!typed) {
     return true;
   }
-  const target = haystack.toLowerCase();
-  return needle.split(/\s+/).every((token) => target.includes(token));
+  const needle = normalizeForSearch(search);
+  if (!needle) {
+    return haystack.toLowerCase().includes(typed);
+  }
+  const target = normalizeForSearch(haystack);
+  return needle.split(" ").every((token) => target.includes(token));
 }
 
 // Substring-based filter for cmdk: every whitespace-separated token of the

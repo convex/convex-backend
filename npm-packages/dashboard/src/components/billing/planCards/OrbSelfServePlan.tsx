@@ -102,9 +102,7 @@ export function OrbSelfServePlan({
                       "billing:subscription:changePlan",
                     )
                   : team.managedBy === "vercel"
-                    ? plan.planType === "CONVEX_PROFESSIONAL"
-                      ? `Convex Professional is not available for teams managed by ${startCase(team.managedBy)}. You can create a new team to use Convex Professional. Existing projects can be transferred to another team on the Project Settings page.`
-                      : `You can manage your subscription in ${startCase(team.managedBy)}.`
+                    ? `You can manage your subscription in ${startCase(team.managedBy)}.`
                     : isOnBusinessPlan
                       ? "Please contact support to change your plan."
                       : missingRequiredPaymentMethod
@@ -139,9 +137,7 @@ export function OrbSelfServePlan({
                       "billing:subscription:changePlan",
                     )
                   : team.managedBy === "vercel"
-                    ? plan.planType === "CONVEX_PROFESSIONAL"
-                      ? `Convex Professional is not available for teams managed by ${startCase(team.managedBy)}. You can create a new team to use Convex Professional. Existing projects can be transferred to another team on the Project Settings page.`
-                      : `You can manage your subscription in ${startCase(team.managedBy)}.`
+                    ? `You can manage your subscription in ${startCase(team.managedBy)}.`
                     : undefined
               }
             >

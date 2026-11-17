@@ -22,6 +22,7 @@ import { projectNavigation, projectSectionNavigation } from "./navigation";
 import {
   DeploymentItem,
   DeploymentTypeIcon,
+  ItemPrimary,
   LoadingSignal,
   NavigationItem,
 } from "./items";
@@ -212,31 +213,37 @@ function CreateDeploymentItem({
     deploymentType === "prod"
       ? PROVISION_PROD_PAGE_NAME
       : PROVISION_DEV_PAGE_NAME;
+  const href = `/t/${team.slug}/${project.slug}/${provisionPage}`;
+  const track = () => trackSelected(`create-${deploymentType}-deployment`);
   return (
     <Command.Item
       value={`action:create-${deploymentType}-deployment`}
       keywords={[typeLabel, deploymentType, "create deployment"]}
-      className="rounded-md outline-1 -outline-offset-1 outline-border-selected/60 outline-dashed"
+      // rounded-lg to match the inner body, which carries the selected
+      // background and would otherwise bleed past this outline's corners.
+      className="rounded-lg outline-1 -outline-offset-1 outline-border-selected/60 outline-dashed"
       onSelect={() => {
-        trackSelected(`create-${deploymentType}-deployment`);
-        onNavigate(`/t/${team.slug}/${project.slug}/${provisionPage}`);
+        track();
+        onNavigate(href);
       }}
     >
-      <div
-        className={cn(
-          "inline-flex shrink-0 items-center justify-center rounded-full p-1 opacity-50",
-          deploymentTypeColorClasses(deploymentType),
-        )}
-      >
-        <DeploymentTypeIcon deploymentType={deploymentType} />
-      </div>
-      <span className="flex min-w-0 flex-col">
-        <span className="truncate text-content-secondary">{typeLabel}</span>
-        <span className="truncate text-xs text-content-tertiary">
-          Create a {typeLabel.toLowerCase()} deployment
+      <ItemPrimary href={href} onModifiedClick={track}>
+        <div
+          className={cn(
+            "inline-flex shrink-0 items-center justify-center rounded-full p-1 opacity-50",
+            deploymentTypeColorClasses(deploymentType),
+          )}
+        >
+          <DeploymentTypeIcon deploymentType={deploymentType} />
+        </div>
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate text-content-secondary">{typeLabel}</span>
+          <span className="truncate text-xs text-content-tertiary">
+            Create a {typeLabel.toLowerCase()} deployment
+          </span>
         </span>
-      </span>
-      <PlusIcon className="ml-auto size-4 shrink-0 text-content-tertiary" />
+        <PlusIcon className="ml-auto size-4 shrink-0 text-content-tertiary" />
+      </ItemPrimary>
     </Command.Item>
   );
 }

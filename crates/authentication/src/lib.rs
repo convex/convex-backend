@@ -34,6 +34,8 @@ use openidconnect::{
     ClientId,
     DiscoveryError,
     IssuerUrl,
+    JsonWebKey,
+    JsonWebKeyAlgorithm,
 };
 use serde::{
     Deserialize,
@@ -206,7 +208,29 @@ where
             // in the response.
 
             let issuer_url = IssuerUrl::new(token_issuer.clone())?;
-            let metadata = CoreProviderMetadata::discover_async(issuer_url, &http_client)
+            // Discovery performs two requests; record each response's size for metrics
+            let discovery_url = issuer_url.join(".well-known/openid-configuration").ok();
+            let oidc_client = |request: HttpRequest| {
+                let is_discovery = discovery_url
+                    .as_ref()
+                    .map(|url| request.uri() == url.as_str());
+                let response = http_client(request);
+                async move {
+                    let response = response.await?;
+                    match is_discovery {
+                        Some(true) => {
+                            metrics::log_openid_configuration_response_size(response.body().len())
+                        },
+                        Some(false) => metrics::log_jwks_response_size(
+                            metrics::OPENIDCONNECT,
+                            response.body().len(),
+                        ),
+                        None => {},
+                    }
+                    Ok::<_, E>(response)
+                }
+            };
+            let metadata = CoreProviderMetadata::discover_async(issuer_url, &oidc_client)
                 .await
                 .map_err(|e| {
                     let short = "AuthProviderDiscoveryFailed";
@@ -239,6 +263,12 @@ where
                         },
                     }
                 })?;
+            metrics::log_jwks_keys(metrics::OPENIDCONNECT, metadata.jwks().keys().len());
+            for key in metadata.jwks().keys() {
+                if let JsonWebKeyAlgorithm::Algorithm(algorithm) = key.signing_alg() {
+                    metrics::log_jwks_algorithm(metrics::OPENIDCONNECT, algorithm);
+                }
+            }
             // Create a verifier for the provider using this metadata. Set the verifier
             // to enforce that the issuer and audience match.
             // Note for posterity: this verifier will reject tokens containing multiple
@@ -264,6 +294,9 @@ where
                     "Could not parse as OIDC ID token. Token might not be an OIDC-compliant JWT.",
                 ),
             )?;
+            if let Ok(algorithm) = token.signing_alg() {
+                metrics::log_jwt_algorithm(metrics::OPENIDCONNECT, algorithm);
+            }
             UserIdentity::from_token(token, verifier).context(ErrorMetadata::unauthenticated(
                 "Unauthenticated",
                 "Could not verify OIDC token claim. Check that the token signature is valid and \
@@ -277,6 +310,7 @@ where
             algorithm,
         } => {
             let jwks_body = fetch_jwks(&jwks_uri, http_client).await?;
+            metrics::log_jwks_response_size(metrics::CUSTOMJWT, jwks_body.len());
             let jwks: JWKSet<biscuit::Empty> = serde_json::de::from_slice(&jwks_body)
                 .with_context(|| {
                     ErrorMetadata::unauthenticated(
@@ -287,6 +321,12 @@ where
                         ),
                     )
                 })?;
+            metrics::log_jwks_keys(metrics::CUSTOMJWT, jwks.keys.len());
+            for key in &jwks.keys {
+                if let Some(algorithm) = &key.common.algorithm {
+                    metrics::log_jwks_algorithm(metrics::CUSTOMJWT, algorithm);
+                }
+            }
             let token = JWT::<serde_json::Value, biscuit::Empty>::new_encoded(&token_str.0);
             let decoded_token = token
                 .decode_with_jwks(&jwks, Some(algorithm.into()))
@@ -313,6 +353,10 @@ where
 
                     ErrorMetadata::unauthenticated("InvalidAuthHeader", final_msg)
                 })?;
+            metrics::log_jwt_algorithm(
+                metrics::CUSTOMJWT,
+                &decoded_token.header()?.registered.algorithm,
+            );
             let payload = decoded_token.payload()?;
             let Some(ref token_issuer) = payload.registered.issuer else {
                 anyhow::bail!(ErrorMetadata::unauthenticated(

@@ -37,8 +37,6 @@ export function TeamNameForm({
     },
   });
 
-  const disabled = !canUpdate || team.managedBy === "vercel";
-
   return (
     <Sheet id={TEAM_SETTINGS_SECTIONS.teamName.id} className="text-sm">
       <h3 className="mb-4">Team Name</h3>
@@ -67,7 +65,7 @@ export function TeamNameForm({
               value={formState.values.name}
               id="name"
               error={formState.errors.name}
-              disabled={disabled}
+              disabled={!canUpdate}
             />
           </Tooltip>
         </div>
@@ -77,7 +75,7 @@ export function TeamNameForm({
             !formState.dirty ||
             formState.isSubmitting ||
             !formState.isValid ||
-            disabled
+            !canUpdate
           }
           type="submit"
           aria-label="Save team name"

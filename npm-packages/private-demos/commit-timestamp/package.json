@@ -2,7 +2,7 @@
   "name": "commit-timestamp",
   "version": "0.0.0",
   "scripts": {
-    "build": ""
+    "build": "tsc -p convex/tsconfig.json --noEmit"
   },
   "dependencies": {
     "convex": "workspace:*"

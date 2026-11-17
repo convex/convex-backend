@@ -88,6 +88,7 @@ pub use functions::{
     ModuleEnvironment,
     QueryInvocation,
     UdfIdentifier,
+    UdfRuntime,
     UdfType,
     UdfTypeJson,
 };

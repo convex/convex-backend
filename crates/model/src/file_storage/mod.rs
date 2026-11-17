@@ -469,9 +469,9 @@ async fn sync_totals<RT: Runtime>(
         }
         match page.status {
             DataSyncStatus::UpToDate { .. } => break page.cursor,
-            // `Stale` is a consistent snapshot too, but one a page limit cut
-            // short of the latest commit — keep paging so the totals don't
-            // fall further behind on every call.
+            // `Stale` is a consistent snapshot too, but behind the latest
+            // repeatable timestamp — keep paging so the totals don't fall
+            // further behind on every call.
             DataSyncStatus::Stale { .. } | DataSyncStatus::Snapshotting { .. } => {},
         }
         cursor = Some(page.cursor);

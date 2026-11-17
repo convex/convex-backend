@@ -3,12 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   ssr: {
     resolve: {
-      conditions: [
-        "convex-internal-types",
-        "module",
-        "node",
-        "development|production",
-      ],
+      conditions: ["convex-internal-types", "node", "development|production"],
     },
   },
   test: {

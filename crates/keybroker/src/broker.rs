@@ -99,6 +99,7 @@ use sync_types::{
 };
 
 use crate::{
+    deployment_jwt::DeploymentJwtKeys,
     encryptor::{
         DeterministicEncryptor,
         Purpose,
@@ -124,6 +125,9 @@ const EXPORT_DOWNLOAD_KEY_VERSION: u8 = 1;
 const STORE_FILE_AUTHZ_VERSION: u8 = 1;
 const QUERY_JOURNAL_VERSION: u8 = 7;
 
+/// Admin keys issued to this member ID aren't bound to a team member.
+pub const UNATTRIBUTED_ADMIN_KEY_MEMBER_ID: MemberId = MemberId(0);
+
 // Max delay from transaction start time -> key being issued that is tolerable.
 const MAX_TS_DELAY: Duration = Duration::from_secs(15);
 
@@ -138,6 +142,8 @@ pub struct KeyBroker {
     export_download_encryptor: RandomEncryptor,
     journal_encryptor: RandomEncryptor,
     store_file_encryptor: RandomEncryptor,
+    s3_export_state_encryptor: RandomEncryptor,
+    deployment_jwt_keys: DeploymentJwtKeys,
 }
 
 // This enum encodes a successful authentication decision, and its nontrivial
@@ -882,12 +888,14 @@ impl AdminIdentity {
     }
 }
 
+// `key` is a usable admin key, so it is omitted to keep it out of logs, spans,
+// and error contexts that `{:?}`-format identities.
 impl fmt::Debug for AdminIdentity {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{}/{:?}/{}/{:?}",
-            self.deployment_name, self.principal, self.key, self.allowed_ops,
+            "{}/{:?}/{:?}/read_only={}",
+            self.deployment_name, self.principal, self.allowed_ops, self.is_read_only,
         )
     }
 }
@@ -944,6 +952,11 @@ impl KeyBroker {
                 &deployment_secret,
                 Purpose::STORE_FILE_AUTHORIZATION,
             )?,
+            s3_export_state_encryptor: RandomEncryptor::derive_from_secret(
+                &deployment_secret,
+                Purpose::S3_EXPORT_STATE,
+            )?,
+            deployment_jwt_keys: DeploymentJwtKeys::derive_from_secret(&deployment_secret)?,
         })
     }
 
@@ -968,11 +981,20 @@ impl KeyBroker {
         &self.data_sync_encryptor
     }
 
+    pub fn s3_export_state_encryptor(&self) -> &RandomEncryptor {
+        &self.s3_export_state_encryptor
+    }
+
+    pub fn deployment_jwt_keys(&self) -> &DeploymentJwtKeys {
+        &self.deployment_jwt_keys
+    }
+
     pub fn function_runner_keybroker(&self) -> FunctionRunnerKeyBroker {
         FunctionRunnerKeyBroker {
             instance_name: self.deployment_name.clone(),
             cursor_encryptor: self.cursor_encryptor.clone(),
             store_file_encryptor: self.store_file_encryptor.clone(),
+            deployment_jwt_keys: Some(self.deployment_jwt_keys.clone()),
         }
     }
 
@@ -1055,7 +1077,13 @@ impl KeyBroker {
                     .decode_proto(ADMIN_KEY_VERSION, encrypted_part)
                     .inspect(|_| log_legacy_admin_key())
             })
-            .with_context(|| format!("Couldn't decode the AdminKeyProto {key}"))?;
+            .with_context(|| {
+                format!(
+                    "Couldn't decode the AdminKeyProto for deployment {instance_name:?} (key \
+                     length {})",
+                    key.len()
+                )
+            })?;
         let instance_name = instance_name
             .or(instance_name_from_encrypted_part.as_deref())
             .context("Invalid admin key format")?;
@@ -1351,9 +1379,21 @@ pub struct FunctionRunnerKeyBroker {
     pub instance_name: String,
     pub cursor_encryptor: DeterministicEncryptor,
     pub store_file_encryptor: RandomEncryptor,
+    /// `None` only in a function runner whose caller predates the key: old
+    /// callers can run everything but `ctx.auth.signJwt` and
+    /// `getDeploymentJwks`.
+    pub deployment_jwt_keys: Option<DeploymentJwtKeys>,
 }
 
 impl FunctionRunnerKeyBroker {
+    /// Only a funrun request from a caller older than #59526 omits
+    /// `deployment_jwt_root_key`, so a missing key is a system error.
+    pub fn deployment_jwt_keys(&self) -> anyhow::Result<&DeploymentJwtKeys> {
+        self.deployment_jwt_keys
+            .as_ref()
+            .context("Function runner caller didn't send the deployment JWT signing key")
+    }
+
     pub fn issue_store_file_authorization<RT: Runtime>(
         &self,
         rt: &RT,

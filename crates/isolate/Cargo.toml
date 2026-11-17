@@ -9,21 +9,7 @@ build = "build.rs"
 include = ["data"]
 
 [package.metadata.cargo-machete]
-ignored = [
-    "axum",
-    "http-body-util",
-    "hyper",
-    "js_build",
-    "must-let",
-    "phf",
-    "pretty_assertions",
-    "reqwest",
-    "search",
-    "search_index_workers",
-    "sha2",
-    "shape_inference",
-    "walkdir",
-]
+ignored = ["js_build", "phf", "sha2", "walkdir"]
 
 [lib]
 doctest = false
@@ -37,13 +23,9 @@ testing = [
     "maplit",
     "metrics/testing",
     "model/testing",
-    "must-let",
     "proptest",
-    "reqwest",
     "roles/testing",
     "runtime/testing",
-    "search/testing",
-    "search_index_workers/testing",
     "storage/testing",
     "usage_tracking/testing",
     "value/testing",
@@ -61,7 +43,6 @@ async-broadcast = { workspace = true }
 async-recursion = { workspace = true }
 async-trait = { workspace = true }
 async_lru = { workspace = true }
-axum = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 cmd_util = { workspace = true }
@@ -69,7 +50,6 @@ common = { workspace = true }
 convex_macro = { workspace = true }
 database = { workspace = true }
 deno_core = { workspace = true }
-deno_core_icudata = { workspace = true }
 derive_more = { workspace = true }
 encoding_rs = { workspace = true }
 errors = { workspace = true }
@@ -79,6 +59,7 @@ futures = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
 humansize = { workspace = true }
+icudtl = { workspace = true }
 indexmap = { workspace = true }
 itertools = { workspace = true }
 keybroker = { workspace = true }
@@ -87,7 +68,6 @@ metrics = { workspace = true }
 mime = { workspace = true }
 model = { workspace = true }
 multer = { workspace = true }
-must-let = { workspace = true, optional = true }
 parking_lot = { workspace = true }
 paste = { workspace = true }
 pb = { workspace = true }
@@ -97,12 +77,9 @@ proptest = { workspace = true, optional = true }
 rand = { workspace = true }
 rand_chacha = { workspace = true }
 regex = { workspace = true }
-reqwest = { workspace = true, optional = true }
 roles = { workspace = true }
 runtime = { workspace = true }
 scopeguard = { workspace = true }
-search = { workspace = true }
-search_index_workers = { workspace = true, optional = true }
 semver = { workspace = true }
 sentry = { workspace = true }
 serde = { workspace = true }
@@ -143,21 +120,14 @@ convex_macro = { workspace = true, features = ["testing"] }
 database = { workspace = true, features = ["testing"] }
 divan = { workspace = true }
 errors = { workspace = true, features = ["testing"] }
-http-body-util = { workspace = true }
-hyper = { workspace = true }
 keybroker = { workspace = true, features = ["testing"] }
 maplit = { workspace = true }
 metrics = { workspace = true, features = ["testing"] }
 model = { workspace = true, features = ["testing"] }
-must-let = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
-reqwest = { workspace = true }
 roles = { workspace = true, features = ["testing"] }
 runtime = { workspace = true, features = ["testing"] }
-search = { workspace = true, features = ["testing"] }
-search_index_workers = { workspace = true, features = ["testing"] }
-shape_inference = { workspace = true, features = ["testing"] }
 storage = { workspace = true, features = ["testing"] }
 udf = { workspace = true, features = ["testing"] }
 usage_tracking = { workspace = true, features = ["testing"] }

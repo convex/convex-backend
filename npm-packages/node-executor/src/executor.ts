@@ -198,7 +198,9 @@ export async function invoke(
   numInvocations += 1;
   logDebug(`Environment numInvocations=${numInvocations}`);
   const result = await globalConsoleState.run(
-    defaultConsoleState(),
+    defaultConsoleState(
+      request.type === "execute" ? request.maxLogLines : undefined,
+    ),
     async () => {
       const devConsole = setupConsole(responseStream);
       return await globalDevConsole.run(devConsole, async () => {
@@ -248,6 +250,7 @@ export type ExecuteRequest = {
   userIdentity: UserIdentity | null;
   environmentVariables: EnvironmentVariable[];
   timeoutSecs: number;
+  maxLogLines?: number;
   serviceTokenGuaranteedLifetimeSecs: number;
   npmVersion: string | null;
   executionContext: ExecutionContext;
@@ -735,15 +738,21 @@ function toString(value: unknown, defaultValue: string) {
       : value.toString();
 }
 
+const DEFAULT_MAX_LOG_LINES = 1024;
+
 type ConsoleState = {
+  maxLogLines: number;
   sentLines: number;
   totalSentLineLength: number;
   logLimitHit: boolean;
   timers: Map<string, number>;
 };
 
-export function defaultConsoleState(): ConsoleState {
+export function defaultConsoleState(
+  maxLogLines: number = DEFAULT_MAX_LOG_LINES,
+): ConsoleState {
   return {
+    maxLogLines,
     sentLines: 0,
     totalSentLineLength: 0,
     logLimitHit: false,
@@ -792,7 +801,8 @@ export function setupConsole(responseStream: Writable) {
     // - 6MB limit on AWS lambda response size, so only collect
     //   maximum 2MB of logs, one ~million UTF16 code units (UTF16
     //   code unit is 2 bytes).
-    // - we only allow max 256 logs, see MAX_LOG_LINES
+    // - at most `consoleState.maxLogLines` lines, the last of which is the
+    //   overflow line.
     if (consoleState.logLimitHit === true) {
       return;
     }
@@ -804,9 +814,11 @@ export function setupConsole(responseStream: Writable) {
         "Log overflow (maximum 1M characters). Remaining log lines omitted.",
       ];
       consoleState.logLimitHit = true;
-    } else if (consoleState.sentLines >= 256) {
+    } else if (consoleState.sentLines >= consoleState.maxLogLines - 1) {
       level = "ERROR";
-      messages = ["Log overflow (maximum 256). Remaining log lines omitted."];
+      messages = [
+        `Log overflow (maximum ${consoleState.maxLogLines}). Remaining log lines omitted.`,
+      ];
       consoleState.logLimitHit = true;
     }
     responseStream.write(

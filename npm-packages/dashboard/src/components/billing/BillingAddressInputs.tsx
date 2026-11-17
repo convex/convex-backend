@@ -5,10 +5,14 @@ import { Address } from "generatedApi";
 
 export function BillingAddressInputs({
   onChangeAddress,
+  onChangeName,
   existingBillingAddress,
   name,
 }: {
   onChangeAddress(address?: Address): Promise<void>;
+  // The AddressElement always renders a name field, and its value is not part
+  // of the `Address` passed to `onChangeAddress`.
+  onChangeName?(name: string): Promise<void>;
   existingBillingAddress?: Address;
   name?: string;
 }) {
@@ -50,6 +54,7 @@ export function BillingAddressInputs({
         className="w-full"
         options={addressElementOptions}
         onChange={(event) => {
+          void onChangeName?.(event.value.name);
           // Call onChangeAddress with the full billing address when all
           // required fields are filled or otherwise undefined to clear the
           // address (in case the user deletes some previously filled fields).

@@ -2,29 +2,45 @@ import { useFlags } from "launchdarkly-react-client-sdk";
 import kebabCase from "lodash/kebabCase";
 
 export const flagDefaults: {
+  allowDefaultEnvRollout: boolean;
   commandPaletteDeleteProjects: boolean;
   enableNewDashboardVersionNotification: boolean;
   connectionStateCheckIntervalMs: number;
-  nonDefaultTeamDevsInMainMenu: number;
   ephemeralZipExportToken: boolean;
   directorySync: boolean;
   promos: boolean;
+  dashboardShowCashUsage: boolean;
   s3ExportIntegration: boolean;
   showFivetranSyncProgress: boolean;
   supportTicketForAllPlans: boolean;
   healthDeployProgress: boolean;
+  componentSwitcherTreeEnabled: boolean;
+  preAuthorizeStarterPlan: boolean;
+  preAuthorizePaymentMethodChange: boolean;
+  tagEditUi: boolean;
+  estimateUsageLimitsCost: boolean;
+  dailyUsageSummaries: boolean;
+  showLegacyKeyUsage: boolean;
 } = {
+  allowDefaultEnvRollout: false,
   commandPaletteDeleteProjects: false,
   enableNewDashboardVersionNotification: false,
   connectionStateCheckIntervalMs: 2500,
-  nonDefaultTeamDevsInMainMenu: 10,
   ephemeralZipExportToken: false,
   directorySync: false,
   promos: false,
+  dashboardShowCashUsage: false,
   s3ExportIntegration: false,
   showFivetranSyncProgress: false,
   supportTicketForAllPlans: false,
   healthDeployProgress: false,
+  componentSwitcherTreeEnabled: false,
+  preAuthorizeStarterPlan: false,
+  preAuthorizePaymentMethodChange: false,
+  tagEditUi: false,
+  estimateUsageLimitsCost: false,
+  dailyUsageSummaries: false,
+  showLegacyKeyUsage: false,
 };
 
 export const flagDefaultsKebabCase = Object.entries(flagDefaults).reduce(

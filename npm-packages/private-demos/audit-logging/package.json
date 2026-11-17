@@ -2,7 +2,7 @@
   "name": "audit-logging",
   "version": "0.0.0",
   "scripts": {
-    "build": "",
+    "build": "tsc -p convex/tsconfig.json --noEmit",
     "test": ""
   },
   "dependencies": {

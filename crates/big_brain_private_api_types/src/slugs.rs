@@ -8,6 +8,10 @@ use regex::Regex;
 // format.
 static SLUG_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\w-]+$").unwrap());
 
+pub fn is_slug_charset(s: &str) -> bool {
+    SLUG_REGEX.is_match(s)
+}
+
 pub fn validate_slug(slug: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         slug.len() >= 3,
@@ -18,10 +22,34 @@ pub fn validate_slug(slug: &str) -> anyhow::Result<()> {
         ErrorMetadata::bad_request("InvalidSlug", "Slug must be at most 64 characters long.",)
     );
     anyhow::ensure!(
-        SLUG_REGEX.is_match(slug),
+        is_slug_charset(slug),
         ErrorMetadata::bad_request(
             "InvalidSlug",
             "Slug must contain only numbers, letters, and '-'.",
+        )
+    );
+    Ok(())
+}
+
+pub const MAX_PROJECT_TAG_LEN: usize = 32;
+
+pub fn validate_project_tag(tag: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !tag.is_empty(),
+        ErrorMetadata::bad_request("InvalidProjectTag", "A tag can't be empty.")
+    );
+    anyhow::ensure!(
+        tag.chars().count() <= MAX_PROJECT_TAG_LEN,
+        ErrorMetadata::bad_request(
+            "InvalidProjectTag",
+            format!("Tag `{tag}` is longer than {MAX_PROJECT_TAG_LEN} characters."),
+        )
+    );
+    anyhow::ensure!(
+        is_slug_charset(tag),
+        ErrorMetadata::bad_request(
+            "InvalidProjectTag",
+            format!("Tag `{tag}` must contain only numbers, letters, '-', and '_'."),
         )
     );
     Ok(())

@@ -46,6 +46,23 @@ function getSectionLabel(permalink) {
   return sectionLabels.find(([prefix]) => permalink.startsWith(prefix))?.[1];
 }
 
+function Arrow({ isNext }) {
+  return (
+    <svg
+      className="pagination-nav__arrow"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d={isNext ? "M6 3l5 5-5 5" : "M10 3L5 8l5 5"} />
+    </svg>
+  );
+}
+
 export default function PaginatorNavLink(props) {
   const { permalink, title, subLabel, isNext } = props;
   const sectionLabel = getSectionLabel(permalink);
@@ -58,11 +75,25 @@ export default function PaginatorNavLink(props) {
       )}
       to={permalink}
     >
-      {subLabel && <div className="pagination-nav__sublabel">{subLabel}</div>}
-      {sectionLabel && (
-        <div className="pagination-nav__section-label">{sectionLabel}</div>
-      )}
-      <div className="pagination-nav__label">{title}</div>
+      <Arrow isNext={isNext} />
+      <div className="pagination-nav__text">
+        {/* The arrow conveys direction visually, so "Previous"/"Next" is only
+            shown when there's no section label to take its place. */}
+        {subLabel && (
+          <div
+            className={clsx(
+              "pagination-nav__sublabel",
+              sectionLabel && "sr-only",
+            )}
+          >
+            {subLabel}
+          </div>
+        )}
+        {sectionLabel && (
+          <div className="pagination-nav__section-label">{sectionLabel}</div>
+        )}
+        <div className="pagination-nav__label">{title}</div>
+      </div>
     </Link>
   );
 }

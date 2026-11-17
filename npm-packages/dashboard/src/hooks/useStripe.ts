@@ -76,6 +76,9 @@ export function useStripePaymentSetup(
 
   const options: StripeElementsOptions = {
     clientSecret,
+    // Stripe defaults to the browser's locale; the rest of the dashboard is
+    // English-only.
+    locale: "en",
     // TODO: Finish styling to have the Stripe form match the rest of the app
     appearance: {
       theme: "stripe",
@@ -109,21 +112,6 @@ export function useStripePaymentSetup(
       },
     },
   };
-
-  // Retrives the setup intent from stripe
-  const retrieveSetupIntent = useCallback(async () => {
-    const stripe = await stripePromise;
-    const result = stripe && (await stripe.retrieveSetupIntent(clientSecret));
-    if (!result || !result.setupIntent) {
-      return null;
-    }
-    const { payment_method } = result.setupIntent;
-    if (payment_method !== null && typeof payment_method !== "string") {
-      throw new Error(`Unexpected payment method type: ${payment_method}`);
-    }
-    await setPaymentMethod(payment_method || undefined);
-    return result.setupIntent;
-  }, [clientSecret, setPaymentMethod]);
 
   // Validates payment details and saves a payment method in stripe.
   const confirmSetup = useCallback(
@@ -163,7 +151,6 @@ export function useStripePaymentSetup(
     resetClientSecret: () => {
       setClientSecret("");
     },
-    retrieveSetupIntent,
     confirmSetup,
   };
 }
@@ -173,9 +160,8 @@ export function useStripeAddressSetup(
   hasAdminPermissions: boolean,
 ) {
   // Reuse the existing stripe initialization for collecting the payment method,
-  // the main difference is that we don't need the retrieveSetupIntent and
-  // confirmSetup functions so we pass in dummy values for paymentMethod and
-  // setPaymentMethod.
+  // the main difference is that we don't need the confirmSetup function so we
+  // pass in dummy values for paymentMethod and setPaymentMethod.
   const { options } = useStripePaymentSetup(
     team,
     undefined,

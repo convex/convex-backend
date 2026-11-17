@@ -66,7 +66,10 @@ use tantivy::{
     TantivyError,
 };
 use text_search::tracker::StaticDeletionTracker;
-use value::InternalId;
+use value::{
+    sha256::Sha256,
+    InternalId,
+};
 use vector::{
     result_merger::merge_vector_results_stream,
     CompiledVectorSearch,
@@ -488,6 +491,18 @@ impl<RT: Runtime> Searcher for SearcherImpl<RT> {
     }
 }
 
+/// Terms are customer data, so errors identify a term by this hash rather than
+/// by its value. The salt keeps the hash from matching precomputed tables of
+/// unsalted SHA-256 digests; anyone holding the term can recompute the hash to
+/// match it against an error.
+fn salted_term_hash(term_value: &[u8]) -> String {
+    const SALT: &[u8] = b"convex-searchlight-term-v1:";
+    let mut hasher = Sha256::new();
+    hasher.update(SALT);
+    hasher.update(term_value);
+    hasher.finalize().as_hex()
+}
+
 #[async_trait]
 impl<RT: Runtime> SegmentTermMetadataFetcher for SearcherImpl<RT> {
     #[fastrace::trace]
@@ -499,9 +514,10 @@ impl<RT: Runtime> SegmentTermMetadataFetcher for SearcherImpl<RT> {
         labels: SearchIndexMetricLabels<'_>,
     ) -> anyhow::Result<BTreeMap<Field, Vec<TermOrdinal>>> {
         let timer = text_query_term_ordinals_searcher_timer();
+        let segment_key = segment;
         let segment_archive = self
             .archive_cache
-            .get(search_storage, &segment, SearchFileType::Text, labels)
+            .get(search_storage, &segment_key, SearchFileType::Text, labels)
             .await?;
         let reader = index_reader_for_directory(&segment_archive).await?;
         let searcher = reader.searcher();
@@ -517,9 +533,13 @@ impl<RT: Runtime> SegmentTermMetadataFetcher for SearcherImpl<RT> {
             let inverted_index = segment.inverted_index(field)?;
             for term_value in term_values {
                 let term_dict = inverted_index.terms();
-                let term_ord = term_dict
-                    .term_ord(term_value)?
-                    .context("Segment must contain term")?;
+                let term_ord = term_dict.term_ord(&term_value)?.with_context(|| {
+                    format!(
+                        "Segment must contain term (segment: {segment_key:?}, field: {field:?}, \
+                         salted term sha256: {})",
+                        salted_term_hash(&term_value)
+                    )
+                })?;
                 term_ordinals.push(term_ord);
             }
             field_to_term_ordinals.insert(field, term_ordinals);
@@ -906,8 +926,6 @@ impl TryFrom<TokenQuery> for pb::searchlight::TokenQuery {
     fn try_from(value: TokenQuery) -> Result<Self, Self::Error> {
         Ok(pb::searchlight::TokenQuery {
             term: Some(value.term.as_slice().to_vec()),
-            // Older searchlight nodes reject requests without this field.
-            max_distance: Some(0),
             prefix: Some(value.prefix),
         })
     }
@@ -937,8 +955,6 @@ impl TryFrom<TokenMatch> for pb::searchlight::TokenMatch {
 
     fn try_from(value: TokenMatch) -> Result<Self, Self::Error> {
         Ok(pb::searchlight::TokenMatch {
-            // Older backends reject matches without this field.
-            distance: Some(0),
             prefix: Some(value.prefix),
             tantivy_bytes: Some(value.term.as_slice().to_vec()),
             token_ord: Some(value.token_ord),

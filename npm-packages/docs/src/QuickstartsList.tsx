@@ -11,7 +11,6 @@ import NodeLogo from "@site/static/img/node-logo.svg";
 import BunLogo from "@site/static/img/bun-logo.svg";
 import PythonLogo from "@site/static/img/python-logo.svg";
 import ReactLogo from "@site/static/img/react-logo.svg";
-import RemixLogo from "@site/static/img/remix-logo.svg";
 import RustLogo from "@site/static/img/rust-logo.svg";
 import SvelteLogo from "@site/static/img/svelte-logo.svg";
 import VueLogo from "@site/static/img/vue-logo.svg";
@@ -168,13 +167,6 @@ export function QuickFrameworksList() {
           href: "/quickstart/nextjs",
           docId: "quickstart/nextjs",
           label: "Next.js",
-        },
-        {
-          icon: <RemixLogo height={40} />,
-          invertIcon: true,
-          href: "/quickstart/remix",
-          docId: "quickstart/remix",
-          label: "Remix",
         },
         {
           icon: <TanStackLogo height={40} />,

@@ -85,6 +85,12 @@ pub fn derive_bits(
             DOMExceptionName::OperationError
         )
     );
+    let byte_length = length / 8;
+    ensure!(
+        // roughly 1s of CPU time in the worst case
+        iterations.get() as u64 * byte_length.max(64) as u64 <= 150_000_000,
+        Error::dom("too many iterations", DOMExceptionName::OperationError)
+    );
     let algorithm = match hash {
         CryptoHash::Sha1 => pbkdf2::PBKDF2_HMAC_SHA1,
         CryptoHash::Sha256 => pbkdf2::PBKDF2_HMAC_SHA256,
@@ -92,7 +98,7 @@ pub fn derive_bits(
         CryptoHash::Sha512 => pbkdf2::PBKDF2_HMAC_SHA512,
     };
     let secret = &key.secret;
-    let mut out = vec![0; length / 8];
+    let mut out = vec![0; byte_length];
     pbkdf2::derive(algorithm, iterations, &salt, secret, &mut out);
     Ok(out)
 }

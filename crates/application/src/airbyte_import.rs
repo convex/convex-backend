@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use common::bootstrap_model::index::database_index::IndexedFields;
 use const_format::formatcp;
 use errors::ErrorMetadata;
-use fivetran_destination::constants::{
+use model::fivetran_import::constants::{
     METADATA_CONVEX_FIELD_NAME,
     SOFT_DELETE_CONVEX_FIELD_NAME,
 };

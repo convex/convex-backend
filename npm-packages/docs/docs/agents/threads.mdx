@@ -124,6 +124,39 @@ const threads = await ctx.runQuery(
 );
 ```
 
+### Listing threads by recent activity
+
+Threads carry no `updatedAt`. Keeping one on the thread would mean patching the
+thread document on every message, which makes concurrent generations in one
+thread contend on a single row. Keep the activity index in your app instead,
+where the mutation that accepts a user message already runs:
+
+```ts
+// convex/schema.ts
+threadActivity: defineTable({
+  userId: v.string(),
+  threadId: v.string(),
+  lastActivityAt: v.number(),
+})
+  .index("by_threadId", ["threadId"])
+  .index("by_userId_lastActivityAt", ["userId", "lastActivityAt"]),
+```
+
+Upsert the row by `by_threadId` in the same mutation that saves the prompt,
+delete it by the same index when the thread is deleted, and list with the
+activity index:
+
+```ts
+const recent = await ctx.db
+  .query("threadActivity")
+  .withIndex("by_userId_lastActivityAt", (q) => q.eq("userId", userId))
+  .order("desc")
+  .paginate(paginationOpts);
+```
+
+One write per user turn, no component reads to list, and the ordering is
+whatever your app defines as activity.
+
 ## Deleting all threads and messages associated with a user
 
 Asynchronously (from a mutation or action):

@@ -75,8 +75,9 @@ export type ServiceName = "ai-gateway";
  *
  * This function can only be called while an action is running. The credential
  * is scoped to the current deployment and should be sent as a bearer token.
- * The action runtime caches and refreshes credentials as needed, so call
- * this function whenever making a service request.
+ * Credentials expire a few minutes after they're issued. The action runtime
+ * caches and refreshes them as needed, so call this function whenever making
+ * a service request rather than reusing one credential for a long action.
  *
  * @param service - The service the credential may access.
  * @returns A JWT to send as `Authorization: Bearer <token>`. Keep it inside

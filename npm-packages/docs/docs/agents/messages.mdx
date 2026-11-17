@@ -18,9 +18,9 @@ messages. For streaming, see
 modified version of this query.
 
 See
-[chat/basic.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/basic.ts)
+[chat/basic.ts](https://github.com/convex/agent/blob/main/example/convex/chat/basic.ts)
 for the server-side code, and
-[chat/streaming.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/streaming.ts)
+[chat/streaming.ts](https://github.com/convex/agent/blob/main/example/convex/chat/streaming.ts)
 for the streaming example.
 
 ```ts
@@ -52,11 +52,15 @@ If you want to get MessageDocs, you can use `listMessages` instead.
 
 ## Showing messages in React
 
-See
-[ChatStreaming.tsx](https://github.com/get-convex/agent/blob/main/example/ui/chat/ChatStreaming.tsx)
-for a streaming example, or
-[ChatBasic.tsx](https://github.com/get-convex/agent/blob/main/example/ui/chat/ChatBasic.tsx)
-for a non-streaming example.
+Examples:
+
+- [ChatBasic.tsx](https://github.com/convex/agent/blob/main/example/ui/chat/ChatBasic.tsx):
+  non-streaming messages.
+- [ChatStreaming.tsx](https://github.com/convex/agent/blob/main/example/ui/chat/ChatStreaming.tsx):
+  streaming messages with custom React components.
+- [ChatAssistantUI.tsx](https://github.com/convex/agent/blob/main/example/ui/chat/ChatAssistantUI.tsx):
+  streaming messages and tool approvals with
+  [assistant-ui](https://www.assistant-ui.com/).
 
 ### `useUIMessages` hook
 
@@ -95,9 +99,8 @@ metadata for rendering messages.
 
 The core UIMessage type from the AI SDK is:
 
-- `parts` is an array of parts (e.g. "text", "file", "image", "toolCall",
-  "toolResult")
-- `content` is a string of the message content.
+- `parts` is an array of parts (e.g. "text", "file", "reasoning",
+  `tool-${toolName}`, "dynamic-tool")
 - `role` is the role of the message (e.g. "user", "assistant", "system").
 
 The helper adds these additional fields:

@@ -28,9 +28,11 @@ use the delta streaming approach (see
 Example:
 
 - Server:
-  [streaming.ts](https://github.com/get-convex/agent/blob/main/example/convex/chat/streaming.ts)
+  [streaming.ts](https://github.com/convex/agent/blob/main/example/convex/chat/streaming.ts)
 - Client:
-  [ChatStreaming.tsx](https://github.com/get-convex/agent/blob/main/example/ui/chat/ChatStreaming.tsx)
+  [ChatStreaming.tsx](https://github.com/convex/agent/blob/main/example/ui/chat/ChatStreaming.tsx)
+- Client with assistant-ui:
+  [ChatAssistantUI.tsx](https://github.com/convex/agent/blob/main/example/ui/chat/ChatAssistantUI.tsx)
 
 ## Streaming message deltas
 
@@ -152,7 +154,7 @@ import { SmoothText } from "@convex-dev/agent/react";
 
 You can consume the stream in all the ways you can with the underlying AI SDK -
 for instance iterating over the content, or using
-[`result.toDataStreamResponse()`](https://ai-sdk.dev/docs/reference/ai-sdk-core/stream-text#to-data-stream-response).
+[`result.toUIMessageStreamResponse()`](https://ai-sdk.dev/docs/reference/ai-sdk-core/stream-text#to-ui-message-stream-response).
 
 If you are not also saving the deltas, it might look like this:
 
@@ -163,6 +165,11 @@ for await (const textPart of result.textStream) {
   console.log(textPart);
 }
 ```
+
+`agent.streamObject` saves the object from the AI SDK's `onFinish`, which only
+runs once the stream has been read to the end. Read `result.partialObjectStream`
+to the end before the action returns: awaiting `result.object` alone does not
+read the stream.
 
 If you want to both iterate as the stream is happening, as well as save the
 deltas, you can pass `{ saveStreamDeltas: { returnImmediately: true } }` to
@@ -182,6 +189,117 @@ return result.toUIMessageStreamResponse();
 
 If you don't want to have the Agent involved at all, the next section will show
 you how to save the deltas yourself.
+
+### Using `useChat` from `@ai-sdk/react`
+
+`toUIMessageStreamResponse()` returns the response shape `useChat` consumes, so
+the AI SDK's React hook and the tooling built around it work against an
+`httpAction`. The hook posts its `messages` array. Validate the last user
+message, use its text as the prompt, and let the agent load the rest of the
+history from the thread:
+
+```ts
+// convex/chat.ts
+import { z } from "zod";
+import { getThreadMetadata } from "@convex-dev/agent";
+import { components } from "./_generated/api";
+import { httpAction } from "./_generated/server";
+import { storyAgent } from "./agents/story";
+import { getAuthUserId } from "./utils";
+
+const chatRequest = z.object({
+  threadId: z.string().min(1),
+  messages: z.array(
+    z.object({ role: z.string(), parts: z.array(z.unknown()) }),
+  ),
+});
+const textPart = z.object({ type: z.literal("text"), text: z.string() });
+
+export const chat = httpAction(async (ctx, request) => {
+  const parsed = chatRequest.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return new Response("Invalid request", { status: 400 });
+  const { messages, threadId } = parsed.data;
+  const last = messages.at(-1);
+  if (last?.role !== "user") {
+    return new Response("Expected a user message", { status: 400 });
+  }
+  const prompt = last.parts
+    .flatMap((part) => {
+      const text = textPart.safeParse(part);
+      return text.success ? [text.data.text] : [];
+    })
+    .join("");
+  if (!prompt) return new Response("No prompt text", { status: 400 });
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return new Response("Unauthorized", { status: 401 });
+  const thread = await getThreadMetadata(ctx, components.agent, { threadId });
+  if (thread.userId !== userId) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  const result = await storyAgent.streamText(
+    ctx,
+    { threadId },
+    { prompt },
+    { saveStreamDeltas: { returnImmediately: true } },
+  );
+  return result.toUIMessageStreamResponse();
+});
+```
+
+Route it in `convex/http.ts` with CORS, as in
+[http.ts](https://github.com/convex/agent/blob/main/example/convex/http.ts):
+
+```ts
+// convex/http.ts
+import { httpRouter } from "convex/server";
+import { corsRouter } from "convex-helpers/server/cors";
+import { chat } from "./chat";
+
+const http = httpRouter();
+const cors = corsRouter(http, {
+  allowedHeaders: ["Authorization", "Content-Type"],
+});
+cors.route({ path: "/chat", method: "POST", handler: chat });
+export default http;
+```
+
+Then point the transport at it. `VITE_CONVEX_SITE_URL` is your deployment's
+`.convex.site` URL, which `npx convex dev` writes for Vite apps:
+
+```tsx
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+
+const { messages, sendMessage } = useChat({
+  transport: new DefaultChatTransport({
+    api: `${import.meta.env.VITE_CONVEX_SITE_URL}/chat`,
+    body: { threadId },
+    headers: async () => ({ Authorization: `Bearer ${await getToken()}` }),
+  }),
+});
+```
+
+This example handles text-only user sends. Add handling for attachments or
+regeneration if your chat UI supports them.
+
+The access check returns 401 or 403 itself, so `useChat` sees the status instead
+of an opaque CORS failure, while unexpected errors still surface as server
+errors. `getAuthUserId` is the example app's demo stub
+(`example/convex/utils.ts`), which ignores the request, so in your app derive
+the user from `ctx.auth.getUserIdentity()` with
+[Convex auth](https://docs.convex.dev/auth) configured. `DefaultChatTransport`
+does not automatically send the Convex client's auth token to an HTTP action, so
+the transport passes it as an `Authorization: Bearer <token>` header, with
+`getToken` standing in for your auth provider's getter for the Convex JWT. See
+[HTTP action auth](https://docs.convex.dev/auth/functions-auth#http-actions).
+
+The trade-off is where state lives. `useChat` holds the conversation in the
+browser tab that made the request; the agent still persists every message, but a
+new `useChat` instance does not automatically load or subscribe to that history.
+On reload, seed its `messages` from a query over the thread. `useUIMessages`
+reads the same persisted messages and deltas reactively from the database, so
+every subscriber sees the stream. Use `useChat` when you need its ecosystem, and
+`useUIMessages` when you need the conversation to be shared.
 
 ## Advanced: Streaming deltas asynchronously without using an Agent
 

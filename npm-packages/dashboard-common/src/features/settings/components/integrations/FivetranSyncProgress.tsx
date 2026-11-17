@@ -192,7 +192,7 @@ export function SyncProgress({
       )}
       {status.type === "snapshotting" ? (
         <p className="text-xs text-content-secondary">
-          {snapshotDetail(status)}
+          <SnapshotDetail status={status} />
         </p>
       ) : (
         status.totalTables !== undefined &&
@@ -214,26 +214,24 @@ function SnapshotProgressBar({
   // The totals are 0 until the deployment's table summaries finish
   // bootstrapping, leaving nothing to measure the snapshot against.
   if (status.totalDocuments === 0) {
-    return (
-      <ProgressBar fraction={undefined} ariaLabel="Initial snapshot progress" />
-    );
+    return <ProgressBar fraction={undefined} ariaLabel="Sync progress" />;
   }
   return (
     <ProgressBarWithPercent
-      // `numDocumentsSynced` counts tombstones and re-synced revisions, so it
-      // can overshoot the total: cap below 100% rather than claim the snapshot
-      // is finished.
+      // Every document can be traversed while the sync is still catching up
+      // to a table change: cap below 100% rather than claim the snapshot is
+      // finished.
       fraction={Math.min(
         0.99,
         status.numDocumentsSynced / status.totalDocuments,
       )}
       variant="stripes"
-      ariaLabel="Initial snapshot progress"
+      ariaLabel="Sync progress"
     />
   );
 }
 
-function snapshotDetail(status: ActiveDataSyncSnapshotting): string {
+function SnapshotDetail({ status }: { status: ActiveDataSyncSnapshotting }) {
   const table = status.currentComponent
     ? `${status.currentComponent}/${status.currentTable}`
     : status.currentTable;
@@ -244,7 +242,37 @@ function snapshotDetail(status: ActiveDataSyncSnapshotting): string {
     status.totalDocuments === 0
       ? `${formatNumber(status.numDocumentsSynced)} documents synced`
       : `${formatNumberCompact(status.numDocumentsSynced)} of ${formatNumberCompact(status.totalDocuments)} documents`;
-  return `${table} · table ${formatNumber(tableIndex)} of ${formatNumber(status.totalTables)} · ${documents}`;
+  const tableProgress =
+    status.totalDocumentsInCurrentTable === 0
+      ? `${formatNumberCompact(status.numDocumentsInCurrentTable)} documents synced`
+      : `${formatNumberCompact(status.numDocumentsInCurrentTable)} of ${formatNumberCompact(status.totalDocumentsInCurrentTable)} documents`;
+  return (
+    <>
+      <Tooltip
+        tip={
+          <div className="flex w-56 flex-col gap-1 p-1 text-left">
+            <ProgressBar
+              fraction={
+                status.totalDocumentsInCurrentTable === 0
+                  ? undefined
+                  : Math.min(
+                      0.99,
+                      status.numDocumentsInCurrentTable /
+                        status.totalDocumentsInCurrentTable,
+                    )
+              }
+              ariaLabel="Table sync progress"
+              className="h-1.5"
+            />
+            <span className="text-content-secondary">{tableProgress}</span>
+          </div>
+        }
+      >
+        <span className="underline decoration-dotted">{table}</span>
+      </Tooltip>
+      {` · table ${formatNumber(tableIndex)} of ${formatNumber(status.totalTables)} · ${documents}`}
+    </>
+  );
 }
 
 /**
@@ -284,10 +312,10 @@ function distanceToNow(ms: number): string {
 
 function snapshotProgressLabel(status: ActiveDataSyncSnapshotting): string {
   if (status.totalDocuments === 0) {
-    return "initial snapshot";
+    return `${formatNumber(status.numDocumentsSynced)} documents synced`;
   }
   const percent = Math.round(
     Math.min(0.99, status.numDocumentsSynced / status.totalDocuments) * 100,
   );
-  return `${percent}% of initial snapshot`;
+  return `${percent}% of documents synced`;
 }

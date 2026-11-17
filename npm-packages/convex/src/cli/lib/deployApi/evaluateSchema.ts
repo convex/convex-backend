@@ -25,11 +25,26 @@ export const indexChangePrediction = z.enum([
 ]);
 export type IndexChangePrediction = z.infer<typeof indexChangePrediction>;
 
+// Mirrors `StagedValidatorState` in
+// `crates/application/src/deploy_config.rs`.
+export const stagedValidatorState = z.union([
+  looseObject({
+    state: z.literal("pending"),
+    numDocsValidated: z.number(),
+    totalDocs: z.number().nullable().optional(),
+  }),
+  looseObject({ state: z.literal("valid") }),
+  looseObject({ state: z.literal("failed"), error: z.string() }),
+]);
+export type StagedValidatorState = z.infer<typeof stagedValidatorState>;
+
 export const tablePrediction = looseObject({
   name: z.string(),
   outcome: tableValidationOutcome,
   numDocs: z.number(),
   sizeBytes: z.number(),
+  staged: stagedValidatorState.optional(),
+  canSkipAfterStagedValidation: z.boolean().optional(),
 });
 export type TablePrediction = z.infer<typeof tablePrediction>;
 
@@ -43,11 +58,30 @@ export const indexPrediction = z.intersection(
 );
 export type IndexPrediction = z.infer<typeof indexPrediction>;
 
+// Mirrors `SerializedDiscardedStagedValidator` in
+// `crates/local_backend/src/deploy_config2.rs`. The backend never discards a
+// failed validator, since a redeploy retries it anyway.
+export const discardedStagedValidator = looseObject({
+  tableName: z.string(),
+  state: z.union([
+    looseObject({
+      state: z.literal("pending"),
+      numDocsValidated: z.number(),
+      totalDocs: z.number().nullable().optional(),
+    }),
+    looseObject({ state: z.literal("valid") }),
+  ]),
+  replaced: z.boolean(),
+});
+export type DiscardedStagedValidator = z.infer<typeof discardedStagedValidator>;
+
 export const componentSchemaPrediction = looseObject({
   definitionPath: z.string(),
   schemaValidation: z.boolean(),
   tables: z.array(tablePrediction),
   indexes: z.array(indexPrediction),
+  // Optional: responses from backends predating the field.
+  discardedStagedValidators: z.array(discardedStagedValidator).optional(),
 });
 export type ComponentSchemaPrediction = z.infer<
   typeof componentSchemaPrediction

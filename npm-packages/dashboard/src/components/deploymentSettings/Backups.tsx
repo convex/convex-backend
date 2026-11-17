@@ -300,6 +300,7 @@ export function AutomaticBackupSelector({
         <span>Backup</span>
         <BackupScheduleSelector
           cronspec={periodicBackup?.cronspec ?? null}
+          includeStorage={includeStorage}
           deployment={deployment}
           loading={periodicBackup === undefined}
           canConfigurePeriodic={canConfigurePeriodic}
@@ -347,6 +348,7 @@ export function AutomaticBackupSelector({
 
 export function BackupScheduleSelector({
   cronspec,
+  includeStorage,
   deployment,
   disabled = false,
   loading = false,
@@ -354,6 +356,7 @@ export function BackupScheduleSelector({
   canDisablePeriodic = true,
 }: {
   cronspec: string | null;
+  includeStorage: boolean;
   deployment: PlatformDeploymentResponse;
   disabled?: boolean;
   loading?: boolean;
@@ -422,6 +425,7 @@ export function BackupScheduleSelector({
             cronspec === null ? "never" : isWeekly ? "weekly" : "daily"
           }
           defaultDayOfWeek={dayOfWeekNum ?? defaultDayOfWeek}
+          includeStorage={includeStorage}
           onClose={close}
           deployment={deployment}
           canConfigurePeriodic={canConfigurePeriodic}
@@ -436,6 +440,7 @@ export function BackupScheduleSelectorInner({
   defaultValue,
   defaultPeriodicity,
   defaultDayOfWeek,
+  includeStorage,
   onClose,
   deployment,
   canConfigurePeriodic = true,
@@ -444,6 +449,7 @@ export function BackupScheduleSelectorInner({
   defaultValue: Date;
   defaultPeriodicity: "never" | "daily" | "weekly";
   defaultDayOfWeek: number;
+  includeStorage: boolean;
   onClose: () => void;
   deployment: PlatformDeploymentResponse;
   canConfigurePeriodic?: boolean;
@@ -484,7 +490,6 @@ export function BackupScheduleSelectorInner({
             const [newHoursLocal, newMinutesLocal] = value.split(":");
             const nowLocal = new Date();
             nowLocal.setHours(+newHoursLocal, +newMinutesLocal);
-            const enablingAutomaticBackups = defaultPeriodicity === "never";
             await configurePeriodicBackup({
               cronspec:
                 periodicity === "daily"
@@ -493,7 +498,8 @@ export function BackupScheduleSelectorInner({
               ...(periodicity === "weekly"
                 ? { expirationDeltaSecs: 14 * 24 * 60 * 60 }
                 : {}),
-              ...(enablingAutomaticBackups ? { includeStorage: false } : {}),
+              includeStorage:
+                defaultPeriodicity === "never" ? false : includeStorage,
             });
             toast("success", "Your backup schedule was modified.");
           }

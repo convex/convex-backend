@@ -249,9 +249,7 @@ message MultiSegmentMetadata {
 
 message TokenQuery {
   optional bytes term = 1;
-  // Always written as 0 and ignored on read. Older searchlight nodes require
-  // it to be present; a follow-up stops writing it and reserves field 2.
-  optional uint32 max_distance = 2;
+  reserved 2;
   optional bool prefix = 3;
 }
 
@@ -260,9 +258,7 @@ message QueryTokensResponse {
 }
 
 message TokenMatch {
-  // Always written as 0 and ignored on read. Older backends require it to be
-  // present; a follow-up stops writing it and reserves field 1.
-  optional uint32 distance = 1;
+  reserved 1;
   optional bool prefix = 2;
   optional bytes tantivy_bytes = 3;
   // Offset into `QueryTokensRequest.token_queries`.

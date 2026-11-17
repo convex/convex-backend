@@ -3,7 +3,7 @@ import Markdown from "react-markdown";
 import skills from "../data/agent-skills.json";
 
 const SKILLS_BASE_URL =
-  "https://github.com/get-convex/agent-skills/blob/main/skills";
+  "https://github.com/convex/agent-skills/blob/main/skills";
 
 export function AgentSkills() {
   return (

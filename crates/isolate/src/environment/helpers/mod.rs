@@ -7,6 +7,13 @@ mod version;
 use std::ops::Deref;
 
 use anyhow::Context;
+use common::{
+    log_lines::{
+        LogLevel,
+        LogLine,
+    },
+    runtime::UnixTimestamp,
+};
 use deno_core::{
     serde_v8,
     v8,
@@ -31,7 +38,19 @@ pub use self::{
 };
 
 pub const MAX_LOG_LINE_LENGTH: usize = 32768;
-pub const MAX_LOG_LINES: usize = 256;
+
+/// The `[ERROR]` line a function's logs end with once it logs past
+/// `max_log_lines`. It occupies the last of those slots, so callers stop
+/// accepting user lines at `max_log_lines - 1`.
+pub fn log_overflow_log_line(max_log_lines: usize, timestamp: UnixTimestamp) -> LogLine {
+    LogLine::new_developer_log_line(
+        LogLevel::Error,
+        vec![format!(
+            "Log overflow (maximum {max_log_lines}). Remaining log lines omitted."
+        )],
+        timestamp,
+    )
+}
 
 #[derive(Debug, derive_more::Display)]
 pub struct ArgName(pub &'static str);

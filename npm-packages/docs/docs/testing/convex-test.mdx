@@ -14,6 +14,7 @@ import GlobalsDemo from "!!raw-loader!@site/../demos/convex-test/convex/globals.
 import ErrorDemo from "!!raw-loader!@site/../demos/convex-test/convex/error.test.ts";
 import HttpDemo from "!!raw-loader!@site/../demos/convex-test/convex/http.test.ts";
 import RunDemo from "!!raw-loader!@site/../demos/convex-test/convex/run.test.ts";
+import DefineTestAppDemo from "!!raw-loader!@site/../demos/convex-test/convex/defineTestApp.test.ts";
 import RequestMetadataDemo from "!!raw-loader!@site/../demos/convex-test/convex/requestMetadata.test.ts";
 
 The [`convex-test`](https://www.npmjs.com/package/convex-test) library provides
@@ -29,7 +30,7 @@ automated testing of the logic in your [functions](/functions/overview.mdx).
 />
 
 You can see more examples in the
-[test suite](https://github.com/get-convex/convex-test/tree/main/convex) of the
+[test suite](https://github.com/convex/convex-test/tree/main/convex) of the
 convex-test library.
 
 ## Get started
@@ -343,7 +344,7 @@ recursively scheduled functions, to finish:
 />
 
 Check out more examples in
-[this file](https://github.com/get-convex/convex-test/blob/main/convex/scheduler.test.ts).
+[this file](https://github.com/convex/convex-test/blob/main/convex/scheduler.test.ts).
 
 ### Authentication
 
@@ -372,6 +373,50 @@ accessor with `t.withRequestMetadata` (version `0.0.59` and later):
   source={RequestMetadataDemo}
   highlightPatterns={["withRequestMetadata"]}
 />
+
+### Define a test application
+
+Use `defineTestApp` to define a small application in your tests, such as a host
+app for a component or library. It provides schema-bound function builders and
+typed function references without needing to export test functions from files.
+
+<Snippet
+  title="convex/defineTestApp.test.ts"
+  source={DefineTestAppDemo}
+  highlightPatterns={["defineTestApp", "app.defineModules", "createTest"]}
+/>
+
+The app provides builders for `query`, `mutation`, `action`, and their
+`internal*` variants with the same syntax as `convex/_generated/server`.
+Register functions with `app.defineModules`, which takes an object mapping
+module paths (such as `"test/callbacks"`) to objects of function exports. It
+returns public references in `api` and internal references in `internal`.
+
+We recommend explicitly annotating return types for handlers that reference this
+API to break TypeScript inference cycles.
+
+Call `createTest()` inside each test for fresh database, scheduler, and
+component registration state. You can also pass options such as
+`createTest({ transactionLimits: true })`.
+
+`defineTestApp` also returns a typed `components` object. Pass component testing
+helpers in its `components` option; each helper's `register` function runs on
+every `createTest()` call. The object keys specify component instance names,
+such as `myWorkpool` above.
+
+To infer the type of `app.components.myWorkpool`, the helper's `register`
+function must return the component's `ComponentApi`. Some existing helpers
+return `void` instead. For those helpers, supply the API type by configuring the
+component as
+`myWorkpool: { register: workpoolTest.register as ComponentRegistration<ComponentApi> }`.
+
+Import `ComponentRegistration` from `convex-test` and `ComponentApi` from the
+component package's `/_generated/component.js` entrypoint.
+
+Additional components can be registered with `t.registerComponent`.
+
+Note: `defineTestApp` does not load `convex.config.ts`. See the
+[component client testing example](/components/authoring.mdx#testing-the-api-and-client-code).
 
 ## Vitest tips
 

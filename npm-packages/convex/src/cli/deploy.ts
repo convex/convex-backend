@@ -123,6 +123,12 @@ Same format as .env.local or .env files, and overrides them.`,
     // blocking backfill through.
     new Option("--allow-deleting-large-indexes").hideHelp(),
   )
+  .addOption(
+    new Option(
+      "--allow-unstaging-schema",
+      "Skip the confirmation prompt when this push discards a staged table validator that is validating or already validated.",
+    ),
+  )
   .showHelpAfterError()
   .action(async (cmdOptions) => {
     const ctx = await oneoffContext(cmdOptions);
@@ -215,6 +221,7 @@ Same format as .env.local or .env files, and overrides them.`,
         skipLargeIndexesCheck: cmdOptions.skipLargeIndexesCheck ?? false,
         allowDeletingLargeIndexes:
           cmdOptions.allowDeletingLargeIndexes ?? false,
+        allowUnstagingSchema: cmdOptions.allowUnstagingSchema ?? false,
         message: cmdOptions.message ?? getDefaultDeployMessage(),
       });
     }
@@ -352,6 +359,9 @@ async function deployToNewPreviewDeployment(
       : options.skipLargeIndexesCheck
         ? "has confirmation"
         : "ask for confirmation",
+    // Staged validation on throwaway preview data is cheap to redo, so
+    // discarding it needs no confirmation.
+    stagedValidatorDeletionCheck: "no verification",
     warnOnSlowSchemaValidation: true,
     message: options.message,
   };
@@ -399,6 +409,7 @@ async function deployToExistingDeployment(
     skipWorkosCheck?: boolean | undefined;
     skipLargeIndexesCheck: boolean;
     allowDeletingLargeIndexes: boolean;
+    allowUnstagingSchema: boolean;
     message: string | null;
   },
 ) {

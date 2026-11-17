@@ -35,7 +35,7 @@ pub type DatabaseVersion = i64;
 // migrations unless explicitly dropping support.
 // Add a user name next to the version when you make a change to highlight merge
 // conflicts.
-pub const DATABASE_VERSION: DatabaseVersion = 133; // ayush
+pub const DATABASE_VERSION: DatabaseVersion = 134; // nipunn
 
 pub struct MigrationExecutor<RT: Runtime> {
     pub db: Database<RT>,
@@ -53,9 +53,7 @@ impl<RT: Runtime> MigrationExecutor<RT> {
                 TableModel::new(&mut tx)
                     .delete_active_table(TableNamespace::Global, backend_serving_record_table)
                     .await?;
-                self.db
-                    .commit_with_write_source(tx, "migration_117")
-                    .await?;
+                self.db.commit(tx, "migration_117").await?;
                 MigrationCompletionCriterion::MigrationComplete(to_version)
             },
             // Empty migration for 118 - represents creation of CronNextRun table
@@ -63,9 +61,7 @@ impl<RT: Runtime> MigrationExecutor<RT> {
             119 => {
                 let mut tx = self.db.begin_system().await?;
                 migr_119::run_migration(&mut tx).await?;
-                self.db
-                    .commit_with_write_source(tx, "migration_119")
-                    .await?;
+                self.db.commit(tx, "migration_119").await?;
                 MigrationCompletionCriterion::MigrationComplete(to_version)
             },
             120 => {
@@ -76,9 +72,7 @@ impl<RT: Runtime> MigrationExecutor<RT> {
             121 => {
                 let mut tx = self.db.begin_system().await?;
                 migr_121::run_migration(&mut tx).await?;
-                self.db
-                    .commit_with_write_source(tx, "migration_121")
-                    .await?;
+                self.db.commit(tx, "migration_121").await?;
                 MigrationCompletionCriterion::MigrationComplete(to_version)
             },
             122 => {
@@ -94,17 +88,13 @@ impl<RT: Runtime> MigrationExecutor<RT> {
             124 => {
                 let mut tx = self.db.begin_system().await?;
                 migr_124::run_migration(&mut tx).await?;
-                self.db
-                    .commit_with_write_source(tx, "migration_124")
-                    .await?;
+                self.db.commit(tx, "migration_124").await?;
                 MigrationCompletionCriterion::MigrationComplete(to_version)
             },
             125 => {
                 let mut tx = self.db.begin_system().await?;
                 migr_125::run_migration(&mut tx).await?;
-                self.db
-                    .commit_with_write_source(tx, "migration_125")
-                    .await?;
+                self.db.commit(tx, "migration_125").await?;
                 MigrationCompletionCriterion::MigrationComplete(to_version)
             },
             126 => {
@@ -139,9 +129,7 @@ impl<RT: Runtime> MigrationExecutor<RT> {
                     let mut tx = self.db.begin_system().await?;
                     let progress = migr_130::run_migration(&mut tx, cursor).await?;
                     if progress.patched > 0 {
-                        self.db
-                            .commit_with_write_source(tx, "migration_130")
-                            .await?;
+                        self.db.commit(tx, "migration_130").await?;
                     }
                     let Some(next) = progress.cursor else {
                         break;
@@ -162,9 +150,11 @@ impl<RT: Runtime> MigrationExecutor<RT> {
             133 => {
                 let mut tx = self.db.begin_system().await?;
                 migr_133::run_migration(&mut tx).await?;
-                self.db
-                    .commit_with_write_source(tx, "migration_133")
-                    .await?;
+                self.db.commit(tx, "migration_133").await?;
+                MigrationCompletionCriterion::MigrationComplete(to_version)
+            },
+            134 => {
+                // Bootstrap creates _s3_export_state and its index before migration runs.
                 MigrationCompletionCriterion::MigrationComplete(to_version)
             },
             _ => anyhow::bail!("Version did not define a migration! {}", to_version),

@@ -9,6 +9,7 @@ import Messages from "!!raw-loader!@site/../demos/file-storage/convex/messages.t
 import App from "!!raw-loader!@site/../demos/file-storage/src/App.tsx";
 import Http from "!!raw-loader!@site/../demos/file-storage-with-http/convex/http.ts";
 import HttpApp from "!!raw-loader!@site/../demos/file-storage-with-http/src/App.tsx";
+import FilesInMutations from "!!raw-loader!@site/../private-demos/snippets/convex/filesInMutations.ts";
 
 Files stored in Convex can be served to your users by generating a URL pointing
 to a given file.
@@ -81,7 +82,7 @@ before returning the file.
 
 A file [`Blob`](https://developer.mozilla.org/en-US/docs/Web/API/Blob) object
 can be generated from a storage ID by the
-[`storage.get`](/api/interfaces/server.StorageActionWriter#get) function of the
+[`storage.get`](/api/interfaces/server.StorageWriter#get) function of the
 [`ActionCtx`](/api/interfaces/server.GenericActionCtx) object, which can be
 returned in a `Response`:
 
@@ -99,3 +100,25 @@ The URL of such an action can be used directly in `img` elements to render
 images:
 
 <Snippet title="src/App.tsx" source={HttpApp} snippet="getImage" />
+
+## Reading files in mutations
+
+Mutations can also read the contents of a file using
+[`storage.get()`](/api/interfaces/server.StorageWriter#get). For example, a
+mutation can parse an uploaded file and write documents based on its contents in
+a single transaction:
+
+<Snippet
+  title="convex/filesInMutations.ts"
+  source={FilesInMutations}
+  snippet="getInMutation"
+  highlightPatterns={["storage.get"]}
+/>
+
+See the [limits](/production/state/limits.mdx#transactions) for the number and
+total size of files a mutation can read, including in mutations it calls with
+`ctx.runMutation`. Reading the same file more than once or reading a file stored
+earlier in the same mutation doesn't count toward the limits again. To read
+larger files, use an [action](/functions/actions.mdx).
+
+Queries can't read file contents.

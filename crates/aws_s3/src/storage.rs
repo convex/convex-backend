@@ -1,6 +1,8 @@
 use std::{
     env,
+    path::Path,
     pin::Pin,
+    sync::Arc,
     time::{
         Duration,
         SystemTime,
@@ -11,7 +13,6 @@ use anyhow::Context;
 use async_trait::async_trait;
 use aws_config::retry::RetryConfig;
 use aws_sdk_s3::{
-    config::IdentityCache,
     error::ProvideErrorMetadata,
     operation::{
         create_multipart_upload::builders::CreateMultipartUploadFluentBuilder,
@@ -41,10 +42,7 @@ use aws_utils::{
 use bytes::Bytes;
 use common::{
     errors::report_error,
-    knobs::{
-        AWS_S3_MIN_IDENTITY_VALIDITY,
-        STORAGE_MAX_INTERMEDIATE_PART_SIZE,
-    },
+    knobs::STORAGE_MAX_INTERMEDIATE_PART_SIZE,
     runtime::Runtime,
     types::{
         FullyQualifiedObjectKey,
@@ -65,6 +63,7 @@ use futures::{
     StreamExt,
     TryStreamExt,
 };
+use pb::searchlight::storage_type::StorageType;
 use serde_json::{
     json,
     Value as JsonValue,
@@ -74,6 +73,7 @@ use storage::{
     ClientDrivenUploadPartToken,
     ClientDrivenUploadToken,
     InvalidGetRangeError,
+    LocalDirStorage,
     ObjectAttributes,
     ObjectListing,
     Storage,
@@ -213,6 +213,22 @@ impl<RT: Runtime> S3Storage<RT> {
     }
 }
 
+/// Inverse of [`Storage::storage_type_proto`].
+pub async fn storage_from_proto<RT: Runtime>(
+    rt: RT,
+    storage_type: StorageType,
+) -> anyhow::Result<Arc<dyn Storage>> {
+    Ok(match storage_type {
+        StorageType::S3(prefix) => {
+            Arc::new(S3Storage::new_with_prefix(prefix.bucket, prefix.prefix, rt).await?)
+        },
+        StorageType::Local(dir) => Arc::new(LocalDirStorage::new_at_path(
+            rt,
+            Path::new(&dir.path).to_owned(),
+        )?),
+    })
+}
+
 async fn s3_client() -> Result<Client, anyhow::Error> {
     static S3_CLIENT: tokio::sync::OnceCell<Client> = tokio::sync::OnceCell::const_new();
     let client = S3_CLIENT
@@ -220,14 +236,7 @@ async fn s3_client() -> Result<Client, anyhow::Error> {
             let config = must_s3_config_from_env()
                 .await
                 .context("AWS env variables are required when using S3 storage")?;
-            let s3_config = config
-                .identity_cache(
-                    IdentityCache::lazy()
-                        .buffer_time(*AWS_S3_MIN_IDENTITY_VALIDITY)
-                        .build(),
-                )
-                .retry_config(RetryConfig::standard())
-                .build();
+            let s3_config = config.retry_config(RetryConfig::standard()).build();
             anyhow::Ok(Client::from_conf(s3_config))
         })
         .await?
@@ -324,13 +333,13 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
         part_number: u16,
         part: Bytes,
     ) -> anyhow::Result<ClientDrivenUploadPartToken> {
+        let part_number = PartNumber::try_from(part_number)
+            .map_err(|e| ErrorMetadata::bad_request("Invalid part number", e.to_string()))?;
         let ClientDrivenUpload {
             object_key,
             upload_id,
         } = token.try_into()?;
         let s3_key = self.s3_key(&object_key);
-        PartNumber::try_from(part_number + 1)
-            .map_err(|e| ErrorMetadata::bad_request("Invalid part number", e.to_string()))?;
         let mut s3_upload = S3Upload::new_client_driven(
             self.client.clone(),
             self.bucket.clone(),
@@ -339,7 +348,7 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
             s3_key,
             self.runtime.clone(),
             vec![],
-            part_number.try_into()?,
+            part_number,
         )?;
         s3_upload.write(part).await?;
         let object_part = s3_upload
@@ -523,9 +532,10 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
         let prefix = self.key_prefix.clone();
         let bucket = self.bucket.clone();
         pb::searchlight::StorageType {
-            storage_type: Some(pb::searchlight::storage_type::StorageType::S3(
-                pb::searchlight::S3Storage { prefix, bucket },
-            )),
+            storage_type: Some(StorageType::S3(pb::searchlight::S3Storage {
+                prefix,
+                bucket,
+            })),
         }
     }
 
@@ -661,7 +671,7 @@ pub struct S3Upload<RT: Runtime> {
     key: ObjectKey,
     s3_key: S3Key,
     uploaded_parts: Vec<ObjectPart>,
-    next_part_number: PartNumber,
+    next_part_number: Option<PartNumber>,
     /// Initialized to true - set to fault if cleanly completed or cleanly
     /// aborted explicitly. Aborting helps save space by cleaning out
     /// incomplete multipart uploads.
@@ -685,7 +695,7 @@ impl<RT: Runtime> S3Upload<RT> {
             key,
             s3_key,
             uploaded_parts: vec![],
-            next_part_number: 1.try_into()?,
+            next_part_number: Some(1.try_into()?),
             needs_abort_on_drop: true,
             runtime,
         })
@@ -708,15 +718,19 @@ impl<RT: Runtime> S3Upload<RT> {
             key,
             s3_key,
             uploaded_parts,
-            next_part_number,
+            next_part_number: Some(next_part_number),
             needs_abort_on_drop: false,
             runtime,
         })
     }
 
     fn next_part_number(&mut self) -> anyhow::Result<PartNumber> {
-        let part_number = self.next_part_number;
-        self.next_part_number = (Into::<u16>::into(self.next_part_number) + 1).try_into()?;
+        let part_number = self
+            .next_part_number
+            .context("S3 multipart part limit reached")?;
+        self.next_part_number = u16::from(part_number)
+            .checked_add(1)
+            .and_then(|next| PartNumber::try_from(next).ok());
         Ok(part_number)
     }
 

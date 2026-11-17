@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Prepares the platform OpenAPI specs for the docs build, writing the results
-// to `.openapi-filtered/`. Three tag-driven transforms:
+// to `.openapi-filtered/`. Deprecated operations are dropped, since they stay
+// served only for existing callers. Three tag-driven transforms:
 //   - `alpha`: the operation is dropped entirely, so it never appears in docs.
 //   - `beta`: the operation is kept but a Beta admonition is prepended to its
 //     description so it renders with a visible beta marker.
@@ -54,6 +55,10 @@ for (const relPath of SOURCES) {
   for (const [pathStr, pathItem] of Object.entries(spec.paths ?? {})) {
     for (const method of HTTP_METHODS) {
       const op = pathItem[method];
+      if (op?.deprecated) {
+        delete pathItem[method];
+        continue;
+      }
       if (!op?.tags) {
         continue;
       }

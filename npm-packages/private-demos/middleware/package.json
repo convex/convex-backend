@@ -8,7 +8,7 @@
   "dependencies": {
     "classnames": "^2.3.2",
     "convex": "workspace:*",
-    "hono": "^4.12.34",
+    "hono": "^4.13.11",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
     "vitest": "^4.1.0",
@@ -16,11 +16,11 @@
   },
   "devDependencies": {
     "@types/babel__core": "^7.20.0",
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
     "@vitejs/plugin-react": "^4.2.1",
     "typescript": "~5.0.3",
-    "vite": "^6.4.3"
+    "vite": "^6.4.5"
   }
 }

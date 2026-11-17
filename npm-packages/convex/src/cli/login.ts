@@ -1,5 +1,4 @@
 import { Command, Option } from "@commander-js/extra-typings";
-import * as dotenv from "dotenv";
 import { BigBrainAuth, Context, oneoffContext } from "../bundler/context.js";
 import { logFinishedStep, logMessage, logWarning } from "../bundler/log.js";
 import {
@@ -21,12 +20,7 @@ import {
   teamDashboardUrl,
 } from "./lib/dashboard.js";
 import { promptSearch, promptYesNo } from "./lib/utils/prompts.js";
-import {
-  CONVEX_DEPLOY_KEY_ENV_VAR_NAME,
-  CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME,
-  ENV_VAR_FILE_PATH,
-  validateOrSelectTeam,
-} from "./lib/utils/utils.js";
+import { validateOrSelectTeam } from "./lib/utils/utils.js";
 import {
   selectProject,
   updateEnvAndConfigForDeploymentSelection,
@@ -40,31 +34,25 @@ import {
   removeAnonymousPrefix,
 } from "./lib/deployment.js";
 import {
-  readGlobalConfig,
   globalConfigPath,
+  readGlobalConfig,
 } from "./lib/utils/globalConfig.js";
 import { getTeamsForUser } from "./lib/api.js";
-
-/**
- * The env file a deploy key came from, or null if it came from the shell.
- * `dotenv` doesn't overwrite variables that are already set, so a value from
- * the shell outranks these files -- match on the value to tell them apart.
- */
-function deployKeyEnvFile(
-  ctx: Context,
-  envVarName: string,
-  value: string,
-): string | null {
-  for (const file of [ENV_VAR_FILE_PATH, ".env"]) {
-    if (!ctx.fs.exists(file)) {
-      continue;
-    }
-    if (dotenv.parse(ctx.fs.readUtf8File(file))[envVarName] === value) {
-      return file;
-    }
-  }
-  return null;
-}
+import {
+  getAccountSelection,
+  initializeDefaultAccount,
+  legacyAuthForFirstAccount,
+  accountConfigPath,
+  accountNotLoggedInMessage,
+  readAccountAuth,
+  writeAccountCredentials,
+} from "./lib/accounts.js";
+import {
+  getDeployKeySource,
+  loadProjectEnvironmentVariables,
+} from "./lib/envvars.js";
+import { bindAccountToDirectory } from "./lib/accountManagement.js";
+import { warnIfDeployKeyOverridesLogin } from "./lib/deployKeyWarning.js";
 
 /**
  * A project or deployment key in the environment outranks the account token for
@@ -84,11 +72,7 @@ async function reportDeployKeyInWorkingDirectory(
     return;
   }
   const key = auth.kind === "projectKey" ? auth.projectKey : auth.deploymentKey;
-  const envVarName = process.env[CONVEX_DEPLOY_KEY_ENV_VAR_NAME]
-    ? CONVEX_DEPLOY_KEY_ENV_VAR_NAME
-    : CONVEX_DEPLOYMENT_TOKEN_ENV_VAR_NAME;
-  const envFile = deployKeyEnvFile(ctx, envVarName, key);
-  const source = envFile ?? "shell environment";
+  const { envVarName, source } = getDeployKeySource(key);
   // Big Brain only strips a `project:`/`team:` prefix itself, so a deployment
   // key authorizes only without its `dev:`/`prod:` prefix. Split on the first
   // `|` like the server does, so a secret containing one survives.
@@ -100,149 +84,283 @@ async function reportDeployKeyInWorkingDirectory(
   logWarning(`Working Directory: Invalid ${envVarName} in ${source}`);
 }
 
-const loginStatus = new Command("status")
-  .description("Check login status and list accessible teams")
-  .allowExcessArguments(false)
-  .action(async () => {
-    const ctx = await oneoffContext({
-      url: undefined,
-      adminKey: undefined,
-      envFile: undefined,
-    });
-
-    // `_updateBigBrainAuth` below replaces any deploy key in `ctx` with the
-    // account token, so read the deploy key first.
-    const auth = ctx.bigBrainAuth();
-
-    const globalConfig = readGlobalConfig(ctx);
-    if (globalConfig === null) {
-      logMessage(`No Convex account token found in: ${globalConfigPath()}`);
-      logMessage("Status: Not logged in");
-      await reportDeployKeyInWorkingDirectory(ctx, auth);
-      return;
-    }
-    logMessage(`Convex account token found in: ${globalConfigPath()}`);
-
-    const accessToken = globalConfig.accessToken;
-    if (!(await isAuthorizedHeader(ctx, `Bearer ${accessToken}`))) {
-      logMessage("Status: Not logged in");
-      await reportDeployKeyInWorkingDirectory(ctx, auth);
-      return;
-    }
-
-    logMessage("Status: Logged in");
-    // Describe the account, even if a deploy key outranks it for other commands.
-    ctx._updateBigBrainAuth({
-      kind: "accessToken",
-      header: `Bearer ${accessToken}`,
-      accessToken,
-    });
-    const teams = await getTeamsForUser(ctx);
-    logMessage(
-      `Teams: ${teams.length} team${teams.length === 1 ? "" : "s"} accessible`,
-    );
-    for (const team of teams) {
-      logMessage(`  - ${team.name} (${team.slug})`);
-    }
-    await reportDeployKeyInWorkingDirectory(ctx, auth);
-  });
-
-export const login = new Command("login")
-  .description("Login to Convex")
-  .allowExcessArguments(false)
-  .option(
-    "--device-name <name>",
-    "Provide a name for the device being authorized",
-  )
-  .option(
-    "-f, --force",
-    "Proceed with login even if a valid access token already exists for this device",
-  )
-  .option(
-    "--no-open",
-    "Don't automatically open the login link in the default browser",
-  )
-  .addOption(
-    new Option(
-      "--login-flow <mode>",
-      `How to log in; defaults to guessing based on the environment.`,
+function createLoginStatusCommand() {
+  return new Command("status")
+    .description(
+      "Check login status and list accessible teams. Exits with code 1 when not logged in.",
     )
-      .choices(["paste", "auto", "poll"] as const)
-      .default("auto" as const),
-  )
-  .addOption(new Option("--link-deployments").hideHelp())
-  // These options are hidden from the help/usage message, but allow overriding settings for testing.
-  // Change the auth credentials with the auth provider
-  .addOption(new Option("--override-auth-url <url>").hideHelp())
-  .addOption(new Option("--override-auth-client <id>").hideHelp())
-  .addOption(new Option("--override-auth-username <username>").hideHelp())
-  .addOption(new Option("--override-auth-password <password>").hideHelp())
-  // Skip the auth provider login and directly use this access token
-  .addOption(new Option("--override-access-token <token>").hideHelp())
-  // Automatically accept opt ins without prompting
-  .addOption(new Option("--accept-opt-ins").hideHelp())
-  // Dump the access token from the auth provider and skip authorization with Convex
-  .addOption(new Option("--dump-access-token").hideHelp())
-  // Hidden option for tests to check if the user is logged in.
-  .addOption(new Option("--check-login").hideHelp())
-  // Redirect to Vercel SSO integration URL
-  .addOption(
-    new Option(
-      "--vercel",
-      "Redirect to Vercel SSO integration for login",
-    ).hideHelp(),
-  )
-  // Override the Vercel URL slug (defaults to 'convex')
-  .addOption(new Option("--vercel-override <slug>").hideHelp())
-  .addCommand(loginStatus)
-  .addHelpCommand(false)
-  .action(async (options, cmd: Command) => {
-    const ctx = await oneoffContext({
-      url: undefined,
-      adminKey: undefined,
-      envFile: undefined,
-    });
-    if (
-      !options.force &&
-      (await checkAuthorization(ctx, !!options.acceptOptIns))
-    ) {
-      logFinishedStep(
-        "This device has previously been authorized and is ready for use with Convex.",
-      );
-      await handleLinkingDeployments(ctx, {
-        interactive: !!options.linkDeployments,
+    .allowExcessArguments(false)
+    .action(async () => {
+      const ctx = await oneoffContext({
+        url: undefined,
+        adminKey: undefined,
+        envFile: undefined,
       });
-      return;
-    }
-    if (!options.force && options.checkLogin) {
-      const isLoggedIn = await checkAuthorization(ctx, !!options.acceptOptIns);
-      if (!isLoggedIn) {
-        return ctx.crash({
+
+      // Keep the directory's deploy key for separate reporting after selecting
+      // the account whose teams will be listed.
+      const auth = ctx.bigBrainAuth();
+      let accountAuth = auth?.kind === "accessToken" ? auth : null;
+      if (accountAuth === null) {
+        const account = await getAccountSelection(ctx);
+        if (account !== null) {
+          accountAuth = await readAccountAuth(ctx, account, true);
+          if (accountAuth === null) {
+            logMessage(accountNotLoggedInMessage(account));
+            logMessage("Status: Not logged in");
+            await reportDeployKeyInWorkingDirectory(ctx, auth);
+            return await ctx.crash({
+              exitCode: 1,
+              errorType: "fatal",
+              printedMessage: null,
+            });
+          }
+        } else {
+          const globalConfig = readGlobalConfig(ctx);
+          if (globalConfig !== null) {
+            accountAuth = {
+              kind: "accessToken",
+              accessToken: globalConfig.accessToken,
+              header: `Bearer ${globalConfig.accessToken}`,
+              account: null,
+            };
+          }
+        }
+      }
+      if (accountAuth === null) {
+        logMessage(`No Convex account token found in: ${globalConfigPath()}`);
+        logMessage("Status: Not logged in");
+        await reportDeployKeyInWorkingDirectory(ctx, auth);
+        return await ctx.crash({
           exitCode: 1,
           errorType: "fatal",
-          errForSentry: "You are not logged in.",
-          printedMessage: "You are not logged in.",
+          printedMessage: null,
         });
       }
-    }
-    if (!!options.overrideAuthUsername !== !!options.overrideAuthPassword) {
-      cmd.error(
-        "If overriding credentials, both username and password must be provided",
+      warnIfDeployKeyOverridesLogin(ctx, true);
+      if (accountAuth.account) {
+        logMessage(`Account: ${accountAuth.account.name}`);
+        logMessage(`Selected by: ${accountAuth.account.source}`);
+        logMessage(
+          `Convex account token found in: ${accountConfigPath(accountAuth.account.name)}`,
+        );
+      } else if (process.env.CONVEX_OVERRIDE_ACCESS_TOKEN) {
+        logMessage("Using CONVEX_OVERRIDE_ACCESS_TOKEN from the environment");
+      } else {
+        logMessage(`Convex account token found in: ${globalConfigPath()}`);
+      }
+
+      if (!(await isAuthorizedHeader(ctx, accountAuth.header))) {
+        logMessage("Status: Not logged in");
+        await reportDeployKeyInWorkingDirectory(ctx, auth);
+        return await ctx.crash({
+          exitCode: 1,
+          errorType: "fatal",
+          printedMessage: null,
+        });
+      }
+
+      logMessage("Status: Logged in");
+      ctx._updateBigBrainAuth(accountAuth);
+      const teams = await getTeamsForUser(ctx);
+      logMessage(
+        `Teams: ${teams.length} team${teams.length === 1 ? "" : "s"} accessible`,
       );
-    }
-
-    const uuid = loadUuidForAnonymousUser(ctx);
-    await performLogin(ctx, {
-      ...options,
-      anonymousId: uuid,
-      vercel: options.vercel,
-      vercelOverride: options.vercelOverride,
+      for (const team of teams) {
+        logMessage(`  - ${team.name} (${team.slug})`);
+      }
+      await reportDeployKeyInWorkingDirectory(ctx, auth);
     });
+}
 
-    await handleLinkingDeployments(ctx, {
-      interactive: !!options.linkDeployments,
-    });
-  });
+export function createLoginCommand() {
+  return (
+    new Command("login")
+      .description("Login to Convex")
+      .allowExcessArguments(false)
+      .option("--account <name>", "Log in to a named account")
+      .option(
+        "--select",
+        "Select this account for this directory and its subdirectories",
+      )
+      .option(
+        "--device-name <name>",
+        "Provide a name for the device being authorized",
+      )
+      .option(
+        "-f, --force",
+        "Proceed with login even if a valid access token already exists for this device",
+      )
+      .option(
+        "--no-open",
+        "Don't automatically open the login link in the default browser",
+      )
+      .addOption(
+        new Option(
+          "--login-flow <mode>",
+          `How to log in; defaults to guessing based on the environment.`,
+        )
+          .choices(["paste", "auto", "poll"] as const)
+          .default("auto" as const),
+      )
+      .addOption(new Option("--link-deployments").hideHelp())
+      // These options are hidden from the help/usage message, but allow overriding settings for testing.
+      // Change the auth credentials with the auth provider
+      .addOption(new Option("--override-auth-url <url>").hideHelp())
+      .addOption(new Option("--override-auth-client <id>").hideHelp())
+      .addOption(new Option("--override-auth-username <username>").hideHelp())
+      .addOption(new Option("--override-auth-password <password>").hideHelp())
+      // Skip the auth provider login and directly use this access token
+      .addOption(new Option("--override-access-token <token>").hideHelp())
+      // Automatically accept opt ins without prompting
+      .addOption(new Option("--accept-opt-ins").hideHelp())
+      // Dump the access token from the auth provider and skip authorization with Convex
+      .addOption(new Option("--dump-access-token").hideHelp())
+      // Hidden option for tests to check if the user is logged in.
+      .addOption(new Option("--check-login").hideHelp())
+      // Redirect to Vercel SSO integration URL
+      .addOption(
+        new Option(
+          "--vercel",
+          "Redirect to Vercel SSO integration for login",
+        ).hideHelp(),
+      )
+      // Override the Vercel URL slug (defaults to 'convex')
+      .addOption(new Option("--vercel-override <slug>").hideHelp())
+      .addCommand(createLoginStatusCommand())
+      .addHelpCommand(false)
+      .action(async (options, cmd: Command) => {
+        const ctx = await oneoffContext({
+          url: undefined,
+          adminKey: undefined,
+          envFile: undefined,
+          skipAuth: true,
+        });
+        const account = await getAccountSelection(ctx, {
+          name: options.account,
+        });
+        if (options.select && account === null) {
+          cmd.error("Pass --account <name> with --select to name this login.");
+        }
+        loadProjectEnvironmentVariables();
+        let namingLegacyAccount = false;
+        if (account !== null) {
+          let auth = options.force
+            ? null
+            : await readAccountAuth(ctx, account, true);
+          if (
+            auth === null &&
+            !options.force &&
+            !options.overrideAccessToken &&
+            !options.overrideAuthUsername &&
+            !process.env.CONVEX_OVERRIDE_ACCESS_TOKEN
+          ) {
+            auth = await legacyAuthForFirstAccount(ctx, account);
+            namingLegacyAccount = auth !== null;
+          }
+          ctx._updateBigBrainAuth(auth);
+        } else {
+          const accessToken =
+            process.env.CONVEX_OVERRIDE_ACCESS_TOKEN ||
+            readGlobalConfig(ctx)?.accessToken;
+          ctx._updateBigBrainAuth(
+            accessToken
+              ? {
+                  kind: "accessToken",
+                  accessToken,
+                  header: `Bearer ${accessToken}`,
+                  account: null,
+                }
+              : null,
+          );
+        }
+        warnIfDeployKeyOverridesLogin(ctx, ctx.bigBrainAuth() !== null);
+        const alreadyLoggedIn =
+          !options.force &&
+          (await checkAuthorization(ctx, !!options.acceptOptIns));
+        if (alreadyLoggedIn) {
+          const auth = ctx.bigBrainAuth();
+          if (
+            namingLegacyAccount &&
+            account !== null &&
+            auth?.kind === "accessToken"
+          ) {
+            await writeAccountCredentials(
+              ctx,
+              account.name,
+              auth.accessToken,
+              {},
+              null,
+            );
+          }
+          logFinishedStep(
+            account !== null
+              ? namingLegacyAccount
+                ? `Saved account "${account.name}" using your existing login.`
+                : `Account "${account.name}" is already logged in.`
+              : "This device has previously been authorized and is ready for use with Convex.",
+          );
+        } else {
+          if (!options.force && options.checkLogin) {
+            const isLoggedIn = await checkAuthorization(
+              ctx,
+              !!options.acceptOptIns,
+            );
+            if (!isLoggedIn) {
+              return ctx.crash({
+                exitCode: 1,
+                errorType: "fatal",
+                errForSentry: "You are not logged in.",
+                printedMessage: "You are not logged in.",
+              });
+            }
+          }
+          if (
+            !!options.overrideAuthUsername !== !!options.overrideAuthPassword
+          ) {
+            cmd.error(
+              "If overriding credentials, both username and password must be provided",
+            );
+          }
+
+          const uuid = loadUuidForAnonymousUser(ctx);
+          await performLogin(ctx, {
+            ...options,
+            account,
+            anonymousId: uuid,
+            vercel: options.vercel,
+            vercelOverride: options.vercelOverride,
+          });
+        }
+
+        const auth = ctx.bigBrainAuth();
+        if (account !== null && auth?.kind === "accessToken") {
+          await initializeDefaultAccount(
+            ctx,
+            account,
+            namingLegacyAccount,
+            !!options.select,
+          );
+        }
+        if (options.select && account !== null) {
+          if (!(await bindAccountToDirectory(ctx, account.name))) {
+            return await ctx.crash({
+              exitCode: 1,
+              errorType: "fatal",
+              printedMessage: `Logged in as "${account.name}", but the directory selection could not be changed.`,
+            });
+          }
+        }
+        if (!alreadyLoggedIn) warnIfDeployKeyOverridesLogin(ctx, true);
+
+        await handleLinkingDeployments(ctx, {
+          interactive: !!options.linkDeployments,
+        });
+      })
+  );
+}
+
+export const login = createLoginCommand();
 
 async function handleLinkingDeployments(
   ctx: Context,

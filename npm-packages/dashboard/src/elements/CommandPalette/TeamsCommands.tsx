@@ -1,4 +1,4 @@
-import { Command } from "cmdk";
+import { Command, useCommandState } from "cmdk";
 import { GearIcon, PlusIcon } from "@radix-ui/react-icons";
 import type { DirectorySyncOffer, TeamResponse } from "generatedApi";
 import { useTeams } from "api/teams";
@@ -10,10 +10,12 @@ import { useJoinDirectorySyncedTeamPrompt } from "hooks/useJoinDirectorySyncedTe
 import { useRouter } from "next/router";
 import { useCopyAction } from "./copy";
 import { teamSwitchDestination } from "./navigation";
+import { sortByMatch } from "./matchRank";
 import {
   ActionItem,
   CurrentBadge,
   HighlightedText,
+  ItemPrimary,
   LoadingSignal,
   NavigationItem,
   PinnedActions,
@@ -39,10 +41,17 @@ export function TeamsCommands({
   const [, setJoinPrompt] = useJoinDirectorySyncedTeamPrompt();
   const { ignoredTeamIds } = useIgnoredDirectorySyncTeams();
   const { pathname } = useRouter();
+  const search = useCommandState((state) => state.search);
 
   const currentTeam = teams?.find((t) => t.slug === selectedTeamSlug);
-  const availableTeams = offers?.filter(
-    (offer) => !ignoredTeamIds.includes(offer.teamId),
+  const rankedTeams = sortByMatch(teams ?? [], search, (team) => [
+    team.name,
+    team.slug,
+  ]);
+  const availableTeams = sortByMatch(
+    offers?.filter((offer) => !ignoredTeamIds.includes(offer.teamId)) ?? [],
+    search,
+    (offer) => [offer.teamName],
   );
 
   return (
@@ -63,7 +72,7 @@ export function TeamsCommands({
               />
             </Command.Group>
           )}
-          {availableTeams && availableTeams.length > 0 && (
+          {availableTeams.length > 0 && (
             <Command.Group heading="Available Teams">
               {availableTeams.map((offer) => (
                 <JoinTeamItem
@@ -79,17 +88,19 @@ export function TeamsCommands({
             </Command.Group>
           )}
           <Command.Group heading="Switch Team">
-            {teams.map((team) => (
-              <TeamItem
-                key={team.id}
-                team={team}
-                isCurrent={team.slug === selectedTeamSlug}
-                onSelect={() => {
-                  trackSelected("switch-team");
-                  onNavigate(teamSwitchDestination(team.slug, pathname));
-                }}
-              />
-            ))}
+            {rankedTeams.map((team) => {
+              const href = teamSwitchDestination(team.slug, pathname);
+              return (
+                <TeamItem
+                  key={team.id}
+                  team={team}
+                  isCurrent={team.slug === selectedTeamSlug}
+                  href={href}
+                  onTrack={() => trackSelected("switch-team")}
+                  onNavigate={() => onNavigate(href)}
+                />
+              );
+            })}
           </Command.Group>
         </>
       )}
@@ -112,11 +123,15 @@ export function TeamsCommands({
 function TeamItem({
   team,
   isCurrent,
-  onSelect,
+  href,
+  onTrack,
+  onNavigate,
 }: {
   team: TeamResponse;
   isCurrent: boolean;
-  onSelect: () => void;
+  href: string;
+  onTrack: () => void;
+  onNavigate: () => void;
 }) {
   const value = `team:${team.slug}`;
   useCopyAction(value, { label: "slug", getText: () => team.slug });
@@ -125,22 +140,27 @@ function TeamItem({
       value={value}
       className="animate-fadeInFromLoading"
       keywords={[team.name, team.slug]}
-      onSelect={onSelect}
+      onSelect={() => {
+        onTrack();
+        onNavigate();
+      }}
     >
-      <Avatar name={team.name} hashKey={team.id.toString()} />
-      <span className="flex min-w-0 flex-col">
-        <span className="truncate">
-          <HighlightedText text={team.name} />
+      <ItemPrimary href={href} onModifiedClick={onTrack}>
+        <Avatar name={team.name} hashKey={team.id.toString()} />
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate">
+            <HighlightedText text={team.name} />
+          </span>
+          <span className="truncate text-xs text-content-tertiary">
+            <HighlightedText text={team.slug} />
+          </span>
         </span>
-        <span className="truncate text-xs text-content-tertiary">
-          <HighlightedText text={team.slug} />
-        </span>
-      </span>
-      {isCurrent && (
-        <span className="ml-auto text-xs text-content-tertiary">
-          <CurrentBadge />
-        </span>
-      )}
+        {isCurrent && (
+          <span className="ml-auto text-xs text-content-tertiary">
+            <CurrentBadge />
+          </span>
+        )}
+      </ItemPrimary>
     </Command.Item>
   );
 }

@@ -18,6 +18,7 @@ import {
   useCurrentProjectWithStatus,
   usePaginatedProjects,
   useProjectById,
+  useTeamProjectTags,
 } from "../../dashboard/src/api/projects";
 import {
   useIsCurrentMemberTeamAdmin,
@@ -180,7 +181,37 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
     createTime: Date.now(),
     prodDeploymentName: "musical-otter-456",
     devDeploymentName: "happy-capybara-123",
+    prodDeploymentReference: "production",
+    devDeploymentReference: "dev/nicolas",
+    tags: ["frontend", "billing"],
   } as NonNullable<ReturnType<typeof useProjectBySlug>>;
+  const mockInvoices: Extract<
+    ReturnType<typeof useListInvoices>,
+    { status: "ok" }
+  >["data"]["invoices"] = [
+    {
+      id: "inv_upcoming",
+      invoiceNumber: "INV-1004",
+      amountDue: "62.50",
+      total: "62.50",
+      invoiceDate: new Date(2026, 11, 1).getTime(),
+      status: "draft",
+      currency: "USD",
+      hasFailedPayment: false,
+      hostedInvoiceUrl: "https://example.com/invoice",
+    },
+    ...[1003, 1002, 1001].map((invoiceNumber, i) => ({
+      id: `inv_${invoiceNumber}`,
+      invoiceNumber: `INV-${invoiceNumber}`,
+      amountDue: "0.00",
+      total: (50 + i * 12.5).toFixed(2),
+      invoiceDate: new Date(2026, 10 - i, 1).getTime(),
+      status: "paid" as const,
+      currency: "USD",
+      hasFailedPayment: false,
+      hostedInvoiceUrl: "https://example.com/invoice",
+    })),
+  ];
   const shouldMockCurrentProject = title.startsWith("docs/pages/project/");
   const shouldMockCurrentDeployment = title.startsWith(
     "docs/pages/project/deployment/",
@@ -261,6 +292,7 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
   mocked(useTeamMembers).mockReturnValue(mockTeamMembers);
   mocked(useCurrentTeam).mockReturnValue(mockTeam);
   mocked(useIsCurrentMemberTeamAdmin).mockReturnValue(true);
+  mocked(useTeamProjectTags).mockReturnValue(["billing", "frontend"]);
   mocked(usePaginatedProjects).mockReturnValue({
     items: [mockProject],
     pagination: {
@@ -295,8 +327,8 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
     subscription: mockSubscription,
   });
   mocked(useListInvoices).mockReturnValue({
-    isLoading: false,
-    invoices: [],
+    status: "ok",
+    data: { invoices: mockInvoices, hasMore: false, isRefreshing: false },
   });
   mocked(useListPlans).mockReturnValue({
     plans: [
@@ -364,12 +396,16 @@ export const docsPageDecorator: DecoratorFunction<ReactRenderer> = (
   mocked(useLaunchDarkly).mockReturnValue({
     ...flagDefaults,
     enableStatuspageWidget: false,
+    tagEditUi: true,
     ...docsPageParams?.launchDarkly,
   });
   mocked(useCurrentDeployment).mockReturnValue(
     shouldMockCurrentDeployment ? activeDeployment : undefined,
   );
-  mocked(useDeploymentByName).mockReturnValue(undefined);
+  mocked(useDeploymentByName).mockReturnValue({
+    deployment: undefined,
+    notFound: false,
+  });
   mocked(useDeploymentRegions).mockReturnValue({
     regions: [
       {

@@ -135,7 +135,17 @@ impl SamplingConfig {
                     None
                 }
             })
-            .unwrap_or(0.0)
+            .unwrap_or_else(|| {
+                [
+                    ("/api/push_config", 0.1),
+                    ("conductor/load-instance", 0.01),
+                    ("usage_tracking_worker/send_usage", 0.01),
+                    ("commit", 0.01),
+                ]
+                .into_iter()
+                .find_map(|(route, fraction)| name.contains(route).then_some(fraction))
+                .unwrap_or(0.00001)
+            })
     }
 }
 
@@ -157,13 +167,13 @@ struct RouteOverride {
 struct SamplingConfigJson {
     instance_overrides: Option<BTreeMap<String, Vec<RouteOverride>>>,
     route_overrides: Option<Vec<RouteOverride>>,
-    default_fraction: f64,
+    default_fraction: Option<f64>,
 }
 
 fn validate_fraction(value: f64, context: &str) -> anyhow::Result<f64> {
     if !(0.0..=1.0).contains(&value) {
         anyhow::bail!(
-            "Invalid fraction {} in {}: clamping to [0.0, 1.0]",
+            "Invalid fraction {} in {}: must be in [0.0, 1.0]",
             value,
             context
         );
@@ -185,7 +195,13 @@ impl TryFrom<SamplingConfigJson> for SamplingConfig {
                     by_regex.push((
                         Some(deployment_name.to_owned()),
                         Regex::new(&route_override.route_regexp).context("Invalid route regexp")?,
-                        validate_fraction(route_override.fraction, deployment_name)?,
+                        validate_fraction(
+                            route_override.fraction,
+                            &format!(
+                                "route {:?} for deployment {}",
+                                route_override.route_regexp, deployment_name
+                            ),
+                        )?,
                     ));
                 }
             }
@@ -195,15 +211,20 @@ impl TryFrom<SamplingConfigJson> for SamplingConfig {
                 by_regex.push((
                     None,
                     Regex::new(&route_override.route_regexp).context("Invalid route regexp")?,
-                    validate_fraction(route_override.fraction, &route_override.route_regexp)?,
+                    validate_fraction(
+                        route_override.fraction,
+                        &format!("route {:?}", route_override.route_regexp),
+                    )?,
                 ));
             }
         }
-        by_regex.push((
-            None,
-            DOT_STAR.clone(),
-            validate_fraction(json.default_fraction, "default")?,
-        ));
+        if let Some(default_fraction) = json.default_fraction {
+            by_regex.push((
+                None,
+                DOT_STAR.clone(),
+                validate_fraction(default_fraction, "default")?,
+            ));
+        }
         Ok(SamplingConfig { by_regex })
     }
 }
@@ -212,6 +233,7 @@ impl FromStr for SamplingConfig {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> anyhow::Result<Self> {
+        let s = s.trim();
         if s.starts_with('{') {
             let json: SamplingConfigJson =
                 serde_json::from_str(s).context("Failed to parse sampling config as JSON")?;
@@ -239,6 +261,7 @@ impl FromStr for SamplingConfig {
                 let rate: f64 = parts[0].parse().context("Failed to parse sampling rate")?;
                 (DOT_STAR.clone(), rate)
             };
+            let rate = validate_fraction(rate, &format!("{:?}", token.trim()))?;
             by_regex.push((deployment_name, name_regex, rate));
         }
         Ok(SamplingConfig { by_regex })

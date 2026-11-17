@@ -26,13 +26,9 @@ export type TransactionMetrics = {
   documentsWritten: TransactionMetric;
   functionsScheduled: TransactionMetric;
   scheduledFunctionArgsBytes: TransactionMetric;
-  /** @internal */
   filesWritten: TransactionMetric;
-  /** @internal */
   fileWriteBytes: TransactionMetric;
-  /** @internal */
   filesRead: TransactionMetric;
-  /** @internal */
   fileReadBytes: TransactionMetric;
 };
 
@@ -51,13 +47,9 @@ export interface TransactionLimits {
   documentsWritten?: number;
   functionsScheduled?: number;
   scheduledFunctionArgsBytes?: number;
-  /** @internal */
   filesWritten?: number;
-  /** @internal */
   fileWriteBytes?: number;
-  /** @internal */
   filesRead?: number;
-  /** @internal */
   fileReadBytes?: number;
 }
 
@@ -100,9 +92,10 @@ export type DeploymentMetadata = {
    */
   region: string | null;
   /**
-   * The deployment class, e.g. `"s16"`, `"s256"`, `"d1024"`, or `"d2048"`.
+   * The deployment class, e.g. `"s16"`, `"s256"`, `"d1024"`, `"d2048"`, or
+   * `"p256"`.
    */
-  class: "s16" | "s256" | "d1024" | "d2048";
+  class: "s16" | "s256" | "d1024" | "d2048" | "p256";
 };
 
 /**

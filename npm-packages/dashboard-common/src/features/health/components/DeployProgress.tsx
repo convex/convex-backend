@@ -56,7 +56,9 @@ function countLabel(done: number, total: number | null) {
     return `${formatNumberCompact(done)} documents`;
   }
   const percent = Math.round((fraction(done, total) ?? 0) * 100);
-  return `${percent}% · ${formatNumberCompact(done)} / ${formatNumberCompact(total)} documents`;
+  return `${percent}% · ${formatNumberCompact(done)} / ${formatNumberCompact(
+    total,
+  )} documents`;
 }
 
 /// A one-line status for the summary card. Its progress bar and per-table
@@ -86,7 +88,7 @@ export function SchemaValidationStatus({
     >
       <ExpandableList
         rows={tables.map((table) => ({
-          key: table.tableName,
+          key: `${table.tableName}:${table.staged ? "staged" : "enforced"}`,
           node: <TableRow table={table} />,
         }))}
         noun="tables"
@@ -172,6 +174,11 @@ function TableRow({
     <span className="flex min-w-0 items-center gap-1.5 text-sm">
       <TableIcon className="size-3.5 shrink-0 text-content-secondary" />
       <span className="truncate font-mono text-xs">{table.tableName}</span>
+      {table.staged && (
+        <span className="rounded-sm border px-1 text-xs text-content-secondary">
+          staged
+        </span>
+      )}
     </span>
   );
   switch (table.state) {
@@ -246,7 +253,14 @@ function HoverDisclosure({
         onClick={() => setPinned((value) => !value)}
         aria-expanded={open}
         aria-controls={detailsId}
-        className="flex w-md max-w-full items-center gap-2 text-left"
+        // Hover already opens the details, so the pinned state needs its own
+        // cue for the click to visibly register. The negative margin keeps
+        // the padded highlight aligned with the lines around it, and half
+        // opacity keeps the progress bar's track (the same token) visible.
+        className={cn(
+          "-mx-1 -my-0.5 flex w-[calc(var(--container-md)+0.5rem)] max-w-[calc(100%+0.5rem)] items-center gap-2 rounded-sm px-1 py-0.5 text-left transition-colors",
+          pinned && "bg-background-tertiary/50",
+        )}
       >
         {icon}
         <span className="min-w-0 flex-1 truncate text-sm text-content-primary">

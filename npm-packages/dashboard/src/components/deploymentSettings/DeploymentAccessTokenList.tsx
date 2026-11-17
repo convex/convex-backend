@@ -80,8 +80,10 @@ export function DeploymentAccessTokenList({
                     />
                   ))
               ) : (
-                <div className="my-6 flex w-full justify-center text-content-secondary">
-                  There are no tokens here yet.
+                <div className="my-4 flex w-full items-center justify-center rounded-md border border-dashed px-4 py-6 text-center text-sm text-content-secondary">
+                  {deploymentType === "preview"
+                    ? "No preview deploy keys yet. Create one to deploy previews from CI or a hosting provider."
+                    : "No deploy keys yet. Create one to deploy from CI or a hosting provider."}
                 </div>
               )}
             </div>

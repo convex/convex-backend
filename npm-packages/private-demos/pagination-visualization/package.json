@@ -19,13 +19,13 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "@types/react": "^19.2.4",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.3.1",
     "postcss": "^8.5.18",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.2",
-    "vite": "^6.4.3"
+    "vite": "^6.4.5"
   }
 }

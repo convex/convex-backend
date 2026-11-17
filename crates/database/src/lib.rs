@@ -213,7 +213,6 @@ pub use self::{
         DocumentDeltas,
         OccRetryStats,
         SnapshotPage,
-        StreamingExportFilter,
         MAX_OCC_FAILURES,
     },
     database_index_workers::index_writer::IndexSelector,

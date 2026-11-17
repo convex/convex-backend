@@ -36,9 +36,7 @@ export interface paths {
         };
         /**
          * List environment variables
-         * @description Get all environment variables in a deployment.
-         *     In the future this might not include "secret" environment
-         *     variables.
+         * @description Get the environment variables in a deployment that aren't secrets.
          */
         get: operations["list_environment_variables"];
         put?: never;
@@ -238,6 +236,81 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/integrations/{id}/rotate_webhook_secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate webhook integration secret
+         * @description Rotate the secret for the webhook integration.
+         */
+        post: operations["rotate_integration_webhook_secret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get integration
+         * @description Get the config for a specific integration by id.
+         */
+        get: operations["get_integration"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete integration
+         * @description Delete the deployment's integration with the given id.
+         */
+        delete: operations["delete_integration"];
+        options?: never;
+        head?: never;
+        /**
+         * Update integration
+         * @description Update an existing integration for the deployment. Omit a field to keep the
+         *     existing value, and use `null` to unset a field. For S3 exports, `null`
+         *     keeps the existing value too.
+         */
+        patch: operations["update_integration"];
+        trace?: never;
+    };
+    "/integrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List integrations
+         * @description List configs for all existing integrations in a deployment.
+         */
+        get: operations["list_integrations"];
+        put?: never;
+        /**
+         * Create integration
+         * @description Create a new integration for the deployment. Errors if a integration of the
+         *     given type already exists.
+         */
+        post: operations["create_integration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/list_log_streams": {
         parameters: {
             query?: never;
@@ -247,7 +320,10 @@ export interface paths {
         };
         /**
          * List log streams
+         * @deprecated
          * @description List configs for all existing log streams in a deployment.
+         *
+         *     Deprecated: use `GET /integrations` instead.
          */
         get: operations["list_log_streams"];
         put?: never;
@@ -267,7 +343,10 @@ export interface paths {
         };
         /**
          * Get log stream
+         * @deprecated
          * @description Get the config for a specific log stream by id.
+         *
+         *     Deprecated: use `GET /integrations/{id}` instead.
          */
         get: operations["get_log_stream"];
         put?: never;
@@ -289,7 +368,10 @@ export interface paths {
         put?: never;
         /**
          * Delete log stream
+         * @deprecated
          * @description Delete the deployment's log stream with the given id.
+         *
+         *     Deprecated: use `DELETE /integrations/{id}` instead.
          */
         post: operations["delete_log_stream"];
         delete?: never;
@@ -309,8 +391,11 @@ export interface paths {
         put?: never;
         /**
          * Create log stream
+         * @deprecated
          * @description Create a new log stream for the deployment. Errors if a log stream of the
          *     given type already exists.
+         *
+         *     Deprecated: use `POST /integrations` instead.
          */
         post: operations["create_log_stream"];
         delete?: never;
@@ -330,8 +415,11 @@ export interface paths {
         put?: never;
         /**
          * Update log stream
+         * @deprecated
          * @description Update an existing log stream for the deployment. Omit a field to keep the
          *     existing value, and use `null` to unset a field.
+         *
+         *     Deprecated: use `PATCH /integrations/{id}` instead.
          */
         post: operations["update_log_stream"];
         delete?: never;
@@ -351,7 +439,10 @@ export interface paths {
         put?: never;
         /**
          * Rotate webhook log stream secret
+         * @deprecated
          * @description Rotate the secret for the webhook log stream.
+         *
+         *     Deprecated: use `POST /integrations/{id}/rotate_webhook_secret` instead.
          */
         post: operations["rotate_webhook_secret"];
         delete?: never;
@@ -423,6 +514,11 @@ export interface paths {
          *     Call this endpoint repeatedly, passing the opaque `pagination.nextCursor`
          *     from each response back in the next request as `cursor`. Omit `cursor` on
          *     the first call.
+         *
+         *     Apply each page's `truncates` before its `values`, and persist these changes
+         *     atomically with `pagination.nextCursor`. Retrying the same input cursor may
+         *     return a different page, so non-atomic updates can lead to data
+         *     inconsistency.
          *
          *     To do a one time data sync, keep fetching pages until reaching an `upToDate`
          *     page. For a continuous streaming export, continue fetching pages
@@ -547,9 +643,8 @@ export interface components {
             totalDocumentsInCurrentTable: number;
             /**
              * Format: int64
-             * @description Documents synced over the sync's lifetime, including deletions and
-             *     re-synced revisions of documents that changed mid-sync — so this can
-             *     slightly exceed `totalDocuments`.
+             * @description Documents in the selected tables traversed so far, counted as of the
+             *     same snapshot as `totalDocuments`.
              */
             numDocumentsSynced: number;
             /**
@@ -558,8 +653,8 @@ export interface components {
              */
             totalDocuments: number;
         };
-        /** @description The sync reached a consistent snapshot at `syncedTs`, but newer data is
-         *     already available; it is streaming later changes (CDC). */
+        /** @description The sync reached a consistent snapshot at `syncedTs`, but its timestamp is
+         *     stale; it is streaming later changes (CDC). Newer data may be available. */
         ActiveDataSyncStale: {
             /**
              * @description Always `stale`. (enum property replaced by openapi-typescript)
@@ -735,6 +830,8 @@ export interface components {
             logStreamType: "postHogErrorTracking";
         } | {
             id: string;
+            /** @description The role's trust policy must require it as `sts:ExternalId`. */
+            roleExternalId: string;
             /** @enum {string} */
             logStreamType: "s3Export";
         };
@@ -760,13 +857,17 @@ export interface components {
             bucket: string;
             /** @description AWS region the bucket lives in, e.g. `us-east-1`. */
             region: string;
-            /** @description Key prefix within the bucket. Omit to write at the bucket root. */
+            /** @description Folder in the bucket to put the export under. Convex writes to
+             *     `<prefix>/<deployment-name>/data-lake/`, or to
+             *     `<deployment-name>/data-lake/` if you omit it. */
             prefix?: string | null;
-            accessKeyId: string;
-            secretAccessKey: string;
+            /** @description ARN of the IAM role Convex assumes to write. The role must be named
+             *     `ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Omit it to
+             *     create the export first: the response carries the `roleExternalId` the
+             *     role's name and trust policy need, and the export waits until an update
+             *     sets the ARN. */
+            roleArn?: string;
             selection?: null | components["schemas"]["Selection"];
-            /** @description How often the mirror is refreshed. */
-            period: components["schemas"]["SyncPeriod"];
         };
         CreateSentryLogStreamArgs: {
             /** @description Sentry Data Source Name (DSN) to route exceptions to. */
@@ -934,7 +1035,7 @@ export interface components {
             /** @description The identity that performed the action. */
             actor: components["schemas"]["AuditLogActor"];
             /** @enum {string} */
-            action: "create_environment_variable" | "update_environment_variable" | "delete_environment_variable" | "create_usage_limit" | "update_usage_limit" | "delete_usage_limit" | "usage_limit_exceeded" | "change_usage_limit_stop_state" | "replace_environment_variable" | "update_canonical_url" | "delete_canonical_url" | "push_config" | "push_config_with_components" | "build_indexes" | "change_deployment_state" | "pause_deployment" | "unpause_deployment" | "change_system_stop_state" | "clear_tables" | "snapshot_import" | "delete_scheduled_jobs_table" | "delete_tables" | "delete_component" | "cancel_all_scheduled_functions" | "cancel_scheduled_function" | "request_export" | "cancel_export" | "set_export_expiration" | "create_integration" | "update_integration" | "delete_integration" | "add_documents" | "delete_documents" | "update_documents" | "create_table" | "delete_files" | "generate_upload_url" | "create_data_sync";
+            action: "create_environment_variable" | "update_environment_variable" | "delete_environment_variable" | "create_usage_limit" | "update_usage_limit" | "delete_usage_limit" | "usage_limit_exceeded" | "change_usage_limit_stop_state" | "replace_environment_variable" | "update_canonical_url" | "delete_canonical_url" | "push_config" | "push_config_with_components" | "build_indexes" | "change_deployment_state" | "pause_deployment" | "unpause_deployment" | "change_system_stop_state" | "clear_tables" | "snapshot_import" | "delete_scheduled_jobs_table" | "delete_tables" | "delete_component" | "cancel_all_scheduled_functions" | "cancel_scheduled_function" | "request_export" | "download_export" | "cancel_export" | "set_export_expiration" | "create_integration" | "update_integration" | "delete_integration" | "add_documents" | "delete_documents" | "update_documents" | "create_table" | "delete_files" | "generate_upload_url" | "create_data_sync";
             /**
              * Format: int64
              * @description Time the event was created, in milliseconds since epoch.
@@ -1000,6 +1101,8 @@ export interface components {
             pagination: components["schemas"]["PaginationMetadata"];
         };
         ListEnvVarsResponse: {
+            /** @description The value of every environment variable that isn't a secret, by
+             *     name. */
             environmentVariables: {
                 [key: string]: string;
             };
@@ -1048,7 +1151,7 @@ export interface components {
             type: "deleting";
         };
         /** @enum {string} */
-        LogTopic: "verification" | "console" | "function_execution" | "exception" | "audit_log" | "scheduler_stats" | "scheduled_job_lag" | "current_storage_usage" | "concurrency_stats" | "storage_api_bandwidth" | "ai_gateway_usage" | "log_stream_egress" | "custom_audit";
+        LogTopic: "verification" | "console" | "function_execution" | "exception" | "audit_log" | "scheduler_stats" | "scheduled_job_lag" | "current_storage_usage" | "concurrency_stats" | "storage_api_bandwidth" | "ai_gateway_usage" | "log_stream_egress" | "custom_audit" | "s3_export_stats";
         /** Format: int64 */
         MemberId: number;
         /**
@@ -1106,15 +1209,15 @@ export interface components {
             bucket: string;
             /** @description AWS region the bucket lives in. */
             region: string;
-            /** @description Key prefix within the bucket. */
+            /** @description Folder in the bucket the export is under, if any. */
             prefix?: string | null;
-            /** @description AWS access key ID used to write to the bucket. The matching secret
-             *     access key is write-only and is never returned. */
-            accessKeyId: string;
-            /** @description The components, tables, and columns being mirrored. */
+            /** @description ARN of the role Convex assumes to write. Empty if it hasn't been set
+             *     yet, and the export doesn't sync while it's empty. */
+            roleArn: string;
+            /** @description Value the role's trust policy must require as `sts:ExternalId`. */
+            roleExternalId: string;
+            /** @description The components and tables being exported. */
             selection: components["schemas"]["Selection"];
-            /** @description How often the mirror is refreshed. */
-            period: components["schemas"]["SyncPeriod"];
         };
         /**
          * @description Progress of the historical-usage backfill. Only `complete` guarantees the
@@ -1157,11 +1260,6 @@ export interface components {
         /** @description Unique id of a data sync, assigned by `/api/v1/data/sync` on the sync's
          *     first page and stable across its lifetime. */
         SyncId: string;
-        /**
-         * @description How often the mirror is refreshed from the deployment.
-         * @enum {string}
-         */
-        SyncPeriod: "continuous" | "hourly" | "daily";
         TableSelection: ({
             /** @description Whether columns not explicitly listed are exported */
             _other: components["schemas"]["InclusionDefault"];
@@ -1253,17 +1351,13 @@ export interface components {
              *     added in the future). */
             topics?: components["schemas"]["LogTopic"][] | null;
         };
+        /** @description The destination is fixed at creation. */
         UpdateS3ExportSinkArgs: {
-            /** @description Name of the S3 bucket to mirror into. */
-            bucket?: string | null;
-            /** @description AWS region the bucket lives in, e.g. `us-east-1`. */
-            region?: string | null;
-            /** @description Key prefix within the bucket. */
-            prefix?: string | null;
-            accessKeyId?: string | null;
-            secretAccessKey?: string | null;
+            /** @description ARN of the IAM role Convex assumes to write. The role must be named
+             *     `ConvexIntegrations-<roleExternalId>`, with path `/convex/`. Set it to
+             *     finish a pending export, or to switch to a role in another account. */
+            roleArn?: string | null;
             selection?: null | components["schemas"]["Selection"];
-            period?: null | components["schemas"]["SyncPeriod"];
         };
         UpdateSentrySinkArgs: {
             /** @description Sentry Data Source Name (DSN) to route exceptions to. */
@@ -1404,7 +1498,6 @@ export type SeedStatusResponse = components['schemas']['SeedStatusResponse'];
 export type Selection = components['schemas']['Selection'];
 export type SentryLogStreamConfig = components['schemas']['SentryLogStreamConfig'];
 export type SyncId = components['schemas']['SyncId'];
-export type SyncPeriod = components['schemas']['SyncPeriod'];
 export type TableSelection = components['schemas']['TableSelection'];
 export type TeamId = components['schemas']['TeamId'];
 export type UpdateAxiomSinkArgs = components['schemas']['UpdateAxiomSinkArgs'];
@@ -1659,6 +1752,136 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GetCanonicalUrlsResponse"];
+                };
+            };
+        };
+    };
+    rotate_integration_webhook_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description id of the webhook integration for which to rotate the secret */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotateLogStreamSecretResponse"];
+                };
+            };
+        };
+    };
+    get_integration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description id of the integration to retrieve */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogStreamConfig"];
+                };
+            };
+        };
+    };
+    delete_integration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description id of the integration to delete */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    update_integration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description id of the integration to update */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLogStreamArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_integrations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogStreamConfig"][];
+                };
+            };
+        };
+    };
+    create_integration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLogStreamArgs"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateLogStreamResponse"];
                 };
             };
         };

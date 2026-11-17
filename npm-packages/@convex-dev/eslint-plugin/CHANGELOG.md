@@ -1,5 +1,18 @@
 # Changelog
 
+## 5.0.1
+
+- Fix false positives in `@convex-dev/no-collect-in-query` with type-aware
+  linting. In projects that include Convex's types, the rule reported every
+  `.collect()` call, including ones on classes and objects unrelated to Convex.
+  It now only reports `.collect()` on Convex queries. Thanks to
+  [@stickerdaniel](https://github.com/stickerdaniel) for the fix.
+- Fix false positives in `@convex-dev/no-filter-in-query` with type-aware
+  linting. The rule recognized Convex queries partly by name, so it reported
+  `.filter()` on unrelated types, such as a class whose predicate takes a
+  parameter of a type named `FilterBuilder`, or a non-Convex `db.query()` result
+  stored in a variable. It now only reports `.filter()` on Convex queries.
+
 ## 5.0.0
 
 - Add a new rule `@convex-dev/no-process-env` (enabled by default as an error)

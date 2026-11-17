@@ -301,7 +301,7 @@ impl PostgresPersistence {
         } else {
             SchemaName::new(&get_current_schema(&pool).await?)?
         };
-        let newly_created = {
+        {
             let mut client = pool
                 .get_connection("init_sql", &schema, &options.instance_name)
                 .await?;
@@ -332,12 +332,6 @@ impl PostgresPersistence {
                     Ok(())
                 })
                 .await?;
-            if !options.allow_read_only
-                && Self::is_read_only(&client, options.multitenant, &options.instance_name).await?
-            {
-                return Err(ConnectError::ReadOnly);
-            }
-            Self::check_newly_created(&client, options.multitenant, &options.instance_name).await?
         };
 
         let lease = Lease::acquire(
@@ -345,9 +339,16 @@ impl PostgresPersistence {
             &schema,
             options.instance_name.clone(),
             options.multitenant,
+            options.allow_read_only,
             lease_lost_shutdown,
         )
         .await?;
+        let newly_created = {
+            let client = pool
+                .get_connection("check_newly_created", &schema, &options.instance_name)
+                .await?;
+            Self::check_newly_created(&client, options.multitenant, &options.instance_name).await?
+        };
         Ok(Self {
             newly_created: newly_created.into(),
             lease,
@@ -408,21 +409,6 @@ impl PostgresPersistence {
             instance_name: options.instance_name,
             multitenant: options.multitenant,
         })
-    }
-
-    async fn is_read_only(
-        client: &PostgresConnection<'_>,
-        multitenant: bool,
-        instance_name: &PgInstanceName,
-    ) -> anyhow::Result<bool> {
-        let mut params = vec![];
-        if multitenant {
-            params.push(&instance_name.raw as &(dyn ToSql + Sync));
-        }
-        Ok(client
-            .query_opt(sql::check_is_read_only(multitenant), &params)
-            .await?
-            .is_some())
     }
 
     pub fn create_pool(pg_config: tokio_postgres::Config) -> anyhow::Result<Arc<ConvexPgPool>> {
@@ -1799,6 +1785,7 @@ impl Lease {
         schema: &SchemaName,
         instance_name: PgInstanceName,
         multitenant: bool,
+        allow_read_only: bool,
         lease_lost_shutdown: ShutdownSignal,
     ) -> anyhow::Result<Self> {
         let timer = metrics::lease_acquire_timer();
@@ -1813,7 +1800,9 @@ impl Lease {
         tracing::info!("attempting to acquire lease");
         let stmt = client
             .with_retry(async move |client| {
-                client.prepare_cached(sql::lease_acquire(multitenant)).await
+                client
+                    .prepare_cached(sql::lease_acquire(multitenant, allow_read_only))
+                    .await
             })
             .await?;
         let mut params = vec![&ts as &(dyn ToSql + Sync)];
@@ -1824,7 +1813,7 @@ impl Lease {
         drop(client);
         anyhow::ensure!(
             rows_modified == 1,
-            "failed to acquire lease: Already acquired with higher timestamp"
+            "failed to acquire lease: already acquired with higher timestamp, or read-only"
         );
         tracing::info!("lease acquired with ts {}", ts);
 

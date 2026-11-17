@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "convex dev --start 'vite --open'",
     "build": "vite build",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "lint:ci": "npm run lint -- --max-warnings=0"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.6",
@@ -18,8 +19,8 @@
     "proxy-agent": "^6.4.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "sharp": "~0.35.4",
-    "snowflake-sdk": "^2.0.0",
+    "sharp": "~0.35.5",
+    "snowflake-sdk": "^3.4.0",
     "tiktoken": "^1.0.10",
     "@types/node-fetch": "^2.6.1"
   },
@@ -37,6 +38,6 @@
     "postcss": "^8.5.18",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.0.3",
-    "vite": "^6.4.3"
+    "vite": "^6.4.5"
   }
 }

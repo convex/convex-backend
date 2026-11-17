@@ -21,6 +21,8 @@ export async function hasGuidelinesInstalled(
  * Download and write the guidelines file.
  * Guidelines live in `_generated/` so local edits are not expected and are
  * not preserved.
+ *
+ * Returns false if the guidelines could not be downloaded.
  */
 export async function installGuidelinesFile({
   convexDir,
@@ -28,15 +30,16 @@ export async function installGuidelinesFile({
 }: {
   convexDir: string;
   state: AiFilesState;
-}): Promise<void> {
+}): Promise<boolean> {
   const guidelines = await downloadGuidelines();
+
   if (guidelines === null) {
     logMessage(
       chalkStderr.yellow(
         "Could not download Convex AI guidelines right now. You can retry with: npx convex ai-files install",
       ),
     );
-    return;
+    return false;
   }
 
   await fs.mkdir(aiDirForConvexDir(convexDir), { recursive: true });
@@ -46,4 +49,6 @@ export async function installGuidelinesFile({
   logMessage(
     `${chalkStderr.green("✔")} ${guidelinesPathForConvexDir(convexDir)} written`,
   );
+
+  return true;
 }

@@ -7,6 +7,7 @@ use anyhow::Context as _;
 use common::{
     backoff::Backoff,
     errors::{
+        is_db_deadlock_error,
         is_duplicate_write_error,
         is_transient_db_error,
         recapture_stacktrace_noreport,
@@ -242,7 +243,9 @@ async fn write_batch<RT: Runtime>(runtime: RT, persistence: Arc<dyn Persistence>
                 break Ok(());
             },
             Err(mut e) => {
-                if !is_transient_db_error(&e) {
+                // MySQL rolls back the deadlock victim's entire transaction, so
+                // retrying the batch with the same timestamps is safe.
+                if !is_transient_db_error(&e) && !is_db_deadlock_error(&e) {
                     break Err(e);
                 }
                 is_retry = true;

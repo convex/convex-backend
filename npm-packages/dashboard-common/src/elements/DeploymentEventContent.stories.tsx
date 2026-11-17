@@ -1,3 +1,5 @@
+import { Infer } from "convex/values";
+import { integrationAuditConfig } from "system-udfs/convex/tableDefs/deploymentAuditLogTable";
 import { Meta, StoryObj } from "@storybook/nextjs";
 import { Id } from "system-udfs/convex/_generated/dataModel";
 import { DeploymentEventContent } from "@common/elements/DeploymentEventContent";
@@ -22,7 +24,6 @@ const meta = {
       </DeploymentInfoContext.Provider>
     ),
   ],
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof DeploymentEventContent>;
 
 export default meta;
@@ -1582,6 +1583,25 @@ export const CreateDataSync: Story = {
   },
 };
 
+export const DownloadExport: Story = {
+  args: {
+    event: {
+      _id: "" as Id<"_deployment_audit_log">,
+      _creationTime: Date.parse("12/19/2022, 10:00:00 AM"),
+      action: "download_export",
+      metadata: {
+        id: "jd72k9x8nmgz5h3qawc4btep0n6y1fvr",
+        component_id: null,
+        component: null,
+        format: "zip",
+        requestor: "dashboard",
+      },
+      memberName: "member@convex.dev",
+      member_id: BigInt(1),
+    },
+  },
+};
+
 export const CancelExport: Story = {
   args: {
     event: {
@@ -1667,6 +1687,164 @@ export const DeleteIntegration: Story = {
       member_id: BigInt(1),
       token_id: BigInt(1),
       app_client_id: null,
+    },
+  },
+};
+
+const integrationAuditEvent = {
+  _id: "" as Id<"_deployment_audit_log">,
+  _creationTime: Date.parse("12/19/2022, 10:00:00 AM"),
+  memberName: "member@convex.dev",
+  member_id: BigInt(1),
+  token_id: BigInt(1),
+  app_client_id: null,
+};
+
+const s3AuditConfig = {
+  type: "s3Export" as const,
+  bucket: "analytics-bucket",
+  region: "us-east-1",
+  prefix: "exports/",
+  selection: { _other: "included" as const },
+};
+
+export const CreateS3ExportIntegration: Story = {
+  args: {
+    event: {
+      ...integrationAuditEvent,
+      action: "create_integration",
+      metadata: { id: "s3-export-id", type: "s3Export", config: s3AuditConfig },
+    },
+  },
+};
+
+export const UpdateS3ExportIntegration: Story = {
+  args: {
+    event: {
+      ...integrationAuditEvent,
+      action: "update_integration",
+      metadata: {
+        id: "s3-export-id",
+        type: "s3Export",
+        previous: s3AuditConfig,
+        current: {
+          ...s3AuditConfig,
+          bucket: "new-analytics-bucket",
+          prefix: null,
+          selection: {
+            _other: "excluded",
+            "": {
+              _other: "excluded",
+              users: { _other: "included", ssn: "excluded" },
+            },
+          },
+        },
+        credential_changes: {
+          type: "s3Export",
+          access_key_id_changed: false,
+          secret_access_key_changed: true,
+        },
+      },
+    },
+  },
+};
+
+export const DeleteS3ExportIntegration: Story = {
+  args: {
+    event: {
+      ...integrationAuditEvent,
+      action: "delete_integration",
+      metadata: { id: "s3-export-id", type: "s3Export", config: s3AuditConfig },
+    },
+  },
+};
+
+function createIntegrationStory(
+  config: Infer<typeof integrationAuditConfig>,
+): Story {
+  return {
+    args: {
+      event: {
+        ...integrationAuditEvent,
+        action: "create_integration",
+        metadata: { id: "integration-id", type: config.type, config },
+      },
+    },
+  };
+}
+
+export const CreateDatadogWithConfiguration = createIntegrationStory({
+  type: "datadog",
+  site: "EU",
+  service: "backend",
+  tags: ["env:prod"],
+  format_version: "2",
+  topics: ["console", "custom_audit"],
+});
+
+export const CreateAxiomWithConfiguration = createIntegrationStory({
+  type: "axiom",
+  dataset: "deployment-logs",
+  ingest_origin: "https://api.axiom.co",
+  attributes: [{ key: "env", value: "prod" }],
+  format_version: "2",
+  topics: null,
+});
+
+export const CreateWebhookWithConfiguration = createIntegrationStory({
+  type: "webhook",
+  url_origin: "https://hooks.example.com:8443",
+  format: "jsonl",
+  topics: ["custom_audit"],
+});
+
+export const CreateSentryWithConfiguration = createIntegrationStory({
+  type: "sentry",
+  dsn_origin: "https://sentry.example.com",
+  project_id: "42",
+  tags: { env: "prod" },
+  format_version: "2",
+});
+
+export const CreatePostHogLogsWithConfiguration = createIntegrationStory({
+  type: "postHogLogs",
+  host_origin: "https://eu.i.posthog.com",
+  service_name: "backend",
+  topics: null,
+});
+
+export const CreatePostHogErrorTrackingWithConfiguration =
+  createIntegrationStory({
+    type: "postHogErrorTracking",
+    host_origin: "https://us.i.posthog.com",
+  });
+
+export const UpdateWebhookCredentials: Story = {
+  args: {
+    event: {
+      ...integrationAuditEvent,
+      action: "update_integration",
+      metadata: {
+        id: "webhook-id",
+        type: "webhook",
+        previous: {
+          type: "webhook",
+          url_origin: "https://hooks.example.com",
+          format: "jsonl",
+          topics: null,
+        },
+        current: {
+          type: "webhook",
+          url_origin: "https://hooks.example.com",
+          format: "jsonl",
+          topics: null,
+        },
+        credential_changes: {
+          type: "webhook",
+          hmac_secret_changed: true,
+          url_changed: true,
+        },
+      },
     },
   },
 };

@@ -189,13 +189,7 @@ pub async fn import_storage_table<RT: Runtime>(
             .map(|ct| ct.parse())
             .transpose()?;
         usage
-            .track_storage_call(
-                component_path.clone(),
-                requestor.usage_tag(),
-                entry.storage_id,
-                content_type,
-                entry.sha256,
-            )
+            .track_storage_call(component_path.clone(), requestor.usage_tag(), content_type)
             .await;
         usage
             .track_storage_ingress(

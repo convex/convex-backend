@@ -57,6 +57,12 @@ export async function handleDashboard(
     ctx,
     dashboardPort,
     async (request, response) => {
+      if (!isLoopbackHost(request.headers.host, dashboardPort)) {
+        response.statusCode = 403;
+        response.end();
+        return;
+      }
+
       const pathname = new URL(
         request.url ?? "/",
         // We only want to extract the pathname so the base doesn’t matter
@@ -94,6 +100,19 @@ export async function handleDashboard(
     dashboardPort,
     cleanupHandle,
   };
+}
+
+/**
+ * The dashboard is only meant to be opened at the URL the CLI prints, so
+ * requests addressed to any other hostname are not served, even if that
+ * hostname resolves to 127.0.0.1.
+ */
+export function isLoopbackHost(host: string | undefined, port: number) {
+  const normalizedHost = host?.toLowerCase();
+  return (
+    normalizedHost === `127.0.0.1:${port}` ||
+    normalizedHost === `localhost:${port}`
+  );
 }
 
 async function reportSelfHostedEvent(

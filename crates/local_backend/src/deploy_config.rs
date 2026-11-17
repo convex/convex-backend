@@ -39,7 +39,10 @@ use model::{
         },
         ConfigModel,
     },
-    source_packages::SourcePackageModel,
+    source_packages::{
+        types::NodeVersion,
+        SourcePackageModel,
+    },
 };
 use roles::RequireDeploymentOp;
 use runtime::prod::ProdRuntime;
@@ -78,6 +81,7 @@ pub struct GetConfigHashesResponse {
     pub module_hashes: Vec<ModuleHashJson>,
     pub udf_server_version: Option<String>,
     pub node_version: Option<String>,
+    pub node_default_memory_mb: Option<u32>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -243,10 +247,13 @@ pub async fn get_config_hashes(
     let config = ConvexObject::try_from(config)?;
     let config: JsonValue = config.to_internal_json();
 
-    let node_version = SourcePackageModel::new(&mut tx, TableNamespace::Global)
+    let latest_source_package = SourcePackageModel::new(&mut tx, TableNamespace::Global)
         .get_latest()
-        .await?
+        .await?;
+    let node_version = latest_source_package
+        .as_ref()
         .and_then(|v| v.node_version.map(|v| v.into()));
+    let node_default_memory_mb = latest_source_package.and_then(|v| v.node_default_memory_mb);
 
     let udf_server_version = udf_config.map(|config| format!("{}", config.server_version));
     Ok(Json(GetConfigHashesResponse {
@@ -254,6 +261,7 @@ pub async fn get_config_hashes(
         module_hashes,
         udf_server_version,
         node_version,
+        node_default_memory_mb,
     }))
 }
 
@@ -293,7 +301,7 @@ pub async fn push_config_handler(
     let udf_server_version = Version::parse(&config.udf_server_version).context(
         ErrorMetadata::bad_request("InvalidVersion", "The function version is invalid"),
     )?;
-    let node_version = config
+    let node_version: Option<NodeVersion> = config
         .node_version
         .clone()
         .map(|v| v.parse())
@@ -305,6 +313,9 @@ pub async fn push_config_handler(
                 config.node_version.unwrap_or_default()
             ),
         ))?;
+    if let Some(node_version) = node_version {
+        node_version.check_supported_for_push()?;
+    }
 
     let (analytics, metrics) = application
         .push_config_no_components(

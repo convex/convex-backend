@@ -140,11 +140,6 @@ pub struct LocalConfig {
     #[clap(long, default_value = "false")]
     pub redact_logs_to_client: bool,
 
-    /// Path of local file for logs to be routed to. For local testing
-    /// of log integrations (eg axiom/datadog).
-    #[clap(long)]
-    pub local_log_sink: Option<String>,
-
     #[clap(subcommand)]
     pub subcommand: Option<Subcommand>,
 }

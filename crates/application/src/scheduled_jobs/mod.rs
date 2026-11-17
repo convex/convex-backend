@@ -118,7 +118,10 @@ use value::{
 };
 
 use crate::{
-    application_function_runner::ApplicationFunctionRunner,
+    application_function_runner::{
+        ApplicationFunctionRunner,
+        PermitTimeout,
+    },
     function_log::FunctionExecutionLog,
 };
 
@@ -568,7 +571,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
             .replace(job_id, job)
             .await?;
         self.database
-            .commit_with_write_source(tx, "scheduled_job_system_error")
+            .commit(tx, "scheduled_job_system_error")
             .await?;
         Ok(())
     }
@@ -620,7 +623,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     )
                     .await?;
                 self.database
-                    .commit_with_write_source(tx, "scheduled_job_analyze_failure")
+                    .commit(tx, "scheduled_job_analyze_failure")
                     .await?;
                 // NOTE: We didn't actually run anything, so we are creating a request context
                 // just report the error.
@@ -656,7 +659,8 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 self.handle_action(caller, tx, job, job_id, usage_tracker)
                     .await?
             },
-            udf_type => {
+            UdfType::Init => anyhow::bail!("Unexpected init function"),
+            UdfType::Query | UdfType::HttpAction => {
                 let message = format!(
                     r#"Unsupported function type. {:?} in module "{:?}"{} is defined as a {udf_type}. "
                             "Only {} and {} can be scheduled."#,
@@ -669,9 +673,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 SchedulerModel::new(&mut tx, namespace)
                     .complete(job_id, ScheduledJobState::Failed(message.clone()))
                     .await?;
-                self.database
-                    .commit_with_write_source(tx, "scheduled_job_bad_udf")
-                    .await?;
+                self.database.commit(tx, "scheduled_job_bad_udf").await?;
                 // NOTE: We didn't actually run anything, so we are creating a request context
                 // just report the error.
                 let request_id = RequestId::new();
@@ -722,6 +724,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     // Should be unreachable given the outer match statement
                     UdfType::Mutation => unreachable!(),
                     UdfType::Action => unreachable!(),
+                    UdfType::Init => unreachable!(),
                 }
             },
         };
@@ -748,6 +751,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 // Continue without running function since the job state has changed
                 return Ok(());
             };
+            let permit = self.runner.acquire_mutation_permit().await;
             let start = self.rt.monotonic_now();
             let context = ExecutionContext::new(
                 RequestContext::new_for_system_request(request_id.clone()),
@@ -760,7 +764,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
             let pause_client = self.rt.pause_client();
 
             // Stage a write so that the mutation can observe its own
-            // `_scheduled_functions` record as `inProgress`. This is invisible to
+            // `_scheduled_functions` document as `inProgress`. This is invisible to
             // other transactions, for whom the job stays `pending` until it
             // reaches a completion state.
             let mut in_progress_job = job.clone();
@@ -779,6 +783,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 self.runner
                     .run_mutation_no_udf_log(
                         tx,
+                        permit,
                         PublicFunctionPath::Component(path.clone()),
                         udf_args.clone(),
                         caller.allowed_visibility(),
@@ -802,7 +807,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                             Err(e)
                         } else {
                             self.database
-                                .commit_with_write_source(tx, WriteSource::mutation(path.clone()))
+                                .commit(tx, WriteSource::mutation(path.clone()))
                                 .await
                         };
                         if let Err(err) = commit_result {
@@ -917,7 +922,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     .await?;
                 // NOTE: We should not be getting developer errors here.
                 self.database
-                    .commit_with_write_source(tx, WriteSource::mutation(job.path.clone()))
+                    .commit(tx, WriteSource::mutation(job.path.clone()))
                     .await?;
             }
             self.function_log
@@ -972,9 +977,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                 SchedulerModel::new(&mut tx, namespace)
                     .replace(job_id, updated_job.clone())
                     .await?;
-                self.database
-                    .commit_with_write_source(tx, "scheduled_job_progress")
-                    .await?;
+                self.database.commit(tx, "scheduled_job_progress").await?;
 
                 // Execute the action
                 let path = job.path.clone();
@@ -987,7 +990,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                         caller,
                         usage_tracker.clone(),
                         context.clone(),
-                        true,
+                        PermitTimeout::WaitIndefinitely,
                     )
                     .await?;
                 let state = match &completion.outcome.result {
@@ -1026,7 +1029,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
                     .complete(job_id, ScheduledJobState::Failed(message.clone()))
                     .await?;
                 self.database
-                    .commit_with_write_source(tx, "scheduled_job_action_error")
+                    .commit(tx, "scheduled_job_action_error")
                     .await?;
                 // Restore the request & execution ID of the failed execution.
                 let context = ExecutionContext::new_from_parts(
@@ -1114,7 +1117,7 @@ impl<RT: Runtime> ScheduledJobContext<RT> {
             .complete(job_id, job_state)
             .await?;
         self.database
-            .commit_with_write_source(tx, "scheduled_job_complete_action")
+            .commit(tx, "scheduled_job_complete_action")
             .await?;
         Ok(())
     }
@@ -1206,9 +1209,7 @@ impl<RT: Runtime> ScheduledJobGarbageCollector<RT> {
         }
         if deleted_jobs > 0 {
             tracing::debug!("Garbage collecting {deleted_jobs} finished scheduled jobs");
-            self.database
-                .commit_with_write_source(tx, "scheduled_job_gc")
-                .await?;
+            self.database.commit(tx, "scheduled_job_gc").await?;
             self.rt.wait(*SCHEDULED_JOB_GARBAGE_COLLECTION_DELAY).await;
         } else {
             let next_job_future = if let Some(next_job_wait) = next_job_wait {

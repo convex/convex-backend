@@ -32,21 +32,30 @@ pub enum DeploymentClass {
     S256,
     D1024,
     D2048,
+    /// S256 limits on a db cluster and conductor reserved for one team, which
+    /// may hold many of that team's deployments.
+    P256,
 }
 
 impl DeploymentClass {
     pub fn is_big(&self) -> bool {
         match self {
             DeploymentClass::D1024 | DeploymentClass::D2048 => true,
-            DeploymentClass::S16 | DeploymentClass::S256 => false,
+            DeploymentClass::S16 | DeploymentClass::S256 | DeploymentClass::P256 => false,
         }
     }
 
+    /// One deployment per db cluster.
     pub fn is_dedicated(&self) -> bool {
         match self {
             DeploymentClass::D1024 | DeploymentClass::D2048 => true,
-            DeploymentClass::S16 | DeploymentClass::S256 => false,
+            DeploymentClass::S16 | DeploymentClass::S256 | DeploymentClass::P256 => false,
         }
+    }
+
+    /// Many deployments on a db cluster reserved for one team.
+    pub fn is_pooled(&self) -> bool {
+        matches!(self, DeploymentClass::P256)
     }
 }
 

@@ -38,7 +38,6 @@ use common::{
         Interval,
     },
     knobs::{
-        MYSQL_FALLBACK_PAGE_SIZE,
         MYSQL_MAX_QUERY_BATCH_SIZE,
         MYSQL_MAX_QUERY_DYNAMIC_BATCH_SIZE,
         MYSQL_MIN_QUERY_BATCH_SIZE,
@@ -76,7 +75,6 @@ use common::{
     },
     sha256::Sha256,
     shutdown::ShutdownSignal,
-    try_anyhow,
     types::{
         IndexId,
         IndexRef,
@@ -112,7 +110,6 @@ use crate::{
         ApproxSize,
     },
     connection::{
-        is_message_too_large_error,
         MySqlConnection,
         MySqlTransaction,
     },
@@ -123,7 +120,6 @@ use crate::{
         write_persistence_global_timer,
         QueryIndexStats,
     },
-    ConnectError,
     ConvexMySqlPool,
     MySqlInstanceName,
     MySqlOptions,
@@ -132,7 +128,7 @@ use crate::{
 
 pub struct Persistence<RT: Runtime> {
     newly_created: AtomicBool,
-    pub(super) lease: Lease<RT>,
+    pub(crate) lease: Lease<RT>,
 
     // Used by the reader.
     pub(super) read_pool: Arc<ConvexMySqlPool<RT>>,
@@ -147,14 +143,16 @@ impl<RT: Runtime> Persistence<RT> {
         db_name: String,
         options: MySqlOptions,
         lease_lost_shutdown: ShutdownSignal,
-    ) -> Result<Self, ConnectError> {
+    ) -> anyhow::Result<Self> {
         if options.version != PersistenceVersion::V5 {
-            return Err(anyhow::anyhow!("V5 persistence cannot open a non-V5 database").into());
+            return Err(anyhow::anyhow!(
+                "V5 persistence cannot open a non-V5 database"
+            ));
         }
         let expected_table_count = super::EXPECTED_TABLE_COUNT;
         let init_sql = super::init_sql(options.multitenant);
         let init_lease = super::init_lease(options.multitenant);
-        let newly_created = {
+        {
             let mut client = pool.acquire("init_sql", &db_name).await?;
             let table_count: usize = client
                 .query_optional(super::GET_TABLE_COUNT, vec![(&db_name).into()])
@@ -181,24 +179,22 @@ impl<RT: Runtime> Persistence<RT> {
                     },
                 )
                 .await?;
-            Self::check_newly_created(&mut client, options.multitenant, &options.instance_name)
-                .await?
         };
-        let mut client = pool.acquire("read_only", &db_name).await?;
-        if !options.allow_read_only
-            && Self::is_read_only(&mut client, options.multitenant, &options.instance_name).await?
-        {
-            return Err(ConnectError::ReadOnly);
-        }
 
         let lease = Lease::acquire(
             pool.clone(),
             db_name.clone(),
             options.instance_name.clone(),
             options.multitenant,
+            options.allow_read_only,
             lease_lost_shutdown,
         )
         .await?;
+        let newly_created = {
+            let mut client = pool.acquire("check_newly_created", &db_name).await?;
+            Self::check_newly_created(&mut client, options.multitenant, &options.instance_name)
+                .await?
+        };
         Ok(Self {
             newly_created: newly_created.into(),
             lease,
@@ -244,25 +240,9 @@ impl<RT: Runtime> Persistence<RT> {
         Reader {
             db_name,
             read_pool: pool,
-            db_should_be_leader: options.db_should_be_leader,
             instance_name: options.instance_name,
             multitenant: options.multitenant,
         }
-    }
-
-    async fn is_read_only(
-        client: &mut MySqlConnection<'_, RT>,
-        multitenant: bool,
-        instance_name: &MySqlInstanceName,
-    ) -> anyhow::Result<bool> {
-        let mut params = vec![];
-        if multitenant {
-            params.push((&instance_name.raw).into());
-        }
-        Ok(client
-            .query_optional(super::check_is_read_only(multitenant), params)
-            .await?
-            .is_some())
     }
 
     async fn check_newly_created(
@@ -280,13 +260,19 @@ impl<RT: Runtime> Persistence<RT> {
             .is_none())
     }
 
+    /// Runs `f` in the transaction that writes the V5 rows, so an error from
+    /// either rolls back the other's writes as well.
     #[fastrace::trace]
-    pub(crate) async fn write_impl<'a>(
+    pub(crate) async fn write_in_transaction<'a, F>(
         &self,
         documents: &'a [DocumentLogEntry],
         indexes: &'a [PersistenceIndexEntry],
         conflict_strategy: ConflictStrategy,
-    ) -> anyhow::Result<()> {
+        f: F,
+    ) -> anyhow::Result<()>
+    where
+        F: for<'tx> AsyncFnOnce(&'tx mut MySqlTransaction<'_>) -> anyhow::Result<()>,
+    {
         anyhow::ensure!(documents.len() <= crate::MAX_INSERT_SIZE);
         let mut write_size = 0;
         for update in documents {
@@ -315,7 +301,7 @@ impl<RT: Runtime> Persistence<RT> {
         let multitenant = self.multitenant;
         let instance_name = mysql_async::Value::from(&self.instance_name.raw);
         self.lease
-            .transact(async move |tx| {
+            .transact("write", async move |tx| {
                 // First, process all of the full document chunks.
                 let mut document_chunks = smart_chunks(documents);
                 for chunk in &mut document_chunks {
@@ -402,7 +388,7 @@ impl<RT: Runtime> Persistence<RT> {
                         )
                         .await?;
                 }
-                Ok(())
+                f(tx).await
             })
             .await
     }
@@ -425,7 +411,6 @@ impl<RT: Runtime> PersistenceTrait for Persistence<RT> {
         Arc::new(Reader {
             db_name: self.db_name.clone(),
             read_pool: self.read_pool.clone(),
-            db_should_be_leader: true,
             instance_name: self.instance_name.clone(),
             multitenant: self.multitenant,
         })
@@ -437,7 +422,8 @@ impl<RT: Runtime> PersistenceTrait for Persistence<RT> {
         indexes: &'a [PersistenceIndexEntry],
         conflict_strategy: ConflictStrategy,
     ) -> anyhow::Result<()> {
-        self.write_impl(documents, indexes, conflict_strategy).await
+        self.write_in_transaction(documents, indexes, conflict_strategy, async |_| Ok(()))
+            .await
     }
 
     async fn write_persistence_global(
@@ -449,7 +435,7 @@ impl<RT: Runtime> PersistenceTrait for Persistence<RT> {
         let multitenant = self.multitenant;
         let instance_name = mysql_async::Value::from(&self.instance_name.raw);
         self.lease
-            .transact(async move |tx| {
+            .transact("write_persistence_global", async move |tx| {
                 let stmt = super::write_persistence_global(multitenant);
                 let mut params = if multitenant {
                     vec![instance_name]
@@ -495,7 +481,7 @@ impl<RT: Runtime> PersistenceTrait for Persistence<RT> {
             }
         });
         self.lease
-            .transact(async move |tx| {
+            .transact("delete_documents", async move |tx| {
                 let mut deleted_count = 0;
                 for chunk in smart_chunks(&documents) {
                     let mut params = Vec::with_capacity(
@@ -529,7 +515,7 @@ impl<RT: Runtime> PersistenceTrait for Persistence<RT> {
         let multitenant = self.multitenant;
         let instance_name = mysql_async::Value::from(&self.instance_name.raw);
         self.lease
-            .transact(async move |tx| {
+            .transact("delete_tablet_documents", async move |tx| {
                 let mut deleted_count = 0;
                 let mut params = Vec::with_capacity(
                     super::documents::DELETE_TABLE_COLUMN_COUNT + (multitenant as usize),
@@ -555,12 +541,6 @@ pub struct Reader<RT: Runtime> {
     db_name: String,
     instance_name: MySqlInstanceName,
     multitenant: bool,
-    /// Set `db_should_be_leader` if this PostgresReader should be connected
-    /// to the database leader. In particular, we protect against heterogenous
-    /// connection pools where one connection is to the leader and another is to
-    /// a follower.
-    #[allow(unused)]
-    db_should_be_leader: bool,
 }
 
 fn maybe_bytes_col(row: &Row, col: usize) -> anyhow::Result<Option<&[u8]>> {
@@ -627,7 +607,7 @@ impl<RT: Runtime> Reader<RT> {
         include_prev_rev: bool,
         range: TimestampRange,
         order: Order,
-        mut page_size: u32,
+        page_size: u32,
         retention_validator: Arc<dyn RetentionValidator>,
     ) {
         anyhow::ensure!(page_size > 0); // 0 size pages loop forever.
@@ -675,36 +655,9 @@ impl<RT: Runtime> Reader<RT> {
                 params.push(self.instance_name.to_string().into());
             }
             params.push((page_size as i64).into());
-            let rows = match client
+            let rows = client
                 .query_collect(query, params, page_size as usize, Ok)
-                .await
-            {
-                Ok(rows) => Ok(rows),
-                Err(ref e) if let Some(db_err) = is_message_too_large_error(e) => {
-                    if page_size == 1 {
-                        anyhow::bail!(
-                            "Failed to load documents with minimum page size `1`: {}",
-                            db_err.message,
-                        );
-                    }
-                    if page_size == *MYSQL_FALLBACK_PAGE_SIZE {
-                        tracing::warn!(
-                            "Falling back to page size `1` due to repeated server error: {}",
-                            db_err.message
-                        );
-                        page_size = 1;
-                    } else {
-                        tracing::warn!(
-                            "Falling back to page size `{}` due to server error: {}",
-                            *MYSQL_FALLBACK_PAGE_SIZE,
-                            db_err.message
-                        );
-                        page_size = *MYSQL_FALLBACK_PAGE_SIZE;
-                    }
-                    continue;
-                },
-                Err(e) => Err(e),
-            }?;
+                .await?;
             drop(client);
 
             retention_validator
@@ -832,7 +785,6 @@ impl<RT: Runtime> Reader<RT> {
             Option<Timestamp>,
         )> = Vec::new();
         let mut has_more = true;
-        let mut fallback = false;
         while has_more {
             // Avoid holding connections across yield points, to limit lifetime
             // and improve fairness.
@@ -855,37 +807,9 @@ impl<RT: Runtime> Reader<RT> {
 
             let execute_timer =
                 metrics::query_index_sql_execute_timer(self.read_pool.cluster_name());
-            let rows = match client
+            let rows = client
                 .query_collect(query, params, batch_size as usize, Ok)
-                .await
-            {
-                Ok(rows) => Ok(rows),
-                Err(ref e) if let Some(db_err) = is_message_too_large_error(e) => {
-                    if batch_size == 1 {
-                        anyhow::bail!(
-                            "Failed to load index rows with minimum page size `1`: {}",
-                            db_err.message
-                        );
-                    }
-                    if batch_size == *MYSQL_FALLBACK_PAGE_SIZE {
-                        tracing::warn!(
-                            "Falling back to page size `1` due to repeated server error: {}",
-                            db_err.message
-                        );
-                        batch_size = 1;
-                    } else {
-                        tracing::warn!(
-                            "Falling back to page size `{}` due to server error: {}",
-                            *MYSQL_FALLBACK_PAGE_SIZE,
-                            db_err.message
-                        );
-                        batch_size = *MYSQL_FALLBACK_PAGE_SIZE;
-                    }
-                    fallback = true;
-                    continue;
-                },
-                Err(e) => Err(e),
-            }?;
+                .await?;
             execute_timer.finish();
             drop(client);
 
@@ -994,10 +918,9 @@ impl<RT: Runtime> Reader<RT> {
             // Double the batch size every iteration until we max dynamic batch size. This
             // helps correct for tombstones, long prefixes and wrong client
             // size estimates.
-            // If we've had to fall back to the fallback page size, stay there without
-            // doubling. TODO: Take size into consideration and increase the max
-            // dynamic batch size.
-            if batch_size < *MYSQL_MAX_QUERY_DYNAMIC_BATCH_SIZE as u32 && !fallback {
+            // TODO: Take size into consideration and increase the max dynamic
+            // batch size.
+            if batch_size < *MYSQL_MAX_QUERY_DYNAMIC_BATCH_SIZE as u32 {
                 batch_size = (batch_size * 2).min(*MYSQL_MAX_QUERY_DYNAMIC_BATCH_SIZE as u32);
             }
         }
@@ -1177,26 +1100,13 @@ impl<RT: Runtime> PersistenceReader for Reader<RT> {
         let multitenant = self.multitenant;
         let instance_name: mysql_async::Value = (&self.instance_name.raw).into();
 
-        // Track remaining items to process and fallback chunk size
-        let mut remaining: &[DocumentPrevTsQuery] = &ids;
-        let mut fallback_chunk_size: Option<usize> = None;
-
-        while !remaining.is_empty() {
+        for chunk in smart_chunks(&ids) {
             // Avoid holding connections across yield points, to limit lifetime
             // and improve fairness.
             let mut client = self
                 .read_pool
                 .acquire("previous_revisions_of_documents", &self.db_name)
                 .await?;
-
-            // Determine chunk - either use smart_chunks or fallback size
-            let chunk = if let Some(max_size) = fallback_chunk_size {
-                let len = remaining.len().min(max_size);
-                &remaining[..len]
-            } else {
-                // Use first chunk from smart_chunks
-                smart_chunks(remaining).next().unwrap()
-            };
 
             let mut params = Vec::with_capacity(
                 chunk.len() * (super::documents::EXACT_REV_CHUNK_PARAMS + multitenant as usize),
@@ -1216,43 +1126,14 @@ impl<RT: Runtime> PersistenceReader for Reader<RT> {
                 // deduplicate, so create a map from DB results back to queries
                 id_ts_to_query.entry((id, prev_ts)).or_default().push(*q);
             }
-            let results = match client
+            let results = client
                 .query_collect(
                     super::documents::exact_rev_chunk(chunk.len(), multitenant),
                     params,
                     chunk.len(),
                     |row| Self::row_to_document(&row),
                 )
-                .await
-            {
-                Ok(r) => Ok(r),
-                Err(ref e) if let Some(db_err) = is_message_too_large_error(e) => {
-                    let current_size = fallback_chunk_size.unwrap_or(chunk.len());
-                    if current_size == 1 {
-                        anyhow::bail!(
-                            "Failed to load previous revisions of documents with minimum chunk \
-                             size `1`: {}",
-                            db_err.message,
-                        );
-                    }
-                    if current_size <= *MYSQL_FALLBACK_PAGE_SIZE as usize {
-                        tracing::warn!(
-                            "Falling back to chunk size `1` due to repeated server error: {}",
-                            db_err.message
-                        );
-                        fallback_chunk_size = Some(1);
-                    } else {
-                        tracing::warn!(
-                            "Falling back to chunk size `{}` due to server error: {}",
-                            *MYSQL_FALLBACK_PAGE_SIZE,
-                            db_err.message
-                        );
-                        fallback_chunk_size = Some(*MYSQL_FALLBACK_PAGE_SIZE as usize);
-                    }
-                    continue;
-                },
-                Err(e) => Err(e),
-            }?;
+                .await?;
             for (prev_ts, id, maybe_doc, prev_prev_ts) in results {
                 let entry = DocumentLogEntry {
                     ts: prev_ts,
@@ -1269,9 +1150,6 @@ impl<RT: Runtime> PersistenceReader for Reader<RT> {
                     anyhow::ensure!(result.insert(q, entry).is_none());
                 }
             }
-
-            // Advance past the processed chunk
-            remaining = &remaining[chunk.len()..];
         }
 
         if let Some(min_ts) = ids.iter().map(|DocumentPrevTsQuery { ts, .. }| *ts).min() {
@@ -1302,26 +1180,13 @@ impl<RT: Runtime> PersistenceReader for Reader<RT> {
         let multitenant = self.multitenant;
         let instance_name: mysql_async::Value = (&self.instance_name.raw).into();
 
-        // Track remaining items to process and fallback chunk size
-        let mut remaining: &[(InternalDocumentId, Timestamp)] = &ids;
-        let mut fallback_chunk_size: Option<usize> = None;
-
-        while !remaining.is_empty() {
+        for chunk in smart_chunks(&ids) {
             // Avoid holding connections across yield points, to limit lifetime
             // and improve fairness.
             let mut client = self
                 .read_pool
                 .acquire("previous_revisions", &self.db_name)
                 .await?;
-
-            // Determine chunk - either use smart_chunks or fallback size
-            let chunk = if let Some(max_size) = fallback_chunk_size {
-                let len = remaining.len().min(max_size);
-                &remaining[..len]
-            } else {
-                // Use first chunk from smart_chunks
-                smart_chunks(remaining).next().unwrap()
-            };
 
             let mut params = Vec::with_capacity(
                 chunk.len() * (super::documents::PREV_REV_CHUNK_PARAMS + multitenant as usize),
@@ -1336,47 +1201,15 @@ impl<RT: Runtime> PersistenceReader for Reader<RT> {
                 }
                 min_ts = cmp::min(*ts, min_ts);
             }
-            let rows = match client
+            let rows = client
                 .query_collect(
                     super::documents::prev_rev_chunk(chunk.len(), multitenant),
                     params,
                     chunk.len(),
                     Ok,
                 )
-                .await
-            {
-                Ok(r) => Ok(r),
-                Err(ref e) if let Some(db_err) = is_message_too_large_error(e) => {
-                    let current_size = fallback_chunk_size.unwrap_or(chunk.len());
-                    if current_size == 1 {
-                        anyhow::bail!(
-                            "Failed to load previous revisions with minimum chunk size `1`: {}",
-                            db_err.message,
-                        );
-                    }
-                    if current_size <= *MYSQL_FALLBACK_PAGE_SIZE as usize {
-                        tracing::warn!(
-                            "Falling back to chunk size `1` due to repeated server error: {}",
-                            db_err.message
-                        );
-                        fallback_chunk_size = Some(1);
-                    } else {
-                        tracing::warn!(
-                            "Falling back to chunk size `{}` due to server error: {}",
-                            *MYSQL_FALLBACK_PAGE_SIZE,
-                            db_err.message
-                        );
-                        fallback_chunk_size = Some(*MYSQL_FALLBACK_PAGE_SIZE as usize);
-                    }
-                    continue;
-                },
-                Err(e) => Err(e),
-            }?;
-
+                .await?;
             results.extend(rows);
-
-            // Advance past the processed chunk
-            remaining = &remaining[chunk.len()..];
         }
         for row in results.into_iter() {
             let ts: i64 = row.get_opt(6).context("row[6]")??;
@@ -1500,7 +1333,7 @@ impl<RT: Runtime> PersistenceReader for Reader<RT> {
 /// The only thing a `Lease` can do is execute a transaction against the
 /// database and atomically ensure that the lease was still held during the
 /// transaction, and otherwise return a lease lost.
-pub(super) struct Lease<RT: Runtime> {
+pub(crate) struct Lease<RT: Runtime> {
     pool: Arc<ConvexMySqlPool<RT>>,
     db_name: String,
     instance_name: MySqlInstanceName,
@@ -1510,6 +1343,46 @@ pub(super) struct Lease<RT: Runtime> {
 }
 
 impl<RT: Runtime> Lease<RT> {
+    #[allow(
+        dead_code,
+        reason = "Consumed by the opt-in shadow implementation in the follow-up PR"
+    )]
+    pub(crate) fn pool(&self) -> &Arc<ConvexMySqlPool<RT>> {
+        &self.pool
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Consumed by the opt-in shadow implementation in the follow-up PR"
+    )]
+    pub(crate) fn db_name(&self) -> &str {
+        &self.db_name
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Consumed by the opt-in shadow implementation in the follow-up PR"
+    )]
+    pub(crate) fn multitenant(&self) -> bool {
+        self.multitenant
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Consumed by the opt-in shadow implementation in the follow-up PR"
+    )]
+    pub(crate) fn timestamp(&self) -> i64 {
+        self.lease_ts
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Consumed by the opt-in shadow implementation in the follow-up PR"
+    )]
+    pub(crate) fn instance_name(&self) -> &str {
+        &self.instance_name.raw
+    }
+
     /// Acquire a lease. Makes other lease-holders get `LeaseLostError` when
     /// they commit.
     async fn acquire(
@@ -1517,6 +1390,7 @@ impl<RT: Runtime> Lease<RT> {
         db_name: String,
         instance_name: MySqlInstanceName,
         multitenant: bool,
+        allow_read_only: bool,
         lease_lost_shutdown: ShutdownSignal,
     ) -> anyhow::Result<Self> {
         let timer = metrics::lease_acquire_timer(pool.cluster_name());
@@ -1530,13 +1404,17 @@ impl<RT: Runtime> Lease<RT> {
         let mut params = vec![ts.into(), ts.into()];
         if multitenant {
             params.push((&instance_name.raw).into());
+            if !allow_read_only {
+                params.push((&instance_name.raw).into());
+            }
         }
         let rows_modified = client
-            .exec_iter(super::lease_acquire(multitenant), params)
+            .exec_iter(super::lease_acquire(multitenant, allow_read_only), params)
             .await?;
+        drop(client);
         anyhow::ensure!(
             rows_modified == 1,
-            "failed to acquire lease: Already acquired with higher timestamp"
+            "failed to acquire lease: already acquired with higher timestamp, or read-only"
         );
         tracing::info!("lease acquired with ts {}", ts);
 
@@ -1558,13 +1436,13 @@ impl<RT: Runtime> Lease<RT> {
     /// it will succeed. Instead, a new `Lease` must be made with `acquire`,
     /// and any in-memory state then resynced because of any changes that
     /// might've been made to the database state while the lease was not
-    /// held.
+    /// held. `op` names the persistence operation on the commit metric.
     #[fastrace::trace]
-    pub(super) async fn transact<F, T>(&self, f: F) -> anyhow::Result<T>
+    pub(crate) async fn transact<F, T>(&self, op: &'static str, f: F) -> anyhow::Result<T>
     where
         F: for<'a> AsyncFnOnce(&'a mut MySqlTransaction<'_>) -> anyhow::Result<T>,
     {
-        self.transact_with_isolation(None, f).await
+        self.transact_with_isolation(op, None, f).await
     }
 
     /// Like [`Self::transact`], but runs at READ COMMITTED instead of the
@@ -1572,17 +1450,22 @@ impl<RT: Runtime> Lease<RT> {
     /// this so their DELETEs take only record locks, sparing concurrent index
     /// writers the next-key/gap locks REPEATABLE READ adds.
     #[fastrace::trace]
-    pub(super) async fn transact_read_committed<F, T>(&self, f: F) -> anyhow::Result<T>
+    pub(crate) async fn transact_read_committed<F, T>(
+        &self,
+        op: &'static str,
+        f: F,
+    ) -> anyhow::Result<T>
     where
         F: for<'a> AsyncFnOnce(&'a mut MySqlTransaction<'_>) -> anyhow::Result<T>,
     {
-        self.transact_with_isolation(Some(IsolationLevel::ReadCommitted), f)
+        self.transact_with_isolation(op, Some(IsolationLevel::ReadCommitted), f)
             .await
     }
 
     #[fastrace::trace]
     async fn transact_with_isolation<F, T>(
         &self,
+        op: &'static str,
         isolation: Option<IsolationLevel>,
         f: F,
     ) -> anyhow::Result<T>
@@ -1590,43 +1473,40 @@ impl<RT: Runtime> Lease<RT> {
         F: for<'a> AsyncFnOnce(&'a mut MySqlTransaction<'_>) -> anyhow::Result<T>,
     {
         let mut client = self.pool.acquire("transact", &self.db_name).await?;
-        let r = try_anyhow!({
-            let mut tx = client
-                .transaction(self.pool.cluster_name(), isolation)
-                .await?;
+        let mut tx = client
+            .transaction(self.pool.cluster_name(), isolation)
+            .await?;
 
-            let timer = metrics::lease_precond_timer(self.pool.cluster_name());
-            let mut params = vec![mysql_async::Value::Int(self.lease_ts)];
-            if self.multitenant {
-                params.push((&self.instance_name.raw).into());
-            }
-            let rows: Option<Row> = tx
-                .exec_first(super::lease_precond(self.multitenant), params)
-                .in_span(Span::enter_with_local_parent(format!(
-                    "{}::lease_precondition",
-                    func_path!()
-                )))
-                .await?;
-            if rows.is_none() {
-                self.lease_lost_shutdown.signal(lease_lost_error());
-                anyhow::bail!(lease_lost_error());
-            }
-            timer.finish();
+        let timer = metrics::lease_precond_timer(self.pool.cluster_name());
+        let mut params = vec![mysql_async::Value::Int(self.lease_ts)];
+        if self.multitenant {
+            params.push((&self.instance_name.raw).into());
+        }
+        let rows: Option<Row> = tx
+            .exec_first(super::lease_precond(self.multitenant), params)
+            .in_span(Span::enter_with_local_parent(format!(
+                "{}::lease_precondition",
+                func_path!()
+            )))
+            .await?;
+        if rows.is_none() {
+            self.lease_lost_shutdown.signal(lease_lost_error());
+            anyhow::bail!(lease_lost_error());
+        }
+        timer.finish();
 
-            let result = f(&mut tx)
-                .in_span(Span::enter_with_local_parent(format!(
-                    "{}::execute_function",
-                    func_path!()
-                )))
-                .await?;
+        let result = f(&mut tx)
+            .in_span(Span::enter_with_local_parent(format!(
+                "{}::execute_function",
+                func_path!()
+            )))
+            .await?;
 
-            let timer = metrics::commit_timer(self.pool.cluster_name());
-            tx.commit().await?;
-            timer.finish();
+        let timer = metrics::commit_timer(self.pool.cluster_name(), op);
+        tx.commit().await?;
+        timer.finish();
 
-            result
-        });
-        client.handle_errors(r).await
+        Ok(result)
     }
 }
 

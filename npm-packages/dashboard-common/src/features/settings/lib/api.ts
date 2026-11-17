@@ -43,6 +43,7 @@ export function useUpdateEnvVars(): (
       const err = await res.json();
       reportHttpError("POST", res.url, err);
       toast("error", err.message);
+      throw new Error(err.message);
     }
   };
 }

@@ -58,7 +58,7 @@ where
         tracing::info!("Creating a root component during import");
         create_root_component(&mut tx).await?;
         database
-            .commit_with_write_source(tx, "snapshot_import_create_root_component")
+            .commit(tx, "snapshot_import_create_root_component")
             .await?;
         return Ok(ComponentId::Root);
     };
@@ -81,7 +81,7 @@ async fn create_unmounted_component<RT: Runtime>(
         .initialize_component_namespace(false)
         .await?;
     database
-        .commit_with_write_source(tx, "snapshot_import_prepare_unmounted_component")
+        .commit(tx, "snapshot_import_prepare_unmounted_component")
         .await?;
     database
         .load_indexes_into_memory(btreeset! { SCHEMAS_TABLE.clone() })
@@ -92,7 +92,6 @@ async fn create_unmounted_component<RT: Runtime>(
         path: format!("{}", parent_path.join(component_name.clone())).parse()?,
         definition_type: ComponentDefinitionType::ChildComponent {
             name: component_name.clone(),
-            args: btreemap! {},
         },
         child_components: vec![],
         http_mounts: btreemap! {},
@@ -113,7 +112,6 @@ async fn create_unmounted_component<RT: Runtime>(
                 ))?
                 .developer_id(),
             name: component_name,
-            args: btreemap! {},
             env: btreemap! {},
         },
         state: ComponentState::Unmounted,
@@ -127,7 +125,7 @@ async fn create_unmounted_component<RT: Runtime>(
         )
         .await?;
     database
-        .commit_with_write_source(tx, "snapshot_import_insert_unmounted_component")
+        .commit(tx, "snapshot_import_insert_unmounted_component")
         .await?;
     Ok(ComponentId::Child(component_id))
 }

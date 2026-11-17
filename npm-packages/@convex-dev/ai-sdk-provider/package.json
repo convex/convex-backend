@@ -6,7 +6,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/convex-backend.git",
+    "url": "git+https://github.com/convex/convex-backend.git",
     "directory": "npm-packages/@convex-dev/ai-sdk-provider"
   },
   "scripts": {
@@ -54,7 +54,7 @@
     "node": ">=22"
   },
   "devDependencies": {
-    "@types/node": "^18.17.0",
+    "@types/node": "^22.0.0",
     "ai": "7.0.105",
     "convex": "workspace:*",
     "tshy": "^3.0.0",

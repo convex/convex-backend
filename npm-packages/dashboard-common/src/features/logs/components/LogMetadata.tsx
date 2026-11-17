@@ -208,19 +208,22 @@ function ResourcesUsed({
       <Disclosure defaultOpen>
         {({ open }) => (
           <>
-            <div className="flex items-center justify-between">
+            {/* The heading wraps the button rather than the other way around:
+                a button's contents lose their roles, so this is what lets
+                heading navigation reach the section. */}
+            <h5 className="flex items-center justify-between text-xs">
               <DisclosureButton className="flex items-center gap-1 text-xs">
                 <PieChartIcon className="size-3 text-content-secondary" />
-                <h6 className="font-semibold text-content-secondary">
+                <span className="font-semibold text-content-secondary">
                   Resources Used
-                </h6>
+                </span>
                 {open ? (
                   <ChevronUpIcon className="size-3" />
                 ) : (
                   <ChevronDownIcon className="size-3" />
                 )}
               </DisclosureButton>
-            </div>
+            </h5>
 
             <DisclosurePanel className="mt-2 animate-fadeInFromLoading">
               {isInProgress && <Running />}
@@ -540,6 +543,8 @@ function FunctionType({
         return "Action";
       case "HttpAction":
         return "HTTP Action";
+      case "Init":
+        return "Init";
       default:
         return <Running />;
     }

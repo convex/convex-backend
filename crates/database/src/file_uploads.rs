@@ -124,6 +124,17 @@ impl FileUploads {
         }
     }
 
+    pub(crate) fn require_no_pending(&self) -> anyhow::Result<()> {
+        if let Self::Pending(uploads) = self {
+            anyhow::ensure!(
+                uploads.is_empty(),
+                "Expected no pending file uploads, but found {}",
+                uploads.len()
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn mark_uploaded(&mut self) {
         if let Self::Pending(uploads) = self {
             let uploaded = uploads

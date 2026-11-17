@@ -6,6 +6,12 @@ use common::{
     index::IndexKeyBytes,
     interval::Interval,
     persistence::{
+        index_scan_attribution::{
+            attribute_index_scan,
+            IndexScanCaller,
+            IndexScanKind,
+        },
+        IndexStream,
         LatestDocument,
         PersistenceSnapshot,
     },
@@ -25,12 +31,16 @@ use futures::StreamExt as _;
 use futures_async_stream::try_stream;
 use value::{
     heap_size::HeapSize,
+    TableMapping,
     TabletId,
 };
 
-use crate::metrics::{
-    index_page_timer,
-    log_index_page_point_lookup,
+use crate::{
+    index_registry::IndexRegistry,
+    metrics::{
+        index_page_timer,
+        log_index_page_point_lookup,
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,46 +87,124 @@ impl IndexReader for PersistenceSnapshot {
         order: Order,
         max_results: usize,
     ) -> anyhow::Result<IndexPage> {
-        let timer = index_page_timer("local");
-        if interval.is_singleton().is_some() {
-            log_index_page_point_lookup();
-        }
-        let result = async {
-            let mut stream = PersistenceSnapshot::index_scan(
-                self,
-                index,
-                tablet_id,
-                interval,
-                order,
-                max_results,
-            );
-            let mut entries = vec![];
-            while let Some(result) = stream.next().await {
-                let (key, LatestDocument { ts, value, .. }) = result?;
-                entries.push(Arc::new(IndexEntry {
-                    key,
-                    ts,
-                    value: PackedDocument::pack(&value),
-                }));
-                if entries.len() >= max_results {
-                    let cursor = CursorPosition::After(entries.last().unwrap().key.clone());
-                    return Ok(IndexPage { entries, cursor });
-                }
-            }
-            Ok(IndexPage {
-                entries,
-                cursor: CursorPosition::End,
-            })
-        }
-        .await;
-        if result.is_ok() {
-            timer.finish();
-        }
-        result
+        read_page(
+            PersistenceSnapshot::index_scan(self, index, tablet_id, interval, order, max_results),
+            interval,
+            max_results,
+        )
+        .await
     }
 
     fn timestamp(&self) -> RepeatableTimestamp {
         PersistenceSnapshot::timestamp(self)
+    }
+}
+
+/// Collects up to `max_results` entries of `stream`, a scan of `interval`.
+async fn read_page(
+    mut stream: IndexStream<'_>,
+    interval: &Interval,
+    max_results: usize,
+) -> anyhow::Result<IndexPage> {
+    let timer = index_page_timer("local");
+    if interval.is_singleton().is_some() {
+        log_index_page_point_lookup();
+    }
+    let result = async {
+        let mut entries = vec![];
+        while let Some(result) = stream.next().await {
+            let (key, LatestDocument { ts, value, .. }) = result?;
+            entries.push(Arc::new(IndexEntry {
+                key,
+                ts,
+                value: PackedDocument::pack(&value).shrink(),
+            }));
+            if entries.len() >= max_results {
+                let cursor = CursorPosition::After(entries.last().unwrap().key.clone());
+                return Ok(IndexPage { entries, cursor });
+            }
+        }
+        Ok(IndexPage {
+            entries,
+            cursor: CursorPosition::End,
+        })
+    }
+    .await;
+    if result.is_ok() {
+        timer.finish();
+    }
+    result
+}
+
+/// Reads `snapshot`, attributing each page to `caller` and to the kind of
+/// index and the table it reads.
+pub struct AttributedIndexReader {
+    snapshot: PersistenceSnapshot,
+    caller: IndexScanCaller,
+    index_registry: Option<IndexRegistry>,
+    table_mapping: Option<TableMapping>,
+}
+
+impl AttributedIndexReader {
+    /// Without `index_registry`, the kind of index each read is attributed to
+    /// is unknown, and without `table_mapping`, so is its table.
+    pub fn new(
+        snapshot: PersistenceSnapshot,
+        caller: IndexScanCaller,
+        index_registry: Option<IndexRegistry>,
+        table_mapping: Option<TableMapping>,
+    ) -> Self {
+        Self {
+            snapshot,
+            caller,
+            index_registry,
+            table_mapping,
+        }
+    }
+
+    fn kind(&self, index: IndexRef, tablet_id: TabletId) -> IndexScanKind {
+        let Some(index_registry) = &self.index_registry else {
+            return IndexScanKind::Unknown;
+        };
+        let is = |name: TabletIndexName| {
+            index_registry
+                .get_enabled(&name)
+                .is_some_and(|enabled| enabled.id() == index.id())
+        };
+        if is(TabletIndexName::by_id(tablet_id)) {
+            IndexScanKind::ById
+        } else if is(TabletIndexName::by_creation_time(tablet_id)) {
+            IndexScanKind::ByCreationTime
+        } else {
+            IndexScanKind::Defined
+        }
+    }
+}
+
+#[async_trait]
+impl IndexReader for AttributedIndexReader {
+    async fn index_page(
+        &self,
+        index: IndexRef,
+        tablet_id: TabletId,
+        interval: &Interval,
+        order: Order,
+        max_results: usize,
+    ) -> anyhow::Result<IndexPage> {
+        let scan = attribute_index_scan(
+            self.snapshot
+                .index_scan(index, tablet_id, interval, order, max_results),
+            self.caller,
+            self.kind(index, tablet_id),
+            self.table_mapping
+                .as_ref()
+                .and_then(|table_mapping| table_mapping.tablet_name(tablet_id).ok()),
+        );
+        read_page(scan, interval, max_results).await
+    }
+
+    fn timestamp(&self) -> RepeatableTimestamp {
+        self.snapshot.timestamp()
     }
 }
 

@@ -77,7 +77,7 @@ pub struct UnsubscribeRequest {
 }
 
 pub async fn worker<T: SyncProtocol>(
-    mut protocol_response_receiver: mpsc::Receiver<ProtocolResponse>,
+    mut protocol_response_receiver: mpsc::UnboundedReceiver<ProtocolResponse>,
     mut client_request_receiver: mpsc::UnboundedReceiver<ClientRequest>,
     mut watch_sender: broadcast::Sender<QueryResults>,
     mut base_client: BaseConvexClient,
@@ -116,6 +116,13 @@ pub async fn worker<T: SyncProtocol>(
                 max_observed_timestamp: base_client.max_observed_timestamp(),
             })
             .await;
+        // Drop responses from the old connection, which would otherwise be
+        // applied to the state reset for the new one.
+        while let Some(protocol_response) = protocol_response_receiver.recv().await {
+            if matches!(protocol_response, ProtocolResponse::ReconnectStarted) {
+                break;
+            }
+        }
         base_client.resend_ongoing_queries_mutations().await;
         // We'll flush messages from base_client inside the next call to
         // `_worker_once`.
@@ -123,7 +130,7 @@ pub async fn worker<T: SyncProtocol>(
 }
 
 async fn _worker_once<T: SyncProtocol>(
-    protocol_response_receiver: &mut mpsc::Receiver<ProtocolResponse>,
+    protocol_response_receiver: &mut mpsc::UnboundedReceiver<ProtocolResponse>,
     client_request_receiver: &mut mpsc::UnboundedReceiver<ClientRequest>,
     watch_sender: &mut broadcast::Sender<QueryResults>,
     base_client: &mut BaseConvexClient,
@@ -234,7 +241,7 @@ async fn _worker_once<T: SyncProtocol>(
 /// Flush all messages to the protocol while processing server mesages.
 async fn communicate<P: SyncProtocol>(
     base_client: &mut BaseConvexClient,
-    protocol_response_receiver: &mut mpsc::Receiver<ProtocolResponse>,
+    protocol_response_receiver: &mut mpsc::UnboundedReceiver<ProtocolResponse>,
     watch_sender: &mut broadcast::Sender<QueryResults>,
     protocol: &mut P,
 ) -> Result<(), ReconnectProtocolReason> {
@@ -243,8 +250,6 @@ async fn communicate<P: SyncProtocol>(
         loop {
             tokio::select! {
                _ = &mut send_future => break,
-               // Keep processing protocol responses while waiting so that we
-               // don't deadlock with the websocket worker.
                Some(protocol_response) = protocol_response_receiver.recv() => {
                    handle_protocol_response(base_client, watch_sender, protocol_response)?;
                }
@@ -269,6 +274,7 @@ fn handle_protocol_response(
         ProtocolResponse::Failure => {
             return Err("ProtocolFailure".into());
         },
+        ProtocolResponse::ReconnectStarted => {},
     }
     Ok(())
 }

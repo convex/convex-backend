@@ -164,8 +164,8 @@ http.route({
 });
 
 /**
- * This gets called by the get-convex/agent-skills CI pipeline to sync the agent skill catalog
- * with the latest skills from the get-convex/agent-skills repo.
+ * This gets called by the convex/agent-skills CI pipeline to sync the agent skill catalog
+ * with the latest skills from the convex/agent-skills repo.
  */
 http.route({
   path: "/v1/agent_skills/publish",

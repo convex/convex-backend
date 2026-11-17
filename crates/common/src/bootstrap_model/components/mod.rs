@@ -19,7 +19,6 @@ pub use self::definition::{
 };
 use crate::components::{
     ComponentName,
-    Resource,
     SerializedResource,
 };
 
@@ -58,7 +57,6 @@ pub enum ComponentType {
     ChildComponent {
         parent: DeveloperDocumentId,
         name: ComponentName,
-        args: BTreeMap<Identifier, Resource>,
         env: BTreeMap<Identifier, EnvBinding>,
     },
 }
@@ -75,6 +73,11 @@ pub struct SerializedComponentMetadata {
     pub definition_id: String,
     pub parent: Option<String>,
     pub name: Option<String>,
+    /// Always empty for a child component and absent for the app. Backends
+    /// that predate the removal of component arguments refuse to load a
+    /// child component without it, so it stays on the document.
+    // TODO(renee): remove once https://github.com/convex/convex/pull/59885 has been deployed and is stable
+    #[serde(default)]
     pub args: Option<Vec<(String, SerializedResource)>>,
     #[serde(default)]
     pub env: Option<Vec<(String, SerializedEnvBinding)>>,
@@ -88,19 +91,10 @@ impl TryFrom<ComponentMetadata> for SerializedComponentMetadata {
     fn try_from(m: ComponentMetadata) -> anyhow::Result<Self> {
         let (parent, name, args, env) = match m.component_type {
             ComponentType::App => (None, None, None, None),
-            ComponentType::ChildComponent {
-                parent,
-                name,
-                args,
-                env,
-            } => (
+            ComponentType::ChildComponent { parent, name, env } => (
                 Some(parent.to_string()),
                 Some(name.to_string()),
-                Some(
-                    args.into_iter()
-                        .map(|(k, v)| anyhow::Ok((k.to_string(), v.try_into()?)))
-                        .try_collect()?,
-                ),
+                Some(Vec::new()),
                 Some(
                     env.into_iter()
                         .map(|(k, v)| anyhow::Ok((k.to_string(), v.try_into()?)))
@@ -128,15 +122,11 @@ impl TryFrom<SerializedComponentMetadata> for ComponentMetadata {
     type Error = anyhow::Error;
 
     fn try_from(m: SerializedComponentMetadata) -> anyhow::Result<Self> {
-        let component_type = match (m.parent, m.name, m.args) {
-            (None, None, None) => ComponentType::App,
-            (Some(parent), Some(name), Some(args)) => ComponentType::ChildComponent {
+        let component_type = match (m.parent, m.name) {
+            (None, None) => ComponentType::App,
+            (Some(parent), Some(name)) => ComponentType::ChildComponent {
                 parent: parent.parse()?,
                 name: name.parse()?,
-                args: args
-                    .into_iter()
-                    .map(|(k, v)| Ok((k.parse()?, v.try_into()?)))
-                    .collect::<anyhow::Result<_>>()?,
                 env: m
                     .env
                     .unwrap_or_default()

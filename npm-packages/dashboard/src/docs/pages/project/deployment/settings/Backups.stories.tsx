@@ -42,6 +42,7 @@ const mockProject = {
   name: "My amazing app",
   slug: "my-amazing-app",
   createTime: NOW - 200 * DAY,
+  tags: [],
 };
 // Matches STORYBOOK_PROD_DEPLOYMENT in the docs page decorator, which renders
 // the surrounding dashboard shell for `docsPage.deploymentType: "prod"`.
@@ -185,9 +186,13 @@ const meta = {
       });
       // Each list item resolves its backup identifier from the source
       // deployment name.
-      mocked(useDeploymentByName).mockReturnValue(mockDeployment);
+      mocked(useDeploymentByName).mockReturnValue({
+        deployment: mockDeployment,
+        notFound: false,
+      });
       mocked(useInfiniteProjects).mockReturnValue({
         projects: [mockProject],
+        pages: [[mockProject]],
         isLoading: false,
         isLoadingMore: false,
         hasMore: false,

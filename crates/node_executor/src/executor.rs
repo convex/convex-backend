@@ -24,6 +24,7 @@ use common::{
     execution_context::ExecutionContext,
     knobs::{
         GET_SERVICE_TOKEN_GUARANTEED_LIFETIME,
+        MAX_LOG_LINES_NODE_ACTIONS,
         NODE_ANALYZE_MAX_RETRIES,
     },
     log_lines::{
@@ -146,6 +147,10 @@ const NODE_ANALYZE_MAX_BACKOFF: Duration = Duration::from_secs(5);
 #[async_trait]
 pub trait NodeExecutor: Sync + Send {
     fn enable(&self) -> anyhow::Result<()>;
+    /// Memory sizes, in MB, that this executor can run Node actions at.
+    fn supported_memory_mb(&self) -> &'static [u32] {
+        &[512]
+    }
     async fn invoke(
         &self,
         request: ExecutorRequest,
@@ -236,6 +241,10 @@ impl<RT: Runtime> NodeActions<RT> {
         self.executor.shutdown()
     }
 
+    pub fn supported_memory_mb(&self) -> &'static [u32] {
+        self.executor.supported_memory_mb()
+    }
+
     #[rustfmt::skip]
     pub async fn execute(
         &self,
@@ -319,7 +328,6 @@ impl<RT: Runtime> NodeActions<RT> {
         Ok(NodeActionOutcome {
             result,
             syscall_trace,
-            memory_used_in_mb: execute_result.memory_allocated_mb,
             egress_bytes: execute_result.egress_bytes,
         })
     }
@@ -587,7 +595,7 @@ impl TryFrom<ExecutorRequest> for JsonValue {
                     .environment_variables
                     .into_iter()
                     .map(|(name, value)| {
-                        ConvexObject::try_from(PersistedEnvironmentVariable(
+                        ConvexObject::try_from(PersistedEnvironmentVariable::new(
                             EnvironmentVariable::new(name, value),
                         ))
                         .map(JsonValue::from)
@@ -609,6 +617,7 @@ impl TryFrom<ExecutorRequest> for JsonValue {
                     "sourcePackage": JsonValue::from(r.source_package),
                     "backendAddress": backend_address,
                     "timeoutSecs": timeout.as_secs_f64(),
+                    "maxLogLines": *MAX_LOG_LINES_NODE_ACTIONS,
                     "serviceTokenGuaranteedLifetimeSecs":
                         GET_SERVICE_TOKEN_GUARANTEED_LIFETIME.as_secs_f64(),
                     "backendCallbackToken": r.callback_token,
@@ -630,7 +639,7 @@ impl TryFrom<ExecutorRequest> for JsonValue {
                     .environment_variables
                     .into_iter()
                     .map(|(name, value)| {
-                        ConvexObject::try_from(PersistedEnvironmentVariable(
+                        ConvexObject::try_from(PersistedEnvironmentVariable::new(
                             EnvironmentVariable::new(name, value),
                         ))
                         .map(JsonValue::from)
@@ -712,6 +721,7 @@ pub struct ExecuteRequest {
 
     pub source_package: SourcePackage,
     pub source_package_id: SourcePackageId,
+    pub memory_mb: u32,
     pub user_identity: Option<UserIdentityAttributes>,
     pub auth_header: Option<String>,
     pub environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
@@ -751,7 +761,6 @@ enum ExecuteResponseResult {
 pub struct NodeActionOutcome {
     pub result: Result<ConvexValue, JsError>,
     pub syscall_trace: SyscallTrace,
-    pub memory_used_in_mb: u64,
     pub egress_bytes: u64,
 }
 

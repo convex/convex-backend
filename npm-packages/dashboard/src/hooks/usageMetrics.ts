@@ -1,5 +1,10 @@
 import { DatabricksQueryId, DateRange, useUsageQuery } from "api/usage";
 import { DeploymentType } from "generatedApi";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+
+export const USAGE_SUMMARY_QUERY_ID = "b63fe48d-320c-401a-8682-0a0b36b50e2b";
+export const USAGE_SUMMARY_BY_DAY_QUERY_ID =
+  "45c7e1d6-4f9b-478e-8a8e-72427d1929ab";
 
 const QUERY_IDS_: {
   summary: DatabricksQueryId;
@@ -9,7 +14,7 @@ const QUERY_IDS_: {
   deploymentCountByType: DatabricksQueryId;
   deploymentCountByStatus: DatabricksQueryId;
 } = {
-  summary: "b63fe48d-320c-401a-8682-0a0b36b50e2b",
+  summary: USAGE_SUMMARY_QUERY_ID,
   backupStorageEstimate: "b58b3969-d916-460a-a7b6-210af082b24a",
   functionBreakdown: "76c86baa-418e-4d7f-ac21-46f397030595",
   deploymentsByClassAndRegion: "dfc73057-1948-4b99-a3bf-9ae802a395ee",
@@ -76,6 +81,12 @@ export type UsageSummaryRow = {
   deploymentCount: number;
   pausedDeploymentCount: number;
   idleDeploymentCount: number;
+};
+
+export type DailyUsageSummaryRow = UsageSummaryRow & {
+  ds: string;
+  // Null on team-wide metrics (deployment counts), which have no project.
+  projectId: number | null;
 };
 
 export type BackupStorageSummary = {
@@ -166,15 +177,60 @@ export function useUsageTeamSummary(
   period: DateRange | null,
   projectId: number | null,
   componentPrefix: string | null,
-  options: { deploymentName?: string; skip?: boolean } = {},
+  options: { skip?: boolean } = {},
 ) {
-  const { data, error } = useUsageQuery({
+  const { dailyUsageSummaries } = useLaunchDarkly();
+  const summary = useUsageQuery({
     queryId: QUERY_IDS_.summary,
     teamId,
     projectId,
     period,
     componentPrefix,
-    deploymentName: options.deploymentName,
+    skip: options.skip || dailyUsageSummaries,
+  });
+  const daily = useUsageTeamSummaryByDay(
+    teamId,
+    period,
+    projectId,
+    componentPrefix,
+    { skip: options.skip || !dailyUsageSummaries },
+  );
+
+  if (dailyUsageSummaries) {
+    return daily.data
+      ? { data: summarizeDailyUsage(daily.data), error: undefined }
+      : daily;
+  }
+
+  const { data, error } = summary;
+  if (error) {
+    return { data: undefined, error };
+  }
+
+  if (!data) {
+    return { data: undefined, error: undefined };
+  }
+
+  return { data: parseUsageSummary(data), error: undefined };
+}
+
+export function parseUsageSummary(data: string[][]): UsageSummaryRow[] {
+  return data.map(parseUsageSummaryRow);
+}
+
+export function useUsageTeamSummaryByDay(
+  teamId: number,
+  period: DateRange | null,
+  projectId: number | null,
+  componentPrefix: string | null,
+  options: { skip?: boolean } = {},
+) {
+  const { data, error } = useUsageQuery({
+    queryId: USAGE_SUMMARY_BY_DAY_QUERY_ID,
+    teamId,
+    projectId,
+    period,
+    componentPrefix,
     skip: options.skip,
   });
 
@@ -186,49 +242,150 @@ export function useUsageTeamSummary(
     return { data: undefined, error: undefined };
   }
 
-  return {
-    data: data.map(
-      ([
-        _teamId,
+  return { data: parseDailyUsageSummary(data), error: undefined };
+}
+
+// The by-day query returns the Summary columns with ds and project_id inserted
+// after team_id.
+export function parseDailyUsageSummary(
+  data: string[][],
+): DailyUsageSummaryRow[] {
+  return data.map(([teamId, ds, projectId, ...summaryColumns]) => ({
+    ...parseUsageSummaryRow([teamId, ...summaryColumns]),
+    ds,
+    // SQL NULL arrives as "" (see useUsageQuery).
+    projectId: projectId === "" ? null : Number(projectId),
+  }));
+}
+
+type UsageSummaryField = Exclude<
+  keyof UsageSummaryRow,
+  "deploymentClass" | "region"
+>;
+
+// How the Summary query totals each field over its period, per deployment
+// class and region: "sum" adds up every day, and a snapshot name takes the
+// latest day with that snapshot. Deployment counts share one snapshot.
+const SUMMARY_FIELD_TOTALS: Record<
+  UsageSummaryField,
+  "sum" | "databaseStorage" | "fileStorage" | "searchStorage" | "deployments"
+> = {
+  databaseStorage: "databaseStorage",
+  databaseIO: "sum",
+  functionCalls: "sum",
+  queryMutationCompute: "sum",
+  actionComputeConvex: "sum",
+  actionComputeNode: "sum",
+  fileStorage: "fileStorage",
+  searchStorage: "searchStorage",
+  dataEgress: "sum",
+  searchQueries: "sum",
+  actionComputeUser: "sum",
+  auditLogBandwidth: "sum",
+  deploymentCount: "deployments",
+  pausedDeploymentCount: "deployments",
+  idleDeploymentCount: "deployments",
+};
+
+// Totals by-day documents into the Summary query's documents, one per
+// deployment class and region. A day has a snapshot when any of the
+// snapshot's fields is nonzero, since the by-day query reports a day without
+// one as zero.
+export function summarizeDailyUsage(
+  documents: DailyUsageSummaryRow[],
+): UsageSummaryRow[] {
+  const byDimension = new Map<string, DailyUsageSummaryRow[]>();
+  for (const document of documents) {
+    const key = JSON.stringify([document.deploymentClass, document.region]);
+    const dimension = byDimension.get(key);
+    if (dimension) {
+      dimension.push(document);
+    } else {
+      byDimension.set(key, [document]);
+    }
+  }
+  const fields = Object.keys(SUMMARY_FIELD_TOTALS) as UsageSummaryField[];
+  return [...byDimension.values()]
+    .map((dimension) => {
+      const latestSnapshot = new Map<string, string>();
+      for (const document of dimension) {
+        for (const field of fields) {
+          const total = SUMMARY_FIELD_TOTALS[field];
+          const latest = latestSnapshot.get(total);
+          if (
+            total !== "sum" &&
+            document[field] !== 0 &&
+            (latest === undefined || document.ds > latest)
+          ) {
+            latestSnapshot.set(total, document.ds);
+          }
+        }
+      }
+      const { deploymentClass, region } = dimension[0];
+      const summary: UsageSummaryRow = {
         deploymentClass,
         region,
-        databaseStorage,
-        databaseIO,
-        functionCalls,
-        queryMutationCompute,
-        actionComputeConvex,
-        actionComputeNode,
-        fileStorage,
-        searchStorage,
-        dataEgress,
-        searchQueries,
-        actionComputeUser,
-        deploymentCount,
-        pausedDeploymentCount,
-        idleDeploymentCount,
-        auditLogBandwidth,
-      ]) =>
-        ({
-          deploymentClass,
-          region,
-          databaseStorage: Number(databaseStorage),
-          databaseIO: Number(databaseIO),
-          functionCalls: Number(functionCalls),
-          queryMutationCompute: Number(queryMutationCompute) / 60 / 60,
-          actionComputeConvex: Number(actionComputeConvex) / 60 / 60,
-          actionComputeNode: Number(actionComputeNode) / 60 / 60,
-          fileStorage: Number(fileStorage),
-          searchStorage: Number(searchStorage),
-          dataEgress: Number(dataEgress),
-          searchQueries: Number(searchQueries),
-          actionComputeUser: Number(actionComputeUser) / 60 / 60,
-          deploymentCount: Number(deploymentCount),
-          pausedDeploymentCount: Number(pausedDeploymentCount),
-          idleDeploymentCount: Number(idleDeploymentCount),
-          auditLogBandwidth: Number(auditLogBandwidth),
-        }) satisfies UsageSummaryRow,
-    ),
-    error: undefined,
+        ...(Object.fromEntries(fields.map((field) => [field, 0])) as Record<
+          UsageSummaryField,
+          number
+        >),
+      };
+      for (const document of dimension) {
+        for (const field of fields) {
+          const total = SUMMARY_FIELD_TOTALS[field];
+          if (total === "sum" || document.ds === latestSnapshot.get(total)) {
+            summary[field] += document[field];
+          }
+        }
+      }
+      return summary;
+    })
+    .sort(
+      (a, b) =>
+        a.deploymentClass.localeCompare(b.deploymentClass) ||
+        a.region.localeCompare(b.region),
+    );
+}
+
+function parseUsageSummaryRow(row: string[]): UsageSummaryRow {
+  const [
+    _teamId,
+    deploymentClass,
+    region,
+    databaseStorage,
+    databaseIO,
+    functionCalls,
+    queryMutationCompute,
+    actionComputeConvex,
+    actionComputeNode,
+    fileStorage,
+    searchStorage,
+    dataEgress,
+    searchQueries,
+    actionComputeUser,
+    deploymentCount,
+    pausedDeploymentCount,
+    idleDeploymentCount,
+    auditLogBandwidth,
+  ] = row;
+  return {
+    deploymentClass,
+    region,
+    databaseStorage: Number(databaseStorage),
+    databaseIO: Number(databaseIO),
+    functionCalls: Number(functionCalls),
+    queryMutationCompute: Number(queryMutationCompute) / 60 / 60,
+    actionComputeConvex: Number(actionComputeConvex) / 60 / 60,
+    actionComputeNode: Number(actionComputeNode) / 60 / 60,
+    fileStorage: Number(fileStorage),
+    searchStorage: Number(searchStorage),
+    dataEgress: Number(dataEgress),
+    searchQueries: Number(searchQueries),
+    actionComputeUser: Number(actionComputeUser) / 60 / 60,
+    deploymentCount: Number(deploymentCount),
+    pausedDeploymentCount: Number(pausedDeploymentCount),
+    idleDeploymentCount: Number(idleDeploymentCount),
+    auditLogBandwidth: Number(auditLogBandwidth),
   };
 }
 
@@ -577,7 +734,11 @@ export function useFunctionCallsPerDayByProjectAndClass(
     return { data: undefined, error: functionError || storageError };
   }
 
-  const metrics = functionData?.map(
+  if (!functionData || !storageData) {
+    return { data: undefined, error: undefined };
+  }
+
+  const metrics: DailyPerTagMetricsByProjectAndClass[] = functionData.map(
     ([
       _teamId,
       projectId,
@@ -602,22 +763,30 @@ export function useFunctionCallsPerDayByProjectAndClass(
     }),
   );
 
-  // Augment with storage calls data
-  const storageDataByKey = (storageData || []).reduce(
-    (acc, [_teamId, projectId, deploymentClass, ds, storageCalls]) => {
-      const key = `${ds}-${projectId}-${deploymentClass}`;
-      acc[key] = Number(storageCalls);
-      return acc;
-    },
-    {} as Record<string, number>,
+  const metricsByKey = new Map(
+    metrics.map((metric) => [
+      `${metric.ds}-${metric.projectId}-${metric.deploymentClass}`,
+      metric,
+    ]),
   );
-  for (const metric of metrics || []) {
-    const key = `${metric.ds}-${metric.projectId}-${metric.deploymentClass}`;
-    const storageCalls = storageDataByKey[key];
-    if (storageCalls) {
-      metric.metrics.push({ tag: "storage_api", value: storageCalls });
-      delete storageDataByKey[key];
+  // Augment with storage calls data. This can have its own top ranked projects
+  // which might be missing from functionData.
+  for (const [
+    _teamId,
+    projectId,
+    deploymentClass,
+    ds,
+    storageCalls,
+  ] of storageData) {
+    const parsedProjectId = parseProjectId(projectId);
+    const key = `${ds}-${parsedProjectId}-${deploymentClass}`;
+    let metric = metricsByKey.get(key);
+    if (!metric) {
+      metric = { ds, projectId: parsedProjectId, deploymentClass, metrics: [] };
+      metrics.push(metric);
+      metricsByKey.set(key, metric);
     }
+    metric.metrics.push({ tag: "storage_api", value: Number(storageCalls) });
   }
 
   return { data: metrics, error: undefined };

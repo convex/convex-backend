@@ -11,7 +11,8 @@ import * as Yup from "yup";
 import { Address, PlanResponse, TeamResponse } from "generatedApi";
 import { PriceSummary } from "components/billing/PriceSummary";
 import { usePostHog } from "hooks/usePostHog";
-import { PaymentDetailsForm } from "./PaymentDetailsForm";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
+import { CardHoldNote, PaymentDetailsForm } from "./PaymentDetailsForm";
 import { BillingAddressInputs } from "./BillingAddressInputs";
 import { useStripePaymentSetup } from "../../hooks/useStripe";
 import { BillingContactInputs } from "./BillingContactInputs";
@@ -138,17 +139,12 @@ export function UpgradePlanContentContainer({
     [],
   );
 
-  const {
-    stripePromise,
-    options,
-    retrieveSetupIntent,
-    confirmSetup,
-    resetClientSecret,
-  } = useStripePaymentSetup(
-    team,
-    formState.values.paymentMethod ?? undefined,
-    setPaymentMethod,
-  );
+  const { stripePromise, options, confirmSetup, resetClientSecret } =
+    useStripePaymentSetup(
+      team,
+      formState.values.paymentMethod ?? undefined,
+      setPaymentMethod,
+    );
 
   return (
     <FormikProvider value={formState}>
@@ -186,10 +182,7 @@ export function UpgradePlanContentContainer({
           // so we can test the UpgradePlanContent component in isolation
           options.clientSecret ? (
             <Elements stripe={stripePromise} options={options}>
-              <PaymentDetailsForm
-                retrieveSetupIntent={retrieveSetupIntent}
-                confirmSetup={confirmSetup}
-              />
+              <PaymentDetailsForm confirmSetup={confirmSetup} />
             </Elements>
           ) : undefined
         }
@@ -213,6 +206,8 @@ export function UpgradePlanContent({
 }: UpgradePlanContentProps) {
   const formState = useFormikContext<UpgradeFormState>();
   const [currentStep, setCurrentStep] = useState(0);
+  // Evaluated by big brain too, which places the hold this note describes.
+  const { preAuthorizeStarterPlan } = useLaunchDarkly();
 
   if (teamMemberDiscountPct < 0 || teamMemberDiscountPct > 1) {
     throw new Error(
@@ -298,6 +293,8 @@ export function UpgradePlanContent({
     if (index === 2 && requiresPaymentMethod) {
       return (
         <div className="flex flex-col gap-6">
+          {preAuthorizeStarterPlan &&
+            plan.planType === "CONVEX_STARTER_PLUS" && <CardHoldNote />}
           {!formState.values.paymentMethod ? (
             <div className="flex flex-col gap-2">
               {/* Reduce the amount of space stripe can take up so it doesn't render horizontal overflow */}

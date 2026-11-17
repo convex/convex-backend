@@ -168,7 +168,7 @@ export const FivetranSyncing: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() => canvas.getByText("Syncing"));
-    await canvas.findByText("42% of initial snapshot");
+    await canvas.findByText("42% of documents synced");
     if (canvas.queryByText("Get Started")) {
       throw new Error("still offering setup instructions during a sync");
     }
@@ -176,13 +176,13 @@ export const FivetranSyncing: Story = {
 };
 
 // Without table summaries there is no percentage to report, so the detail line
-// falls back to naming the phase.
+// falls back to the count of documents synced.
 export const FivetranSyncingWithoutTotals: Story = {
   parameters: { activeDataSyncs: [bootstrappingSync] },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await waitFor(() => canvas.getByText("Syncing"));
-    await canvas.findByText("initial snapshot");
+    await canvas.findByText(/documents synced$/);
   },
 };
 
@@ -242,7 +242,17 @@ export const FivetranSyncDetailModal: Story = {
   play: async ({ canvasElement }) => {
     const dialog = await openSyncDetails(canvasElement);
     await dialog.findByText("Syncing");
-    await dialog.findByText(/^messages · table 3 of 12/);
+    await dialog.findByText(/· table 3 of 12/);
+    await userEvent.hover(dialog.getByRole("button", { name: "messages" }));
+    await screen.findAllByText("143K of 890K documents");
+    const tableBar = (
+      await screen.findAllByRole("progressbar", {
+        name: "Table sync progress",
+      })
+    )[0];
+    if (Math.round(Number(tableBar.getAttribute("aria-valuenow"))) !== 16) {
+      throw new Error("reported progress for a different table");
+    }
     // An initial snapshot has no consistent timestamp to report yet.
     if (dialog.queryByText(/ ago$/)) {
       throw new Error("timestamped a sync that has no snapshot yet");
@@ -275,10 +285,20 @@ export const FivetranSyncDetailModalWithoutTotals: Story = {
   play: async ({ canvasElement }) => {
     const dialog = await openSyncDetails(canvasElement);
     const bar = await dialog.findByRole("progressbar", {
-      name: "Initial snapshot progress",
+      name: "Sync progress",
     });
     if (bar.getAttribute("aria-valuenow") !== null) {
       throw new Error("reported a percentage without knowing the total");
+    }
+    await userEvent.hover(dialog.getByRole("button", { name: "messages" }));
+    await screen.findAllByText("143K documents synced");
+    const tableBar = (
+      await screen.findAllByRole("progressbar", {
+        name: "Table sync progress",
+      })
+    )[0];
+    if (tableBar.getAttribute("aria-valuenow") !== null) {
+      throw new Error("reported table progress without knowing the total");
     }
   },
 };
@@ -341,7 +361,7 @@ export const FivetranSyncProgressFlagOff: Story = {
 
 type S3Integration = Extract<AnalyticsIntegration, { kind: "s3Export" }>;
 type S3Progress = NonNullable<
-  NonNullable<S3Integration["existing"]>["config"]["progress"]
+  NonNullable<S3Integration["existing"]>["exportProgress"]
 >;
 
 const connectedDeployment = {
@@ -360,15 +380,16 @@ function s3Export(progress: S3Progress | undefined): S3Integration {
       _id: "s3export" as never,
       _creationTime: minutesAgo(60 * 24),
       status: { type: "active" },
+      exportProgress: progress,
       config: {
         type: "s3Export",
         bucket: "acme-analytics",
         region: "us-west-2",
         prefix: "convex",
-        accessKeyId: "AKIAIOSFODNN7EXAMPLE",
+        roleArn:
+          "arn:aws:iam::123456789012:role/convex/ConvexIntegrations-Qk9xT3mZa8vLw2Hc5RfG1uYpN7dB4eJs",
+        roleExternalId: "Qk9xT3mZa8vLw2Hc5RfG1uYpN7dB4eJs",
         selection: {},
-        period: "daily",
-        progress,
       },
     },
   };
@@ -461,7 +482,7 @@ export const S3ExportDetailModal: Story = {
     );
     const dialog = within(await screen.findByTestId("modal"));
     await dialog.findByText(
-      "s3://acme-analytics/convex/wandering-fish-513/tables/",
+      "s3://acme-analytics/convex/wandering-fish-513/data-lake/",
     );
     await dialog.findByText("wandering_fish_513");
   },
@@ -510,6 +531,26 @@ export const S3ExportSetupForm: Story = {
   ),
 };
 
+// A role export created without its ARN yet: the form opens on Connect AWS.
+export const S3ExportFinishAwsSetup: Story = {
+  name: "S3 Export Finish AWS Setup",
+  render: () => {
+    const pending = s3Export(undefined);
+    pending.existing!.status = { type: "pending" };
+    pending.existing!.config = {
+      ...pending.existing!.config,
+      roleArn: "",
+    };
+    return (
+      <S3Providers>
+        <div className="flex h-192 w-2xl flex-col">
+          <S3ExportConfigurationForm integration={pending} onClose={() => {}} />
+        </div>
+      </S3Providers>
+    );
+  },
+};
+
 export const S3ExportComponentSelection: Story = {
   name: "S3 Export Component Selection",
   render: () => (
@@ -527,7 +568,7 @@ export const S3ExportComponentSelection: Story = {
     await userEvent.click(
       canvas.getByRole("checkbox", { name: "Include component tables" }),
     );
-    await canvas.findByText(/Saving this change restarts the export/);
+    await canvas.findByText(/keeps the progress of tables you already export/);
     await userEvent.click(
       canvas.getByRole("button", { name: "Choose specific tables Advanced" }),
     );

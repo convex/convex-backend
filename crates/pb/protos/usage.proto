@@ -63,5 +63,5 @@ message VectorQueryUsage {
   optional string index_name = 3;
   optional uint64 num_searches = 4;
   optional uint64 bytes_searched = 5;
-  optional uint64 dimensions = 6;
+  reserved 6;
 }

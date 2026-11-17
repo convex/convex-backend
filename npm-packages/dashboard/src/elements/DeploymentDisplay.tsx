@@ -11,7 +11,10 @@ import {
 } from "api/deployments";
 import { useCurrentTeam, useTeamEntitlements, useTeamMembers } from "api/teams";
 import { useProfile } from "api/profile";
-import { useRememberLastViewedDeploymentForProject } from "hooks/useLastViewed";
+import {
+  useRememberLastViewedDeploymentForProject,
+  useRememberLastViewedNonDefaultDeployment,
+} from "hooks/useLastViewed";
 import { cn } from "@ui/cn";
 import { useRouter } from "next/router";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
@@ -111,7 +114,7 @@ export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
   const { deployments } = useDeployments(project.id);
   const fetchByName =
     deployments === undefined && !deploymentName?.startsWith("local-");
-  const deploymentFromName = useDeploymentByName(
+  const { deployment: deploymentFromName } = useDeploymentByName(
     fetchByName ? deploymentName : undefined,
   );
   const fallbackDeployment =
@@ -123,6 +126,7 @@ export function DeploymentDisplay({ project }: { project: ProjectDetails }) {
   const member = useProfile();
 
   useRememberLastViewedDeploymentForProject(project.slug, deployment?.name);
+  useRememberLastViewedNonDefaultDeployment(project, deployment);
 
   const teamMembers = useTeamMembers(project.teamId);
 
@@ -230,10 +234,12 @@ export function DeploymentLabel({
         id="select-deployment"
         data-testid="select-deployment"
         className={cn(
-          "flex h-9.25 items-center gap-2 truncate rounded-full border text-sm font-medium transition-opacity hover:opacity-80",
-          selected && "opacity-80",
+          "flex h-9.25 items-center gap-2 truncate rounded-full border text-sm font-medium transition-colors hover:[--bg-opacity:80%]",
           "focus-visible:ring-1 focus-visible:ring-border-selected focus-visible:outline-hidden",
           deploymentTypeColorClasses(deployment.deploymentType),
+          // Fade only the background: dimming the whole button with `opacity`
+          // drops the label below 4.5:1 contrast.
+          selected && "[--bg-opacity:80%]",
         )}
         type="button"
         ref={buttonRef}
@@ -375,11 +381,10 @@ export function DeploymentLabelProvisionDeployment({
         className={cn(
           "flex h-9.25 items-center gap-2 rounded-full px-3",
           "border border-dashed",
-          "truncate text-sm font-medium transition-opacity hover:opacity-80",
-          selected && "opacity-80",
+          "truncate text-sm font-medium transition-colors hover:[--bg-opacity:40%]",
           // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- eslint-plugin-better-tailwindcss v4 incorrectly identifies "prod"/"dev" as class names
           deploymentTypeColorClasses(isProvisionProd ? "prod" : "dev"),
-          "[--bg-opacity:50%]",
+          selected ? "[--bg-opacity:40%]" : "[--bg-opacity:50%]",
         )}
         ref={buttonRef}
         tabIndex={0}

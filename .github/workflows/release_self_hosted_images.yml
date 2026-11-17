@@ -44,14 +44,14 @@ jobs:
 
       - name: Tag and push backend manifest
         run: |
-          docker manifest create ghcr.io/get-convex/convex-backend:${{ github.sha }} \
-            --amend ghcr.io/get-convex/convex-backend@${{ needs.release_backend.outputs.backend_x64_digest }} \
-            --amend ghcr.io/get-convex/convex-backend@${{ needs.release_backend.outputs.backend_arm64_digest }}
-          docker manifest push ghcr.io/get-convex/convex-backend:${{ github.sha }}
+          docker manifest create ghcr.io/convex/convex-backend:${{ github.sha }} \
+            --amend ghcr.io/convex/convex-backend@${{ needs.release_backend.outputs.backend_x64_digest }} \
+            --amend ghcr.io/convex/convex-backend@${{ needs.release_backend.outputs.backend_arm64_digest }}
+          docker manifest push ghcr.io/convex/convex-backend:${{ github.sha }}
 
       - name: Tag and push dashboard manifest
         run: |
-          docker manifest create ghcr.io/get-convex/convex-dashboard:${{ github.sha }} \
-            --amend ghcr.io/get-convex/convex-dashboard@${{ needs.release_dashboard.outputs.dashboard_x64_digest }} \
-            --amend ghcr.io/get-convex/convex-dashboard@${{ needs.release_dashboard.outputs.dashboard_arm64_digest }}
-          docker manifest push ghcr.io/get-convex/convex-dashboard:${{ github.sha }}
+          docker manifest create ghcr.io/convex/convex-dashboard:${{ github.sha }} \
+            --amend ghcr.io/convex/convex-dashboard@${{ needs.release_dashboard.outputs.dashboard_x64_digest }} \
+            --amend ghcr.io/convex/convex-dashboard@${{ needs.release_dashboard.outputs.dashboard_arm64_digest }}
+          docker manifest push ghcr.io/convex/convex-dashboard:${{ github.sha }}

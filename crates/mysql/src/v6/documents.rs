@@ -5,6 +5,8 @@ use std::iter;
 use common::query::Order;
 use itertools::Itertools;
 
+use super::reader::DocumentScope;
+
 /// Loads a page of documents, where timestamps are bounded by [?, ?) and the
 /// (ts, table_id, id) of the last document read is the cursor. The cursor
 /// follows the primary key after its `deployment_id` prefix, which is fixed for
@@ -89,13 +91,17 @@ pub(crate) fn check_newly_created() -> &'static str {
     "SELECT 1 FROM @db_name.documents WHERE deployment_id = ? LIMIT 1"
 }
 
-pub(crate) fn exact_revision_chunk(chunk_size: usize) -> String {
+pub(crate) fn exact_revision_chunk(chunk_size: usize, scope: &DocumentScope) -> String {
+    let tenant_column = match scope {
+        DocumentScope::DeploymentId => "deployment_id",
+        DocumentScope::InstanceName(_) => "instance_name",
+    };
     let entries = iter::repeat_n("(table_id = ? AND id = ? AND ts = ?)", chunk_size).join(" OR ");
     format!(
         r#"SELECT id, ts, table_id, json_value, deleted, prev_ts
 FROM @db_name.documents FORCE INDEX (PRIMARY)
-WHERE deployment_id = ? AND ({entries})
-ORDER BY deployment_id ASC, ts ASC, table_id ASC, id ASC"#
+WHERE {tenant_column} = ? AND ({entries})
+ORDER BY {tenant_column} ASC, ts ASC, table_id ASC, id ASC"#
     )
 }
 

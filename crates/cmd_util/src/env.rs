@@ -10,6 +10,7 @@ use std::{
 use sentry_tracing::EventFilter;
 use tracing::Level;
 use tracing_subscriber::{
+    filter::LevelFilter,
     fmt::{
         format::format,
         MakeWriter,
@@ -111,7 +112,8 @@ where
             &tracing::Level::DEBUG | &tracing::Level::TRACE => EventFilter::Ignore,
             _ => EventFilter::Breadcrumb,
         })
-        .span_filter(|_md| false);
+        .span_filter(|_md| false)
+        .with_filter(LevelFilter::INFO);
     layers.push(sentry_layer.boxed());
 
     let guard = if let Some(ref file) = *CONVEX_TRACE_FILE {

@@ -6,11 +6,11 @@ use deno_core::{
     },
 };
 
-use super::V8OpProvider;
-use crate::{
-    environment::AsyncOpRequest,
-    request_scope::StreamListener,
+use super::{
+    stream::listen_to_stream,
+    V8OpProvider,
 };
+use crate::environment::AsyncOpRequest;
 
 pub fn async_op_storage_store<'b, P: V8OpProvider<'b>>(
     provider: &mut P,
@@ -18,12 +18,9 @@ pub fn async_op_storage_store<'b, P: V8OpProvider<'b>>(
     resolver: v8::Global<v8::PromiseResolver>,
 ) -> anyhow::Result<()> {
     let stream_id = serde_v8::from_v8(&mut provider.scope(), args.get(1))?;
-    let (body_sender, body_receiver) = spsc::unbounded_channel();
-    match stream_id {
-        Some(stream_id) => {
-            provider.new_stream_listener(stream_id, StreamListener::RustStream(body_sender))?;
-        },
-        None => drop(body_sender),
+    let body_receiver = match stream_id {
+        Some(stream_id) => listen_to_stream(provider, stream_id)?,
+        None => spsc::unbounded_channel().1,
     };
     let content_type: Option<String> = serde_v8::from_v8(&mut provider.scope(), args.get(2))?;
     let content_type = content_type.filter(|ct| !ct.is_empty());

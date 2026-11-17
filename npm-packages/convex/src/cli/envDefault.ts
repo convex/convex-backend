@@ -147,6 +147,8 @@ const envDefaultList = addEnvDefaultOptions(
         "• List only default variable names (no values): `npx convex env default list --names-only`",
         "• List all default variables and their values: `npx convex env default list --include-values`",
         "",
+        "When an AI agent runs this command (detected from environment variables like AI_AGENT or CLAUDECODE), only names are listed unless --include-values is passed.",
+        "",
         "The deployment type is determined by the current deployment (local maps to dev), or by --type if provided.",
       ].join("\n"),
     )
@@ -157,7 +159,7 @@ const envDefaultList = addEnvDefaultOptions(
     .addOption(
       new Option(
         "--include-values",
-        "Print each variable's value alongside its name, in .env format (the default). Pass it explicitly in scripts that rely on the values.",
+        "Print each variable's value alongside its name, in .env format. This is the default unless an AI agent is detected, so pass it explicitly in scripts that rely on the values.",
       ).conflicts("namesOnly"),
     )
     .configureHelp({ showGlobalOptions: true })
@@ -169,6 +171,7 @@ const envDefaultList = addEnvDefaultOptions(
   await ensureHasConvexDependency(ctx, "env default list");
   await envList(ctx, backend, {
     namesOnly: cmdOptions.namesOnly ?? false,
+    includeValues: cmdOptions.includeValues ?? false,
   });
 });
 

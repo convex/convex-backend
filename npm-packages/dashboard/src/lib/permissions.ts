@@ -34,7 +34,8 @@ export type ResourceKind =
 export type ProjectSelector =
   | { kind: "any" }
   | { kind: "id"; id: number }
-  | { kind: "slug"; slug: string };
+  | { kind: "slug"; slug: string }
+  | { kind: "tag"; tag: string };
 
 // Right-hand side of `creator=` on a deployment or token selector. Mirrors
 // `CreatorMatcher` in `crates_private/big_brain_lib/src/roles/types.rs` —
@@ -72,7 +73,7 @@ export type ResourceSpecifier = { segments: ResourceSegment[] };
 
 export type ConcreteSegment =
   | { kind: "team" }
-  | { kind: "project"; id: number; slug: string }
+  | { kind: "project"; id: number; slug: string; tags: string[] }
   | {
       kind: "deployment";
       id: number;
@@ -178,6 +179,7 @@ function parseProjectSelector(s: string): ProjectSelector {
     return { kind: "id", id };
   }
   if (s.startsWith("slug=")) return { kind: "slug", slug: s.slice(5) };
+  if (s.startsWith("tag=")) return { kind: "tag", tag: s.slice(4) };
   throw new Error(`Invalid selector for project resource: ${s}`);
 }
 
@@ -286,6 +288,7 @@ const ACTION_RESOURCE_KIND: Record<RoleStatementAction, ResourceKind> = {
   "team:domain:create": "team",
   "team:domain:delete": "team",
   "team:domain:view": "team",
+  "team:projectTags:view": "team",
   "team:usage:view": "team",
   // Billing
   "billing:paymentMethod:update": "billing",
@@ -406,7 +409,7 @@ export function actionResourceKind(action: RoleStatementAction): ResourceKind {
 
 function projectSelectorMatches(
   selector: ProjectSelector,
-  segment: { id: number; slug: string },
+  segment: { id: number; slug: string; tags: string[] },
 ): boolean {
   switch (selector.kind) {
     case "any":
@@ -415,6 +418,8 @@ function projectSelectorMatches(
       return segment.id === selector.id;
     case "slug":
       return segment.slug === selector.slug;
+    case "tag":
+      return segment.tags.includes(selector.tag);
     default: {
       const _exhaustive: never = selector;
       return _exhaustive;
@@ -638,29 +643,42 @@ export function teamTokenResource(creator: number | null): ConcreteResource {
   };
 }
 
-// Project-scoped resource: a single project segment carrying id and slug
-// so roles can match on either selector form.
-export function projectResource(project: {
+type ProjectAttributes = {
   id: number;
   slug: string;
-}): ConcreteResource {
+  tags: string[];
+};
+
+function projectSegment(project: ProjectAttributes): ConcreteSegment {
   return {
-    segments: [{ kind: "project", id: project.id, slug: project.slug }],
+    kind: "project",
+    id: project.id,
+    slug: project.slug,
+    tags: project.tags,
   };
 }
+
+// Project-scoped resource: a single project segment carrying id, slug, and
+// tags so roles can match on any selector form.
+export function projectResource(project: ProjectAttributes): ConcreteResource {
+  return { segments: [projectSegment(project)] };
+}
+
+// Stands in for a project that doesn't exist yet when gating
+// `project:create`. It has no tags because the dashboard creates projects
+// without tags, so a create grant scoped by `tag=` doesn't match it.
+export const PROPOSED_PROJECT_RESOURCE: ConcreteResource = {
+  segments: [{ kind: "project", id: 0, slug: "", tags: [] }],
+};
 
 // Project-scoped default environment variable resource. Lives at
 // `project:<sel>:defaultEnvironmentVariable:*` on the wire, so the
 // concrete resource must carry the project segment too.
-export function defaultEnvironmentVariableResource(project: {
-  id: number;
-  slug: string;
-}): ConcreteResource {
+export function defaultEnvironmentVariableResource(
+  project: ProjectAttributes,
+): ConcreteResource {
   return {
-    segments: [
-      { kind: "project", id: project.id, slug: project.slug },
-      { kind: "defaultEnvironmentVariable" },
-    ],
+    segments: [projectSegment(project), { kind: "defaultEnvironmentVariable" }],
   };
 }
 
@@ -670,7 +688,7 @@ export function defaultEnvironmentVariableResource(project: {
 // create my own preview deploy key"; pass null for whole-list view checks
 // so a role limited to `creator=me` denies.
 export function projectTokenResource(
-  project: { id: number; slug: string },
+  project: ProjectAttributes,
   tokenCreator: number | null,
 ): ConcreteResource {
   return {
@@ -685,7 +703,7 @@ export function projectTokenResource(
 // deployment segment carries the creator id so a role like
 // "deployments you created" still matches.
 export function deploymentResource(
-  project: { id: number; slug: string },
+  project: ProjectAttributes,
   deployment: {
     id: number;
     deploymentType: string;
@@ -694,7 +712,7 @@ export function deploymentResource(
 ): ConcreteResource {
   return {
     segments: [
-      { kind: "project", id: project.id, slug: project.slug },
+      projectSegment(project),
       {
         kind: "deployment",
         id: deployment.id,
@@ -714,7 +732,7 @@ export function deploymentResource(
 // "can I create my own deploy key"; pass null for whole-list view
 // checks so a role limited to `creator=me` denies.
 export function deploymentTokenResource(
-  project: { id: number; slug: string },
+  project: ProjectAttributes,
   deployment: {
     id: number;
     deploymentType: string;

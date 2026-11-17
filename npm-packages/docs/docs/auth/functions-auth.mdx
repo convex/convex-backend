@@ -9,8 +9,9 @@ import Example from "!!raw-loader!@site/../private-demos/snippets/convex/authFun
 import Fields from "!!raw-loader!@site/../private-demos/snippets/convex/authFunctionsFields.ts";
 import Fetch from "!!raw-loader!@site/../private-demos/snippets/src/httpAuthCall.ts";
 
-_If you're using Convex Auth, see the
-[authorization doc](https://labs.convex.dev/auth/authz#use-authentication-state-in-backend-functions)._
+_If you're using Convex Auth, see
+[Best practices](/auth/convex-auth/best-practices.mdx#use-components-as-the-source-of-truth-for-data-they-manage)
+for reading the signed-in user with `getAuthUserId`._
 
 Within a Convex [function](/functions/overview.mdx), you can access information
 about the currently logged-in user by using the

@@ -228,7 +228,7 @@ pub static MAX_ACTION_USER_TIMEOUT: LazyLock<Duration> =
 pub static GET_SERVICE_TOKEN_GUARANTEED_LIFETIME: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_secs(env_config(
         "GET_SERVICE_TOKEN_GUARANTEED_LIFETIME_SECONDS",
-        10 * 60,
+        2 * 60,
     ))
 });
 
@@ -266,8 +266,10 @@ pub static SNAPSHOT_LIST_TIME_LIMIT: LazyLock<Duration> =
 /// page *may* emit more than this: all of a transaction's writes are emitted on
 /// the same page, since a page boundary never splits a transaction, so a single
 /// transaction larger than this limit overflows the page.
+/// This should be an exact multiple of `MYSQL_MAX_QUERY_BATCH_SIZE` to avoid
+/// fetching a partial batch's worth of extra documents at each page boundary.
 pub static DATA_SYNC_PAGE_SIZE_LIMIT: LazyLock<usize> =
-    LazyLock::new(|| env_config("DATA_SYNC_PAGE_SIZE_LIMIT", 16384));
+    LazyLock::new(|| env_config("DATA_SYNC_PAGE_SIZE_LIMIT", 20000));
 
 /// Soft limit on the total byte size of documents emitted in a single
 /// `DataSyncIterator` page, bounding page/response size on deployments with
@@ -279,6 +281,9 @@ pub static DATA_SYNC_PAGE_BYTES_LIMIT: LazyLock<usize> =
 /// Max number of rows `DataSyncIterator` will read from persistence when
 /// computing a single page. A page can read many more rows than it emits when
 /// catching up the document log with a narrow table filter (lots of skipping).
+///
+/// Note that `DataSyncIterator` never splits up transactions, so large
+/// transactions will still exceed this value.
 ///
 /// Must be `>= DATA_SYNC_PAGE_SIZE_LIMIT`: the `by_id` dimension reads up to
 /// `page_size_limit` rows per page, so the row-read bound can't be smaller than
@@ -378,6 +383,14 @@ pub static DOCUMENTS_IN_MEMORY: LazyLock<usize> =
 /// timeout) in TableIterator
 pub static TABLE_ITERATOR_MAX_RETRIES: LazyLock<u32> =
     LazyLock::new(|| env_config("TABLE_ITERATOR_MAX_RETRIES", 1));
+
+/// Documents per `by_id` page when the SchemaWorker walks a table.
+pub static SCHEMA_WORKER_PAGE_SIZE: LazyLock<usize> =
+    LazyLock::new(|| env_config("SCHEMA_WORKER_PAGE_SIZE", 1000));
+
+/// Number of schema-validation table walks allowed to run concurrently.
+pub static SCHEMA_WORKER_WALK_CONCURRENCY: LazyLock<usize> =
+    LazyLock::new(|| env_config("SCHEMA_WORKER_WALK_CONCURRENCY", 1));
 
 /// Length of the HTTP server TCP backlog.
 pub static HTTP_SERVER_TCP_BACKLOG: LazyLock<u32> =
@@ -644,6 +657,38 @@ pub static MAX_TRANSACTION_CACHE_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| 
 pub static TRANSACTION_MAX_READ_SET_INTERVALS: LazyLock<usize> =
     LazyLock::new(|| env_config("TRANSACTION_MAX_READ_SET_INTERVALS", 4096));
 
+/// Bytes that can be read in a single init mutation.
+pub static INIT_MAX_READ_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| {
+    env_config("INIT_MAX_READ_SIZE_BYTES", 1 << 14) // 16 KiB
+});
+
+/// Bytes that can be written in a single init mutation.
+pub static INIT_MAX_USER_WRITE_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| {
+    env_config("INIT_MAX_USER_WRITE_SIZE_BYTES", 1 << 14) // 16 KiB
+});
+
+/// Documents that can be read in a single init mutation.
+pub static INIT_MAX_READ_SIZE_ROWS: LazyLock<usize> =
+    LazyLock::new(|| env_config("INIT_MAX_READ_SIZE_ROWS", 100));
+
+/// Intervals that can be read in a single init mutation.
+pub static INIT_MAX_READ_SET_INTERVALS: LazyLock<usize> =
+    LazyLock::new(|| env_config("INIT_MAX_READ_SET_INTERVALS", 100));
+
+/// Documents that can be written in a single init mutation.
+pub static INIT_MAX_NUM_USER_WRITES: LazyLock<usize> =
+    LazyLock::new(|| env_config("INIT_MAX_NUM_USER_WRITES", 100));
+
+/// Functions that can be scheduled in a single init mutation.
+pub static INIT_MAX_NUM_SCHEDULED: LazyLock<usize> =
+    LazyLock::new(|| env_config("INIT_MAX_NUM_SCHEDULED", 10));
+
+/// Total bytes of arguments that can be provided to the functions scheduled in
+/// a single init mutation.
+pub static INIT_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| {
+    env_config("INIT_MAX_SCHEDULED_TOTAL_ARGUMENT_SIZE_BYTES", 1 << 14) // 16 KiB
+});
+
 /// Intervals that can be read in a transaction before warning.
 pub static TRANSACTION_WARN_READ_SET_INTERVALS: LazyLock<usize> =
     LazyLock::new(|| env_config("TRANSACTION_WARN_READ_SET_INTERVALS", 3072));
@@ -680,6 +725,12 @@ pub static INDEX_RETENTION_DELETE_PARALLEL: LazyLock<usize> =
 pub static DOCUMENT_RETENTION_DELETE_PARALLEL: LazyLock<usize> =
     LazyLock::new(|| env_config("DOCUMENT_RETENTION_DELETE_PARALLEL", 1));
 
+/// Maximum interval in seconds between retention cutoff updates; jitter
+/// shortens each interval. Clamped to at least one second. Lower values expire
+/// history sooner at the cost of more frequent persistence writes.
+pub static ADVANCE_RETENTION_TS_FREQUENCY: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("ADVANCE_RETENTION_TS_FREQUENCY", 30).max(1)));
+
 /// INDEX_RETENTION_DELAY determines the size of the index retention window.
 ///
 /// Larger window means we keep around old snapshots for longer, which can cause
@@ -689,11 +740,26 @@ pub static DOCUMENT_RETENTION_DELETE_PARALLEL: LazyLock<usize> =
 pub static INDEX_RETENTION_DELAY: LazyLock<Duration> =
     LazyLock::new(|| Duration::from_secs(env_config("INDEX_RETENTION_DELAY", 4 * 60)));
 
+/// How long maintenance keeps a MySQL V6 `indexes_log_<bucket>` table after its
+/// last timestamp, as index history to inspect by hand during an incident.
+/// Reads and writes never use a bucket below the published floor, which follows
+/// `INDEX_RETENTION_DELAY`, so this only delays drops. A bucket is never
+/// dropped above the floor, even when this is shorter.
+pub static V6_INDEX_LOG_RETENTION_DELAY: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("V6_INDEX_LOG_RETENTION_DELAY", 3 * 60 * 60)));
+
 /// How often each conductor checks that the MySQL V6 `indexes_log_<bucket>`
 /// tables its cluster needs exist, and that buckets past retention are gone.
 pub static INDEXES_LOG_MAINTENANCE_INTERVAL: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_secs(env_config("INDEXES_LOG_MAINTENANCE_INTERVAL", 60).max(1))
 });
+
+/// Kill switch for MySQL V6 `indexes_log` bucket maintenance. While off,
+/// rounds do nothing, so commits start failing once writes pass the last
+/// bucket created; that is at most `INDEXES_LOG_LOOKAHEAD_BUCKETS` buckets
+/// away.
+pub static V6_MAINTENANCE_ENABLED: LazyLock<bool> =
+    LazyLock::new(|| env_config("V6_MAINTENANCE_ENABLED", true));
 
 /// How many `indexes_log_<bucket>` tables to create beyond the one taking
 /// writes now.
@@ -1200,17 +1266,7 @@ pub static MYSQL_MAX_CHUNK_BYTES: LazyLock<usize> =
 pub static MYSQL_MAX_FILL_CHUNK_ROWS: LazyLock<usize> =
     LazyLock::new(|| env_config("MYSQL_MAX_FILL_CHUNK_ROWS", 1024));
 
-/// Page size to fall back to when Vitess rejects large result sets.
-/// Vitess limits query results to 64MiB. As documents can be up to 1MiB (plus
-/// some overhead) and system documents can be larger still, we may need to fall
-/// back to a much smaller page size if we hit the limit while loading
-/// documents. If the fallback page size still fails, we'll try page size 1
-/// before giving up.
-pub static MYSQL_FALLBACK_PAGE_SIZE: LazyLock<u32> =
-    LazyLock::new(|| env_config("MYSQL_FALLBACK_PAGE_SIZE", 5));
-
-/// Timeout for all operations on MySQL connections, Vitess timeout is 20s so
-/// set lower than that
+/// Timeout for all operations on MySQL connections
 pub static MYSQL_TIMEOUT: LazyLock<u64> = LazyLock::new(|| env_config("MYSQL_TIMEOUT_SECONDS", 19));
 
 /// Maximum number of connections to MySQL
@@ -1224,6 +1280,24 @@ pub static MYSQL_MIN_QUERY_BATCH_SIZE: LazyLock<usize> =
 /// Maximum number of rows to read from MySQL in a single query.
 pub static MYSQL_MAX_QUERY_BATCH_SIZE: LazyLock<usize> =
     LazyLock::new(|| env_config("MYSQL_MAX_QUERY_BATCH_SIZE", 5000));
+
+/// Maximum parallel document fetches per V6 index scan batch. A value of one
+/// uses the index-to-documents JOIN.
+pub static MYSQL_INDEX_SCAN_CONCURRENCY: LazyLock<NonZeroUsize> = LazyLock::new(|| {
+    env_config(
+        "MYSQL_INDEX_SCAN_CONCURRENCY",
+        NonZeroUsize::new(8).unwrap(),
+    )
+});
+
+/// Minimum V6 index batch size per worker to justify the extra document-fetch
+/// round trip. Smaller batches use the index-to-documents JOIN.
+pub static MYSQL_INDEX_SCAN_MIN_ROWS_PER_WORKER: LazyLock<NonZeroUsize> = LazyLock::new(|| {
+    env_config(
+        "MYSQL_INDEX_SCAN_MIN_ROWS_PER_WORKER",
+        NonZeroUsize::new(512).unwrap(),
+    )
+});
 
 /// We dynamically increase the batch size up to this threshold if client keeps
 /// fetching more results. This helps correct for tombstones, long prefixes and
@@ -1504,10 +1578,8 @@ pub static FUNRUN_MAX_CPU_PRESSURE: LazyLock<f64> =
 /// larger than (N / 15) where N is the number of instances with lambdas.
 ///
 /// You can check go/num-instances-with-lambdas
-///
-/// NOTE: the true value of this is overridden in big brain knob overrides
 pub static AWS_LAMBDA_DEPLOY_SPLAY: LazyLock<Duration> =
-    LazyLock::new(|| Duration::from_secs(env_config("AWS_LAMBDA_DEPLOY_SPLAY_SECONDS", 32400)));
+    LazyLock::new(|| Duration::from_secs(env_config("AWS_LAMBDA_DEPLOY_SPLAY_SECONDS", 172800)));
 
 /// How long of a window to debounce static lambda deployments. Don't allow too
 /// many static deploys in a small window to protect the infrastructure.
@@ -1541,6 +1613,13 @@ pub static AWS_LAMBDA_CLIENT_MAX_CONCURRENT_REQUESTS: LazyLock<usize> =
 /// actions resource limits in the docs.
 pub static AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB: LazyLock<i32> =
     LazyLock::new(|| env_config("AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB", 512));
+
+/// Kill switch for `node.defaultMemoryMb` sizes above the smallest on the AWS
+/// Lambda executor. When set, a push that sets a larger size fails.
+/// Deployments that already set one keep their Lambda size until their next
+/// push.
+pub static DISABLE_NODE_ACTION_MEMORY_MB: LazyLock<bool> =
+    LazyLock::new(|| env_config("DISABLE_NODE_ACTION_MEMORY_MB", false));
 
 /// Disk size limit in MB for the static AWS Lambda.
 pub static AWS_STATIC_LAMBDA_DISK_SIZE_MB: LazyLock<i32> =
@@ -1826,6 +1905,18 @@ pub static HTTP_SERVER_TIMEOUT_DURATION: LazyLock<Duration> =
 pub static MAX_PUSH_BYTES: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_PUSH_BYTES", 200_000_000));
 
+/// The limit on the size of push-time messages to and from funrun (analyze and
+/// schema, auth config, and component definition evaluation).
+/// This needs to be large enough to cover all of `MAX_UNZIPPED_PACKAGES_SIZE`,
+/// plus some buffer for environment variables, module paths, and protobuf
+/// framing.
+pub static MAX_FUNRUN_PUSH_MESSAGE_SIZE: LazyLock<usize> =
+    LazyLock::new(|| env_config("MAX_FUNRUN_PUSH_MESSAGE_SIZE", 246_000_000));
+
+/// Maximum buffered size, in bytes, of one client-driven snapshot import part.
+pub static MAX_IMPORT_UPLOAD_PART_BYTES: LazyLock<usize> =
+    LazyLock::new(|| env_config("MAX_IMPORT_UPLOAD_PART_BYTES", 64 * 1024 * 1024));
+
 /// The limit on the request size to /echo. Limits requests to 128MiB to help
 /// mitigate DDoS attacks.
 pub static MAX_ECHO_BYTES: LazyLock<usize> =
@@ -1835,14 +1926,8 @@ pub static MAX_ECHO_BYTES: LazyLock<usize> =
 pub static MAX_USER_MODULES: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_USER_MODULES", 4096));
 
-/// The limit, in bytes, on the zipped size of a deployment's source packages
-/// (user modules plus external node dependencies).
-///
-/// Conductor will build a zip of this size in memory during code push.
-pub static MAX_ZIPPED_PACKAGES_SIZE: LazyLock<usize> =
-    LazyLock::new(|| env_config("MAX_ZIPPED_PACKAGES_SIZE", 90_000_000));
-
-/// Percentage of request traces that should sampled.
+/// Fraction of request traces to sample, overriding the built-in sampling
+/// rules.
 ///
 /// Sampling config is a JSON object with the following format:
 /// {
@@ -1867,20 +1952,11 @@ pub static MAX_ZIPPED_PACKAGES_SIZE: LazyLock<usize> =
 /// and then stringify it at the end.
 ///
 /// See `fastrace_helpers.rs` for more examples
-pub static REQUEST_TRACE_SAMPLE_CONFIG: LazyLock<SamplingConfig> = LazyLock::new(|| {
-    env_config(
-        "REQUEST_TRACE_SAMPLE_CONFIG",
-        prod_override(
-            SamplingConfig::default(),
-            r#"{"defaultFraction":0.00001,"routeOverrides":[{"routeRegexp":"/api/push_config","fraction":0.1}, {"routeRegexp":"conductor/load-instance","fraction":0.01}, {"routeRegexp":"usage_tracking_worker/send_usage","fraction":0.01}, {"routeRegexp":"commit","fraction":0.01}]}"#
-                .parse()
-                .unwrap(),
-        ),
-    )
-});
+pub static REQUEST_TRACE_SAMPLE_CONFIG: LazyLock<SamplingConfig> =
+    LazyLock::new(|| env_config("REQUEST_TRACE_SAMPLE_CONFIG", "{}".parse().unwrap()));
 
-/// Size of the cache for access token authentication
-pub static AUTH_CACHE_SIZE: LazyLock<u64> = LazyLock::new(|| env_config("AUTH_CACHE_SIZE", 1000));
+/// Maximum auth cache entries shared across a conductor's deployments.
+pub static AUTH_CACHE_SIZE: LazyLock<u64> = LazyLock::new(|| env_config("AUTH_CACHE_SIZE", 10_000));
 
 /// Length of time an entry to the access authentication cache is valid
 pub static AUTH_CACHE_TTL_SECONDS: LazyLock<u64> =
@@ -1956,6 +2032,11 @@ pub static SYNC_WORKER_UPDATE_QUERIES_RETRY_MAX_BACKOFF_SECS: LazyLock<Duration>
 pub static MAX_IMPORT_AGE: LazyLock<Duration> =
     LazyLock::new(|| Duration::from_secs(env_config("MAX_IMPORT_AGE_SECONDS", 7 * 24 * 60 * 60)));
 
+/// Maximum bytes in an imported JSONL or logical CSV line, including line
+/// endings. Quoted CSV fields can span physical lines.
+pub static SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES: LazyLock<usize> =
+    LazyLock::new(|| env_config("SNAPSHOT_IMPORT_MAX_LINE_SIZE_BYTES", 16 << 20));
+
 /// Max staleness in seconds of a partition loader result before we allow
 /// refreshing. If a request tries to update the partition loader and this
 /// duration has not passed since the last refresh, a stale value will be used.
@@ -2001,6 +2082,11 @@ pub static INSTANCE_LOADER_INSTANCES_PER_SECOND: LazyLock<NonZeroU32> = LazyLock
         NonZeroU32::new(4).unwrap(),
     )
 });
+
+/// Number of Porter upstreams selected per conductor and capacity of its shared
+/// connection cache. Values are clamped to at least 1 for service discovery.
+pub static NUM_PORTER_CONNECTIONS: LazyLock<usize> =
+    LazyLock::new(|| env_config("NUM_PORTER_CONNECTIONS", 2).max(1));
 
 /// The max number of storage files that can be fetched concurrently during
 /// export. Concurrency is also limited by `EXPORT_MAX_INFLIGHT_PREFETCH_BYTES`.
@@ -2100,17 +2186,6 @@ pub static ENV_VAR_TOTAL_SIZE_LIMIT: LazyLock<usize> =
 pub static DISABLE_METRICS_ENDPOINT: LazyLock<bool> =
     LazyLock::new(|| env_config("DISABLE_METRICS_ENDPOINT", false));
 
-/// When using the S3 storage provider with expiring AWS credentials, the
-/// duration before credential expiration that the AWS client should refresh
-/// those credentials.
-///
-/// Note that the AWS SDK automatically jitters the refresh so the final
-/// validity can actually be as little as half this value.
-///
-/// This ensures that presigned URLs (e.g. for node executor) stay valid.
-pub static AWS_S3_MIN_IDENTITY_VALIDITY: LazyLock<Duration> =
-    LazyLock::new(|| Duration::from_secs(env_config("AWS_S3_MIN_IDENTITY_VALIDITY_SECS", 1230)));
-
 /// If set, skip stripping PII from errors before they are reported. Useful for
 /// local debugging where the operator wants to see the original error contents.
 pub static SHOW_PII_IN_ERRORS: LazyLock<bool> =
@@ -2174,7 +2249,8 @@ pub static MAX_PERSISTENCE_WRITES_BACKOFF: LazyLock<Duration> = LazyLock::new(||
 /// keepalive a connection the peer drops without a TCP FIN/RST (e.g. a
 /// serverless receiver cycling a container mid-request) is awaited until the
 /// request or kernel TCP timeout (~16 min), stalling a sequential consumer like
-/// the webhook log sink. 15s interval/timeout matches usher. No-op on HTTP/1.1.
+/// the webhook integration. 15s interval/timeout matches usher. No-op on
+/// HTTP/1.1.
 pub static HTTP2_CLIENT_KEEPALIVE_INTERVAL: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_secs(env_config("HTTP2_CLIENT_KEEPALIVE_INTERVAL_SECONDS", 15))
 });
@@ -2183,3 +2259,56 @@ pub static HTTP2_CLIENT_KEEPALIVE_INTERVAL: LazyLock<Duration> = LazyLock::new(|
 /// dropped.
 pub static HTTP2_CLIENT_KEEPALIVE_TIMEOUT: LazyLock<Duration> =
     LazyLock::new(|| Duration::from_secs(env_config("HTTP2_CLIENT_KEEPALIVE_TIMEOUT_SECONDS", 15)));
+
+/// HTTP/2 keepalive PING interval for internal gRPC clients and servers.
+pub static GRPC_KEEPALIVE_INTERVAL: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("GRPC_KEEPALIVE_INTERVAL_SECONDS", 15)));
+
+/// Timeout for an unacked gRPC HTTP/2 keepalive PING before the connection is
+/// closed.
+pub static GRPC_KEEPALIVE_TIMEOUT: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("GRPC_KEEPALIVE_TIMEOUT_SECONDS", 15)));
+
+/// Longest lifetime `ctx.auth.signJwt` may give a token.
+pub static DEPLOYMENT_JWT_MAX_LIFETIME: LazyLock<Duration> = LazyLock::new(|| {
+    Duration::from_secs(env_config("DEPLOYMENT_JWT_MAX_LIFETIME_SECONDS", 60 * 60))
+});
+
+/// How long verifiers may cache the deployment JWKS served at
+/// `/.well-known/jwks.json`.
+pub static DEPLOYMENT_JWKS_MAX_AGE: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("DEPLOYMENT_JWKS_MAX_AGE_SECONDS", 300)));
+
+/// Max number of log lines in a single V8 action
+pub static MAX_LOG_LINES_V8_ACTIONS: LazyLock<usize> =
+    LazyLock::new(|| env_config("MAX_LOG_LINES_V8_ACTIONS", 1024).max(1));
+
+/// Max number of log lines in a single Node action. Sent to the Node executor
+/// with each request.
+pub static MAX_LOG_LINES_NODE_ACTIONS: LazyLock<usize> =
+    LazyLock::new(|| env_config("MAX_LOG_LINES_NODE_ACTIONS", 1024).max(1));
+
+/// Max number of log lines in a single query or mutation
+pub static MAX_LOG_LINES_DATABASE_UDFS: LazyLock<usize> =
+    LazyLock::new(|| env_config("MAX_LOG_LINES_DATABASE_UDFS", 256).max(1));
+
+/// Kill switch for S3 exports on this conductor. When set, the S3 export
+/// worker never starts, so Porter gets no sync requests. An export resumes
+/// from its checkpoint on the restart after this is unset.
+pub static DISABLE_S3_EXPORT: LazyLock<bool> =
+    LazyLock::new(|| env_config("DISABLE_S3_EXPORT", false));
+
+/// Number of parallel Glue table writes in one S3 export page.
+pub static S3_EXPORT_GLUE_CONCURRENCY: LazyLock<usize> =
+    LazyLock::new(|| env_config("S3_EXPORT_GLUE_CONCURRENCY", 8).max(1));
+
+/// Snapshots an S3 export table keeps. Each page commits one snapshot per
+/// changed table, and each commit rewrites the whole snapshot list, so the
+/// list is bounded. Readers need only the current snapshot, which holds every
+/// data file; `_ts` serves incremental reads.
+pub static S3_EXPORT_RETAINED_SNAPSHOTS: LazyLock<usize> =
+    LazyLock::new(|| env_config("S3_EXPORT_RETAINED_SNAPSHOTS", 10).max(1));
+
+/// Number of tables one S3 export page appends to in parallel.
+pub static S3_EXPORT_TABLE_CONCURRENCY: LazyLock<usize> =
+    LazyLock::new(|| env_config("S3_EXPORT_TABLE_CONCURRENCY", 8).max(1));

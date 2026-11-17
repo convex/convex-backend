@@ -68,6 +68,7 @@ import type * as _system_server from "../_system/server.js";
 import type * as tableDefs_awsLambdaVersions from "../tableDefs/awsLambdaVersions.js";
 import type * as tableDefs_deploymentAuditLogTable from "../tableDefs/deploymentAuditLogTable.js";
 import type * as tableDefs_snapshotImport from "../tableDefs/snapshotImport.js";
+import type * as tableDefs_streamingExport from "../tableDefs/streamingExport.js";
 
 /**
  * A utility for referencing Convex functions in your app's API.
@@ -133,6 +134,7 @@ declare const fullApi: ApiFromModules<{
   "tableDefs/awsLambdaVersions": typeof tableDefs_awsLambdaVersions;
   "tableDefs/deploymentAuditLogTable": typeof tableDefs_deploymentAuditLogTable;
   "tableDefs/snapshotImport": typeof tableDefs_snapshotImport;
+  "tableDefs/streamingExport": typeof tableDefs_streamingExport;
 }>;
 export declare const api: FilterApi<
   typeof fullApi,

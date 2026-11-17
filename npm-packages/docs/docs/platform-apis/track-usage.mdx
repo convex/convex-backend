@@ -24,7 +24,7 @@ deployment you manage.
 
 When you create a new deployment on behalf of a user, configure a log stream for
 it as part of the same provisioning step. Use the
-[Create log stream](/deployment-api/create-log-stream) endpoint, authenticated
+[Create integration](/deployment-api/create-integration) endpoint, authenticated
 with a deploy key for the deployment.
 
 You can point the log stream at any of the supported integrations (Axiom,
@@ -34,8 +34,8 @@ For aggregating usage across many deployments into your own system, a custom
 webhook pointed at an endpoint you control is typically the simplest option.
 
 Store the returned log stream `id` alongside your record of the deployment so
-you can [update](/deployment-api/update-log-stream) or
-[delete](/deployment-api/delete-log-stream) it later (for example, when an end
+you can [update](/deployment-api/update-integration) or
+[delete](/deployment-api/delete-integration) it later (for example, when an end
 user deletes their app).
 
 <Admonition type="note">

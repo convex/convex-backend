@@ -6,12 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "lint:ci": "npm run lint -- --max-warnings=0"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.2.1",
     "convex": "workspace:*",
-    "next": "^15.5.27",
+    "next": "^15.5.28",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "eslint-plugin-react-hooks": "^5.2.0",

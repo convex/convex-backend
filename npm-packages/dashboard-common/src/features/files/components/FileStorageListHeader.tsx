@@ -114,6 +114,7 @@ export function FileStorageListHeader({
               </Button>
             )}
             <Button
+              variant="neutral"
               size="xs"
               className="text-xs"
               icon={

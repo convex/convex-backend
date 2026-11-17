@@ -261,9 +261,11 @@ export const EditGroupRole: Story = {
   },
 };
 
-// The role combobox and the custom-role menu open surfaces of their own, and
-// the popover dismisses on a click outside its panel. They portal into the
-// panel instead, so picking a role adds it rather than closing the editor.
+// The role combobox and the custom-role list open surfaces of their own, and
+// the popover dismisses on a click outside its panel. The role combobox
+// portals into the panel, and the custom-role list is a Headless UI portal,
+// which the popover counts as inside it, so picking a role adds it rather than
+// closing the editor.
 export const EditGroupRoleAddsCustomRole: Story = {
   ...Configured,
   parameters: OPEN_POPOVER_A11Y,
@@ -274,10 +276,10 @@ export const EditGroupRoleAddsCustomRole: Story = {
     await userEvent.click(await screen.findByTestId("combobox-button-Role"));
     await userEvent.click(await screen.findByText("Custom"));
     await userEvent.click(
-      await screen.findByRole("button", { name: "Add custom role" }),
+      await screen.findByRole("combobox", { name: "Custom roles" }),
     );
     await userEvent.click(
-      await screen.findByRole("menuitem", { name: "Support Engineer" }),
+      await screen.findByRole("option", { name: "Support Engineer" }),
     );
 
     await expect(await screen.findByTestId("edit-group-role")).toBeVisible();

@@ -14,7 +14,7 @@ quickstart:
 3. Update `"name"` in your new `package.json` file to match your subdirectory
    name
 4. Add your new package to
-   [pnpm-workspace.yaml](https://github.com/get-convex/convex/blob/main/npm-packages/pnpm-workspace.yaml)
+   [pnpm-workspace.yaml](https://github.com/convex/convex/blob/main/npm-packages/pnpm-workspace.yaml)
 5. Run `just update-js` to install dependencies
 
 ## Running a convex package

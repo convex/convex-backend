@@ -179,7 +179,7 @@ type-safe pipelines ingesting log events.
 All events will have the following three fields:
 
 - `topic`: string, categorizes a log event, one of
-  `["verification", "console", "function_execution", "audit_log", "concurrency_stats", "scheduler_stats", "current_storage_usage", "storage_api_bandwidth", "ai_gateway_usage"]`
+  `["verification", "console", "function_execution", "audit_log", "concurrency_stats", "scheduler_stats", "current_storage_usage", "storage_api_bandwidth", "ai_gateway_usage", "s3_export_stats"]`
 - `timestamp`: number, Unix epoch timestamp in milliseconds as an integer
 - `convex`: An object containing metadata related to your Convex deployment,
   including `deployment_name`, `deployment_type`, `project_name`, and
@@ -224,6 +224,7 @@ Example event for `console.log("Sent message!")` from a mutation:
     "function": {
       "path": "messages:send",
       "request_id": "d064ef901f7ec0b7",
+      "runtime": "convex",
       "type": "mutation"
     },
     "log_level": "LOG",
@@ -339,6 +340,7 @@ Example event for a query:
       "cached": false,
       "path": "message:list",
       "request_id": "892104e63bd39d9a",
+      "runtime": "convex",
       "type": "query"
     },
     "status": "success",
@@ -441,6 +443,10 @@ The following fields are added under `function` for all `console` and
 
 - `type`: string, one of `["query", "mutation", "action", "http_action"]`
 - `path`: string, e.g. `"myDir/myFile:myFunction"`, or `"POST /my_endpoint"`
+- `runtime`: string, one of `["convex", "node"]`, the
+  [runtime](/functions/runtimes.mdx) the function ran in. Queries, mutations,
+  and HTTP actions always run in the Convex runtime. `null` for actions that
+  failed with a system error before starting.
 - `cached`: optional boolean, for queries this denotes whether this event came
   from a cached function execution
 - `request_id`: string, the
@@ -575,6 +581,47 @@ Example event:
   "timestamp": 1715973841548,
   "storage_id": "k12345678901234567890123456789012",
   "egress_bytes": 1048576
+}
+```
+
+### `s3_export_stats` events
+
+These events report the status of your deployment's
+[S3 export](/production/integrations/s3-export.mdx). One is sent whenever the
+status changes, and about once a minute while it stays the same.
+
+To catch an export that's falling behind, alert on `lag_seconds`. To catch one
+that has stopped working, alert when `status` stays `"failed"` for a few
+minutes, since a single failure is usually followed by a successful retry.
+
+Schema:
+
+- `topic`: `"s3_export_stats"`
+- `timestamp`: Unix epoch timestamp in milliseconds
+- `status`: string, one of:
+  - `"snapshotting"`: the first sync is running, copying the existing documents
+    of each table. This also happens after you add a table.
+  - `"catching_up"`: the export is behind your deployment's latest writes and is
+    working through them.
+  - `"up_to_date"`: S3 has every change to the tables in the export.
+  - `"failed"`: the export hit an error. Convex keeps retrying.
+- `lag_seconds`: number or `null`, how far the data in S3 is behind your
+  deployment's most recent write, in seconds. It grows while the export is
+  failing and your deployment keeps getting writes, and stays flat if nothing
+  new is written. It's `null` until the first sync finishes, and while a newly
+  added table is being copied.
+- `last_error`: string or `null`, why the export is failing. It's `null` unless
+  the status is `"failed"`.
+
+Example event:
+
+```json
+{
+  "topic": "s3_export_stats",
+  "timestamp": 1715973841548,
+  "status": "up_to_date",
+  "lag_seconds": 3,
+  "last_error": null
 }
 ```
 

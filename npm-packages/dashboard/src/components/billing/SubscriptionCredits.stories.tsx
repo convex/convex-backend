@@ -12,7 +12,6 @@ const meta = {
       <SubscriptionCredits {...args} />
     </Sheet>
   ),
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof SubscriptionCredits>;
 
 export default meta;

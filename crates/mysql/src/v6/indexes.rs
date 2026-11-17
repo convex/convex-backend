@@ -27,6 +27,7 @@ use common::{
     },
     runtime::Runtime,
     types::{
+        IndexId,
         IndexRef,
         IndexWriteMode,
         PersistenceIndexId,
@@ -63,6 +64,43 @@ use crate::{
     },
     metrics,
 };
+
+/// Typed diagnostics contain only internal identifiers, timestamps, and fixed
+/// invariant descriptions, allowing callers to report failures without SQL
+/// data.
+#[derive(Clone, Copy, Debug, thiserror::Error)]
+pub(crate) enum IndexWriteError {
+    #[error(
+        "MySQL V6 index write replaces an entry of document {document_id} at {ts} without that \
+         document revision"
+    )]
+    MissingDocumentRevision {
+        document_id: InternalDocumentId,
+        ts: Timestamp,
+    },
+    #[error(
+        "MySQL V6 index writes with `Overwrite` are unimplemented: index backfill uses \
+         `write_index_backfill`"
+    )]
+    UnsupportedOverwrite,
+    #[error(
+        "MySQL V6 live index write at {ts} supersedes a revision at {prev_ts}, which is not \
+         earlier"
+    )]
+    InvalidPredecessor { ts: Timestamp, prev_ts: Timestamp },
+    #[error("MySQL V6 tombstone for an index key with no previous entry")]
+    MissingPredecessor,
+    #[error("MySQL V6 index write replaces an entry that is not there")]
+    MissingReplacedRow,
+    #[error("MySQL V6 tombstone's own row is not there")]
+    MissingTombstoneRow,
+    #[error("MySQL V6 tombstone for an index key whose previous entry is not there")]
+    MissingDeletedRow,
+    #[error("MySQL V6 index write into log bucket {0}")]
+    LogBucket(i64),
+    #[error("MySQL V6 requires a persistence index ID to write index {0}")]
+    MissingPersistenceIndexId(IndexId),
+}
 
 #[derive(Default)]
 pub(crate) struct IndexWriteBatch {
@@ -139,8 +177,7 @@ impl IndexWriteBatch {
         for (ts, document_id) in self.replacement_commits() {
             anyhow::ensure!(
                 revisions.contains(&(ts, document_id)),
-                "MySQL V6 index write replaces an entry of document {document_id} at {ts} without \
-                 that document revision"
+                IndexWriteError::MissingDocumentRevision { document_id, ts }
             );
         }
         Ok(())
@@ -177,8 +214,7 @@ impl IndexEngine {
     ) -> anyhow::Result<IndexWriteBatch> {
         anyhow::ensure!(
             conflict_strategy == ConflictStrategy::Error || index_updates.is_empty(),
-            "MySQL V6 index writes with `Overwrite` are unimplemented: index backfill uses \
-             `write_index_backfill`"
+            IndexWriteError::UnsupportedOverwrite
         );
         let mut batch = IndexWriteBatch::default();
         for update in index_updates {
@@ -194,10 +230,10 @@ impl IndexEngine {
             if let Some(prev) = update.prev {
                 anyhow::ensure!(
                     prev.ts < update.ts,
-                    "MySQL V6 live index write at {} supersedes a revision at {}, which is not \
-                     earlier",
-                    update.ts,
-                    prev.ts
+                    IndexWriteError::InvalidPredecessor {
+                        ts: update.ts,
+                        prev_ts: prev.ts
+                    }
                 );
                 batch
                     .log_rows
@@ -243,7 +279,7 @@ impl IndexEngine {
                         .push(ScanningOp::Tombstone(row(update.ts, prev.document_id)));
                 },
                 (None, None, _) => {
-                    anyhow::bail!("MySQL V6 tombstone for an index key with no previous entry")
+                    anyhow::bail!(IndexWriteError::MissingPredecessor)
                 },
             }
         }
@@ -401,7 +437,7 @@ impl IndexEngine {
         self.delete_exact(
             tx,
             &tombstones,
-            "MySQL V6 tombstone's own row is not there",
+            IndexWriteError::MissingTombstoneRow,
             "tombstone_chunk_write",
             cluster_name,
         )
@@ -415,9 +451,7 @@ impl IndexEngine {
                         chunk.iter().flat_map(LogRow::params).collect(),
                     )
                     .await
-                    .with_context(|| {
-                        format!("MySQL V6 index write into log bucket {}", bucket.value())
-                    })
+                    .context(IndexWriteError::LogBucket(bucket.value()))
                 }
                 .in_span(chunk_span("log_chunk_write", chunk))
                 .await?;
@@ -437,7 +471,7 @@ impl IndexEngine {
         self.delete_exact(
             tx,
             &batch.scan_complete_deletes,
-            "MySQL V6 tombstone for an index key whose previous entry is not there",
+            IndexWriteError::MissingDeletedRow,
             "delete_chunk_write",
             cluster_name,
         )
@@ -531,7 +565,7 @@ impl IndexEngine {
             .await?;
             anyhow::ensure!(
                 affected == chunk.len() as u64,
-                "MySQL V6 index write replaces an entry that is not there"
+                IndexWriteError::MissingReplacedRow
             );
             timer.finish();
         }
@@ -542,7 +576,7 @@ impl IndexEngine {
         &self,
         tx: &mut MySqlTransaction<'_>,
         rows: &[IndexRow],
-        missing: &str,
+        missing: IndexWriteError,
         span_kind: &str,
         cluster_name: &str,
     ) -> anyhow::Result<()> {
@@ -557,7 +591,7 @@ impl IndexEngine {
             }
             .in_span(chunk_span(span_kind, chunk))
             .await?;
-            anyhow::ensure!(affected == chunk.len() as u64, "{missing}");
+            anyhow::ensure!(affected == chunk.len() as u64, missing);
             timer.finish();
         }
         Ok(())
@@ -565,12 +599,9 @@ impl IndexEngine {
 }
 
 fn persistence_index_id(index: IndexRef) -> anyhow::Result<PersistenceIndexId> {
-    index.persistence_index_id().with_context(|| {
-        format!(
-            "MySQL V6 requires a persistence index ID to write index {}",
-            index.id()
-        )
-    })
+    index
+        .persistence_index_id()
+        .context(IndexWriteError::MissingPersistenceIndexId(index.id()))
 }
 
 fn chunk_span(kind: &str, rows: &[impl ApproxSize]) -> Span {
