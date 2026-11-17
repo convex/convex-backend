@@ -514,14 +514,16 @@ function DeploymentTypeCheckboxes({
   );
 }
 
+// The dark checked fills need 3:1 against the card background
+// (`background-secondary`) and against the white checkmark (WCAG 1.4.11).
 function deploymentTypeCheckedBackground(dtype: DeploymentTypeType) {
   switch (dtype) {
     case "prod":
-      return "checked:bg-purple-700 text-purple-700 enabled:hover:checked:bg-purple-800 dark:checked:bg-purple-500 dark:enabled:hover:bg-purple-500 dark:text-purple-500";
+      return "checked:bg-purple-700 text-purple-700 enabled:hover:checked:bg-purple-800 dark:checked:bg-fuchsia-600 dark:enabled:hover:bg-fuchsia-500 dark:text-purple-500";
     case "preview":
-      return "checked:bg-orange-700 text-orange-700 enabled:hover:checked:bg-orange-800 dark:checked:bg-orange-700 dark:enabled:hover:bg-orange-600 dark:text-orange-400";
+      return "checked:bg-orange-700 text-orange-700 enabled:hover:checked:bg-orange-800 dark:checked:bg-orange-600 dark:enabled:hover:bg-orange-500 dark:text-orange-400";
     case "dev":
-      return "checked:bg-green-700 text-green-700 enabled:hover:checked:bg-green-800 dark:checked:bg-green-700 dark:enabled:hover:bg-green-600 dark:text-green-400";
+      return "checked:bg-green-700 text-green-700 enabled:hover:checked:bg-green-800 dark:checked:bg-green-600 dark:enabled:hover:bg-green-500 dark:text-green-400";
     case "custom":
       return "checked:bg-neutral-8 text-neutral-8 enabled:hover:checked:bg-neutral-9 dark:checked:bg-neutral-6 dark:enabled:hover:bg-neutral-5 dark:text-neutral-5";
     default: {
