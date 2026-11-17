@@ -336,13 +336,13 @@
   --green-100: rgb(203, 237, 182);
   --green-200: rgb(180, 236, 146);
   --green-500: rgb(79, 176, 20);
-  --green-700: rgb(34, 137, 9);
+  --green-700: rgb(0, 117, 0);
   --green-900: rgb(44, 83, 20);
   --yellow-50: rgb(254, 252, 232);
   --yellow-100: rgb(250, 228, 171);
   --yellow-200: rgb(230, 226, 168);
   --yellow-500: rgb(243, 176, 28);
-  --yellow-700: rgb(213, 113, 21);
+  --yellow-700: rgb(177, 80, 0);
   --yellow-900: rgb(109, 82, 23);
   --neutral-1: rgb(222, 226, 234);
   --neutral-2: rgb(204, 206, 211);
@@ -386,9 +386,9 @@ html.light {
   --background-error: var(--red-100);
   --background-errorSecondary: var(--red-200);
   --content-primary: rgb(42, 40, 37);
-  --content-secondary: rgb(112, 111, 106);
-  --content-tertiary: rgb(112, 111, 106);
-  --content-accent: rgb(48, 106, 207);
+  --content-secondary: rgb(102, 101, 96);
+  --content-tertiary: rgb(102, 101, 96);
+  --content-accent: rgb(44, 102, 203);
   --content-success: var(--green-700);
   --content-warning: var(--yellow-900);
   --content-error: var(--red-700);

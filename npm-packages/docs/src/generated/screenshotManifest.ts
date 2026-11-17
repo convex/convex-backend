@@ -149,7 +149,7 @@ export const screenshots = [
     "storyTitle": "docs/components/ProjectCard",
     "light": {
       "filename": "components_project_card_light.webp",
-      "width": 1092,
+      "width": 1094,
       "height": 435
     },
     "dark": {
@@ -1203,7 +1203,7 @@ export const screenshots = [
     "light": {
       "filename": "pages_project_review_default_environment_variable_changes_light.webp",
       "width": 2200,
-      "height": 838
+      "height": 834
     },
     "dark": {
       "filename": "pages_project_review_default_environment_variable_changes_dark.webp",

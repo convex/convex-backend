@@ -234,10 +234,12 @@ export function DeploymentLabel({
         id="select-deployment"
         data-testid="select-deployment"
         className={cn(
-          "flex h-9.25 items-center gap-2 truncate rounded-full border text-sm font-medium transition-opacity hover:opacity-80",
-          selected && "opacity-80",
+          "flex h-9.25 items-center gap-2 truncate rounded-full border text-sm font-medium transition-colors hover:[--bg-opacity:80%]",
           "focus-visible:ring-1 focus-visible:ring-border-selected focus-visible:outline-hidden",
           deploymentTypeColorClasses(deployment.deploymentType),
+          // Fade only the background: dimming the whole button with `opacity`
+          // drops the label below 4.5:1 contrast.
+          selected && "[--bg-opacity:80%]",
         )}
         type="button"
         ref={buttonRef}
@@ -379,11 +381,10 @@ export function DeploymentLabelProvisionDeployment({
         className={cn(
           "flex h-9.25 items-center gap-2 rounded-full px-3",
           "border border-dashed",
-          "truncate text-sm font-medium transition-opacity hover:opacity-80",
-          selected && "opacity-80",
+          "truncate text-sm font-medium transition-colors hover:[--bg-opacity:40%]",
           // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- eslint-plugin-better-tailwindcss v4 incorrectly identifies "prod"/"dev" as class names
           deploymentTypeColorClasses(isProvisionProd ? "prod" : "dev"),
-          "[--bg-opacity:50%]",
+          selected ? "[--bg-opacity:40%]" : "[--bg-opacity:50%]",
         )}
         ref={buttonRef}
         tabIndex={0}
