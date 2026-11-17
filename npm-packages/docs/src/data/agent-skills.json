@@ -18,7 +18,7 @@
     },
     {
       "name": "convex-auth",
-      "description": "Add authentication (passkeys/OAuth) to the current Convex app, including the auth.config.ts wiring."
+      "description": "Add Convex Auth sign-in (passkeys by default, other methods on request) to a new or existing Convex app, including auth.config.ts."
     },
     {
       "name": "convex-authz",
