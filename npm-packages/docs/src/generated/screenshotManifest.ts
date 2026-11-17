@@ -1208,7 +1208,7 @@ export const screenshots = [
     "dark": {
       "filename": "pages_project_review_default_environment_variable_changes_dark.webp",
       "width": 2200,
-      "height": 842
+      "height": 838
     }
   },
   {

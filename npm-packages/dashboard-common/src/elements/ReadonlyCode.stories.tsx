@@ -8,7 +8,7 @@ const meta = {
     path: "example.js",
   },
   render: (args) => (
-    <div style={{ height: "100vh", background: "#eee" }}>
+    <div className="h-screen bg-background-primary">
       <ReadonlyCode {...args} />
     </div>
   ),

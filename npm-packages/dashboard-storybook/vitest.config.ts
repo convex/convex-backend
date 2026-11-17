@@ -37,26 +37,33 @@ export default defineConfig({
     ],
   },
   test: {
+    // Every story runs once per theme, so the a11y checks (color contrast in
+    // particular) cover both palettes.
     projects: [
-      {
-        extends: true,
-        plugins: [
-          storybookTest({
-            configDir: path.join(dirname, ".storybook"),
-            storybookScript: "npm run storybook -- --no-open",
-          }),
-        ],
-        test: {
-          name: "storybook",
-          browser: {
-            enabled: true,
-            provider: playwright(),
-            headless: true,
-            instances: [{ browser: "chromium" }],
-          },
-          setupFiles: ["./.storybook/vitest.setup.ts"],
-        },
-      },
+      storybookProject("storybook", "./.storybook/vitest.setup.ts"),
+      storybookProject("storybook-dark", "./.storybook/vitest.setup.dark.ts"),
     ],
   },
 });
+
+function storybookProject(name: string, setupFile: string) {
+  return {
+    extends: true,
+    plugins: [
+      storybookTest({
+        configDir: path.join(dirname, ".storybook"),
+        storybookScript: "npm run storybook -- --no-open",
+      }),
+    ],
+    test: {
+      name,
+      browser: {
+        enabled: true,
+        provider: playwright(),
+        headless: true,
+        instances: [{ browser: "chromium" as const }],
+      },
+      setupFiles: [setupFile],
+    },
+  };
+}

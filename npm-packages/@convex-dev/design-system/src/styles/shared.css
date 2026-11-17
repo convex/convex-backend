@@ -411,7 +411,8 @@ html.dark {
   --background-primary: rgb(30, 28, 26);
   --background-secondary: rgb(42, 40, 37);
   --background-tertiary: rgb(60, 58, 55);
-  --background-highlight: var(--yellow-900);
+  /* Darker than --yellow-900 so --content-secondary stays above 4.5:1 on it. */
+  --background-highlight: rgb(90, 63, 0);
   --background-success: var(--green-900);
   --background-warning: var(--yellow-900);
   --background-error: var(--red-900);

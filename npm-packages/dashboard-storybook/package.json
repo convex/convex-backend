@@ -6,7 +6,7 @@
   "scripts": {
     "storybook": "storybook dev --no-open",
     "build": "storybook build",
-    "test-storybook": "vitest --project=storybook",
+    "test-storybook": "vitest --project=storybook --project=storybook-dark",
     "generate-docs-screenshots": "tsx scripts/generate-docs-screenshots.ts"
   },
   "dependencies": {

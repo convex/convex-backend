@@ -35,7 +35,7 @@ export function deploymentTypeColorClasses(
     case "prod":
       return "[--bg-opacity:100%] border-purple-600 dark:border-purple-100 bg-purple-100/(--bg-opacity) text-purple-800 dark:bg-purple-700/(--bg-opacity) dark:text-purple-100";
     case "preview":
-      return "[--bg-opacity:100%] border-orange-600 dark:border-orange-400 bg-orange-100/(--bg-opacity) text-orange-800 dark:bg-orange-900/(--bg-opacity) dark:text-orange-400";
+      return "[--bg-opacity:100%] border-orange-600 dark:border-orange-400 bg-orange-100/(--bg-opacity) text-orange-800 dark:bg-orange-900/(--bg-opacity) dark:text-orange-300";
     case "dev":
       return "[--bg-opacity:100%] border-green-600 dark:border-green-400 bg-green-100/(--bg-opacity) text-green-800 dark:bg-green-900/(--bg-opacity) dark:text-green-400";
     case "custom":
