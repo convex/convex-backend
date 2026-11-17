@@ -202,6 +202,8 @@ minimumReleaseAgeExclude:
   - vite@7.3.8
   # Renovate security update: toml@5.0.1
   - toml@5.0.1
+  # Renovate security update: happy-dom@21.0.4
+  - happy-dom@21.0.4
 
 # Keep react and react-dom out of pnpm's hoisted fallback layer. The workspace
 # has both React 18 (the demos) and React 19 (the dashboards), and
