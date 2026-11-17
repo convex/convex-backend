@@ -40,6 +40,10 @@ import {
   CUSTOM_ROLE_TEMPLATES_BY_ID,
 } from "./customRoleTemplates";
 import { registerCustomRoleCompletions } from "./customRoleCompletions";
+import {
+  TABLE_CELL as CELL,
+  TABLE_HEADER_CELL as HEADER_CELL,
+} from "./teamAuthentication/SettingsSheet";
 
 const BLANK_STATEMENT: RoleStatement = {
   effect: "allow",
@@ -748,8 +752,8 @@ function CustomRoleListItem({
   const deleteCustomRole = useDeleteCustomRole(teamId);
 
   return (
-    <div className="flex w-full flex-col py-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <tr className="border-b last:border-b-0">
+      <td className={CELL}>
         <div className="flex flex-col gap-0.5">
           <div>{role.name}</div>
           {role.description && (
@@ -758,69 +762,62 @@ function CustomRoleListItem({
             </div>
           )}
         </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex flex-col items-end">
-            <div className="text-xs text-content-secondary">
-              {role.statements.length} statement
-              {role.statements.length !== 1 ? "s" : ""}
-            </div>
-            <TimestampDistance
-              prefix="Created "
-              date={new Date(role.createTime)}
-            />
-          </div>
-          <Menu
-            placement="bottom-end"
-            buttonProps={{
-              variant: "neutral",
-              size: "xs",
-              icon: <DotsVerticalIcon />,
-              "aria-label": "Custom role options",
-            }}
+      </td>
+      <td className={cn(CELL, "whitespace-nowrap")}>
+        <TimestampDistance date={new Date(role.createTime)} />
+      </td>
+      <td className={cn(CELL, "text-right")}>
+        <Menu
+          placement="bottom-end"
+          buttonProps={{
+            variant: "neutral",
+            size: "xs",
+            icon: <DotsVerticalIcon />,
+            "aria-label": `${role.name} options`,
+          }}
+        >
+          <MenuItem action={onView}>View</MenuItem>
+          <MenuItem
+            action={onEdit}
+            disabled={disabled}
+            tip={disabled ? disabledReason : undefined}
+            tipSide="left"
           >
-            <MenuItem action={onView}>View</MenuItem>
-            <MenuItem
-              action={onEdit}
-              disabled={disabled}
-              tip={disabled ? disabledReason : undefined}
-              tipSide="left"
-            >
-              Edit
-            </MenuItem>
-            <MenuItem
-              variant="danger"
-              action={() => setShowDelete(true)}
-              disabled={disabled}
-              tip={disabled ? disabledReason : undefined}
-              tipSide="left"
-            >
-              Delete
-            </MenuItem>
-          </Menu>
-        </div>
-      </div>
-      {showDelete && (
-        <ConfirmationDialog
-          dialogTitle="Delete Custom Role"
-          dialogBody={`Are you sure you want to delete the custom role "${role.name}"? This cannot be undone.`}
-          validationText={role.name}
-          confirmText="Delete"
-          error={deleteError}
-          onClose={() => {
-            setShowDelete(false);
-            setDeleteError(undefined);
-          }}
-          onConfirm={async () => {
-            try {
-              await deleteCustomRole({ id: role.id });
+            Edit
+          </MenuItem>
+          <MenuItem
+            variant="danger"
+            action={() => setShowDelete(true)}
+            disabled={disabled}
+            tip={disabled ? disabledReason : undefined}
+            tipSide="left"
+          >
+            Delete
+          </MenuItem>
+        </Menu>
+        {showDelete && (
+          <ConfirmationDialog
+            dialogTitle="Delete Custom Role"
+            dialogBody={`Are you sure you want to delete the custom role "${role.name}"? This cannot be undone.`}
+            validationText={role.name}
+            confirmText="Delete"
+            error={deleteError}
+            onClose={() => {
               setShowDelete(false);
-            } catch (e: unknown) {
-              setDeleteError(errorMessage(e, "Failed to delete."));
-            }
-          }}
-        />
-      )}
-    </div>
+              setDeleteError(undefined);
+            }}
+            onConfirm={async () => {
+              try {
+                await deleteCustomRole({ id: role.id });
+                setShowDelete(false);
+              } catch (e: unknown) {
+                setDeleteError(errorMessage(e, "Failed to delete."));
+              }
+            }}
+          />
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -942,21 +939,74 @@ function CustomRolesContent({ team }: { team: TeamResponse }) {
 
   return (
     <div className="-mx-6 flex min-h-0 flex-1 flex-col">
-      <div className="sticky top-0 z-10 -mt-6 flex items-center gap-2 bg-background-primary p-6">
-        {showForm ? (
-          <Link href={listHref}>
-            <h2>Custom Roles</h2>
-          </Link>
-        ) : (
-          <h2>Custom Roles</h2>
-        )}
-        {showForm && currentCrumb && (
-          <>
-            <span className="text-content-secondary" role="separator">
-              /
-            </span>
-            <h2 className="text-content-secondary">{currentCrumb}</h2>
-          </>
+      <div className="sticky top-0 z-10 -mt-6 flex items-end justify-between gap-4 bg-background-primary p-6">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            {showForm ? (
+              <Link href={listHref}>
+                <h2>Custom Roles</h2>
+              </Link>
+            ) : (
+              <h2>Custom Roles</h2>
+            )}
+            {showForm && currentCrumb && (
+              <>
+                <span className="text-content-secondary" role="separator">
+                  /
+                </span>
+                <h2 className="text-content-secondary">{currentCrumb}</h2>
+              </>
+            )}
+          </div>
+          {!showForm && (
+            <p className="max-w-prose text-sm text-content-secondary">
+              Custom roles let you define fine-grained permissions for your team
+              members.{" "}
+              <Link
+                href="https://docs.convex.dev/team-management/custom-roles"
+                target="_blank"
+              >
+                Learn more about custom roles
+              </Link>
+              .
+            </p>
+          )}
+        </div>
+        {!showForm && (
+          <div className="shrink-0">
+            <Menu
+              placement="bottom-end"
+              buttonProps={{
+                icon: <PlusIcon />,
+                disabled: !canManage,
+                tip: disabledReason,
+                children: "Create Role",
+              }}
+            >
+              {[
+                <div
+                  key="__header__"
+                  className="mx-3 pb-1 text-xs text-content-secondary select-none"
+                >
+                  Role Template
+                </div>,
+                ...CUSTOM_ROLE_TEMPLATES.map((t) => (
+                  <MenuItem
+                    key={t.id}
+                    action={() => goToNew(t.id)}
+                    tip={t.description}
+                    tipSide="left"
+                  >
+                    {t.label}
+                  </MenuItem>
+                )),
+                <hr key="__divider__" className="mx-3 my-1 border-t" />,
+                <MenuItem key="__blank__" action={() => goToNew()}>
+                  Start without a template
+                </MenuItem>,
+              ]}
+            </Menu>
+          </div>
         )}
       </div>
       <div className="relative flex min-h-0 flex-1 overflow-x-hidden">
@@ -980,58 +1030,22 @@ function CustomRolesContent({ team }: { team: TeamResponse }) {
                 team to create and manage custom roles.
               </Callout>
             )}
-            <Sheet>
-              <div className="mb-4 flex items-center justify-between gap-4">
-                <p className="text-sm text-content-primary">
-                  Custom roles let you define fine-grained permissions for your
-                  team members.{" "}
-                  <Link
-                    href="https://docs.convex.dev/team-management/custom-roles"
-                    target="_blank"
-                  >
-                    Learn more about custom roles
-                  </Link>
-                  .
-                </p>
-                <Menu
-                  placement="bottom-end"
-                  buttonProps={{
-                    icon: <PlusIcon />,
-                    disabled: !canManage,
-                    tip: disabledReason,
-                    children: "Create Role",
-                  }}
-                >
-                  {[
-                    <div
-                      key="__header__"
-                      className="mx-3 pb-1 text-xs text-content-secondary select-none"
-                    >
-                      Role Template
-                    </div>,
-                    ...CUSTOM_ROLE_TEMPLATES.map((t) => (
-                      <MenuItem
-                        key={t.id}
-                        action={() => goToNew(t.id)}
-                        tip={t.description}
-                        tipSide="left"
-                      >
-                        {t.label}
-                      </MenuItem>
-                    )),
-                    <hr key="__divider__" className="mx-3 my-1 border-t" />,
-                    <MenuItem key="__blank__" action={() => goToNew()}>
-                      Start without a template
-                    </MenuItem>,
-                  ]}
-                </Menu>
-              </div>
+            <Sheet padding={false}>
               {roles === undefined ? (
-                <Loading fullHeight={false} className="h-14 w-full" />
-              ) : (
-                <div className="flex w-full flex-col divide-y">
-                  {roles.length > 0 ? (
-                    roles.map((role) => (
+                <Loading fullHeight={false} className="m-3 h-10" />
+              ) : roles.length > 0 ? (
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="border-b">
+                      <th className={cn(HEADER_CELL, "w-full")}>Name</th>
+                      <th className={HEADER_CELL}>Created</th>
+                      <th className={cn(HEADER_CELL, "w-0")}>
+                        <span className="sr-only">Actions</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {roles.map((role) => (
                       <CustomRoleListItem
                         key={role.id}
                         role={role}
@@ -1041,12 +1055,12 @@ function CustomRolesContent({ team }: { team: TeamResponse }) {
                         disabled={!canManage}
                         disabledReason={disabledReason}
                       />
-                    ))
-                  ) : (
-                    <div className="my-6 flex w-full justify-center text-content-secondary">
-                      No custom roles have been created yet.
-                    </div>
-                  )}
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div className="px-6 py-4 text-content-secondary">
+                  No custom roles have been created yet.
                 </div>
               )}
             </Sheet>
