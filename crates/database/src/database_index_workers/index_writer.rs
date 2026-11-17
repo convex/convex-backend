@@ -479,9 +479,10 @@ impl<RT: Runtime> IndexWriter<RT> {
         // Consider ourselves successful if both the producer and consumer exit
         // successfully.
         let ((), ()) = futures::try_join!(producer, consumer)?;
-        let marker_indexes: BTreeSet<_> = self
-            .persistence
-            .index_backfill_marker_indexes()
+        let marker_indexes: BTreeSet<_> =
+            retry_persistence_operation("index_backfill_marker_indexes", retry_config, || async {
+                self.persistence.index_backfill_marker_indexes().await
+            })
             .await?
             .into_iter()
             .collect();

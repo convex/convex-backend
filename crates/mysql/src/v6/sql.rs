@@ -736,8 +736,12 @@ pub(crate) fn backfill_markers_page(
     )
 }
 
-pub(crate) const LIST_BACKFILL_MARKER_INDEXES: &str =
-    "SELECT DISTINCT index_id FROM @db_name.indexes_backfill_deletes WHERE deployment_id = ?";
+/// One primary-key seek per distinct index. `SELECT DISTINCT` reads every
+/// marker for the deployment whenever the optimizer skips the loose index
+/// scan, which exceeds `MYSQL_TIMEOUT` once markers number in the millions.
+pub(crate) const NEXT_BACKFILL_MARKER_INDEX: &str =
+    "SELECT index_id FROM @db_name.indexes_backfill_deletes WHERE deployment_id = ? AND index_id \
+     >= ? ORDER BY index_id LIMIT 1";
 
 pub(crate) const DELETE_BACKFILL_MARKERS_CHUNK: &str = "DELETE FROM \
                                                         @db_name.indexes_backfill_deletes WHERE \
