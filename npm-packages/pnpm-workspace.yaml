@@ -204,6 +204,9 @@ minimumReleaseAgeExclude:
   - toml@5.0.1
   # Renovate security update: happy-dom@21.0.4
   - happy-dom@21.0.4
+  # Virtualized tree behind the functions sidebar; 1.0.0 is the first stable
+  # release after the betas.
+  - "@pierre/trees@1.0.0"
 
 # Keep react and react-dom out of pnpm's hoisted fallback layer. The workspace
 # has both React 18 (the demos) and React 19 (the dashboards), and

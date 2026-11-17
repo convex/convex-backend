@@ -364,6 +364,8 @@ export type DeploymentInfo = (
   showFivetranSyncProgress: boolean;
   /** Shows the component switcher as a tree of nested components. */
   componentSwitcherTreeEnabled: boolean;
+  /** Renders the functions sidebar as a virtualized tree. */
+  virtualizedFunctionsSidebarEnabled: boolean;
   /** Shows the approximate cost of each usage limit. */
   estimateUsageLimitsCost: boolean;
   /** Opens the feedback sheet. Absent where there is nowhere to send it,

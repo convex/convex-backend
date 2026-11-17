@@ -23,4 +23,23 @@ const customJestConfig = {
 
 const config = createJestConfig(customJestConfig);
 
-export default config;
+// `next/jest` leaves everything under `node_modules` untranspiled, but
+// `@pierre/trees` (behind the virtualized functions sidebar) ships only ES
+// modules.
+const ES_MODULE_PACKAGES = ["@pierre", "preact", "preact-render-to-string"];
+
+export default async () => {
+  const resolved = await config();
+  return {
+    ...resolved,
+    resolver: "<rootDir>/jest.resolver.cjs",
+    transformIgnorePatterns: [
+      `/node_modules/(?!\\.pnpm)(?!(${ES_MODULE_PACKAGES.join("|")})/)`,
+      `/node_modules/\\.pnpm/(?!(${ES_MODULE_PACKAGES.map((p) => p.replace("/", "\\+")).join("|")})[+@])`,
+      // CSS modules, which `next/jest` maps to proxies instead.
+      ...(resolved.transformIgnorePatterns ?? []).filter(
+        (pattern) => !pattern.includes("node_modules"),
+      ),
+    ],
+  };
+};

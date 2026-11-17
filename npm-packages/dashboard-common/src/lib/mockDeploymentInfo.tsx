@@ -119,6 +119,7 @@ export const mockDeploymentInfo: DeploymentInfo = {
   connectionStateCheckIntervalMs: 2500,
   showFivetranSyncProgress: false,
   componentSwitcherTreeEnabled: false,
+  virtualizedFunctionsSidebarEnabled: false,
   estimateUsageLimitsCost: false,
   openFeedbackForm: () => {},
   captureEvent: () => {},

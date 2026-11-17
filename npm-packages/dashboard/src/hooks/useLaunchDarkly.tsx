@@ -15,6 +15,7 @@ export const flagDefaults: {
   supportTicketForAllPlans: boolean;
   healthDeployProgress: boolean;
   componentSwitcherTreeEnabled: boolean;
+  virtualizedFunctionsSidebar: boolean;
   preAuthorizeStarterPlan: boolean;
   preAuthorizePaymentMethodChange: boolean;
   tagEditUi: boolean;
@@ -35,6 +36,7 @@ export const flagDefaults: {
   supportTicketForAllPlans: false,
   healthDeployProgress: false,
   componentSwitcherTreeEnabled: false,
+  virtualizedFunctionsSidebar: false,
   preAuthorizeStarterPlan: false,
   preAuthorizePaymentMethodChange: false,
   tagEditUi: false,

@@ -346,6 +346,7 @@ const deploymentInfo: Omit<DeploymentInfo, "deploymentUrl" | "adminKey"> = {
   connectionStateCheckIntervalMs: 2500,
   showFivetranSyncProgress: false,
   componentSwitcherTreeEnabled: false,
+  virtualizedFunctionsSidebarEnabled: false,
   estimateUsageLimitsCost: false,
 };
 
