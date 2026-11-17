@@ -250,13 +250,17 @@ export async function downloadSnapshotExport(
   if (ctx.fs.exists(inputPath)) {
     const st = ctx.fs.stat(inputPath);
     if (st.isDirectory()) {
-      const contentDisposition =
-        response.headers.get("content-disposition") ?? "";
-      let filename = `snapshot_${args.snapshotExportTs.toString()}.zip`;
-      if (contentDisposition.startsWith("attachment; filename=")) {
-        filename = contentDisposition.slice("attachment; filename=".length);
+      if (typeof args.snapshotExportTs !== "bigint") {
+        return await ctx.crash({
+          exitCode: 1,
+          errorType: "fatal",
+          printedMessage: `Error: Deployment returned an invalid snapshot export timestamp: ${stringifyValueForError(args.snapshotExportTs)}`,
+        });
       }
-      filePath = path.join(inputPath, filename);
+      filePath = path.join(
+        inputPath,
+        `snapshot_${args.snapshotExportTs.toString()}.zip`,
+      );
     } else {
       // TODO(sarah) -- if this is called elsewhere, I'd like to catch the error + potentially
       // have different logging
