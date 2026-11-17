@@ -140,6 +140,8 @@ packages:
   - "tests/component-tests/projects/http_mount_routing"
   - "tests/component-tests/projects/http_no_prefix_mounting"
   - "tests/component-tests/projects/http_prefix_and_mount_routing"
+  - "tests/component-tests/projects/init"
+  - "tests/component-tests/projects/init_wrong_arg_type"
   - "tests/component-tests/projects/mounted"
   - "tests/component-tests/projects/schema_with_index"
   - "tests/component-tests/projects/with-schema"
