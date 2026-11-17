@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
-import { fn } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import { ProjectEnvVarConfig } from "@common/features/settings/lib/types";
 import { DefaultEnvironmentVariablesInner } from "./DefaultEnvironmentVariables";
 
@@ -98,5 +98,38 @@ export const DuplicateNamesNoConflict: Story = {
 export const NoAdminPermissions: Story = {
   args: {
     hasAdminPermissions: false,
+  },
+};
+
+// The deployment type checkboxes only render in edit mode.
+export const Editing: Story = {
+  args: {
+    environmentVariables: [
+      {
+        name: "ALL_ENVS_KEY",
+        value: "shared-secret",
+        deploymentTypes: ["dev", "preview", "prod"],
+      },
+      {
+        name: "DEV_ONLY_KEY",
+        value: "dev-secret",
+        deploymentTypes: ["dev"],
+      },
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    for (const button of canvas.getAllByRole("button", { name: "Edit" })) {
+      await userEvent.click(button);
+    }
+    const checkboxes = await canvas.findAllByRole("checkbox");
+    await expect(checkboxes.map((checkbox) => checkbox.ariaChecked)).toEqual([
+      "true",
+      "true",
+      "true",
+      "true",
+      "false",
+      "false",
+    ]);
   },
 };
