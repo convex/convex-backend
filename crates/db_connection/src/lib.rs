@@ -61,6 +61,7 @@ pub fn persistence_seed<RT: Runtime>(
     deployment_name: &str,
     deployment_id: Option<DeploymentId>,
     _runtime: RT,
+    require_leader: bool,
 ) -> anyhow::Result<PersistenceSeed<RT>> {
     match db {
         DbDriverTag::Sqlite => Ok(PersistenceSeed::Sqlite {
@@ -74,7 +75,7 @@ pub fn persistence_seed<RT: Runtime>(
                 db_spec.parse()?,
                 db,
                 flags.require_ssl,
-                true, /* require_leader */
+                require_leader,
             )?;
             match args {
                 PersistenceArgs::Postgres {
@@ -147,7 +148,15 @@ pub async fn connect_persistence<RT: Runtime>(
     runtime: RT,
     shutdown_signal: ShutdownSignal,
 ) -> anyhow::Result<Arc<dyn Persistence>> {
-    match persistence_seed(db, db_spec, flags, deployment_name, deployment_id, runtime)? {
+    match persistence_seed(
+        db,
+        db_spec,
+        flags,
+        deployment_name,
+        deployment_id,
+        runtime,
+        true, /* require_leader */
+    )? {
         PersistenceSeed::Sqlite { db_spec } => {
             let persistence = Arc::new(SqlitePersistence::new(&db_spec)?);
             tracing::info!("Connected to SQLite at {db_spec}");
@@ -185,6 +194,49 @@ pub async fn connect_persistence_reader<RT: Runtime>(
     deployment_id: Option<DeploymentId>,
     runtime: RT,
 ) -> anyhow::Result<Arc<dyn PersistenceReader>> {
+    connect_reader(
+        db,
+        db_spec,
+        require_ssl,
+        deployment_name,
+        deployment_id,
+        runtime,
+        true, /* require_leader */
+    )
+    .await
+}
+
+/// Like [`connect_persistence_reader`], but `db_spec` may point at a read
+/// replica (e.g. an Aurora reader endpoint).
+pub async fn connect_persistence_reader_allow_replica<RT: Runtime>(
+    db: DbDriverTag,
+    db_spec: &str,
+    require_ssl: bool,
+    deployment_name: &str,
+    deployment_id: Option<DeploymentId>,
+    runtime: RT,
+) -> anyhow::Result<Arc<dyn PersistenceReader>> {
+    connect_reader(
+        db,
+        db_spec,
+        require_ssl,
+        deployment_name,
+        deployment_id,
+        runtime,
+        false, /* require_leader */
+    )
+    .await
+}
+
+async fn connect_reader<RT: Runtime>(
+    db: DbDriverTag,
+    db_spec: &str,
+    require_ssl: bool,
+    deployment_name: &str,
+    deployment_id: Option<DeploymentId>,
+    runtime: RT,
+    require_leader: bool,
+) -> anyhow::Result<Arc<dyn PersistenceReader>> {
     match persistence_seed(
         db,
         db_spec,
@@ -196,6 +248,7 @@ pub async fn connect_persistence_reader<RT: Runtime>(
         deployment_name,
         deployment_id,
         runtime,
+        require_leader,
     )? {
         PersistenceSeed::Sqlite { db_spec } => {
             Ok(Arc::new(SqlitePersistence::new(&db_spec)?) as Arc<dyn PersistenceReader>)
@@ -241,7 +294,15 @@ pub async fn set_read_only<RT: Runtime>(
     runtime: RT,
     read_only: bool,
 ) -> anyhow::Result<()> {
-    match persistence_seed(db, db_spec, flags, instance_name, deployment_id, runtime)? {
+    match persistence_seed(
+        db,
+        db_spec,
+        flags,
+        instance_name,
+        deployment_id,
+        runtime,
+        true, /* require_leader */
+    )? {
         PersistenceSeed::Postgres { config, options } => {
             let pool = PostgresPersistence::create_pool(config)?;
             PostgresPersistence::set_read_only(pool, options, read_only).await?;
