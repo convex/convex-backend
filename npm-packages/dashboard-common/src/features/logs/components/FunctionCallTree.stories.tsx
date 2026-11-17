@@ -5,9 +5,6 @@ import { Sheet } from "@ui/Sheet";
 
 const meta: Meta<typeof FunctionCallTree> = {
   component: FunctionCallTree,
-  parameters: {
-    a11y: { test: "todo" },
-  },
   decorators: [
     (Story) => (
       <Sheet>

@@ -12,6 +12,8 @@ const meta = {
       <ReadonlyCode {...args} />
     </div>
   ),
+  // Monaco loads asynchronously, so whether axe sees the editor varies from
+  // run to run, and the loaded editor has violations of its own.
   parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof ReadonlyCode>;
 

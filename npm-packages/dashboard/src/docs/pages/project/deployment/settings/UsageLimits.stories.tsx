@@ -116,7 +116,6 @@ const meta = {
         },
       },
     },
-    a11y: { test: "todo" },
   },
   // The view loads limits over HTTP from the deployment API (there is no udf
   // to fake), so stub fetch for the deployment's URL and answer

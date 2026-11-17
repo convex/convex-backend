@@ -51,7 +51,6 @@ const meta = {
       </div>
     ),
   ],
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof DirectorySidebar>;
 
 export default meta;

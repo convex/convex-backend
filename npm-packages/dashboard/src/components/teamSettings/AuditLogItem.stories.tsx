@@ -29,7 +29,6 @@ const meta = {
     memberId: 1,
     members: [member],
   },
-  parameters: { a11y: { test: "todo" } },
   decorators: [
     (Story) => (
       <Sheet>

@@ -3,6 +3,8 @@ import { ReadonlyCodeDiff } from "@common/elements/ReadonlyCode";
 
 const meta = {
   component: ReadonlyCodeDiff,
+  // Monaco loads asynchronously, so whether axe sees the editor varies from
+  // run to run, and the loaded editor has violations of its own.
   parameters: { a11y: { test: "todo" } },
   args: {
     language: "javascript",

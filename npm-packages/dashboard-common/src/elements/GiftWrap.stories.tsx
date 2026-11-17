@@ -60,9 +60,6 @@ function Example({
 
 const meta = {
   component: Example,
-  parameters: {
-    a11y: { test: "todo" },
-  },
 } satisfies Meta<typeof Example>;
 
 export default meta;

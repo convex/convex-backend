@@ -28,7 +28,6 @@ const meta = {
     environmentVariables: mockEnvironmentVariables,
     onUpdate: fn(),
   },
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof DefaultEnvironmentVariablesInner>;
 
 export default meta;

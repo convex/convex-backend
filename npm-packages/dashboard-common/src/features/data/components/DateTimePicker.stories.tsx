@@ -10,9 +10,6 @@ const meta = {
     date: new Date("2024-10-07T14:35:32"),
     "aria-label": "Date and time",
   },
-  parameters: {
-    a11y: { test: "todo" },
-  },
   decorators: [
     (Story) => (
       <Sheet>
@@ -44,7 +41,6 @@ export const WithOnSave: Story = {
     onSave: fn(),
   },
   parameters: {
-    a11y: { test: "todo" },
     docs: {
       description: {
         story: "Press Enter after changing the date to trigger onSave callback",

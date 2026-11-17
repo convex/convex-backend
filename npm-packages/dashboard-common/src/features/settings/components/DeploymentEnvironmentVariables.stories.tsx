@@ -90,7 +90,6 @@ function renderStory({
 
 const meta = {
   component: DeploymentEnvironmentVariables,
-  parameters: { a11y: { test: "todo" } },
   render: (_args, { parameters }) => {
     const { deployment, isSelfHosted } = parameters as {
       deployment?: PlatformDeploymentResponse;

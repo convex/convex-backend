@@ -22,9 +22,6 @@ const meta = {
   component: Profile,
   parameters: {
     layout: "fullscreen",
-    a11y: {
-      test: "todo",
-    },
   },
   beforeEach: () => {
     mocked(useProfileEmails).mockReturnValue([

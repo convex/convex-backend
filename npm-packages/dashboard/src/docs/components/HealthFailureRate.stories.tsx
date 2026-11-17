@@ -41,9 +41,6 @@ const chartData: ChartData = {
 const meta = {
   component: FailureRateCard,
   args: { chartData },
-  parameters: {
-    a11y: { test: "todo" },
-  },
   render: (args) => (
     <ConvexProvider client={mockClient}>
       <DeploymentInfoContext.Provider value={mockDeploymentInfo}>
