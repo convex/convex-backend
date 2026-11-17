@@ -35,7 +35,12 @@ export function tagSentryWithDeployment(
     return;
   }
   Sentry.setTag("deployment_type", deploymentFields.deploymentType);
-  if (SENDS_DEPLOYMENT_NAME[deploymentFields.deploymentType]) {
-    Sentry.setTag("deployment", deploymentFields.deploymentName);
-  }
+  // Setting `undefined` removes a tag left by an earlier selection in the same
+  // process.
+  Sentry.setTag(
+    "deployment",
+    SENDS_DEPLOYMENT_NAME[deploymentFields.deploymentType]
+      ? deploymentFields.deploymentName
+      : undefined,
+  );
 }
