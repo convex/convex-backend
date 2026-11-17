@@ -84,10 +84,7 @@ export function GenerateSchema({
         )}
       </div>
       {displayedSchema && (
-        <div
-          className="relative block rounded-sm border p-4 text-sm wrap-break-word whitespace-pre-wrap"
-          aria-hidden="true"
-        >
+        <div className="relative block rounded-sm border p-4 text-sm wrap-break-word whitespace-pre-wrap">
           <ReadonlyCode
             path="generateSchema"
             highlightLines={
