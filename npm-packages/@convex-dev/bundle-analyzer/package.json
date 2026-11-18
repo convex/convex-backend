@@ -1,6 +1,6 @@
 {
   "name": "@convex-dev/bundle-analyzer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Analyze your Convex project to identify ways to optimize your bundle size.",
   "license": "Apache-2.0",
   "type": "module",
