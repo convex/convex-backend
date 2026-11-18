@@ -6,6 +6,11 @@
   "engines": {
     "node": ">=22.0.0 <27.0.0"
   },
+  "scripts": {
+    "eslint": "just eslint . --config lint/eslint.config.mjs --max-warnings=0 --cache --cache-strategy content",
+    "dprint": "cd .. && just _dprint check",
+    "check-versions": "node check-versions.mjs"
+  },
   "devDependencies": {
     "turbo": "2.10.5"
   }

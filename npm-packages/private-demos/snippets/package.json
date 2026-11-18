@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "scripts": {
     "build": "tsc -p convex/tsconfig.json --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "lint:ci": "npm run lint -- --max-warnings=0"
   },
   "dependencies": {
     "convex": "workspace:*",

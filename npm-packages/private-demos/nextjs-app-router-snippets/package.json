@@ -6,7 +6,8 @@
     "dev": "convex dev --start 'next dev'",
     "build": "tsc && next build 2>&1",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "lint:ci": "npm run lint -- --max-warnings=0"
   },
   "dependencies": {
     "react": "^18.0.0",

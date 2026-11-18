@@ -20,6 +20,7 @@ export const flagDefaults: {
   tagEditUi: boolean;
   estimateUsageLimitsCost: boolean;
   dailyUsageSummaries: boolean;
+  showLegacyKeyUsage: boolean;
 } = {
   allowDefaultEnvRollout: false,
   commandPaletteDeleteProjects: false,
@@ -39,6 +40,7 @@ export const flagDefaults: {
   tagEditUi: false,
   estimateUsageLimitsCost: false,
   dailyUsageSummaries: false,
+  showLegacyKeyUsage: false,
 };
 
 export const flagDefaultsKebabCase = Object.entries(flagDefaults).reduce(

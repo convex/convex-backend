@@ -37,6 +37,8 @@ pub struct BackendInfo {
     pub send_logs_to_client: Option<bool>,
     pub custom_audit_logs_in_log_streams_config_enabled: Option<bool>,
     pub ai_gateway_disabled: Option<bool>,
+    pub periodic_backups_enabled: Option<bool>,
+    pub max_cloud_backups: Option<u64>,
 }
 
 impl BackendInfo {
@@ -59,6 +61,8 @@ impl BackendInfo {
             send_logs_to_client,
             custom_audit_logs_in_log_streams_config_enabled,
             ai_gateway_disabled,
+            periodic_backups_enabled,
+            max_cloud_backups,
         } = other;
         if self.team_id != *team_id {
             return Some("backend_info.team_id");
@@ -103,6 +107,9 @@ impl BackendInfo {
         let _ = custom_audit_logs_in_log_streams_config_enabled;
         // TODO(andy): enable once all conductors have this field.
         let _ = ai_gateway_disabled;
+        // TODO(nipunn): enable once all conductors have these fields.
+        let _ = periodic_backups_enabled;
+        let _ = max_cloud_backups;
         None
     }
 }

@@ -6,6 +6,8 @@ pub enum LegacyAdminKeyVerdict {
     Accepted(Identity),
     /// The deployment's team opted out of legacy admin keys.
     DisabledForTeam,
+    /// Legacy admin keys are no longer available to the deployment's team.
+    Obsolete,
     CheckLocally,
 }
 

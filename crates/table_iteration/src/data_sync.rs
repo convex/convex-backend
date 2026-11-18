@@ -273,10 +273,6 @@ pub struct ProgressStatus {
     /// Documents emitted so far from the current table's `by_id` traversal,
     /// across all pages of this sync.
     pub num_documents_in_current_table: u64,
-    /// Documents (including tombstones and re-emitted revisions) emitted over
-    /// the sync's lifetime, so this can exceed the number of documents in the
-    /// target tables.
-    pub num_documents_synced: u64,
 }
 
 /// The consistency state reported alongside a page.
@@ -863,7 +859,6 @@ fn status(cursor: &DataSyncCursor, latest: Timestamp, total_tables: u64) -> Data
                 total_tables,
                 current_table: *current_table,
                 num_documents_in_current_table: cursor.current_table_docs_synced,
-                num_documents_synced: cursor.num_docs_synced,
             },
         },
     }

@@ -67,7 +67,7 @@
           "Environment Variables"
         ],
         "summary": "List environment variables",
-        "description": "Get all environment variables in a deployment.\nIn the future this might not include \"secret\" environment\nvariables.",
+        "description": "Get the environment variables in a deployment that aren't secrets.",
         "operationId": "list_environment_variables",
         "responses": {
           "200": {
@@ -1347,7 +1347,7 @@
           "numDocumentsSynced": {
             "type": "integer",
             "format": "int64",
-            "description": "Documents synced over the sync's lifetime, including deletions and\nre-synced revisions of documents that changed mid-sync — so this can\nslightly exceed `totalDocuments`.",
+            "description": "Documents in the selected tables traversed so far, counted as of the\nsame snapshot as `totalDocuments`.",
             "minimum": 0
           },
           "totalDocuments": {
@@ -2722,6 +2722,7 @@
         "properties": {
           "environmentVariables": {
             "type": "object",
+            "description": "The value of every environment variable that isn't a secret, by\nname.",
             "additionalProperties": {
               "type": "string"
             },

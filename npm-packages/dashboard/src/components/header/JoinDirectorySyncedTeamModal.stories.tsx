@@ -27,9 +27,6 @@ const meta = {
   component: JoinDirectorySyncedTeamModal,
   parameters: {
     layout: "fullscreen",
-    // A focus-trapping dialog over an otherwise empty canvas, which trips the
-    // automated a11y checks meant for full pages.
-    a11y: { test: "todo" },
   },
   beforeEach: () => {
     mocked(useProfile).mockReturnValue({

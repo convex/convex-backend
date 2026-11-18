@@ -103,7 +103,7 @@ export function DeploymentReference({
 
   return (
     <Sheet id={DEPLOYMENT_SETTINGS_SECTIONS.deploymentReference.id}>
-      <h4 className="mb-2">Deployment Reference</h4>
+      <h3 className="mb-2">Deployment Reference</h3>
       <p className="mb-4 text-xs text-content-secondary">
         You can use the reference to target this deployment from the CLI (e.g.{" "}
         <code>--deployment&nbsp;{value ?? "<reference>"}</code>).

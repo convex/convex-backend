@@ -5,9 +5,6 @@ const meta = {
   component: TeamInvoicesPage,
   parameters: {
     layout: "fullscreen",
-    a11y: {
-      test: "todo",
-    },
   },
 } satisfies Meta<typeof TeamInvoicesPage>;
 

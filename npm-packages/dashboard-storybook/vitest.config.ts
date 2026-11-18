@@ -37,26 +37,46 @@ export default defineConfig({
     ],
   },
   test: {
+    // Every story runs once per theme, so the a11y checks (color contrast in
+    // particular) cover both palettes.
+    //
+    // The test panel in the Storybook UI sets VITEST_STORYBOOK, which makes
+    // addon-vitest rename every storybookTest() project to
+    // `storybook:<configDir>` and run only that name. Both projects share
+    // `.storybook`, so the panel only gets the light one; `test-storybook`
+    // (and CI) never set the variable and run both themes.
     projects: [
-      {
-        extends: true,
-        plugins: [
-          storybookTest({
-            configDir: path.join(dirname, ".storybook"),
-            storybookScript: "npm run storybook -- --no-open",
-          }),
-        ],
-        test: {
-          name: "storybook",
-          browser: {
-            enabled: true,
-            provider: playwright(),
-            headless: true,
-            instances: [{ browser: "chromium" }],
-          },
-          setupFiles: ["./.storybook/vitest.setup.ts"],
-        },
-      },
+      storybookProject("storybook", "./.storybook/vitest.setup.ts"),
+      ...(process.env.VITEST_STORYBOOK === "true"
+        ? []
+        : [
+            storybookProject(
+              "storybook-dark",
+              "./.storybook/vitest.setup.dark.ts",
+            ),
+          ]),
     ],
   },
 });
+
+function storybookProject(name: string, setupFile: string) {
+  return {
+    extends: true,
+    plugins: [
+      storybookTest({
+        configDir: path.join(dirname, ".storybook"),
+        storybookScript: "npm run storybook -- --no-open",
+      }),
+    ],
+    test: {
+      name,
+      browser: {
+        enabled: true,
+        provider: playwright(),
+        headless: true,
+        instances: [{ browser: "chromium" as const }],
+      },
+      setupFiles: [setupFile],
+    },
+  };
+}

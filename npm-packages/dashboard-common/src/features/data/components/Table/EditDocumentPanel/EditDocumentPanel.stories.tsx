@@ -31,7 +31,6 @@ const meta = {
       </DeploymentInfoContext.Provider>
     </ConvexProvider>
   ),
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof EditDocumentPanel>;
 
 export default meta;

@@ -29,6 +29,7 @@
     "@types/node": "^22.0.0",
     "@types/progress": "~2.0.7",
     "@types/semver": "^7.3.13",
+    "convex": "workspace:*",
     "typescript": "^5.9.2",
     "vitest": "^4.1.0",
     "zshy": "0.7.0"

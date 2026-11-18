@@ -178,9 +178,6 @@ const meta = {
   component: BackupDeploymentSelector,
   parameters: {
     layout: "fullscreen",
-    // The anchored menu is a focus-trapping Radix dialog over an otherwise
-    // empty canvas, which trips the automated a11y checks meant for full pages.
-    a11y: { test: "todo" },
     nextjs: {
       router: {
         pathname: "/t/[team]/[project]/[deploymentName]/settings/backups",

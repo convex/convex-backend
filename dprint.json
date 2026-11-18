@@ -51,6 +51,8 @@
     "npm-packages/convex/api-extractor-configs/temp",
     // openapi
     "npm-packages/convex/src/cli/generatedApi.ts",
+    // Snapshot written by `schema.test.ts`, which compares it byte for byte
+    "npm-packages/system-udfs/systemSchema.json",
     // Autoformatted by codegen, but with different prettier settings
     "npm-packages/**/convex/README.md",
     "npm-packages/**/convex/_generated/*",

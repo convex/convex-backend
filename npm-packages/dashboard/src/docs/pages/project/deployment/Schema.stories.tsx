@@ -231,7 +231,6 @@ const meta = {
         },
       },
     },
-    a11y: { test: "todo" },
   },
   beforeEach: () => {
     const originalDateNow = Date.now;

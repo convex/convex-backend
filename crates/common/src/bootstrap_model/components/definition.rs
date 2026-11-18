@@ -213,6 +213,12 @@ pub enum SerializedEnvBinding {
 struct SerializedComponentInstantiation {
     name: String,
     path: String,
+    /// Always serialized as `null`: CLIs up to 1.38 validate this field as
+    /// `z.nullable(...)` in the push analysis response and reject it when the
+    /// key is absent.
+    #[serde(default)]
+    #[deprecated]
+    args: Option<Vec<(String, JsonValue)>>,
     #[serde(default)]
     env: Vec<(String, SerializedEnvBinding)>,
 }
@@ -334,6 +340,8 @@ impl TryFrom<ComponentInstantiation> for SerializedComponentInstantiation {
         Ok(Self {
             name: String::from(i.name),
             path: String::from(i.path),
+            #[allow(deprecated)]
+            args: None,
             env: i
                 .env
                 .into_iter()

@@ -144,6 +144,8 @@ pub enum LegacyAdminKeyOutcome {
     Accepted,
     /// The deployment's team opted out of legacy admin keys.
     DisabledForTeam,
+    /// Legacy admin keys are no longer available to the deployment's team.
+    Obsolete,
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]

@@ -69,7 +69,7 @@ export const deploymentCreate = new Command("create")
   .option("--region <region>", "Deployment region")
   .option(
     "--class <class>",
-    "Deployment class (e.g. `s16`, `s256`, `d1024`). Defaults to your team's default class.",
+    "Deployment class (e.g. `s16` or `s256`). Defaults to the team's default class.",
   )
   .option(
     "--select",

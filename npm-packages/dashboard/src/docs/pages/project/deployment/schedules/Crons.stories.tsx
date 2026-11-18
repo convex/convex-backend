@@ -233,9 +233,11 @@ const meta = {
     a11y: { test: "todo" },
   },
   beforeEach: () => {
-    // Polyfill Buffer
-    (window as any).Buffer = {
-      from: (input: ArrayBuffer | ArrayBufferView | string) => {
+    // Polyfill Buffer. It must be a class: Vitest checks `instanceof Buffer`
+    // when it serializes a test failure, which throws on a plain object.
+    const originalBuffer = (window as any).Buffer;
+    (window as any).Buffer = class {
+      static from(input: ArrayBuffer | ArrayBufferView | string) {
         const bytes =
           typeof input === "string"
             ? new TextEncoder().encode(input)
@@ -247,7 +249,7 @@ const meta = {
                   input.byteLength,
                 );
         return { toString: () => new TextDecoder("utf-8").decode(bytes) };
-      },
+      }
     };
 
     const originalDateNow = Date.now;
@@ -255,6 +257,7 @@ const meta = {
 
     return () => {
       Date.now = originalDateNow;
+      (window as any).Buffer = originalBuffer;
     };
   },
   render: () => (

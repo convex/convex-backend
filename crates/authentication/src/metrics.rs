@@ -122,6 +122,7 @@ pub fn log_deploy_key_use(key_type: DeployKeyType) {
 pub enum LegacyAdminKeyCheckOutcome {
     Accepted,
     DisabledForTeam,
+    Obsolete,
     CheckedLocally,
 }
 

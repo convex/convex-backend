@@ -36,9 +36,7 @@ export interface paths {
         };
         /**
          * List environment variables
-         * @description Get all environment variables in a deployment.
-         *     In the future this might not include "secret" environment
-         *     variables.
+         * @description Get the environment variables in a deployment that aren't secrets.
          */
         get: operations["list_environment_variables"];
         put?: never;
@@ -645,9 +643,8 @@ export interface components {
             totalDocumentsInCurrentTable: number;
             /**
              * Format: int64
-             * @description Documents synced over the sync's lifetime, including deletions and
-             *     re-synced revisions of documents that changed mid-sync — so this can
-             *     slightly exceed `totalDocuments`.
+             * @description Documents in the selected tables traversed so far, counted as of the
+             *     same snapshot as `totalDocuments`.
              */
             numDocumentsSynced: number;
             /**
@@ -1104,6 +1101,8 @@ export interface components {
             pagination: components["schemas"]["PaginationMetadata"];
         };
         ListEnvVarsResponse: {
+            /** @description The value of every environment variable that isn't a secret, by
+             *     name. */
             environmentVariables: {
                 [key: string]: string;
             };

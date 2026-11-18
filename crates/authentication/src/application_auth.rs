@@ -4,6 +4,7 @@ use common::runtime::Runtime;
 use errors::ErrorMetadata;
 use keybroker::{
     legacy_admin_key_disabled_error,
+    legacy_admin_key_obsolete_error,
     AdminIdentityPrincipal,
     Identity,
     KeyBroker,
@@ -85,6 +86,10 @@ impl<RT: Runtime> ApplicationAuth<RT> {
                     LegacyAdminKeyVerdict::DisabledForTeam => {
                         log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::DisabledForTeam);
                         Err(anyhow::anyhow!(legacy_admin_key_disabled_error()))
+                    },
+                    LegacyAdminKeyVerdict::Obsolete => {
+                        log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::Obsolete);
+                        Err(anyhow::anyhow!(legacy_admin_key_obsolete_error()))
                     },
                     LegacyAdminKeyVerdict::CheckLocally => {
                         log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::CheckedLocally);

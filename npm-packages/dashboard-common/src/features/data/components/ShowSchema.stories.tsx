@@ -25,7 +25,6 @@ const meta = {
       ],
     ]),
   },
-  parameters: { a11y: { test: "todo" } },
   decorators: [
     (Story) => (
       <Sheet>

@@ -137,14 +137,14 @@ pub async fn update_environment_variables(
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ListEnvVarsResponse {
+    /// The value of every environment variable that isn't a secret, by
+    /// name.
     environment_variables: std::collections::BTreeMap<String, String>,
 }
 
 /// List environment variables
 ///
-/// Get all environment variables in a deployment.
-/// In the future this might not include "secret" environment
-/// variables.
+/// Get the environment variables in a deployment that aren't secrets.
 #[utoipa::path(
     get,
     path = "/list_environment_variables",
@@ -166,7 +166,9 @@ pub async fn list_environment_variables(
     identity.require_operation(keybroker::DeploymentOp::ViewEnvironmentVariables)?;
 
     let mut tx = st.application.begin(identity).await?;
-    let env_vars = EnvironmentVariablesModel::new(&mut tx).get_all().await?;
+    let env_vars = EnvironmentVariablesModel::new(&mut tx)
+        .get_all_non_secret()
+        .await?;
 
     let environment_variables = env_vars
         .into_iter()

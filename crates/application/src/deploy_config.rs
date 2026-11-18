@@ -132,6 +132,7 @@ use model::{
     source_packages::{
         types::{
             check_node_default_memory_mb_for_push,
+            check_node_default_memory_mb_supported,
             NodeVersion,
             NodeVersionDiff,
             SourcePackage,
@@ -199,6 +200,12 @@ struct EvaluatedPushContents {
 impl<RT: Runtime> Application<RT> {
     #[fastrace::trace]
     pub async fn start_push(&self, config: &ProjectConfig) -> anyhow::Result<StartPushResult> {
+        if let Some(memory_mb) = config.node_default_memory_mb {
+            check_node_default_memory_mb_supported(
+                memory_mb,
+                self.runner().supported_node_memory_mb(),
+            )?;
+        }
         let EvaluatedPushContents {
             app,
             auth_info,

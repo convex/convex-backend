@@ -599,8 +599,8 @@ Schema:
 - `topic`: `"s3_export_stats"`
 - `timestamp`: Unix epoch timestamp in milliseconds
 - `status`: string, one of:
-  - `"snapshotting"`: the export is copying the existing documents of one or
-    more tables. This happens when the export starts and after you add a table.
+  - `"snapshotting"`: the first sync is running, copying the existing documents
+    of each table. This also happens after you add a table.
   - `"catching_up"`: the export is behind your deployment's latest writes and is
     working through them.
   - `"up_to_date"`: S3 has every change to the tables in the export.
@@ -608,8 +608,8 @@ Schema:
 - `lag_seconds`: number or `null`, how far the data in S3 is behind your
   deployment's most recent write, in seconds. It grows while the export is
   failing and your deployment keeps getting writes, and stays flat if nothing
-  new is written. It's `null` while the status is `"snapshotting"` and before
-  the first snapshot finishes.
+  new is written. It's `null` until the first sync finishes, and while a newly
+  added table is being copied.
 - `last_error`: string or `null`, why the export is failing. It's `null` unless
   the status is `"failed"`.
 

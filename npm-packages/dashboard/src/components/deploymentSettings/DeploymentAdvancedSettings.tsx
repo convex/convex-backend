@@ -364,7 +364,7 @@ function TriStateSettingSheet({
 
   return (
     <Sheet id={id}>
-      <h4 className="mb-2">{title}</h4>
+      <h3 className="mb-2">{title}</h3>
       <p className="mb-4 text-xs text-content-secondary">{description}</p>
       <div className="flex flex-col gap-3">
         <Tooltip
@@ -483,7 +483,7 @@ export function DeploymentExpirySheet({
 
   return (
     <Sheet id={DEPLOYMENT_SETTINGS_SECTIONS.deploymentExpiry.id}>
-      <h4 className="mb-2">Deployment Expiry</h4>
+      <h3 className="mb-2">Deployment Expiry</h3>
       <p className="mb-4 text-xs text-content-secondary">
         Set a time at which this deployment will be automatically deleted.
       </p>
