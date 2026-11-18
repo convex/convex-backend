@@ -7,9 +7,6 @@
   memory. The default stays at 512 MiB. Node actions bill action compute at the
   memory size you set. See
   [Configuring Node.js action memory](https://docs.convex.dev/config/convex.json#configuring-nodejs-action-memory).
-- The bundle analyzer now suggests the dependency in your `package.json` that
-  pulls a large package into a Node bundle, when that package is a transitive
-  dependency that `node.externalPackages` can't externalize directly.
 - `npx convex ai-files install` and `npx convex ai-files update` now remove
   Convex agent skills that were deleted upstream.
 - `npx convex deployment create --help` now documents the `--class` option.
