@@ -1,4 +1,6 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { Context } from "../../../bundler/context.js";
+import { logVerbose } from "../../../bundler/log.js";
 import {
   dashboardOutDir,
   loadProjectDashboardConfig,
@@ -16,6 +18,7 @@ import {
 import { bigBrainAPIMaybeThrows } from "../utils/utils.js";
 
 export const DEFAULT_LOCAL_DASHBOARD_PORT = 6790;
+const MAX_DASHBOARD_PORT_ATTEMPTS = 10;
 
 /**
  * This runs the `dashboard-self-hosted` app locally.
@@ -41,22 +44,13 @@ export async function handleDashboard(
   );
   const anonymousId = loadUuidForAnonymousUser(ctx) ?? undefined;
   await ensureDashboardDownloaded(ctx, version);
-  const [dashboardPort] = await choosePorts(ctx, {
-    count: 1,
-    startPort: DEFAULT_LOCAL_DASHBOARD_PORT,
-    requestedPorts: [null, null],
-  });
-  saveProjectDashboardConfig(ctx, deployment.name, {
-    port: dashboardPort,
-  });
 
   let hasReportedSelfHostedEvent = false;
 
   const serverOptions = { cors: false } as const;
-  const { cleanupHandle } = await startServer(
-    ctx,
-    dashboardPort,
-    async (request, response) => {
+  const serveDashboard =
+    (dashboardPort: number) =>
+    async (request: IncomingMessage, response: ServerResponse) => {
       if (!isLoopbackHost(request.headers.host, dashboardPort)) {
         response.statusCode = 403;
         response.end();
@@ -93,13 +87,44 @@ export async function handleDashboard(
       await serveHandler(request, response, {
         public: dashboardOutDir(),
       });
-    },
-    serverOptions,
-  );
-  return {
-    dashboardPort,
-    cleanupHandle,
-  };
+    };
+
+  let startPort = DEFAULT_LOCAL_DASHBOARD_PORT;
+  for (let attempt = 1; ; attempt++) {
+    const [dashboardPort] = await choosePorts(ctx, {
+      count: 1,
+      startPort,
+      requestedPorts: [null, null],
+    });
+    let cleanupHandle: string;
+    try {
+      ({ cleanupHandle } = await startServer(
+        ctx,
+        dashboardPort,
+        serveDashboard(dashboardPort),
+        serverOptions,
+      ));
+    } catch (error: any) {
+      // Another process can take the port between `choosePorts` and `listen`.
+      if (
+        error?.code === "EADDRINUSE" &&
+        attempt < MAX_DASHBOARD_PORT_ATTEMPTS
+      ) {
+        logVerbose(`Dashboard port ${dashboardPort} was taken, trying another`);
+        startPort = dashboardPort + 1;
+        continue;
+      }
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        errForSentry: error,
+        printedMessage: `Couldn't start the local dashboard on port ${dashboardPort}: ${error?.message ?? error}`,
+      });
+    }
+    // Saved only once the server listens, so it never names an unserved port.
+    saveProjectDashboardConfig(ctx, deployment.name, { port: dashboardPort });
+    return { dashboardPort, cleanupHandle };
+  }
 }
 
 /**

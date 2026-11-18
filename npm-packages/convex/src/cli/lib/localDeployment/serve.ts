@@ -59,15 +59,24 @@ export const startServer = async (
     await server.close();
   });
 
-  // Listen for any error that occurs while serving, and throw an error
-  // if any errors are received.
+  // Log any error that occurs while serving.
   server.on("error", (error) => {
     logVerbose(`Failed to serve: ${error.stack?.toString() ?? error.message}`);
   });
 
-  // Finally, start the server -- this promise resolves once the server has started.
-  await new Promise((resolve, _reject) => {
-    server.listen(port, `127.0.0.1`, () => resolve(`http://127.0.0.1:${port}`));
+  // Finally, start the server -- this promise resolves once the server has
+  // started, and rejects if it can't listen (e.g. the port was taken after it
+  // was chosen, which emits EADDRINUSE).
+  await new Promise<void>((resolve, reject) => {
+    const onListenError = (error: Error) => {
+      ctx.removeCleanup(cleanupHandle);
+      reject(error);
+    };
+    server.once("error", onListenError);
+    server.listen(port, `127.0.0.1`, () => {
+      server.off("error", onListenError);
+      resolve();
+    });
   });
   return { cleanupHandle };
 };

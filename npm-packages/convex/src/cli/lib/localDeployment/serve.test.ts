@@ -62,9 +62,14 @@ test("startServer resolves on a free port and serves requests", async () => {
   const { ctx, cleanups } = makeContext();
 
   const { cleanupHandle } = await settleWithin(
-    startServer(ctx, port, async (_request, response) => {
-      response.end("ok");
-    }, {}),
+    startServer(
+      ctx,
+      port,
+      async (_request, response) => {
+        response.end("ok");
+      },
+      {},
+    ),
   );
   const body = await new Promise<string>((resolve, reject) => {
     http
