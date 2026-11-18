@@ -14,13 +14,16 @@ export function useTeamInvites(teamId: number) {
   return data?.items;
 }
 
-export function useCreateInvite(teamId: number) {
+export function useCreateInvite(
+  teamId: number,
+  { toastOnSuccess = true }: { toastOnSuccess?: boolean } = {},
+) {
   return useManagementApiMutation({
     path: "/teams/{team_id}/invite_team_member",
     pathParams: { team_id: teamId.toString() },
     mutateKey: "/teams/{team_id}/list_pending_invites",
     mutatePathParams: { team_id: teamId.toString() },
-    successToast: "Invitation sent.",
+    successToast: toastOnSuccess ? "Invitation sent." : undefined,
   });
 }
 

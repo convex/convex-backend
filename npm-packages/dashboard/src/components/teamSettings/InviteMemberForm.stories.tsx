@@ -1,6 +1,9 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
 
+import { mocked } from "storybook/test";
 import { TeamMember } from "@convex-dev/platform/managementApi";
+import { useHasCustomRolePermission, useListCustomRoles } from "api/roles";
+import { useTeamEntitlements } from "api/teams";
 import { InviteMemberForm } from "./InviteMemberForm";
 
 const meta = { component: InviteMemberForm } satisfies Meta<
@@ -38,6 +41,47 @@ export const Primary: Story = {
       referredBy: null,
     },
     members,
+    invites: [],
     canInvite: true,
+  },
+};
+
+export const WithCustomRoles: Story = {
+  args: Primary.args,
+  beforeEach: () => {
+    mocked(useHasCustomRolePermission).mockReturnValue(true);
+    mocked(useTeamEntitlements).mockReturnValue({
+      customRolesEnabled: true,
+      maxTeamMembers: 100,
+    } as ReturnType<typeof useTeamEntitlements>);
+    mocked(useListCustomRoles).mockReturnValue({
+      data: {
+        items: ["Auditor", "Billing Admin", "Support Engineer"].map(
+          (name, i) => ({
+            id: i + 1,
+            teamId: 1,
+            name,
+            statements: [],
+            createTime: 0,
+          }),
+        ),
+        pagination: { hasMore: false, nextCursor: null },
+      },
+    } as unknown as ReturnType<typeof useListCustomRoles>);
+  },
+};
+
+export const OneSeatLeft: Story = {
+  args: {
+    ...Primary.args,
+    invites: [
+      { email: "pending@example.org", role: "developer", expired: false },
+    ],
+  },
+  beforeEach: () => {
+    mocked(useTeamEntitlements).mockReturnValue({
+      customRolesEnabled: false,
+      maxTeamMembers: 4,
+    } as ReturnType<typeof useTeamEntitlements>);
   },
 };
