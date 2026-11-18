@@ -236,7 +236,7 @@ impl PackageSize {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "ModulesTooLarge",
                 format!(
-                    "Total module size exceeded the unzipped maximum ({} > maximum size {})",
+                    "Total module size exceeded the maximum ({} > maximum size {})",
                     self.unzipped_size_bytes.format_size(BINARY),
                     MAX_UNZIPPED_PACKAGES_SIZE.format_size(BINARY)
                 ),
