@@ -26,6 +26,12 @@ const ENTRY_POINTS_TO_DOCUMENT = [
 const config: Config = {
   future: {
     v4: true,
+    faster: {
+      // No page shows last-update info, so nothing needs the eager read of the
+      // whole repo's git history, which stalls in blobless clones (Netlify's
+      // cold-cache builds) while rename detection lazily fetches blobs.
+      gitEagerVcs: false,
+    },
   },
   title: "Convex Developer Hub",
   tagline: "The source for documentation about Convex.",
