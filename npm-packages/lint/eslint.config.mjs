@@ -381,6 +381,25 @@ const config = [
           controlComponents: ["Checkbox"],
         },
       ],
+      // Our Button is a control too, and a string `tip` names it when it has
+      // no text. Form fields are covered by label-has-associated-control.
+      "jsx-a11y/control-has-associated-label": [
+        "error",
+        {
+          controlComponents: ["Button"],
+          labelAttributes: ["tip", "title"],
+          ignoreElements: [
+            "input",
+            "textarea",
+            "select",
+            "td",
+            "th",
+            "tr",
+            "canvas",
+          ],
+          depth: 4,
+        },
+      ],
       "react/forbid-elements": [
         1,
         {

@@ -104,6 +104,7 @@ export function EmptyDataContent({
                   <Button size="sm" variant="neutral" icon={<PlusIcon />}>
                     Add
                   </Button>
+                  {/* eslint-disable-next-line jsx-a11y/control-has-associated-label -- part of an inert, decorative preview that screen readers never reach */}
                   <Button
                     size="sm"
                     variant="neutral"
