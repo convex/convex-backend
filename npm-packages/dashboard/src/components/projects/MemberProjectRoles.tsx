@@ -17,6 +17,7 @@ import { useState } from "react";
 import sortBy from "lodash/sortBy";
 import { MEMBER_RESOURCE, projectResource } from "lib/permissions";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
+import { ListTable, ListTableHeaderDetail } from "elements/ListTable";
 import { ProjectAdminFormModal } from "./ProjectAdminsFormModal";
 
 export function MemberProjectRoles() {
@@ -111,65 +112,77 @@ export function MemberProjectRoles() {
       </p>
       <LoadingTransition>
         {membersWithProjectAccess && (
-          <div className="flex w-full flex-col">
-            {sortBy(membersWithProjectAccess, (member) =>
-              (member.name || member.email).toLocaleLowerCase(),
-            ).map((member, idx) => (
-              <div
-                className="flex items-center justify-between border-b py-2 last:border-b-0"
-                key={idx}
-              >
-                <div className="flex flex-col truncate">
-                  {member.name && (
-                    <div className="text-sm text-content-primary">
-                      {member.name}
+          <ListTable
+            className="mt-2"
+            header={
+              <>
+                Member
+                <ListTableHeaderDetail>
+                  {membersWithProjectAccess.length} with admin access
+                </ListTableHeaderDetail>
+              </>
+            }
+          >
+            <div className="divide-y">
+              {sortBy(membersWithProjectAccess, (member) =>
+                (member.name || member.email).toLocaleLowerCase(),
+              ).map((member) => (
+                <div
+                  className="flex items-center justify-between gap-4 px-4 py-3"
+                  key={member.id}
+                >
+                  <div className="flex flex-col truncate">
+                    {member.name && (
+                      <div className="text-sm text-content-primary">
+                        {member.name}
+                      </div>
+                    )}
+                    <div
+                      className={`truncate ${
+                        member.name
+                          ? "text-xs text-content-secondary"
+                          : "text-sm text-content-primary"
+                      }`}
+                    >
+                      {member.email}
                     </div>
-                  )}
-                  <div
-                    className={`truncate ${
-                      member.name
-                        ? "text-xs text-content-secondary"
-                        : "text-sm text-content-primary"
-                    }`}
-                  >
-                    {member.email}
+                  </div>
+                  <div className="flex gap-1">
+                    {member.role === "admin" && (
+                      <Tooltip
+                        tip={
+                          <div className="flex flex-col">
+                            <p>
+                              This member can manage all projects in the team
+                              because they are a team admin.
+                            </p>{" "}
+                            <p>
+                              You may view and manage team admins on the{" "}
+                              <Link href={`/t/${team?.slug}/settings/members`}>
+                                member settings
+                              </Link>{" "}
+                              page.
+                            </p>
+                          </div>
+                        }
+                      >
+                        <div className="rounded-sm border p-1 text-xs">
+                          Team Admin
+                        </div>
+                      </Tooltip>
+                    )}
+                    {member.isProjectAdmin && (
+                      <Tooltip tip="This member can manage this project because they are a project admin.">
+                        <div className="rounded-sm border p-1 text-xs">
+                          Project Admin
+                        </div>
+                      </Tooltip>
+                    )}
                   </div>
                 </div>
-                <div className="flex gap-1">
-                  {member.role === "admin" && (
-                    <Tooltip
-                      tip={
-                        <div className="flex flex-col">
-                          <p>
-                            This member can manage all projects in the team
-                            because they are a team admin.
-                          </p>{" "}
-                          <p>
-                            You may view and manage team admins on the{" "}
-                            <Link href={`/t/${team?.slug}/settings/members`}>
-                              member settings
-                            </Link>{" "}
-                            page.
-                          </p>
-                        </div>
-                      }
-                    >
-                      <div className="rounded-sm border p-1 text-xs">
-                        Team Admin
-                      </div>
-                    </Tooltip>
-                  )}
-                  {member.isProjectAdmin && (
-                    <Tooltip tip="This member can manage this project because they are a project admin.">
-                      <div className="rounded-sm border p-1 text-xs">
-                        Project Admin
-                      </div>
-                    </Tooltip>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </ListTable>
         )}
       </LoadingTransition>
       {limitedToOwnRole && (

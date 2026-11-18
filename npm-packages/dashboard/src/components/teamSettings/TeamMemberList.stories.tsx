@@ -1,4 +1,7 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
+import { mocked } from "storybook/test";
+import { useProfile } from "api/profile";
+import { useProjectRoles } from "api/roles";
 import { TeamResponse } from "generatedApi";
 import {
   InvitationResponse,
@@ -9,6 +12,18 @@ import { TeamMemberList } from "./TeamMemberList";
 
 const meta = {
   component: TeamMemberList,
+  beforeEach: () => {
+    // The member list renders once the viewer's profile and project roles load.
+    mocked(useProfile).mockReturnValue({
+      id: 1,
+      email: "user1@example.org",
+      name: "User 1",
+    } as ReturnType<typeof useProfile>);
+    mocked(useProjectRoles).mockReturnValue({
+      isLoading: false,
+      projectRoles: [],
+    });
+  },
 } satisfies Meta<typeof TeamMemberList>;
 
 export default meta;

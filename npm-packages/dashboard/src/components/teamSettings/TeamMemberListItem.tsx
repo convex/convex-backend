@@ -123,10 +123,8 @@ export function TeamMemberListItem({
     <div
       ref={ref}
       className={classNames(
-        "flex flex-wrap justify-between items-center gap-4 py-2",
-        isHighlighted
-          ? "bg-highlight px-2 -mx-2 rounded-sm border"
-          : "border-b last:border-b-0",
+        "flex flex-wrap items-center justify-between gap-4 px-4 py-3",
+        isHighlighted && "bg-highlight",
       )}
     >
       <div className="flex max-w-[40%] flex-col sm:max-w-[50%] md:max-w-[80%]">
