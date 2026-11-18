@@ -135,14 +135,13 @@ functions may be executed in the old Node.js version for up a few minutes.
 
 Node actions run with 512 MiB of memory by default. To give them more, set
 `node.defaultMemoryMb` to `2048`. The setting applies to every Node action in
-the deployment, including those in components, and they bill
-[action compute](/production/state/limits.mdx) at that size. Convex runtime
-actions keep their own limits.
+the deployment, and they bill [action compute](/production/state/limits.mdx) at
+that size. Convex runtime actions keep their own limits.
 
 <Admonition type="info" title="Convex version requirement">
 
-To set the memory size, you must use the `convex` NPM package version
-1.51.0-alpha.0 or later.
+To set the memory size, you must use the `convex` NPM package version 1.51.0 or
+later.
 
 </Admonition>
 
