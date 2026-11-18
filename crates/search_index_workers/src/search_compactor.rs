@@ -125,18 +125,12 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
         let mut presence = SearchIndexPresence::Absent;
         let mut tx = self.database.begin(Identity::system()).await?;
 
-        let non_empty_search_indexes = IndexModel::new(&mut tx)
-            .get_all_non_empty_search_indexes()
-            .await?;
-
-        // Skip compaction on empty tables.
-        for index_doc in non_empty_search_indexes {
-            let (index_id, index_metadata) = index_doc.into_id_and_value();
-            let Some(config) = T::get_config(&index_metadata.config) else {
+        for index_doc in IndexModel::new(&mut tx).get_all_indexes()? {
+            let Some(config) = T::get_config(&index_doc.config) else {
                 continue;
             };
             presence = SearchIndexPresence::Present;
-            let name = index_metadata.name;
+            let name = &index_doc.name;
 
             let maybe_segments_to_compact = match &config.on_disk_state {
                 SearchOnDiskState::Backfilling(backfill_state) => {
@@ -187,9 +181,9 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
                 );
                 segments_to_compact.truncate(*MAX_COMPACTION_SEGMENTS);
                 let job = CompactionJob {
-                    index_id,
+                    index_id: index_doc.id(),
                     index_name: name.clone(),
-                    spec: config.spec.clone(),
+                    spec: config.spec,
                     on_disk_state: config.on_disk_state,
                     segments_to_compact,
                     compaction_reason,

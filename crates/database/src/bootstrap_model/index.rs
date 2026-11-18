@@ -69,7 +69,6 @@ use crate::{
         SystemIndex,
         SystemTable,
     },
-    table_summary::table_summary_bootstrapping_error,
     transaction_index::TransactionIndex,
     unauthorized_error,
     SystemMetadataModel,
@@ -937,30 +936,6 @@ impl<'a, RT: Runtime> IndexModel<'a, RT> {
         &self,
     ) -> impl Iterator<Item = &'_ ParsedDocument<TabletIndexMetadata>> {
         self.tx.index.index_registry().all_indexes()
-    }
-
-    /// Returns all search indexes (text and vector) on non-empty tables.
-    pub async fn get_all_non_empty_search_indexes(
-        &mut self,
-    ) -> anyhow::Result<Vec<ParsedDocument<TabletIndexMetadata>>> {
-        self.take_indexes_dependency()?;
-        let mut non_empty_indexes = vec![];
-        for index in self.get_all_indexes_untracked() {
-            match index.config {
-                IndexConfig::Text { .. } | IndexConfig::Vector { .. } => (),
-                IndexConfig::Database { .. } => continue,
-            };
-            let table = *index.name.table();
-            let Some(count) = self.tx.count_snapshot.count(table).await? else {
-                return Err(table_summary_bootstrapping_error(Some(
-                    "Table count unavailable while bootstrapping",
-                )));
-            };
-            if count != 0 {
-                non_empty_indexes.push(index.clone());
-            }
-        }
-        Ok(non_empty_indexes)
     }
 
     /// Returns the index metadata matching the given id or fails if the
