@@ -59,7 +59,8 @@ export function RootCommands({
   const router = useRouter();
   const team = useCurrentTeam();
   const project = useCurrentProject();
-  const { commandPaletteDeleteProjects } = useLaunchDarkly();
+  const { commandPaletteDeleteProjects, teamIntegrationsPage } =
+    useLaunchDarkly();
   const [, setSupportFormOpen] = useSupportFormOpen();
   const { trackSelected } = usePaletteAnalytics();
 
@@ -83,7 +84,11 @@ export function RootCommands({
     team && project
       ? projectNavigation(team.slug, project.slug, project.name)
       : undefined;
-  const teamNav = team ? teamNavigation(team.slug, team.name) : undefined;
+  const teamNav = team
+    ? teamNavigation(team.slug, team.name, {
+        showIntegrations: teamIntegrationsPage,
+      })
+    : undefined;
 
   const currentPage = findCurrentPage(
     [

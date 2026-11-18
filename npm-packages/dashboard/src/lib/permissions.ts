@@ -632,6 +632,10 @@ export const OAUTH_APPLICATION_RESOURCE: ConcreteResource = {
   segments: [{ kind: "oauthApplication" }],
 };
 
+export const INTEGRATION_RESOURCE: ConcreteResource = {
+  segments: [{ kind: "integration" }],
+};
+
 // Team-scoped tokens carry a creator selector so a role like
 // "team tokens you created" still matches. Callers gating "can I create
 // my own team token" should pass the current member's id; for view checks

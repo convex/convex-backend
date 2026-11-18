@@ -225,6 +225,8 @@ export function teamNavigation(
   teamSlug: string,
   // The team these pages belong to, for the items' second line.
   teamName?: string,
+  // Whether the `teamIntegrationsPage` flag shows the Integrations page.
+  { showIntegrations = false }: { showIntegrations?: boolean } = {},
 ): NavigationTarget[] {
   const uriPrefix = `/t/${teamSlug}`;
   const team = teamName ?? teamSlug;
@@ -296,6 +298,16 @@ export function teamNavigation(
       href: `${uriPrefix}/settings/applications`,
       Icon: TEAM_SETTINGS_PAGE_ICONS.applications,
     },
+    ...(showIntegrations
+      ? [
+          {
+            label: "Integrations",
+            parent: "Team Settings",
+            href: `${uriPrefix}/settings/integrations`,
+            Icon: TEAM_SETTINGS_PAGE_ICONS.integrations,
+          },
+        ]
+      : []),
   ];
 }
 
