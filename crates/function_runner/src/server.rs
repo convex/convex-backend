@@ -17,7 +17,10 @@ use common::{
     },
     document::udf_unix_timestamp,
     errors::JsError,
-    execution_context::ExecutionContext,
+    execution_context::{
+        ExecutionContext,
+        ExecutionId,
+    },
     http::{
         fetch::FetchClient,
         RoutedHttpPath,
@@ -496,7 +499,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
     pub async fn run_component_inits_no_retention_check(
         &self,
         run_request_args: RunRequestArgs,
-        inits: Vec<ValidatedPathAndArgs>,
+        inits: Vec<(ValidatedPathAndArgs, ExecutionId)>,
     ) -> anyhow::Result<(
         FunctionFinalTransaction,
         BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>,
@@ -529,7 +532,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
             subfunctions_in_same_isolate: _,
             deployment,
         }: RunRequestArgs,
-        inits: Vec<ValidatedPathAndArgs>,
+        inits: Vec<(ValidatedPathAndArgs, ExecutionId)>,
     ) -> anyhow::Result<(
         FunctionFinalTransaction,
         BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>,
@@ -539,7 +542,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
             udf_type == UdfType::Init,
             "Unexpected udf type {udf_type} for run_component_inits"
         );
-        check_component_inits(inits.iter().map(ValidatedPathAndArgs::path))?;
+        check_component_inits(inits.iter().map(|(path_and_args, _)| path_and_args.path()))?;
         let deployment_name = deployment.name.clone();
         let usage_tracker = FunctionUsageTracker::new();
         let mut transaction = self
@@ -581,8 +584,10 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
         };
         let mut outcomes = BTreeMap::new();
         let mut failed = false;
-        for path_and_args in inits {
+        for (path_and_args, execution_id) in inits {
             let path = path_and_args.path().clone();
+            let mut init_context = context.clone();
+            init_context.execution_id = execution_id;
             let tokens = transaction.begin_subtransaction();
             transaction.set_transaction_limits(TransactionLimits {
                 bytes_read: *INIT_MAX_READ_SIZE_BYTES,
@@ -607,7 +612,7 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
                     path_and_args,
                     transaction,
                     QueryJournal::new(),
-                    context.clone(),
+                    init_context,
                     environment_data.clone(),
                     rng_seed,
                     unix_timestamp,

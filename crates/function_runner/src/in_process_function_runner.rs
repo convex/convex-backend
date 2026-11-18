@@ -19,7 +19,10 @@ use common::{
         ResolvedComponentFunctionPath,
     },
     errors::JsError,
-    execution_context::ExecutionContext,
+    execution_context::{
+        ExecutionContext,
+        ExecutionId,
+    },
     http::fetch::FetchClient,
     knobs::{
         FUNRUN_ISOLATE_ACTIVE_THREADS,
@@ -331,7 +334,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         identity: Identity,
         ts: RepeatableTimestamp,
         existing_writes: FunctionWrites,
-        path_and_args: Vec<ValidatedPathAndArgs>,
+        inits: Vec<(ValidatedPathAndArgs, ExecutionId)>,
         default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         in_memory_index_last_modified: BTreeMap<IndexId, Timestamp>,
         context: ExecutionContext,
@@ -387,7 +390,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         // until after we call `validate_run_function_result` below.
         let result = self
             .server
-            .run_component_inits_no_retention_check(run_request_args, path_and_args)
+            .run_component_inits_no_retention_check(run_request_args, inits)
             .await;
         validate_run_function_result(UdfType::Init, *ts, self.database.retention_validator())
             .await?;
