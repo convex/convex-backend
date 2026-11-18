@@ -1,5 +1,12 @@
 # Changelog
 
+## 6.0.0
+
+- Add a new rule `@convex-dev/no-time-or-random-in-queries` (enabled by default
+  as a warning) that detects queries whose results depend on the current time or
+  random values, including through local helpers and helpers imported via
+  relative paths.
+
 ## 5.0.1
 
 - Fix false positives in `@convex-dev/no-collect-in-query` with type-aware

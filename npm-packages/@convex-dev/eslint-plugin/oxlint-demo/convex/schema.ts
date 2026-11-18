@@ -6,8 +6,10 @@ export default defineSchema({
     author: v.string(),
     channel: v.string(),
     body: v.string(),
+    sentAt: v.number(),
   })
     // oxlint-disable-next-line @convex-dev/no-duplicate-indexes
     .index("by_author", ["author"])
-    .index("by_author_and_channel", ["author", "channel"]),
+    .index("by_author_and_channel", ["author", "channel"])
+    .index("by_sentAt", ["sentAt"]),
 });

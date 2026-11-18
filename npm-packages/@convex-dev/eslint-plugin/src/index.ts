@@ -9,6 +9,7 @@ import { noTopOfHourCrons } from "./lib/no-top-of-hour-crons.js";
 import { noSchemaImportCycle } from "./lib/no-schema-import-cycle.js";
 import { noDuplicateIndexes } from "./lib/no-duplicate-indexes.js";
 import { noProcessEnv } from "./lib/no-process-env.js";
+import { noTimeOrRandomInQueries } from "./lib/no-time-or-random-in-queries.js";
 import type { RuleModule } from "@typescript-eslint/utils/ts-eslint";
 import { version } from "./version.js";
 
@@ -24,6 +25,7 @@ const rules = {
   "no-schema-import-cycle": noSchemaImportCycle,
   "no-duplicate-indexes": noDuplicateIndexes,
   "no-process-env": noProcessEnv,
+  "no-time-or-random-in-queries": noTimeOrRandomInQueries,
 } satisfies Record<string, RuleModule<string, unknown[]>>;
 
 const recommendedRules = {
@@ -40,6 +42,7 @@ const recommendedRules = {
   "@convex-dev/no-schema-import-cycle": "error",
   "@convex-dev/no-duplicate-indexes": "error",
   "@convex-dev/no-process-env": "error",
+  "@convex-dev/no-time-or-random-in-queries": "warn",
 } satisfies {
   [key: `@convex-dev/${string}`]: "error" | "warn" | "off";
 };
