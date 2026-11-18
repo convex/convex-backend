@@ -277,16 +277,18 @@ impl IcebergChangeWriter {
             .unwrap_or_else(|| names::glue_name(source))
     }
 
-    async fn register(&mut self, name: &str) -> Result<()> {
-        if let Some(location) = self.unregistered.remove(name) {
-            self.catalog
-                .register_table(
-                    &TableIdent::new(self.namespace.clone(), name.to_owned()),
-                    location,
-                )
-                .await?;
-        }
-        Ok(())
+    async fn register(&mut self, name: &str) -> Result<Option<Table>> {
+        let Some(location) = self.unregistered.remove(name) else {
+            return Ok(None);
+        };
+        let table = self
+            .catalog
+            .register_table(
+                &TableIdent::new(self.namespace.clone(), name.to_owned()),
+                location,
+            )
+            .await?;
+        Ok(Some(table))
     }
 
     /// Records `table`'s current metadata pointer.
@@ -383,12 +385,16 @@ impl IcebergChangeWriter {
     /// another tablet means a stale state, so that is an error.
     #[fastrace::trace]
     async fn load_existing(&mut self, source: &SourceTable, name: &str) -> Result<Option<Table>> {
-        self.register(name).await?;
-        let ident = TableIdent::new(self.namespace.clone(), name.to_owned());
-        if !self.catalog.table_exists(&ident).await? {
-            return Ok(None);
-        }
-        let table = self.catalog.load_table(&ident).await?;
+        let table = match self.register(name).await? {
+            Some(table) => table,
+            None => {
+                let ident = TableIdent::new(self.namespace.clone(), name.to_owned());
+                if !self.catalog.table_exists(&ident).await? {
+                    return Ok(None);
+                }
+                self.catalog.load_table(&ident).await?
+            },
+        };
         let owner = source_of(&table)?;
         ensure!(
             owner.tablet == source.tablet,
