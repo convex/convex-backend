@@ -231,6 +231,7 @@ export function GlobalFunctionTester({
 
   return (
     <aside
+      aria-label="Function runner"
       key={isVertical.toString() + isExpanded.toString()}
       className={classNames(
         "bg-background-secondary shadow-sm",
