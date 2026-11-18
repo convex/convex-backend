@@ -40,6 +40,14 @@
   @variant dark {
     --item-fill: var(--background-tertiary);
     --item-outline: var(--border-transparent);
+
+    /* Tertiary text is 3.6:1 on the selected fill. Use the secondary color
+       there instead (5.4:1), which still sits below the primary text. The
+       theme variable is resolved on the root, so it is the one to override. */
+    &[data-selected="true"],
+    &:active {
+      --color-content-tertiary: var(--content-secondary);
+    }
   }
 
   @apply rounded-lg text-sm flex items-center gap-2 p-2 cursor-pointer;
