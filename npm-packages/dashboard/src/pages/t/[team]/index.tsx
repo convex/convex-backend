@@ -184,6 +184,8 @@ function TeamContent({
                 size="xs"
                 className={cn(!showAsList && "bg-background-tertiary")}
                 onClick={() => setShowAsList(false)}
+                aria-label="Show as grid"
+                aria-pressed={!showAsList}
               />
               <Button
                 icon={<ListBulletIcon />}
@@ -192,6 +194,8 @@ function TeamContent({
                 size="xs"
                 className={cn(showAsList && "bg-background-tertiary")}
                 onClick={() => setShowAsList(true)}
+                aria-label="Show as list"
+                aria-pressed={showAsList}
               />
             </div>
           </div>

@@ -57,6 +57,9 @@ export function CopyButton({
       tip={tip}
       tipSide={tipSide}
       disabled={disabled}
+      aria-label={
+        copied || (!inline && label) ? undefined : tip || label || "Copy"
+      }
     >
       {copied ? "Copied!" : !inline && label}
     </Button>

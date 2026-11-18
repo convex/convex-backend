@@ -193,6 +193,7 @@ export function DatadogConfigurationForm({
           placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
           action={() => setShowApiKey(!showApiKey)}
           Icon={showApiKey ? EyeNoneIcon : EyeOpenIcon}
+          iconTooltip={showApiKey ? "Hide API key" : "Show API key"}
           error={formState.errors.ddApiKey}
           description="API key is used to authenticate with Datadog."
         />

@@ -53,6 +53,7 @@ export function DeploymentCredentialsForm({
         label="Admin Key"
         type={showKey ? "text" : "password"}
         Icon={showKey ? EyeNoneIcon : EyeOpenIcon}
+        iconTooltip={showKey ? "Hide admin key" : "Show admin key"}
         placeholder="Enter the admin key for this deployment"
         value={draftAdminKey}
         action={() => {

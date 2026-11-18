@@ -205,6 +205,7 @@ export function AxiomConfigurationForm({
           placeholder="xxxx-xxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
           action={() => setShowApiKey(!showApiKey)}
           Icon={showApiKey ? EyeNoneIcon : EyeOpenIcon}
+          iconTooltip={showApiKey ? "Hide API key" : "Show API key"}
           error={formState.errors.apiKey}
           description="API key is used to authenticate with Axiom."
         />
@@ -259,6 +260,7 @@ export function AxiomConfigurationForm({
                       inline
                       className="mt-1 h-fit"
                       icon={<TrashIcon />}
+                      aria-label="Remove attribute"
                     />
                   </div>
                 ))}
