@@ -31,7 +31,10 @@ use common::{
     },
     errors::JsError,
     execution_context::RequestMetadata,
-    knobs::FINISH_PUSH_MAX_OCC_FAILURES,
+    knobs::{
+        COMPONENT_ARGS_MAX_SIZE_BYTES,
+        FINISH_PUSH_MAX_OCC_FAILURES,
+    },
     runtime::{
         try_join,
         Runtime,
@@ -329,6 +332,7 @@ impl<RT: Runtime> Application<RT> {
             )
             .await?;
         validate_env_var_declarations(&evaluated_components)?;
+        validate_component_args_size(&evaluated_components)?;
         // Build and typecheck the component tree. We don't strictly need to do this
         // before `/finish_push`, but it's better to fail fast here on errors before
         // waiting for schema backfills to complete.
@@ -1105,6 +1109,33 @@ fn validate_env_var_declarations(
                         "Env var `{name}` on {component_label} has a non-string validator. \
                          Component env vars must be declared with `v.string()`, \
                          `v.literal(\"...\")`, or a union of those."
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_component_args_size(
+    evaluated_components: &BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
+) -> anyhow::Result<()> {
+    let limit = *COMPONENT_ARGS_MAX_SIZE_BYTES;
+    for (path, evaluated) in evaluated_components {
+        for instantiation in &evaluated.definition.child_components {
+            let size = instantiation.serialized_args_size()?;
+            if size > limit {
+                let component_label = if path.is_root() {
+                    "the app".to_string()
+                } else {
+                    format!("component {path}", path = String::from(path.clone()))
+                };
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "ComponentArgsTooLarge",
+                    format!(
+                        "The arguments {component_label} passes to component `{name}` are {size} \
+                         bytes, over the limit of {limit} bytes.",
+                        name = String::from(instantiation.name.clone()),
                     ),
                 ));
             }

@@ -1,4 +1,4 @@
-import { PropertyValidators } from "../../values/index.js";
+import { convexToJson, PropertyValidators } from "../../values/index.js";
 import { version } from "../../index.js";
 import {
   AnyFunctionReference,
@@ -13,12 +13,16 @@ import {
   AppDefinitionAnalysis,
   ComponentDefinitionAnalysis,
   ComponentDefinitionType,
+  SerializedComponentArg,
 } from "./definition.js";
 import {
+  extractReferencePath,
   getFunctionAddress,
   setReferencePath,
   toReferencePath,
 } from "./paths.js";
+import { functionName } from "../functionName.js";
+import { isSimpleObject } from "../../common/index.js";
 import type {
   Validator,
   VLiteral,
@@ -509,6 +513,7 @@ type ChildComponent = [
   definition: ImportedComponentDefinition,
   env: Record<string, any> | null,
   httpPrefix: string | undefined,
+  args: Record<string, any> | null,
 ];
 
 type ComponentDefinitionData = CommonDefinitionData & {
@@ -599,6 +604,14 @@ function createComponentArgRefs(): any {
   return new Proxy({}, handler);
 }
 
+function isArgRef(value: unknown): value is ComponentArgRef {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as ComponentArgRef).__componentArgRef === "string"
+  );
+}
+
 function isEnvRef(value: unknown): value is EnvRef {
   return (
     typeof value === "object" &&
@@ -661,11 +674,21 @@ function use<Definition extends ComponentDefinition<any, any>>(
     }
   }
 
+  const argValues: Record<string, any> = {};
+  if (options?.args) {
+    for (const [key, value] of Object.entries(options.args)) {
+      if (value !== undefined) {
+        argValues[key] = value;
+      }
+    }
+  }
+
   this._childComponents.push([
     name,
     importedComponentDefinition,
     envValues,
     httpPrefix,
+    argValues,
   ]);
   return new InstalledComponent(definition, name);
 }
@@ -757,8 +780,9 @@ function serializeChildComponents(childComponents: ChildComponent[]): {
   name: string;
   path: string;
   env: [string, SerializedEnvArg][] | null;
+  args: [string, SerializedComponentArg][];
 }[] {
-  return childComponents.map(([name, definition, p]) => {
+  return childComponents.map(([name, definition, p, , a]) => {
     // Note: httpPrefix (4th element) is used separately in buildHttpMounts()
     let env: [string, SerializedEnvArg][] | null = null;
     if (p !== null) {
@@ -779,6 +803,14 @@ function serializeChildComponents(childComponents: ChildComponent[]): {
         }
       }
     }
+    // args must always be a list. This is needed for compatibility for older backends before the legacy args validator code path was removed
+    const args: [string, SerializedComponentArg][] = [];
+    for (const [name, value] of Object.entries(a ?? {})) {
+      if (value === undefined) {
+        continue;
+      }
+      args.push([name, serializeComponentArg(name, value)]);
+    }
     // we know that components carry this extra information
     const path = definition.componentDefinitionPath;
     if (!path)
@@ -790,11 +822,88 @@ function serializeChildComponents(childComponents: ChildComponent[]): {
     return {
       name: name!,
       path: path!,
-      // This is needed for compatibility for older backends from before the legacy args validator code path was removed
-      args: [],
       env,
+      args,
     };
   });
+}
+
+/**
+ * Serialize one argument passed in `use(component, { args })`.
+ */
+function serializeComponentArg(
+  path: string,
+  value: any,
+): SerializedComponentArg {
+  if (isEnvRef(value)) {
+    throw new Error(
+      `Component argument "${path}" can't be an environment variable. ` +
+        `Pass it with the \`env\` option instead.`,
+    );
+  }
+  // `component.args.limit`, from the parent's own `defineComponent(...)`
+  if (isArgRef(value)) {
+    return { type: "parentArgument", name: value.__componentArgRef };
+  }
+  if (isFunctionReferenceObject(value)) {
+    const address = getFunctionAddress(value);
+    // `internal.module.func`
+    if (address.name !== undefined) {
+      return {
+        type: "reference",
+        reference: `_reference/function/${address.name}`,
+      };
+    }
+    // `components.sibling`, `components.sibling.module.func`, or the value
+    // returned by `use()`
+    if (address.reference !== undefined) {
+      return { type: "reference", reference: address.reference };
+    }
+    throw new Error(`Component argument "${path}" isn't a valid argument.`);
+  }
+  // Arrays and objects containing any of the above; ones that don't are
+  // serialized as plain values below.
+  if (Array.isArray(value)) {
+    const elements = value.map((element, i) =>
+      serializeComponentArg(`${path}[${i}]`, element),
+    );
+    if (elements.some((element) => element.type !== "value")) {
+      return { type: "array", elements };
+    }
+  } else if (
+    typeof value === "object" &&
+    value !== null &&
+    isSimpleObject(value)
+  ) {
+    const fields: [string, SerializedComponentArg][] = Object.entries(value)
+      .filter(([, field]) => field !== undefined)
+      .map(([key, field]) => [
+        key,
+        serializeComponentArg(`${path}.${key}`, field),
+      ]);
+    if (fields.some(([, field]) => field.type !== "value")) {
+      return { type: "object", fields };
+    }
+  }
+  try {
+    return { type: "value", value: JSON.stringify(convexToJson(value)) };
+  } catch (e: any) {
+    throw new Error(
+      `Component argument "${path}" isn't a valid argument: ${e.message}. `,
+    );
+  }
+}
+
+/**
+ * Whether `value` is a FunctionReference in object form (returns false for a FunctionHandle)
+ */
+function isFunctionReferenceObject(value: any): boolean {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  return (
+    value[functionName] !== undefined || extractReferencePath(value) !== null
+  );
 }
 
 function exportComponentForAnalysis(
@@ -827,6 +936,7 @@ function exportComponentForAnalysis(
     httpMounts,
     exports: serializeExportTree(this._exportTree),
     ...(envVars.length > 0 ? { envVars } : {}),
+    ...(this._init !== undefined ? { init: this._init } : {}),
   };
 }
 

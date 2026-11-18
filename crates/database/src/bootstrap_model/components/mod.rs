@@ -300,6 +300,7 @@ impl<'a, RT: Runtime> BootstrapComponentsModel<'a, RT> {
                         http_mounts: BTreeMap::new(),
                         http_prefix: None,
                         env_vars: BTreeMap::new(),
+                        init: None,
                     })
                 } else {
                     anyhow::bail!(ErrorMetadata::bad_request(

@@ -2182,6 +2182,11 @@ pub static ENV_VAR_LIMIT: LazyLock<usize> = LazyLock::new(|| env_config("ENV_VAR
 pub static ENV_VAR_TOTAL_SIZE_LIMIT: LazyLock<usize> =
     LazyLock::new(|| env_config("ENV_VAR_TOTAL_SIZE_LIMIT", 512 * 1024));
 
+/// Maximum size in bytes of the serialized arguments a component passes to one
+/// child component.
+pub static COMPONENT_ARGS_MAX_SIZE_BYTES: LazyLock<usize> =
+    LazyLock::new(|| env_config("COMPONENT_ARGS_MAX_SIZE_BYTES", 16 * 1024));
+
 /// If set, disable the /metrics endpoint
 pub static DISABLE_METRICS_ENDPOINT: LazyLock<bool> =
     LazyLock::new(|| env_config("DISABLE_METRICS_ENDPOINT", false));

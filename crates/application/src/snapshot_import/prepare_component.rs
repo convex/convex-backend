@@ -98,6 +98,7 @@ async fn create_unmounted_component<RT: Runtime>(
         http_prefix: None,
         exports: btreemap! {},
         env_vars: btreemap! {},
+        init: None,
     };
     let (definition_id, _diff) = ComponentDefinitionConfigModel::new(&mut tx)
         .create_component_definition(definition)
@@ -143,6 +144,7 @@ async fn create_root_component<RT: Runtime>(tx: &mut Transaction<RT>) -> anyhow:
         http_prefix: None,
         exports: btreemap! {},
         env_vars: btreemap! {},
+        init: None,
     };
 
     let (definition_id, _diff) = ComponentDefinitionConfigModel::new(tx)
