@@ -20,6 +20,10 @@
   # (minimumReleaseAge, trustPolicy, tarball URLs); CI's `pnpm install --frozen-lockfile`
   # checks the same lockfile before merge. Lockfile integrity hashes are still enforced.
   PNPM_CONFIG_TRUST_LOCKFILE = "true"
+  # Hosts that ran an earlier build mount its filesystem as a read-only overlayfs layer,
+  # where hard-linking a store file left there copies it up (~1 GB in total). A store on
+  # tmpfs is never carried into the next build.
+  PNPM_CONFIG_STORE_DIR = "/tmp/pnpm-store"
 
 [[headers]]
   for = "/fonts/*"
