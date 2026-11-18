@@ -173,6 +173,15 @@ impl<'a> TypecheckContext<'a> {
                 &resolved_env,
                 Some(&evaluated.definition.env_vars),
             )?;
+            if !instantiation.args.is_empty() && child_evaluated.definition.init.is_none() {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "InvalidComponentArgs",
+                    format!(
+                        "Component '{child_component_path}' was passed arguments but doesn't \
+                         declare an init in `defineComponent`."
+                    ),
+                ));
+            }
 
             // Chain-resolve EnvVar bindings through the component hierarchy.
             let resolved_env: BTreeMap<Identifier, EnvBinding> = resolved_env
