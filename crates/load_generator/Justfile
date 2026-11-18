@@ -36,9 +36,9 @@ prod workload: check_vars reset_env_vars
   crates/load_generator/workloads/{{workload}}.json --provisioner production --stats-report --once
 
 # check-dev for integration tests (runs the load-generator binary directly)
-check-dev-integration-test: reset_env_vars
+check-dev-integration-test *ARGS: reset_env_vars
   cd ../.. && UDF_USE_FUNRUN=false ./target/debug/load-generator --duration 10 \
-   --provisioner conductor-debug  --stats-report --once "crates/load_generator/workloads/light.json"
+   --provisioner conductor-debug  --stats-report --once "crates/load_generator/workloads/light.json" "$@"
 
 
 dev_bb_login:

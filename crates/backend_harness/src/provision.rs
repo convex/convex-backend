@@ -56,16 +56,35 @@ static SELF_HOSTED_DOCKER_COMPOSE: LazyLock<PathBuf> =
 
 const PROD_PROVISION_HOST: &str = "https://api.convex.dev";
 const BACKEND_HARNESS_CLIENT_ID: &str = concat!("backend-harness-", env!("CARGO_PKG_VERSION"));
-/// Port usher runs on locally
-const USHER_PORT: u16 = 8002;
-/// Port funrun runs on locally, overriding its default of 40994. Must stay
-/// below the Linux ephemeral range (32768–60999): a port inside it can already
-/// be held by an unrelated outbound connection, so the bind fails with
-/// EADDRINUSE.
+/// Below Linux's ephemeral range so outbound connections cannot claim it first.
 const FUNRUN_PORT: u16 = 8005;
-/// Address of local test backend through usher
-static USHER_INSTANCE_URL: LazyLock<String> =
-    LazyLock::new(|| format!("http://carnitas.local.convex.cloud:{USHER_PORT}"));
+
+// Port overrides let JS integration tests and the load generator run separate
+// conductor stacks on one host. Keep ports below Linux's ephemeral range
+// (32768–60999), where outbound connections can hold a port before we bind it.
+fn conductor_port() -> u16 {
+    env_config("BACKEND_HARNESS_CONDUCTOR_PORT", 8000)
+}
+fn conductor_grpc_port() -> u16 {
+    env_config("BACKEND_HARNESS_CONDUCTOR_GRPC_PORT", 7999)
+}
+fn usher_port() -> u16 {
+    env_config("BACKEND_HARNESS_USHER_PORT", 8002)
+}
+fn usher_metrics_port() -> u16 {
+    env_config("BACKEND_HARNESS_USHER_METRICS_PORT", 8003)
+}
+
+// provision's narrower cargo build unifies a different feature set and
+// rebuilds. CI builds all binaries together up front; like CONVEX_PREBUILT_JS,
+// presence opts into using those artifacts.
+fn skip_build() -> bool {
+    env::var_os("BACKEND_HARNESS_SKIP_BUILD").is_some()
+}
+
+fn usher_instance_url() -> String {
+    format!("http://carnitas.local.convex.cloud:{}", usher_port())
+}
 
 /// Ports the open-source `convex-local-backend` binds. Overridable via env so a
 /// second backend stack (e.g. the conductor stack, which uses 8000) can run
@@ -178,13 +197,13 @@ impl ProvisionHandle {
             ProvisionHandle::BigBrain { .. } => None,
             ProvisionHandle::LocalBackend { _usher_handle, .. } => {
                 let url = if _usher_handle.is_some() {
-                    USHER_INSTANCE_URL.clone()
+                    usher_instance_url()
                 } else {
                     format!("http://127.0.0.1:{}", open_source_backend_port())
                 };
                 Some(url)
             },
-            ProvisionHandle::LocalConductor { .. } => Some(USHER_INSTANCE_URL.clone()),
+            ProvisionHandle::LocalConductor { .. } => Some(usher_instance_url()),
         }
     }
 
@@ -348,9 +367,15 @@ fn start_local_usher(logs: &LogInterleaver, release: bool) -> anyhow::Result<Chi
         "usher".into(),
         Command::new(usher_binary)
             .arg("--port")
-            .arg(USHER_PORT.to_string())
+            .arg(usher_port().to_string())
+            .arg("--metrics-port")
+            .arg(usher_metrics_port().to_string())
             .arg("--register-service")
-            .arg("convex-conductor-0=127.0.0.1:8000,grpc.port=7999")
+            .arg(format!(
+                "convex-conductor-0=127.0.0.1:{},grpc.port={}",
+                conductor_port(),
+                conductor_grpc_port(),
+            ))
             .arg("--partition-mapping")
             .arg("carnitas=0")
             .arg("--region=local")
@@ -425,28 +450,36 @@ async fn provision(
         },
         BackendProvisioner::ConductorDebug | BackendProvisioner::ConductorRelease => {
             let release = matches!(backend_provisioner, BackendProvisioner::ConductorRelease);
-            let mut build_cmd = Command::new("cargo");
-            build_cmd.arg("build").arg("--bin").arg("conductor");
             let udf_use_funrun = env_config("UDF_USE_FUNRUN", true);
-            if udf_use_funrun {
-                build_cmd.arg("--bin").arg("funrun");
+            if !skip_build() {
+                let mut build_cmd = Command::new("cargo");
+                build_cmd.arg("build").arg("--bin").arg("conductor");
+                if udf_use_funrun {
+                    build_cmd.arg("--bin").arg("funrun");
+                }
+                if release {
+                    build_cmd.arg("--release");
+                }
+                logs.spawn_with_prefixed_logs("cargo build".into(), &mut build_cmd)?
+                    .wait()
+                    .map(|result| anyhow::Ok(result?.exit_ok()?))
+                    .await?;
             }
-            if release {
-                build_cmd.arg("--release");
-            }
-            logs.spawn_with_prefixed_logs("cargo build".into(), &mut build_cmd)?
-                .wait()
-                .map(|result| anyhow::Ok(result?.exit_ok()?))
-                .await?;
             let conductor_binary = if release {
                 REPO_ROOT.join("target/release/conductor")
             } else {
                 REPO_ROOT.join("target/debug/conductor")
             };
+            let usher_port = usher_port();
+            let instance_url = usher_instance_url();
             let tempdir_handle = tempfile::tempdir()?;
             let db_path = tempdir_handle.path().join("convex_local_backend.sqlite3");
             let mut run_conductor_cmd = Command::new(conductor_binary);
             run_conductor_cmd
+                .arg("--port")
+                .arg(conductor_port().to_string())
+                .arg("--grpc-port")
+                .arg(conductor_grpc_port().to_string())
                 .arg("--local-storage")
                 .arg(tempdir_handle.path())
                 .arg("--db-cluster-name")
@@ -455,9 +488,9 @@ async fn provision(
                 .arg("--do-not-require-ssl")
                 .arg(db_path.clone())
                 .arg("--convex-origin-base")
-                .arg(format!("http://local.convex.cloud:{USHER_PORT}"))
+                .arg(format!("http://local.convex.cloud:{usher_port}"))
                 .arg("--convex-site-base")
-                .arg(format!("http://local.convex.site:{USHER_PORT}"))
+                .arg(format!("http://local.convex.site:{usher_port}"))
                 .arg("--instance")
                 .arg(format!("carnitas={local_secret}"))
                 .env("UDF_USE_FUNRUN", udf_use_funrun.to_string())
@@ -477,7 +510,7 @@ async fn provision(
                 .transpose()?;
             // Give it ~15 seconds to start up (5 retries with 500ms exponential backoff)
             wait_for_http_health(
-                &USHER_INSTANCE_URL.parse()?,
+                &instance_url.parse()?,
                 BACKEND_HARNESS_CLIENT_ID,
                 Some("0.0.0-backendharness"),
                 // We should include a random instance name here, but it would need to match our
@@ -498,21 +531,23 @@ async fn provision(
                     _funrun_handle: funrun_handle,
                     _tempdir: tempdir_handle,
                 },
-                USHER_INSTANCE_URL.clone(),
+                instance_url,
             )
         },
         BackendProvisioner::OpenSourceDebug | BackendProvisioner::OpenSourceRelease => {
             let release = matches!(backend_provisioner, BackendProvisioner::OpenSourceRelease);
-            let mut cmd = Command::new("cargo");
-            cmd.arg("build").arg("--bin").arg("convex-local-backend");
-            if release {
-                cmd.arg("--release");
-            }
+            if !skip_build() {
+                let mut cmd = Command::new("cargo");
+                cmd.arg("build").arg("--bin").arg("convex-local-backend");
+                if release {
+                    cmd.arg("--release");
+                }
 
-            logs.spawn_with_prefixed_logs("cargo build".into(), &mut cmd)?
-                .wait()
-                .await?
-                .exit_ok()?;
+                logs.spawn_with_prefixed_logs("cargo build".into(), &mut cmd)?
+                    .wait()
+                    .await?
+                    .exit_ok()?;
+            }
 
             let backend_binary = if release {
                 REPO_ROOT.join("target/release/convex-local-backend")

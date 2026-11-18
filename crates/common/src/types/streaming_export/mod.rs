@@ -410,9 +410,8 @@ pub struct ActiveDataSyncSnapshotting {
     pub num_documents_in_current_table: u64,
     /// Total documents in the current table, as of a recent snapshot.
     pub total_documents_in_current_table: u64,
-    /// Documents synced over the sync's lifetime, including deletions and
-    /// re-synced revisions of documents that changed mid-sync — so this can
-    /// slightly exceed `totalDocuments`.
+    /// Documents in the selected tables traversed so far, counted as of the
+    /// same snapshot as `totalDocuments`.
     pub num_documents_synced: u64,
     /// Total documents across all selected tables, as of a recent snapshot.
     pub total_documents: u64,

@@ -32,9 +32,8 @@ pub enum DataSyncState {
         current_table: TableName,
         num_documents_synced_in_current_table: u64,
         total_documents_in_current_table: u64,
-        /// Documents (including tombstones and re-emitted revisions) emitted
-        /// over the sync's lifetime, so this can slightly exceed
-        /// `total_documents`.
+        /// Documents in the selected tables traversed so far, by the same
+        /// counts as `total_documents`.
         num_documents_synced: u64,
         /// Documents across all target tables.
         total_documents: u64,
@@ -62,8 +61,6 @@ pub enum DataSyncState {
 }
 
 impl DataSyncState {
-    /// Documents (including tombstones and re-emitted revisions) emitted over
-    /// the sync's lifetime, regardless of which phase the sync is in.
     pub fn num_documents_synced(&self) -> u64 {
         match self {
             Self::Snapshotting {

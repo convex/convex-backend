@@ -14,6 +14,22 @@ cargo test -p <package> "test_name" # for a specific test or test group
 just format-rust
 ```
 
+## Compatibility with older clients
+
+Projects keep running old versions of the `convex` npm package and its CLI, and
+of the other client libraries, for months. Some of them validate responses
+strictly, as the CLI does with zod, and fail on a missing field. Any serialized
+type in a response to those clients, such as `SerializedComponentInstantiation`,
+is a wire format shared with every version still in use:
+
+- Keep obsolete fields required only for compatibility, marked `#[deprecated]`
+  and set to an empty value only when older clients accept it; preserve fields
+  they still use. A field validated as `z.nullable(...)` must still be sent as
+  `null`: a missing key fails validation.
+- Before removing or renaming a field, check how older published versions read
+  it (for example with `npm pack convex@<version>`), not only the code in this
+  repository.
+
 ## Rust style
 
 - Before adding a crate dependency or a new abstraction, check whether existing

@@ -13,9 +13,6 @@ const meta = {
     show: true,
   },
   render: (args) => <Example {...args} />,
-  parameters: {
-    a11y: { test: "todo" },
-  },
 } satisfies Meta<typeof CopiedPopper>;
 
 export default meta;

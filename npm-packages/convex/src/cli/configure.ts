@@ -53,6 +53,7 @@ import {
 import { ensureLoggedIn } from "./lib/login.js";
 import { handleAnonymousDeployment } from "./lib/localDeployment/anonymous.js";
 import { fetchDeploymentCanonicalUrls } from "./lib/deploy2.js";
+import { tagSentryWithDeployment } from "./lib/utils/sentryDeploymentTags.js";
 type DeploymentCredentials = {
   url: string;
   adminKey: string;
@@ -123,6 +124,7 @@ export async function deploymentCredentialsOrConfigure(
     chosenConfiguration,
     cmdOptions,
   );
+  tagSentryWithDeployment(selectedDeployment.deploymentFields);
   const { convexCloudUrl, convexSiteUrl: siteUrl } =
     await fetchDeploymentCanonicalUrls(ctx, {
       adminKey: selectedDeployment.adminKey,

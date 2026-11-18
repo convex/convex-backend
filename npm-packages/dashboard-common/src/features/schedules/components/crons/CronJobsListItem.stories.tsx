@@ -45,7 +45,6 @@ const meta = {
       </ConvexProvider>
     </Sheet>
   ),
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof CronJobLogListItem>;
 
 export default meta;

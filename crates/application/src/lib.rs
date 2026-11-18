@@ -1911,7 +1911,8 @@ impl<RT: Runtime> Application<RT> {
             match change {
                 EnvVarChange::Set(env_var) => {
                     let name = env_var.name();
-                    if let Some(_existing) = model.delete(name).await? {
+                    let existing = model.delete(name).await?;
+                    if existing.is_some() {
                         audit_events.push(DeploymentAuditLogEvent::UpdateEnvironmentVariable {
                             name: name.clone(),
                         });
@@ -1920,7 +1921,11 @@ impl<RT: Runtime> Application<RT> {
                             name: name.clone(),
                         });
                     }
-                    model.create(env_var, &self.system_env_var_names).await?;
+                    // Replacing a variable keeps its visibility.
+                    let visibility = existing.and_then(|existing| existing.visibility);
+                    model
+                        .create_with_visibility(env_var, visibility, &self.system_env_var_names)
+                        .await?;
                 },
                 EnvVarChange::Unset(name) => {
                     if let Some(_existing) = model.delete(&name).await? {

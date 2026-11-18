@@ -8,7 +8,6 @@ const meta = {
   args: {
     referralCode: "CONVEX123",
   },
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof ReferralsInner>;
 
 export default meta;

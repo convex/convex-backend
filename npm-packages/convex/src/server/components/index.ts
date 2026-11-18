@@ -2,12 +2,13 @@ import { PropertyValidators } from "../../values/index.js";
 import { version } from "../../index.js";
 import {
   AnyFunctionReference,
+  FunctionArgs,
   FunctionReference,
   FunctionReference_future,
   FunctionType,
 } from "../api.js";
 import { performAsyncSyscall } from "../impl/syscall.js";
-import { DefaultFunctionArgs } from "../registration.js";
+import { DefaultFunctionArgs, FunctionVisibility } from "../registration.js";
 import {
   AppDefinitionAnalysis,
   ComponentDefinitionAnalysis,
@@ -26,6 +27,7 @@ import type {
   VUnion,
 } from "../../values/validators.js";
 import type { Infer } from "../../values/validator.js";
+import type { Value } from "../../values/value.js";
 import { isValidator } from "../../values/validator.js";
 import type { Expand } from "../../type_utils.js";
 export { getFunctionAddress } from "./paths.js";
@@ -105,6 +107,16 @@ export type ComponentDefinition<
   Env extends EnvDefinition = {},
 > = {
   /**
+   * TODO: replace the overload below with this when releasing args.
+   *
+   * @internal
+   */
+  use<Definition extends ComponentDefinition<any, any>>(
+    definition: Definition,
+    ...args: UseArgsInternal<Definition>
+  ): InstalledComponent<Definition>;
+
+  /**
    * Install a component with the given definition in this component definition.
    *
    * Takes a component definition and an optional name.
@@ -139,11 +151,40 @@ export type ComponentDefinition<
   __env: Env;
 };
 
+/**
+ * TODO: replace ComponentDefinition with this when releasing args.
+ *
+ * @internal
+ */
+export type ComponentDefinitionInternal<
+  Exports extends ComponentExports = any,
+  Env extends EnvDefinition = {},
+  Args extends ComponentArgs = {},
+> = ComponentDefinition<Exports, Env> & {
+  /**
+   * References to this component's own arguments, as declared by the `args`
+   * validator of its init function. Pass one of these in
+   * `component.use(child, { args: { ... } })` to forward an argument to a
+   * child component.
+   */
+  args: ComponentArgRefs<Args>;
+
+  /**
+   * Internal type-only property tracking the init mutation's arguments.
+   *
+   * @deprecated This is a type-only property, don't use it.
+   */
+  __args: Args;
+};
+
 type ComponentDefinitionExports<T extends ComponentDefinition<any, any>> =
   T["__exports"];
 
 type ComponentDefinitionEnv<T extends ComponentDefinition<any, any>> =
   T["__env"];
+
+type ComponentDefinitionArgs<T extends ComponentDefinition<any, any>> =
+  T extends { __args?: infer Args extends ComponentArgs } ? Args : {};
 
 /**
  * The names in an {@link EnvDefinition} whose validators are required (not
@@ -184,6 +225,125 @@ type UseArgs<Definition extends ComponentDefinition<any, any>> =
   RequiredEnvKeys<ComponentDefinitionEnv<Definition>> extends never
     ? [options?: UseOptions<Definition>]
     : [options: UseOptions<Definition>];
+
+/**
+ * {@link UseOptions} plus `args` for the component's init, which is required
+ * exactly when the init has required arguments.
+ *
+ * TODO: replace UseOptions with this when releasing args.
+ *
+ * @internal
+ */
+type UseOptionsInternal<Definition extends ComponentDefinition<any, any>> =
+  Expand<
+    {
+      name?: string;
+      httpPrefix?: string;
+    } & ([RequiredEnvKeys<ComponentDefinitionEnv<Definition>>] extends [never]
+      ? { env?: UseOptionsEnv<ComponentDefinitionEnv<Definition>> }
+      : { env: UseOptionsEnv<ComponentDefinitionEnv<Definition>> }) &
+      ({} extends UseOptionsArgs<ComponentDefinitionArgs<Definition>>
+        ? { args?: UseOptionsArgs<ComponentDefinitionArgs<Definition>> }
+        : { args: UseOptionsArgs<ComponentDefinitionArgs<Definition>> })
+  >;
+
+/**
+ * {@link UseArgs} for a component that may declare an init: `options` is also
+ * mandatory when the init has required arguments.
+ *
+ * TODO: replace UseArgs with this when releasing args.
+ *
+ * @internal
+ */
+type UseArgsInternal<Definition extends ComponentDefinition<any, any>> =
+  {} extends UseOptionsInternal<Definition>
+    ? [options?: UseOptionsInternal<Definition>]
+    : [options: UseOptionsInternal<Definition>];
+
+/**
+ * The values a parent may pass for a component's arguments.
+ *
+ * @internal
+ */
+type UseOptionsArgs<Args extends ComponentArgs> = [keyof Args] extends [never]
+  ? Record<string, never>
+  : Expand<{ [K in keyof Args]: ComponentArgInput<Args[K]> }>;
+
+/**
+ * The arguments of a component's init: what its `args` validator accepts, or
+ * `Record<string, unknown>` for an init without one, which accepts anything.
+ *
+ * TODO: make this public when releasing args.
+ *
+ * @internal
+ */
+export type ComponentArgs = DefaultFunctionArgs;
+
+/**
+ * The value a parent may pass for a given component argument.
+ *
+ * If the type of the argument is a {@link FunctionHandle_future}, a {@link FunctionReference} may be passed in because it is not possible to create function handles when defining a component.
+ *
+ * The parent may also forward its own component arguments to a child component.
+ *
+ * TODO: make this public when releasing args.
+ *
+ * @internal
+ */
+export type ComponentArgInput<T> =
+  | ComponentArgRef<T>
+  | (T extends FunctionHandle_future<infer Type, infer Args, infer Returns>
+      ? FunctionReference_future<Type, FunctionVisibility, Args, Returns>
+      : T extends (infer Element extends Value)[]
+        ? ComponentArgInput<Element>[]
+        : T extends { [key: string]: Value | undefined }
+          ?
+              | { [K in keyof T]: ComponentArgInput<T[K]> }
+              // The backend resolves an installed component to an object of
+              // handles to its exports.
+              | InstalledComponent<
+                  ComponentDefinition<ComponentExportsForArg<T>, any>
+                >
+          : T);
+
+/**
+ * What a component must export to be passed to an argument of type `T`.
+ *
+ * For example, to pass a component as `{ fns: { ping: FunctionHandle<"mutation"> } }`,
+ * it must export a mutation at `fns.ping`.
+ */
+type ComponentExportsForArg<T> =
+  T extends FunctionHandle_future<infer Type, infer Args, infer Returns>
+    ? FunctionReference_future<Type, FunctionVisibility, Args, Returns>
+    : T extends { [key: string]: Value | undefined }
+      ? { [K in keyof T]: ComponentExportsForArg<T[K]> }
+      : never;
+
+/**
+ * A reference to one of a component's own arguments, produced by
+ * `component.args.<NAME>`. Pass this in `component.use(child, { args: ... })`
+ * to forward the argument to a child component.
+ *
+ * TODO: make this public when releasing args.
+ *
+ * @internal
+ */
+export type ComponentArgRef<T = any> = {
+  __componentArgRef: string;
+
+  __argType: T;
+};
+
+/**
+ * Compute the typed `args` namespace from an init mutation's arguments.
+ *
+ * TODO: make this public when releasing args.
+ *
+ * @internal
+ */
+export type ComponentArgRefs<Args extends ComponentArgs> = {
+  [K in keyof Args & string]-?: ComponentArgRef<Args[K]>;
+};
 
 type UseOptionsEnv<E extends EnvDefinition> = Expand<
   {
@@ -296,6 +456,16 @@ export type EnvFromAppDefinition<A> =
  */
 export type AppDefinition<Env extends EnvDefinition = EnvDefinition> = {
   /**
+   * TODO: replace the overload below with this when releasing args.
+   *
+   * @internal
+   */
+  use<Definition extends ComponentDefinition<any, any>>(
+    definition: Definition,
+    ...args: UseArgsInternal<Definition>
+  ): InstalledComponent<Definition>;
+
+  /**
    * Install a component with the given definition in this component definition.
    *
    * Takes a component definition and an optional name.
@@ -330,18 +500,21 @@ interface ExportTree {
 
 type CommonDefinitionData = {
   _isRoot: boolean;
-  _childComponents: [
-    string,
-    ImportedComponentDefinition,
-    Record<string, any> | null,
-    string | undefined,
-  ][];
+  _childComponents: ChildComponent[];
   _exportTree: ExportTree;
 };
+
+type ChildComponent = [
+  name: string,
+  definition: ImportedComponentDefinition,
+  env: Record<string, any> | null,
+  httpPrefix: string | undefined,
+];
 
 type ComponentDefinitionData = CommonDefinitionData & {
   _env: PropertyValidators;
   _name: string;
+  _init?: string;
   _onInitCallbacks: Record<string, (argsStr: string) => string>;
 };
 type AppDefinitionData = CommonDefinitionData & {
@@ -414,6 +587,18 @@ function createEnvRefs(
   return new Proxy({}, handler);
 }
 
+function createComponentArgRefs(): any {
+  const handler: ProxyHandler<any> = {
+    get(_, prop: string | symbol) {
+      if (typeof prop !== "string") {
+        return undefined;
+      }
+      return { __componentArgRef: prop };
+    },
+  };
+  return new Proxy({}, handler);
+}
+
 function isEnvRef(value: unknown): value is EnvRef {
   return (
     typeof value === "object" &&
@@ -429,6 +614,7 @@ function use<Definition extends ComponentDefinition<any, any>>(
     name?: string;
     httpPrefix?: string;
     env?: Record<string, any>;
+    args?: Record<string, any>;
   },
 ): InstalledComponent<Definition> {
   // At runtime an imported component will have this shape.
@@ -551,12 +737,7 @@ function normalizeHttpPrefix(prefix: string): string {
 }
 
 function buildHttpMounts(
-  childComponents: [
-    string,
-    ImportedComponentDefinition,
-    Record<string, any> | null,
-    string | undefined,
-  ][],
+  childComponents: ChildComponent[],
 ): Record<string, string> {
   const httpMounts: Record<string, string> = {};
   for (const [name, , , httpPrefix] of childComponents) {
@@ -572,14 +753,7 @@ type SerializedEnvArg =
   | { type: "value"; value: string }
   | { type: "envVar"; name: string };
 
-function serializeChildComponents(
-  childComponents: [
-    string,
-    ImportedComponentDefinition,
-    Record<string, any> | null,
-    string | undefined,
-  ][],
-): {
+function serializeChildComponents(childComponents: ChildComponent[]): {
   name: string;
   path: string;
   env: [string, SerializedEnvArg][] | null;
@@ -658,8 +832,8 @@ function exportComponentForAnalysis(
 
 // This is what is actually contained in a ComponentDefinition.
 type RuntimeComponentDefinition = Omit<
-  ComponentDefinition<any, any>,
-  "__exports" | "__env"
+  ComponentDefinitionInternal<any, any, any>,
+  "__exports" | "__env" | "__args"
 > &
   ComponentDefinitionData & {
     export: () => ComponentDefinitionAnalysis;
@@ -691,7 +865,34 @@ export function defineComponent<
   options?: {
     env?: Env;
   },
-): ComponentDefinition<Exports, Env> {
+): ComponentDefinition<Exports, Env>;
+/**
+ * TODO: make this overload public when releasing args.
+ *
+ * @internal
+ */
+export function defineComponent<
+  Exports extends ComponentExports = any,
+  const Env extends EnvDefinition = {},
+  Init extends FunctionReference<"mutation", "internal"> = FunctionReference<
+    "mutation",
+    "internal",
+    {}
+  >,
+>(
+  name: string,
+  options: {
+    env?: Env;
+    init: Init;
+  },
+): ComponentDefinitionInternal<Exports, Env, FunctionArgs<Init>>;
+export function defineComponent(
+  name: string,
+  options?: {
+    env?: EnvDefinition;
+    init?: FunctionReference<"mutation", "internal">;
+  },
+): ComponentDefinitionInternal<any, any, any> {
   const envValidators: PropertyValidators = {};
   if (options?.env) {
     for (const [key, decl] of Object.entries(options.env)) {
@@ -705,6 +906,18 @@ export function defineComponent<
     }
   }
 
+  let init: string | undefined;
+  if (options?.init !== undefined) {
+    const address = getFunctionAddress(options.init);
+    if (address.name === undefined) {
+      throw new Error(
+        `The \`init\` option of component "${name}" must be a function in ` +
+          `this component, e.g. \`internal.init.myInit\`.`,
+      );
+    }
+    init = address.name;
+  }
+
   const ret: RuntimeComponentDefinition = {
     _isRoot: false,
     _name: name,
@@ -712,15 +925,17 @@ export function defineComponent<
     _childComponents: [],
     _exportTree: {},
     _onInitCallbacks: {},
+    ...(init !== undefined ? { _init: init } : {}),
 
     env: createEnvRefs(`component "${name}"`, options?.env),
+    args: createComponentArgRefs(),
 
     export: exportComponentForAnalysis,
     use,
 
-    ...({} as { __exports: any; __env: any }),
+    ...({} as { __exports: any; __env: any; __args: any }),
   };
-  return ret as any as ComponentDefinition<Exports, Env>;
+  return ret as any;
 }
 
 /**

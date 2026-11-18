@@ -8,9 +8,6 @@ const meta = {
   component: BillingPage,
   parameters: {
     layout: "fullscreen",
-    a11y: {
-      test: "todo",
-    },
   },
   beforeEach: () => {
     mocked(useGetCurrentSpend).mockReturnValue({

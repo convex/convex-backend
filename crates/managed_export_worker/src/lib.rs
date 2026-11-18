@@ -11,6 +11,7 @@ use common::{
     errors::report_error,
     execution_context::ExecutionId,
     fastrace_helpers::get_sampled_span,
+    knobs::DISABLE_S3_EXPORT,
     log_streaming::{
         LogEvent,
         LogSender,
@@ -120,6 +121,9 @@ impl<RT: Runtime> S3ExportWorker<RT> {
     }
 
     pub async fn run(mut self) {
+        if *DISABLE_S3_EXPORT {
+            return;
+        }
         let mut backoff = Backoff::new(INITIAL_BACKOFF, MAX_BACKOFF);
         loop {
             match self.run_once().await {

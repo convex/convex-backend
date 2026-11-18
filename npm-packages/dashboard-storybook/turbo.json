@@ -15,21 +15,22 @@
         "shapes#build",
         "system-udfs#build"
       ],
-      // Storybook compiles dashboard and dashboard-self-hosted directly, so
-      // their source, config, and package metadata must invalidate its build.
+      // Storybook reads dashboard source, static assets, and Next/PostCSS config,
+      // plus both apps' TypeScript/package metadata. Allowlisting these inputs
+      // keeps gitignored Next outputs and Turbo logs out of the build hash.
       // The dependencies built above contribute their own task hashes.
-      // Each Turbo invocation writes fresh logs, which would invalidate an
-      // otherwise identical build.
       "inputs": [
         "$TURBO_DEFAULT$",
-        "../dashboard/**",
-        "!../dashboard/.next/**",
-        "!../dashboard/.turbo/**",
-        "!../dashboard/node_modules/**",
-        "../dashboard-self-hosted/**",
-        "!../dashboard-self-hosted/.next/**",
-        "!../dashboard-self-hosted/.turbo/**",
-        "!../dashboard-self-hosted/node_modules/**"
+        "../dashboard/src/**",
+        "../dashboard/public/**",
+        "../dashboard/package.json",
+        "../dashboard/tsconfig.json",
+        "../dashboard/next.config.js",
+        "../dashboard/postcss.config.js",
+        "../dashboard/.env*",
+        "../dashboard-self-hosted/src/**",
+        "../dashboard-self-hosted/package.json",
+        "../dashboard-self-hosted/tsconfig.json"
       ],
       "outputs": ["storybook-static/**"]
     }

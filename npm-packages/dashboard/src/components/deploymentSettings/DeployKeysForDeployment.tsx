@@ -116,7 +116,7 @@ export function DeployKeysForDeployment() {
     return (
       <div id={DEPLOYMENT_SETTINGS_SECTIONS.deployKeys.id} className="w-full">
         <div className="mb-2 flex w-full items-center justify-between">
-          <h4>Deploy Keys</h4>
+          <h3>Deploy Keys</h3>
         </div>
         <NoPermissionMessage
           message="You do not have permission to view deploy keys in this deployment."
@@ -153,6 +153,7 @@ export function DeployKeysForDeployment() {
       {team && deployment && (
         <DeploymentAccessTokenList
           header="Deploy Keys"
+          headingLevel="h3"
           buttonProps={{
             deploymentType,
             getAdminKey: async (

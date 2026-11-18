@@ -198,8 +198,8 @@ fn main() -> anyhow::Result<()> {
     rerun_if_changed("../../npm-packages/system-udfs/tsconfig.json")?;
 
     // Step 1: Ensure the `server`, `dashboard`, and `cli` deps are installed.
-    // Keep the package list in sync with the `Build JS required by Rust` step in
-    // rust.yml, which is what lets the cargo steps there set CONVEX_PREBUILT_JS.
+    // Keep the package list in sync with `build-rust-js` in Justfile so callers
+    // can set CONVEX_PREBUILT_JS.
     if !js_prebuilt() {
         pnpm_install()?;
         let mut pkgs = vec!["convex", "node-executor", "system-udfs", "udf-runtime"];

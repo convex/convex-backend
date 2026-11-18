@@ -24,7 +24,6 @@ const meta = {
       </DeploymentInfoContext.Provider>
     ),
   ],
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof DeploymentEventContent>;
 
 export default meta;

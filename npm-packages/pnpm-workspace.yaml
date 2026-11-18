@@ -166,16 +166,6 @@ minimumReleaseAgeExclude:
   - "@ai-sdk/gateway@4.0.85"
   - "@ai-sdk/provider@4.0.17"
   - "@ai-sdk/provider-utils@5.0.43"
-  - next@16.4.2
-  - "@next/env@16.4.2"
-  - "@next/swc-darwin-arm64@16.4.2"
-  - "@next/swc-darwin-x64@16.4.2"
-  - "@next/swc-linux-arm64-gnu@16.4.2"
-  - "@next/swc-linux-arm64-musl@16.4.2"
-  - "@next/swc-linux-x64-gnu@16.4.2"
-  - "@next/swc-linux-x64-musl@16.4.2"
-  - "@next/swc-win32-arm64-msvc@16.4.2"
-  - "@next/swc-win32-x64-msvc@16.4.2"
   - next@15.5.27
   - "@next/env@15.5.27"
   - "@next/swc-darwin-arm64@15.5.27"
@@ -210,6 +200,10 @@ minimumReleaseAgeExclude:
   # Pulled in alongside the Dependabot vite 6.4.5 bump, which re-resolved the
   # vite 7 line too.
   - vite@7.3.8
+  # Renovate security update: toml@5.0.1
+  - toml@5.0.1
+  # Renovate security update: happy-dom@21.0.4
+  - happy-dom@21.0.4
 
 # Keep react and react-dom out of pnpm's hoisted fallback layer. The workspace
 # has both React 18 (the demos) and React 19 (the dashboards), and
@@ -398,7 +392,7 @@ overrides:
   "morgan@>=1.0.0 <1.12.1": ^1.12.1
   "nanoid@>=3.0.0 <3.3.18": ^3.3.18
   "next@>=15.0.0 <15.5.28": ^15.5.28
-  "next@>=16.0.0 <16.4.1": ^16.4.1
+  "next@>=16.0.0 <16.4.6": ^16.4.6
   "nitropack@>=2.0.0 <2.13.4": 2.13.4
   "node-forge@<1.4.3": ^1.4.3
   "nuxt@>=4.0.0 <4.6.3": ^4.6.3
@@ -439,7 +433,7 @@ overrides:
   "tar@>=7.5.7 <7.5.21": ^7.5.21
   "tinypool@>=1.0.0 <2.1.2": ^2.1.2
   "valibot@>=1.0.0 <1.4.2": ^1.4.2
-  "toml@>=3.0.0 <4.2.0": ^4.2.0
+  "toml@>=3.0.0 <4.2.0": ^5.0.0
   "trim@<0.0.3": ^0.0.3
   "undici@5.28.4": ^6.29.1
   "undici@>=5.29.0 <6.0.0": ^6.29.1

@@ -147,6 +147,10 @@ const NODE_ANALYZE_MAX_BACKOFF: Duration = Duration::from_secs(5);
 #[async_trait]
 pub trait NodeExecutor: Sync + Send {
     fn enable(&self) -> anyhow::Result<()>;
+    /// Memory sizes, in MB, that this executor can run Node actions at.
+    fn supported_memory_mb(&self) -> &'static [u32] {
+        &[512]
+    }
     async fn invoke(
         &self,
         request: ExecutorRequest,
@@ -235,6 +239,10 @@ impl<RT: Runtime> NodeActions<RT> {
 
     pub fn shutdown(&self) {
         self.executor.shutdown()
+    }
+
+    pub fn supported_memory_mb(&self) -> &'static [u32] {
+        self.executor.supported_memory_mb()
     }
 
     #[rustfmt::skip]
@@ -587,7 +595,7 @@ impl TryFrom<ExecutorRequest> for JsonValue {
                     .environment_variables
                     .into_iter()
                     .map(|(name, value)| {
-                        ConvexObject::try_from(PersistedEnvironmentVariable(
+                        ConvexObject::try_from(PersistedEnvironmentVariable::new(
                             EnvironmentVariable::new(name, value),
                         ))
                         .map(JsonValue::from)
@@ -631,7 +639,7 @@ impl TryFrom<ExecutorRequest> for JsonValue {
                     .environment_variables
                     .into_iter()
                     .map(|(name, value)| {
-                        ConvexObject::try_from(PersistedEnvironmentVariable(
+                        ConvexObject::try_from(PersistedEnvironmentVariable::new(
                             EnvironmentVariable::new(name, value),
                         ))
                         .map(JsonValue::from)

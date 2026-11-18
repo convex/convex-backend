@@ -8,10 +8,12 @@ const meta = {
     path: "example.js",
   },
   render: (args) => (
-    <div style={{ height: "100vh", background: "#eee" }}>
+    <div className="h-screen bg-background-primary">
       <ReadonlyCode {...args} />
     </div>
   ),
+  // Monaco loads asynchronously, so whether axe sees the editor varies from
+  // run to run, and the loaded editor has violations of its own.
   parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof ReadonlyCode>;
 

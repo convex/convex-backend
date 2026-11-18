@@ -1614,11 +1614,12 @@ pub static AWS_LAMBDA_CLIENT_MAX_CONCURRENT_REQUESTS: LazyLock<usize> =
 pub static AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB: LazyLock<i32> =
     LazyLock::new(|| env_config("AWS_STATIC_LAMBDA_MEMORY_LIMIT_MB", 512));
 
-/// Whether a push may set `node.defaultMemoryMb` in `convex.json` to a size
-/// other than the smallest. Only cloud deployments size their Lambda from it,
-/// so enable this per partition during rollout.
-pub static NODE_ACTION_MEMORY_MB_ENABLED: LazyLock<bool> =
-    LazyLock::new(|| env_config("NODE_ACTION_MEMORY_MB_ENABLED", false));
+/// Kill switch for `node.defaultMemoryMb` sizes above the smallest on the AWS
+/// Lambda executor. When set, a push that sets a larger size fails.
+/// Deployments that already set one keep their Lambda size until their next
+/// push.
+pub static DISABLE_NODE_ACTION_MEMORY_MB: LazyLock<bool> =
+    LazyLock::new(|| env_config("DISABLE_NODE_ACTION_MEMORY_MB", false));
 
 /// Disk size limit in MB for the static AWS Lambda.
 pub static AWS_STATIC_LAMBDA_DISK_SIZE_MB: LazyLock<i32> =
@@ -2290,6 +2291,12 @@ pub static MAX_LOG_LINES_NODE_ACTIONS: LazyLock<usize> =
 /// Max number of log lines in a single query or mutation
 pub static MAX_LOG_LINES_DATABASE_UDFS: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_LOG_LINES_DATABASE_UDFS", 256).max(1));
+
+/// Kill switch for S3 exports on this conductor. When set, the S3 export
+/// worker never starts, so Porter gets no sync requests. An export resumes
+/// from its checkpoint on the restart after this is unset.
+pub static DISABLE_S3_EXPORT: LazyLock<bool> =
+    LazyLock::new(|| env_config("DISABLE_S3_EXPORT", false));
 
 /// Number of parallel Glue table writes in one S3 export page.
 pub static S3_EXPORT_GLUE_CONCURRENCY: LazyLock<usize> =

@@ -266,7 +266,6 @@ const meta = {
         },
       },
     },
-    a11y: { test: "todo" },
   },
   decorators: [
     (Story) => (

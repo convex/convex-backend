@@ -46,6 +46,7 @@ use crate::{
     environment_variables::types::{
         EnvVarName,
         EnvVarValue,
+        EnvVarVisibility,
         EnvironmentVariable,
         PersistedEnvironmentVariable,
     },
@@ -92,7 +93,7 @@ impl PreloadedEnvironmentVariables {
             return Ok(None);
         };
         let doc: ParsedDocument<PersistedEnvironmentVariable> = doc.parse()?;
-        let var = doc.into_value().0;
+        let var = doc.into_value().variable;
         anyhow::ensure!(var.name() == name, "Invalid environment variable");
         Ok(Some(var.into_value()))
     }
@@ -126,7 +127,7 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
             .await?
             .map(|doc| {
                 let doc: ParsedDocument<PersistedEnvironmentVariable> = doc.parse()?;
-                doc.map(|doc| Ok(doc.0))
+                doc.map(|doc| Ok(doc.variable))
             })
             .transpose()
     }
@@ -139,7 +140,7 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
             return Ok(None);
         };
         let persisted: ParsedDocument<PersistedEnvironmentVariable> = doc.parse()?;
-        Ok(Some(persisted.into_value().0))
+        Ok(Some(persisted.into_value().variable))
     }
 
     #[fastrace::trace]
@@ -154,25 +155,69 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
             .all()
             .await?
         {
-            let old_value = environment_variables
-                .insert(env_var.0.name().to_owned(), env_var.0.value().to_owned());
+            let old_value = environment_variables.insert(
+                env_var.variable.name().to_owned(),
+                env_var.variable.value().to_owned(),
+            );
             anyhow::ensure!(old_value.is_none(), "Duplicate environment variable");
         }
         Ok(environment_variables)
     }
 
+    /// The variables that aren't secrets, the only ones whose value may be
+    /// shown outside of the deployment's functions.
+    pub async fn get_all_non_secret(
+        &mut self,
+    ) -> anyhow::Result<BTreeMap<EnvVarName, EnvVarValue>> {
+        let mut environment_variables = BTreeMap::new();
+        for env_var in self
+            .tx
+            .query_system(
+                TableNamespace::Global,
+                &SystemIndex::<EnvironmentVariablesTable>::by_creation_time(),
+            )?
+            .all()
+            .await?
+        {
+            if env_var.is_secret() {
+                continue;
+            }
+            let old_value = environment_variables.insert(
+                env_var.variable.name().to_owned(),
+                env_var.variable.value().to_owned(),
+            );
+            anyhow::ensure!(old_value.is_none(), "Duplicate environment variable");
+        }
+        Ok(environment_variables)
+    }
+
+    /// Creates a variable whose visibility isn't chosen.
     pub async fn create(
         &mut self,
         env_var: EnvironmentVariable,
         forbidden_names: &HashSet<EnvVarName>,
     ) -> anyhow::Result<ResolvedDocumentId> {
-        if forbidden_names.contains(env_var.name()) {
-            anyhow::bail!(env_var_name_forbidden(env_var.name()));
+        self.create_with_visibility(env_var, None, forbidden_names)
+            .await
+    }
+
+    pub async fn create_with_visibility(
+        &mut self,
+        variable: EnvironmentVariable,
+        visibility: Option<EnvVarVisibility>,
+        forbidden_names: &HashSet<EnvVarName>,
+    ) -> anyhow::Result<ResolvedDocumentId> {
+        if forbidden_names.contains(variable.name()) {
+            anyhow::bail!(env_var_name_forbidden(variable.name()));
         }
         SystemMetadataModel::new_global(self.tx)
             .insert(
                 &ENVIRONMENT_VARIABLES_TABLE,
-                PersistedEnvironmentVariable(env_var).try_into()?,
+                PersistedEnvironmentVariable {
+                    variable,
+                    visibility,
+                }
+                .try_into()?,
             )
             .await
     }
@@ -180,7 +225,7 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
     pub async fn delete(
         &mut self,
         name: &EnvVarName,
-    ) -> anyhow::Result<Option<EnvironmentVariable>> {
+    ) -> anyhow::Result<Option<PersistedEnvironmentVariable>> {
         let Some(doc) = self.get(name).await? else {
             return Ok(None);
         };
@@ -188,7 +233,7 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
             .delete(doc.id())
             .await?;
         let env_var: ParsedDocument<PersistedEnvironmentVariable> = document.parse()?;
-        Ok(Some(env_var.into_value().0))
+        Ok(Some(env_var.into_value()))
     }
 
     pub async fn edit(
@@ -227,16 +272,22 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
                 anyhow::bail!(env_var_name_not_unique(Some(&new_env_var_name)));
             }
 
+            let previous_env_var: ParsedDocument<PersistedEnvironmentVariable> =
+                document.parse()?;
+            let previous_env_var = previous_env_var.into_value();
+
             SystemMetadataModel::new_global(self.tx)
                 .replace(
                     id,
-                    PersistedEnvironmentVariable(environment_variable).try_into()?,
+                    PersistedEnvironmentVariable {
+                        variable: environment_variable,
+                        visibility: previous_env_var.visibility,
+                    }
+                    .try_into()?,
                 )
                 .await?;
 
-            let previous_env_var: ParsedDocument<PersistedEnvironmentVariable> =
-                document.parse()?;
-            previous_env_vars.insert(id, previous_env_var.into_value().0);
+            previous_env_vars.insert(id, previous_env_var.variable);
         }
 
         for (id, previous_env_var) in previous_env_vars {

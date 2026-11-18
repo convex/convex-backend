@@ -6,6 +6,20 @@
   // installed and therefore what every package builds against.
   "globalDependencies": ["pnpm-workspace.yaml"],
   "tasks": {
+    "//#eslint": {
+      "dependsOn": ["@convex-dev/eslint-plugin#build"],
+      "cache": false,
+      "outputs": []
+    },
+    "//#dprint": {
+      // dprint checks repository files outside this Turbo workspace.
+      "cache": false,
+      "outputs": []
+    },
+    "//#check-versions": {
+      "cache": false,
+      "outputs": []
+    },
     "build": {
       "dependsOn": ["^build"],
       "outputs": [
@@ -23,6 +37,13 @@
     },
     "test-esm": {
       "dependsOn": ["build"],
+      "outputs": []
+    },
+    "lint:ci": {
+      "dependsOn": ["build", "^build", "@convex-dev/eslint-plugin#build"],
+      "outputs": []
+    },
+    "checkApiSpec": {
       "outputs": []
     },
     // Deps that expose only `dist/` (convex, shapes, id-encoding, the

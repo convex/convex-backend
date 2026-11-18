@@ -21,6 +21,10 @@ import {
 } from "@common/lib/deploymentContext";
 import { UsageBanner, useCurrentUsageBanner } from "./UsageBanner";
 import {
+  LegacyAdminKeysBanner,
+  useLegacyAdminKeysBanner,
+} from "./LegacyAdminKeysBanner";
+import {
   FailedPaymentBanner,
   useShowFailedPaymentBanner,
 } from "./FailedPaymentBanner";
@@ -132,6 +136,7 @@ function DashboardHeaderWhenLoggedIn() {
   const usageBannerVariant = useCurrentUsageBanner(team?.id ?? null);
   const showFailedPaymentBanner = useShowFailedPaymentBanner();
   const showUpdateBillingAddressBanner = useShowUpdateBillingAddressBanner();
+  const legacyAdminKeysBanner = useLegacyAdminKeysBanner();
 
   if (inNoHeaderRoute) {
     return null;
@@ -149,6 +154,15 @@ function DashboardHeaderWhenLoggedIn() {
         !showUpdateBillingAddressBanner &&
         usageBannerVariant !== null && (
           <UsageBanner team={team!} variant={usageBannerVariant} />
+        )}
+      {!showFailedPaymentBanner &&
+        !showUpdateBillingAddressBanner &&
+        usageBannerVariant === null &&
+        legacyAdminKeysBanner.deploymentCount > 0 && (
+          <LegacyAdminKeysBanner
+            deploymentCount={legacyAdminKeysBanner.deploymentCount}
+            onDismiss={legacyAdminKeysBanner.dismiss}
+          />
         )}
     </div>
   );

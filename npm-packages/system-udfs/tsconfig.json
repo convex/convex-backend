@@ -1,5 +1,10 @@
 {
-  "include": ["convex/**/*", "convex/_generated/*", "vitest.config.ts"],
+  "include": [
+    "convex/**/*",
+    "convex/_generated/*",
+    "vitest.config.ts",
+    "schema.test.ts"
+  ],
   "compilerOptions": {
     "target": "es5",
     "lib": ["dom", "dom.iterable", "esnext"],

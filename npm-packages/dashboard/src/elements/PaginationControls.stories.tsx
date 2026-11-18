@@ -4,7 +4,6 @@ import { PaginationControls } from "./PaginationControls";
 
 const meta = {
   component: PaginationControls,
-  parameters: { a11y: { test: "todo" } },
 } satisfies Meta<typeof PaginationControls>;
 
 export default meta;
