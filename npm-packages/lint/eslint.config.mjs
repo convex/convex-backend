@@ -13,6 +13,7 @@ import storybook from "eslint-plugin-storybook";
 import betterTailwindcss from "eslint-plugin-better-tailwindcss";
 import boundaries from "eslint-plugin-boundaries";
 import convexPlugin from "@convex-dev/eslint-plugin";
+import buttonTipNeedsAriaLabel from "./rules/button-tip-needs-aria-label.mjs";
 
 import { fixupPluginRules } from "@eslint/compat";
 
@@ -366,6 +367,15 @@ const config = [
   { files: dashboardFiles, ...jsxA11y.flatConfigs.recommended },
   {
     files: dashboardFiles,
+    plugins: {
+      local: {
+        rules: { "button-tip-needs-aria-label": buttonTipNeedsAriaLabel },
+      },
+    },
+    rules: { "local/button-tip-needs-aria-label": "error" },
+  },
+  {
+    files: dashboardFiles,
     rules: {
       "react/react-in-jsx-scope": "off",
       "react/prop-types": "off",
@@ -382,7 +392,9 @@ const config = [
         },
       ],
       // Our Button is a control too, and a string `tip` names it when it has
-      // no text. Form fields are covered by label-has-associated-control.
+      // no text (Button uses it as the aria-label). A JSX `tip` doesn't, which
+      // `local/button-tip-needs-aria-label` catches. Form fields are covered by
+      // label-has-associated-control.
       "jsx-a11y/control-has-associated-label": [
         "error",
         {
