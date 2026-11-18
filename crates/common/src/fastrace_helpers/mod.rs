@@ -51,7 +51,18 @@ impl EncodedSpan {
 /// Given an instance name returns a span with the sample percentage specified
 /// in `knobs.rs`
 pub fn get_sampled_span<R: Rng>(deployment_name: &str, name: &str, rng: &mut R) -> Span {
-    let sample_ratio = get_sampling_ratio(deployment_name, name);
+    get_sampled_span_at_least(deployment_name, name, rng, 0.0)
+}
+
+/// Like [`get_sampled_span`], but samples at `min_ratio` when the knob asks
+/// for less.
+pub fn get_sampled_span_at_least<R: Rng>(
+    deployment_name: &str,
+    name: &str,
+    rng: &mut R,
+    min_ratio: f64,
+) -> Span {
+    let sample_ratio = get_sampling_ratio(deployment_name, name).max(min_ratio);
     let should_sample = rng.random_bool(sample_ratio);
     match should_sample {
         true => Span::root(name.to_owned(), SpanContext::random())
