@@ -16,6 +16,10 @@
   # build needs none of mise.toml's tools, and ignoring it keeps init from failing when
   # mise.toml's min_version is newer than the image's mise.
   MISE_IGNORED_CONFIG_PATHS = "/opt/build/repo/mise.toml"
+  # Skips pnpm's slow re-check of every lockfile entry against registry metadata
+  # (minimumReleaseAge, trustPolicy, tarball URLs); CI's `pnpm install --frozen-lockfile`
+  # checks the same lockfile before merge. Lockfile integrity hashes are still enforced.
+  PNPM_CONFIG_TRUST_LOCKFILE = "true"
 
 [[headers]]
   for = "/fonts/*"
