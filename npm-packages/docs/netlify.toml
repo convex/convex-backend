@@ -1,25 +1,20 @@
 [build]
   ignore = "bash npm-packages/docs/scripts/should-build.sh"
-  # Runs from the repo root. `npm-packages/convex`'s build script runs under uv, which
-  # the build image doesn't ship, so install the version mise.toml pins (self-updating
-  # mise first, see MISE_IGNORED_CONFIG_PATHS below) and put mise's shims on PATH.
+  # Runs from the repo root. The docs build reads other workspace packages only as checked-in
+  # source: `convex/src` (TypeDoc) and `@convex-dev/platform/*-openapi.json`.
   command = """
-    mise self-update \
-    && MISE_IGNORED_CONFIG_PATHS= mise install uv \
-    && eval "$(mise activate bash --shims)" \
-    && cd scripts \
+    cd scripts \
     && npm ci \
     && cd ../npm-packages/docs \
     && export PATH="$PWD/../../scripts/node_modules/.bin:$PATH" \
     && pnpm --filter 'docs...' install --frozen-lockfile \
-    && turbo run build --filter=docs^... \
     && npm run build
   """
 
 [build.environment]
-  # Netlify's build image has a version of mise older than the min_version specified in
-  # our mise.toml, so mise can't read that config until the build command self-updates
-  # it; the command unsets this where it needs the pinned tool versions.
+  # Netlify's init phase runs the image's preinstalled mise from the repo root. The docs
+  # build needs none of mise.toml's tools, and ignoring it keeps init from failing when
+  # mise.toml's min_version is newer than the image's mise.
   MISE_IGNORED_CONFIG_PATHS = "/opt/build/repo/mise.toml"
 
 [[headers]]

@@ -13,9 +13,8 @@ npm run dev
 This command starts a local dev server and opens up a browser window. Most
 changes are reflected live without having to restart the server.
 
-If you make changes to the `convex` NPM package and want to see them reflected
-in API docs, run `just turbo run build --filter=convex...` and restart the
-server.
+TypeDoc generates the API docs from `convex` source when the server starts, so
+restart the server to see changes to the `convex` NPM package.
 
 The command runs `npm run dev`, which will not run all checks in our presubmits.
 For example, broken links are not checked. To view all errors, try building and
