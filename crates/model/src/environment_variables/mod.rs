@@ -191,6 +191,29 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
         Ok(environment_variables)
     }
 
+    /// Every variable as it is stored, by name. This includes the value of
+    /// secrets, which callers must keep to themselves.
+    pub async fn get_all_persisted(
+        &mut self,
+    ) -> anyhow::Result<BTreeMap<EnvVarName, PersistedEnvironmentVariable>> {
+        let mut environment_variables = BTreeMap::new();
+        for env_var in self
+            .tx
+            .query_system(
+                TableNamespace::Global,
+                &SystemIndex::<EnvironmentVariablesTable>::by_creation_time(),
+            )?
+            .all()
+            .await?
+        {
+            let env_var = PersistedEnvironmentVariable::clone(&env_var);
+            let old_value =
+                environment_variables.insert(env_var.variable.name().to_owned(), env_var);
+            anyhow::ensure!(old_value.is_none(), "Duplicate environment variable");
+        }
+        Ok(environment_variables)
+    }
+
     /// Creates a variable whose visibility isn't chosen.
     pub async fn create(
         &mut self,

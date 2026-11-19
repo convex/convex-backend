@@ -5,6 +5,7 @@ use axum::{
         State,
     },
     response::IntoResponse,
+    routing::get,
 };
 use common::{
     http::{
@@ -23,6 +24,7 @@ use model::environment_variables::{
     types::{
         EnvVarName,
         EnvVarValue,
+        EnvVarVisibility,
         EnvironmentVariable,
     },
     EnvironmentVariablesModel,
@@ -73,6 +75,13 @@ pub struct UpdateEnvVarsRequest {
     #[serde(default)]
     #[schema(ignore)]
     member_id: Option<MemberId>,
+}
+
+fn is_secret(visibility: EnvVarVisibility) -> bool {
+    match visibility {
+        EnvVarVisibility::Secret => true,
+        EnvVarVisibility::Config => false,
+    }
 }
 
 /// Update environment variables
@@ -180,6 +189,64 @@ pub async fn list_environment_variables(
     }))
 }
 
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvVarResponse {
+    name: String,
+    /// Null for a secret: its value can't be read.
+    value: Option<String>,
+    /// Whether the variable is a secret: functions can read it, but the
+    /// dashboard, the CLI and this API can only overwrite or delete it.
+    /// Null while that is undecided; the value is readable until then.
+    secret: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListAllEnvVarsResponse {
+    /// Every environment variable in the deployment, sorted by name.
+    items: Vec<EnvVarResponse>,
+}
+
+/// List environment variables
+///
+/// Get all environment variables in a deployment, secrets included.
+/// Secrets are listed without their value.
+#[utoipa::path(
+    get,
+    path = "/environment_variables",
+    tag = "Environment Variables",
+    responses(
+        (status = 200, body = ListAllEnvVarsResponse)
+    ),
+    security(
+        ("Deploy Key" = []),
+        ("OAuth Team Token" = []),
+        ("Team Token" = []),
+        ("OAuth Project Token" = []),
+    ),
+)]
+pub async fn list_all_environment_variables(
+    MtState(st): MtState<LocalAppState>,
+    ExtractIdentity(identity): ExtractIdentity,
+) -> Result<impl IntoResponse, HttpResponseError> {
+    identity.require_operation(keybroker::DeploymentOp::ViewEnvironmentVariables)?;
+
+    let mut tx = st.application.begin(identity).await?;
+    let items = EnvironmentVariablesModel::new(&mut tx)
+        .get_all_persisted()
+        .await?
+        .into_iter()
+        .map(|(name, env_var)| EnvVarResponse {
+            name: name.to_string(),
+            value: (!env_var.is_secret()).then(|| env_var.variable.value().to_string()),
+            secret: env_var.visibility.map(is_secret),
+        })
+        .collect();
+
+    Ok(Json(ListAllEnvVarsResponse { items }))
+}
+
 fn validate_env_var(name: &String, value: &String) -> anyhow::Result<EnvironmentVariable> {
     let name: EnvVarName = name.parse()?;
     let value: EnvVarValue = value.parse()?;
@@ -191,8 +258,16 @@ where
     LocalAppState: FromRef<S>,
     S: Clone + Send + Sync + 'static,
 {
-    OpenApiRouter::new().routes(utoipa_axum::routes!(
-        update_environment_variables,
-        list_environment_variables
-    ))
+    OpenApiRouter::new()
+        .routes(utoipa_axum::routes!(
+            update_environment_variables,
+            list_environment_variables
+        ))
+        // Registered as a plain route, which keeps it out of the OpenAPI
+        // spec, and so out of the docs and the generated clients, while its
+        // name is being settled.
+        .route(
+            "/environment_variables",
+            get(list_all_environment_variables),
+        )
 }
