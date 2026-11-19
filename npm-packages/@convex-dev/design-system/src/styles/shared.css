@@ -137,6 +137,7 @@
   --animate-dashLength: dashLength 1.5s ease-in-out infinite;
   --animate-slideUp: slideUp 0.3s ease-out;
   --animate-fadeInBackdrop: fadeIn 0.3s ease-out;
+  --animate-scaleIn: scaleIn 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   --animate-indeterminateBar: indeterminateBar 1.3s ease-in-out infinite;
 
   /* Keyframes */
@@ -279,6 +280,17 @@
     }
     100% {
       opacity: 1;
+    }
+  }
+
+  @keyframes scaleIn {
+    from {
+      opacity: 0;
+      scale: 0.9;
+    }
+    to {
+      opacity: 1;
+      scale: 1;
     }
   }
 

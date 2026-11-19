@@ -19,9 +19,9 @@ function Interactive<T extends string>({
   defaultValue,
 }: {
   options: SegmentedControlOption<T>[];
-  defaultValue: T;
+  defaultValue: T | null;
 }) {
-  const [value, setValue] = useState(defaultValue);
+  const [value, setValue] = useState<T | null>(defaultValue);
   return (
     <SegmentedControl options={options} value={value} onChange={setValue} />
   );
@@ -181,4 +181,17 @@ export const DisabledOptionWithTooltip: Story = {
     value: "day",
   },
   render: () => <Interactive options={periodOptions} defaultValue="day" />,
+};
+
+const visibilityOptions: SegmentedControlOption<"public" | "private">[] = [
+  { label: "Public", value: "public" },
+  { label: "Private", value: "private" },
+];
+
+export const NoSelection: Story = {
+  args: {
+    options: visibilityOptions,
+    value: null,
+  },
+  render: () => <Interactive options={visibilityOptions} defaultValue={null} />,
 };
