@@ -160,7 +160,7 @@ pkcs8 = "0.10.2"
 postgres = { path = "crates/postgres" }
 postgres-protocol = "0.6"
 pretty_assertions = "1"
-prometheus = { git = "https://github.com/convex/rust-prometheus", rev = "367f80d0d3678ed7989814fd5864598746a3b946" }
+prometheus = { git = "https://github.com/convex/rust-prometheus", rev = "89a17d8d6185120517bddda124a494d6960c8515" }
 proptest = "1"
 proptest-derive = "0.5.0"
 proptest-http = { git = "https://github.com/nipunn1313/proptest-http", rev = "0e658bd4f6dbb73bdd3be66f0d2c34c00cc3a446" }
@@ -281,7 +281,7 @@ strip = "debuginfo"
 
 [patch.crates-io]
 v8 = { git = "https://github.com/convex/rusty_v8", rev = "105b32c50433c4cf6eb77fe6a79e93b8637b20e2" }
-prometheus = { git = "https://github.com/convex/rust-prometheus", rev = "367f80d0d3678ed7989814fd5864598746a3b946" }
+prometheus = { git = "https://github.com/convex/rust-prometheus", rev = "89a17d8d6185120517bddda124a494d6960c8515" }
 tungstenite = { git = "https://github.com/danielsufrindisler/tungstenite-rs", rev = "eda0a0c5c15334feca45aec64af90fded2917cb7" }
 moka = { git = "https://github.com/convex/moka", rev = "ef75713ad43a39fae18c3c01fa414eefa9439af0" }
 h2 = { git = "https://github.com/convex/h2", rev = "802108be83230eb90ad5124a2b2ecdacbce70c02" }
