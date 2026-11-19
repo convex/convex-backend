@@ -7,8 +7,11 @@ export type SegmentedControlOption<T extends string> = {
   label: ReactNode;
   value: T;
   disabled?: boolean;
-  /** Shown in a tooltip when the option is disabled. */
-  disabledTooltip?: ReactNode;
+  /**
+   * Shown when hovering the option, whether or not it is disabled. Use it to
+   * name an icon-only label or to explain why the option is disabled.
+   */
+  tip?: ReactNode;
 };
 
 export function SegmentedControl<T extends string>({
@@ -159,8 +162,8 @@ export function SegmentedControl<T extends string>({
             {option.label}
           </button>
         );
-        return option.disabled && option.disabledTooltip ? (
-          <Tooltip key={option.value} tip={option.disabledTooltip} asChild>
+        return option.tip ? (
+          <Tooltip key={option.value} tip={option.tip} asChild>
             {button}
           </Tooltip>
         ) : (

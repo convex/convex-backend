@@ -1,4 +1,5 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
+import { GridIcon, ListBulletIcon } from "@radix-ui/react-icons";
 import { fn } from "storybook/test";
 import { useState } from "react";
 import { SegmentedControl, SegmentedControlOption } from "./SegmentedControl";
@@ -140,4 +141,44 @@ export const FourOptionsConstrained: Story = {
       />
     </div>
   ),
+};
+
+const viewOptions: SegmentedControlOption<"list" | "grid">[] = [
+  {
+    label: <ListBulletIcon aria-label="List" />,
+    value: "list",
+    tip: "List view",
+  },
+  {
+    label: <GridIcon aria-label="Grid" />,
+    value: "grid",
+    tip: "Grid view",
+  },
+];
+
+export const IconsWithTooltips: Story = {
+  args: {
+    options: viewOptions,
+    value: "list",
+  },
+  render: () => <Interactive options={viewOptions} defaultValue="list" />,
+};
+
+const periodOptions: SegmentedControlOption<"day" | "week" | "month">[] = [
+  { label: "Day", value: "day" },
+  { label: "Week", value: "week" },
+  {
+    label: "Month",
+    value: "month",
+    disabled: true,
+    tip: "Monthly data is only available on paid plans.",
+  },
+];
+
+export const DisabledOptionWithTooltip: Story = {
+  args: {
+    options: periodOptions,
+    value: "day",
+  },
+  render: () => <Interactive options={periodOptions} defaultValue="day" />,
 };
