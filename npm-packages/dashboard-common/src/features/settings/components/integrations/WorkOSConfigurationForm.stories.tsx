@@ -157,7 +157,7 @@ function StoryShell({
 
 const meta = {
   component: WorkOSConfigurationForm,
-  parameters: { layout: "padded", a11y: { test: "todo" } },
+  parameters: { layout: "padded" },
   render: (args) => <StoryShell {...(args as Scenario)} />,
 } satisfies Meta<typeof StoryShell>;
 

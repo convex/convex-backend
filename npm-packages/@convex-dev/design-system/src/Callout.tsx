@@ -10,7 +10,10 @@ type CalloutVariant =
 
 const classes: Record<CalloutVariant, string> = {
   error: "bg-background-error",
-  instructions: "bg-background-warning",
+  // In dark mode, secondary text and links reach only 3.5:1 and 4.4:1 on
+  // yellow-900, so the callout lightens both for its contents.
+  instructions:
+    "bg-background-warning dark:[--color-content-secondary:color-mix(in_srgb,var(--content-primary)_85%,transparent)] dark:[--color-content-link:var(--blue-100)]",
   hint: "bg-util-accent/10 dark:bg-util-accent/30",
   upsell: "bg-util-accent/10 dark:bg-util-accent/30",
   localDev:
