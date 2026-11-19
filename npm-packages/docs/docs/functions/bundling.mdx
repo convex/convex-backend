@@ -62,36 +62,7 @@ particularly if they are not effectively
 [aws-sdk](https://www.npmjs.com/package/aws-sdk) or
 [snowflake-sdk](https://www.npmjs.com/package/snowflake-sdk))
 
-You can follow these steps to debug bundle size:
-
-<StepByStep>
-  <Step title="Make sure you're using the most recent version of convex">
-    ```sh
-    npm install convex@latest
-    ```
-  </Step>
-  <Step title="Generate the bundle">
-   Note that this will not push code, just generate a bundle for debugging purposes.
-
-    ```sh
-    npx convex dev --once --debug-bundle-path /tmp/myBundle
-    ```
-
-  </Step>
-  <Step title="Visualize the bundle">
-  Use
-   [source-map-explorer](https://github.com/danvk/source-map-explorer/tree/master)
-   to visualize your bundle.
-
-    ```sh
-    npx source-map-explorer /tmp/myBundle/**/*.js
-    ```
-
-  </Step>
-</StepByStep>
-
-Code bundled for the Convex runtime will be in the `isolate` directory while
-code bundled for node actions will be in the `node` directory.
+If your code exceeds this limit, pushing fails with a `ModulesTooLarge` error.
 
 [External packages](/functions/bundling.mdx#external-packages) count towards the
 size limit, but will not be uploaded when pushing code to your deployment.
@@ -106,6 +77,46 @@ the sourcemaps in your bundle, which can substantially reduce bundle size.
 Upgrade to the latest version of the `convex` package for these improvements.
 
 </Admonition>
+
+### Debugging bundle size
+
+To debug bundle size, run
+[`@convex-dev/bundle-analyzer`](https://www.npmjs.com/package/@convex-dev/bundle-analyzer)
+from the root directory of your project:
+
+```sh
+npx @convex-dev/bundle-analyzer summary
+```
+
+This bundles your code locally and provides a summary of the largest components,
+packages, and modules, along with suggestions for optimizing the bundle.
+
+You can use the bundle analyzer commands to pinpoint areas for optimization. For
+example, the `packages` command lists the largest packages in the bundle:
+
+```sh
+npx @convex-dev/bundle-analyzer packages
+```
+
+You can also use the `packages` command to drill into which modules import a
+package:
+
+```sh
+npx @convex-dev/bundle-analyzer packages zod
+```
+
+To browse the whole bundle in an interactive treemap in your terminal, run
+`explore`:
+
+```sh
+npx @convex-dev/bundle-analyzer explore
+```
+
+Every command (except `explore`) accepts the `--json` option, which prints the
+command output as JSON. This can be helpful for AI agents using these commands.
+
+Run `npx @convex-dev/bundle-analyzer --help` to see all commands, or see the
+[package README](https://www.npmjs.com/package/@convex-dev/bundle-analyzer).
 
 ### Dynamic dependencies
 
