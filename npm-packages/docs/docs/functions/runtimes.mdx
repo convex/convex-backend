@@ -256,6 +256,12 @@ which import is responsible for the error.
 
 Note that argument size limits are lower (5MiB instead of 16MiB).
 
+A Node.js action invocation may or may not run in the same Node.js process as a
+previous invocation. When a process is reused, module-level state, such as
+global variables, caches, and memory usage (RSS), carries over from earlier
+calls. Don't rely on each call starting in a fresh process, or on state
+persisting between calls.
+
 ### Node.js version configuration
 
 By default, all actions ran in the Node.js environment are executed in
