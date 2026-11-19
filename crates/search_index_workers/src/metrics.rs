@@ -172,6 +172,7 @@ pub enum CompactionReason {
     SmallSegments,
     LargeSegments,
     Deletes,
+    EmptySegments,
 }
 
 impl CompactionReason {
@@ -180,6 +181,7 @@ impl CompactionReason {
             CompactionReason::SmallSegments => "small",
             CompactionReason::LargeSegments => "large",
             CompactionReason::Deletes => "deletes",
+            CompactionReason::EmptySegments => "empty",
         };
         StaticMetricLabel::new(COMPACTION_REASON_LABEL, label)
     }
