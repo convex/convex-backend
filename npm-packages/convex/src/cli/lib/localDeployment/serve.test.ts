@@ -71,16 +71,19 @@ test("startServer resolves on a free port and serves requests", async () => {
       {},
     ),
   );
-  const body = await new Promise<string>((resolve, reject) => {
-    http
-      .get({ host: "127.0.0.1", port, agent: false }, (response) => {
-        response.setEncoding("utf8");
-        let data = "";
-        response.on("data", (chunk) => (data += chunk));
-        response.on("end", () => resolve(data));
-      })
-      .on("error", reject);
-  });
-  expect(body).toBe("ok");
-  await cleanups.get(cleanupHandle)!();
+  try {
+    const body = await new Promise<string>((resolve, reject) => {
+      http
+        .get({ host: "127.0.0.1", port, agent: false }, (response) => {
+          response.setEncoding("utf8");
+          let data = "";
+          response.on("data", (chunk) => (data += chunk));
+          response.on("end", () => resolve(data));
+        })
+        .on("error", reject);
+    });
+    expect(body).toBe("ok");
+  } finally {
+    await cleanups.get(cleanupHandle)!();
+  }
 });
