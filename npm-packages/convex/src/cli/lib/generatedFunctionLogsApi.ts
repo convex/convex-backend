@@ -29,7 +29,7 @@ export interface components {
             /** Format: double */
             returnBytes?: number | null;
             occInfo?: null | components["schemas"]["OccInfoJson"];
-            willRetry: boolean;
+            willRetry?: boolean | null;
             /** Format: double */
             executionTimestamp: number;
             identityType: string;

@@ -181,8 +181,9 @@ pub struct FunctionExecution {
     pub occ_info: Option<OccInfo>,
 
     /// Whether this function will be retried (e.g. a mutation that OCCs or hits
-    /// write throughput limits)
-    pub will_retry: bool,
+    /// write throughput limits). `None` when that isn't known yet when the
+    /// execution is logged.
+    pub will_retry: Option<bool>,
 
     // Whether this was a fresh call or a rerun. Only applicable for queries.
     pub query_invocation: Option<QueryInvocation>,
@@ -752,7 +753,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: None,
             occ_info: None,
-            will_retry: false,
+            will_retry: Some(false),
             query_invocation: Some(query_invocation),
         };
         self.log_execution(execution, true, true);
@@ -957,7 +958,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: Some(mutation_retry_count),
             occ_info,
-            will_retry,
+            will_retry: Some(will_retry),
             query_invocation: None,
         };
         self.log_execution(execution, true, true);
@@ -1057,7 +1058,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context: completion.context,
             mutation_retry_count: None,
             occ_info: None,
-            will_retry: false,
+            will_retry: Some(false),
             query_invocation: None,
         };
         self.log_execution(execution, /* send_console_events */ false, true)
@@ -1220,7 +1221,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: None,
             occ_info: None,
-            will_retry: false,
+            will_retry: Some(false),
             query_invocation: None,
         };
         self.log_execution(
