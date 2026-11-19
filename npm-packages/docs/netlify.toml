@@ -25,6 +25,12 @@
   # tmpfs is never carried into the next build.
   PNPM_CONFIG_STORE_DIR = "/tmp/pnpm-store"
 
+# Production (the `docs-prod` branch) generates the reference pages from the
+# release of the `convex` package version instead of the branch. See
+# npm-packages/docs/scripts/reference-source.js.
+[context.production.environment]
+  CONVEX_DOCS_REFERENCE_SOURCE = "release"
+
 [[headers]]
   for = "/fonts/*"
   [headers.values]

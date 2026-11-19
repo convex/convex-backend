@@ -9,6 +9,10 @@ import { join, resolve } from "path";
 import type { Config, ThemeConfig } from "@docusaurus/types";
 import type { Options as PresetClassicOptions } from "@docusaurus/preset-classic";
 import type * as OpenApiPlugin from "docusaurus-plugin-openapi-docs";
+import {
+  prepareReferenceSource,
+  writeEntryPointsTsconfig,
+} from "./scripts/reference-source.js";
 
 // Load environment variables.
 dotenv.config({ path: ".env.local" });
@@ -22,6 +26,11 @@ const ENTRY_POINTS_TO_DOCUMENT = [
   "nextjs",
   "values",
 ];
+
+const referenceSource = prepareReferenceSource();
+const apiEntryPoints = ENTRY_POINTS_TO_DOCUMENT.map((entryPoint) =>
+  join(referenceSource.packageDir, "src", entryPoint, "index.ts"),
+);
 
 const config: Config = {
   future: {
@@ -327,19 +336,16 @@ const config: Config = {
       "docusaurus-plugin-typedoc",
       {
         id: "api",
-        entryPoints: ENTRY_POINTS_TO_DOCUMENT.map(
-          (entryPoint) => "../convex/src/" + entryPoint + "/index.ts",
-        ),
-        tsconfig: "../convex/tsconfig.json",
+        entryPoints: apiEntryPoints,
+        tsconfig: writeEntryPointsTsconfig(referenceSource, apiEntryPoints),
         excludePrivate: true,
         excludeInternal: true,
-        // Don't generate "defined in" text when generating docs because our
-        // source isn't public.
-        disableSources: false,
-        sourceLinkTemplate:
-          "https://github.com/convex/convex-js/blob/main/{path}#L{line}",
-        gitRemote: "https://github.com/convex/convex-js",
-        basePath: "../convex/src",
+        plugin: [resolve("./scripts/typedoc-api-plugin.js")],
+        pageBanner: referenceSource.pageBanner,
+        sourceLinkRoot: referenceSource.root,
+        sourceLinkTemplate: `https://github.com/${referenceSource.linkRepo}/blob/{gitRevision}/{path}#L{line}`,
+        gitRevision: referenceSource.linkRef,
+        basePath: join(referenceSource.packageDir, "src"),
         // Keep everything in source order so we can be intentional about our
         // ordering. This seems to only work for functions, variables and type
         // aliases but it's something.
