@@ -739,7 +739,7 @@ pub enum DocumentSchema {
 }
 
 impl DocumentSchema {
-    fn check_value(
+    pub fn check_value(
         &self,
         value: &ConvexObject,
         table_mapping: &NamespacedTableMapping,
