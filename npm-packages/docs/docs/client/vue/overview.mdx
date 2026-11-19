@@ -44,10 +44,16 @@ started, the [nuxt-convex-module docs](https://nuxt-convex-module.dev) for more
 documentation, or its [GitHub page](https://github.com/qruto/nuxt-convex-module)
 for issues.
 
-It ports the official [Convex React client](/client/react/overview.mdx), with
-some additions. The port also covers the [Clerk](/auth/clerk.mdx) and
-[Auth0](/auth/auth0.mdx) adapters and the
-[Polar](https://www.convex.dev/components/polar) component's client.
+It ports the official [Convex React client](/client/react/overview.mdx), along
+with the following first-party packages:
+[Convex Auth](/auth/convex-auth/index.mdx),
+[`convex-helpers`](https://github.com/get-convex/convex-helpers),
+[Persistent Text Streaming](https://www.convex.dev/components/persistent-text-streaming),
+[Presence](https://www.convex.dev/components/presence) and
+[Rate Limiter](https://www.convex.dev/components/rate-limiter). In addition, it
+covers Convex's integrations with [Clerk](/auth/clerk.mdx),
+[Auth0](/auth/auth0.mdx), [Polar](https://www.convex.dev/components/polar) and
+[Cloudflare R2](https://www.convex.dev/components/cloudflare-r2).
 
 Beyond the port, it adds a `<ConvexImage>` component and
 [file storage](https://nuxt-convex-module.dev/guide/file-storage) composables

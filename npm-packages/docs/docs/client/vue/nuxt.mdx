@@ -42,11 +42,16 @@ for more documentation, or its
 [GitHub page](https://github.com/qruto/nuxt-convex-module) for issues.
 
 It ports the official [Convex React](/client/react/overview.mdx) and
-[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients, with some
-additions. The port also covers the [Clerk](/auth/clerk.mdx) and
-[Auth0](/auth/auth0.mdx) adapters and the clients of the
-[Better Auth](https://labs.convex.dev/better-auth) and
-[Polar](https://www.convex.dev/components/polar) components.
+[Next.js](/client/nextjs/app-router/server-rendering.mdx) clients, along with
+the following first-party packages: [Convex Auth](/auth/convex-auth/index.mdx),
+[`convex-helpers`](https://github.com/get-convex/convex-helpers),
+[Persistent Text Streaming](https://www.convex.dev/components/persistent-text-streaming),
+[Presence](https://www.convex.dev/components/presence) and
+[Rate Limiter](https://www.convex.dev/components/rate-limiter). In addition, it
+covers Convex's integrations with [Clerk](/auth/clerk.mdx),
+[Auth0](/auth/auth0.mdx), [Better Auth](https://labs.convex.dev/better-auth),
+[Polar](https://www.convex.dev/components/polar) and
+[Cloudflare R2](https://www.convex.dev/components/cloudflare-r2).
 
 Beyond the port, it adds:
 
@@ -56,9 +61,9 @@ Beyond the port, it adds:
 - A `<ConvexImage>` component and
   [file storage](https://nuxt-convex-module.dev/guide/file-storage) composables
   with upload progress, queues and retries
-- A
-  [route middleware](https://nuxt-convex-module.dev/components/better-auth#use)
-  that protects pages with Better Auth
+- Route middleware that protects pages with
+  [Convex Auth](https://nuxt-convex-module.dev/components/convex-auth#protect-a-page)
+  or [Better Auth](https://nuxt-convex-module.dev/components/better-auth#use)
 - A Convex tab in [Nuxt DevTools](https://nuxt-convex-module.dev/guide/devtools)
 - A
   [Content Security Policy](https://nuxt-convex-module.dev/getting-started/security)
