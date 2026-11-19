@@ -25,9 +25,11 @@ use common::{
         },
     },
     components::{
+        CanonicalizedComponentFunctionPath,
         ComponentDefinitionPath,
         ComponentId,
         ComponentPath,
+        PublicFunctionPath,
     },
     errors::JsError,
     execution_context::RequestMetadata,
@@ -46,6 +48,7 @@ use common::{
         TableValidationOutcome,
     },
     types::{
+        AllowedVisibility,
         EnvVarName,
         EnvVarValue,
         IndexName,
@@ -53,6 +56,7 @@ use common::{
         NodeDependency,
         RepeatableTimestamp,
         Timestamp,
+        UdfType,
     },
     version::Version,
 };
@@ -99,6 +103,10 @@ use model::{
             SchemaChange,
         },
         file_based_routing::file_based_exports,
+        init::{
+            init_function,
+            resolve_component_args,
+        },
         type_checking::{
             CheckedComponent,
             TypecheckContext,
@@ -149,18 +157,26 @@ use serde::{
     Deserialize,
     Serialize,
 };
+use serde_json::Value as JsonValue;
 use sync_types::{
     module_path::InvalidModulePathError,
+    types::SerializedArgs,
     CanonicalizedModulePath,
+    CanonicalizedUdfPath,
     ModulePath,
 };
 use udf::{
     environment::system_env_var_overrides,
+    validation::{
+        PendingArgsPolicy,
+        ValidatedPathAndArgs,
+    },
     EvaluateAppDefinitionsResult,
 };
 use usage_tracking::FunctionUsageTracker;
 use value::{
     sha256::Sha256Digest,
+    ConvexObject,
     DeveloperDocumentId,
     ResolvedDocumentId,
     TableName,
@@ -168,12 +184,21 @@ use value::{
 };
 
 use crate::{
+    application_function_runner::ComponentInit,
     schema_worker::table_shape_provider,
     validate_env_var_values,
     Application,
     ApplyConfigArgs,
     ConfigMetadataAndSchema,
 };
+
+fn init_failure(
+    init_path: &CanonicalizedUdfPath,
+    component_path: &ComponentPath,
+    details: &str,
+) -> String {
+    format!("init {init_path} of component {component_path:?}:\n{details}")
+}
 
 pub struct PushAnalytics {
     pub config: ConfigMetadata,
@@ -965,6 +990,11 @@ impl<RT: Runtime> Application<RT> {
                             definition_diffs,
                             component_diffs,
                         };
+
+                        // Run component inits after the transaction has the new modules and
+                        // component tree
+                        self.run_component_inits(tx, start_push).await?;
+
                         Ok((diff, audit_log_events))
                     }
                     .in_span(Span::enter_with_local_parent("finish_push_tx"))
@@ -989,6 +1019,113 @@ impl<RT: Runtime> Application<RT> {
             })?;
 
         Ok((diff, ts))
+    }
+
+    async fn run_component_inits(
+        &self,
+        tx: &mut Transaction<RT>,
+        start_push: &StartPushResponse,
+    ) -> anyhow::Result<()> {
+        // Walk the component tree to resolve component arguments
+        // Since parent components may forward their args to their child components, we
+        // must resolve the parent component first
+        let mut requests = Vec::new();
+        let mut stack = vec![(&start_push.app, ConvexObject::empty())];
+        while let Some((component, args)) = stack.pop() {
+            let evaluated = start_push
+                .analysis
+                .get(&component.definition_path)
+                .context("Missing analysis for component definition")?;
+            for instantiation in &evaluated.definition.child_components {
+                let child = component
+                    .child_components
+                    .get(&instantiation.name)
+                    .with_context(|| format!("Missing child component {:?}", instantiation.name))?;
+                let child_args =
+                    resolve_component_args(tx, component, &args, instantiation).await?;
+                stack.push((child, child_args));
+            }
+            // init is only available within components, not the app.
+            if component.component_path.is_root() {
+                continue;
+            }
+            let Some((init_path, _)) = init_function(&component.component_path, evaluated)? else {
+                continue;
+            };
+            requests.push(
+                self.prepare_component_init(tx, &component.component_path, init_path, args)
+                    .await?,
+            );
+        }
+        if requests.is_empty() {
+            return Ok(());
+        }
+
+        let outcomes = self.runner.run_component_inits(tx, requests).await?;
+        let mut failures = Vec::new();
+        for (path, outcome) in outcomes {
+            let Err(js_error) = outcome.result else {
+                continue;
+            };
+            let failure = init_failure(&path.udf_path, &path.component_path, &js_error.to_string());
+            failures.push((path.component_path, failure));
+        }
+        if !failures.is_empty() {
+            failures.sort_by(|(a, _), (b, _)| a.cmp(b));
+            let failures: Vec<_> = failures.into_iter().map(|(_, failure)| failure).collect();
+            let what_failed = if failures.len() == 1 {
+                "an init failed".to_string()
+            } else {
+                format!("{} inits failed", failures.len())
+            };
+            anyhow::bail!(ErrorMetadata::bad_request(
+                "InitFailed",
+                format!(
+                    "The push was rolled back because {what_failed}:\n\n{}",
+                    failures.join("\n\n"),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn prepare_component_init(
+        &self,
+        tx: &mut Transaction<RT>,
+        component_path: &ComponentPath,
+        init_path: &CanonicalizedUdfPath,
+        args: ConvexObject,
+    ) -> anyhow::Result<ComponentInit> {
+        let arguments = SerializedArgs::from_args(vec![JsonValue::from(args)])?;
+
+        let path = CanonicalizedComponentFunctionPath {
+            component: component_path.clone(),
+            udf_path: init_path.clone(),
+        };
+        let validated = ValidatedPathAndArgs::new_with_returns_validator(
+            AllowedVisibility::All,
+            tx,
+            PublicFunctionPath::Component(path),
+            arguments,
+            UdfType::Mutation,
+            PendingArgsPolicy::Reject,
+        )
+        .await?;
+        let (path_and_args, returns_validator, _) = match validated {
+            Ok(validated) => validated,
+            Err(js_error) => anyhow::bail!(ErrorMetadata::bad_request(
+                "InvalidComponentArgs",
+                init_failure(init_path, component_path, &js_error.to_string()),
+            )),
+        };
+        let component = path_and_args.path().component;
+        let table_mapping = tx.table_mapping().namespace(component.into());
+
+        Ok(ComponentInit {
+            path_and_args,
+            returns_validator,
+            table_mapping,
+        })
     }
 
     /// N.B.: does not check auth
