@@ -7,6 +7,7 @@
         ".docusaurus/**",
         "typedoc-sidebar.js",
         "docs/api/**",
+        "docs/cli/reference/**",
         "docs/management-api/**",
         "docs/deployment-api/**",
         "docs/public-deployment-api/**",

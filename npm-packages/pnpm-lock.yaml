@@ -687,9 +687,6 @@ importers:
       '@auth0/auth0-react':
         specifier: 2.15.1
         version: 2.15.1(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@babel/code-frame':
-        specifier: ^7.27.1
-        version: 7.29.0
       '@babel/parser':
         specifier: ^7.27.1
         version: 7.28.5
@@ -744,9 +741,6 @@ importers:
       '@testing-library/react':
         specifier: ~16.3.0
         version: 16.3.0(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.8))(@types/react@19.2.8)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@types/babel__code-frame':
-        specifier: ^7.0.6
-        version: 7.0.6
       '@types/deep-equal':
         specifier: 1.0.4
         version: 1.0.4

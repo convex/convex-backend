@@ -440,6 +440,7 @@ const config: Config = {
         },
       },
     ],
+    "./src/plugins/cliReferencePlugin",
     "./src/plugins/prefixIds",
     "./src/plugins/imageZoomPlugin",
     [

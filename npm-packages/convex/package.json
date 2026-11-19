@@ -273,7 +273,6 @@
   ],
   "devDependencies": {
     "@auth0/auth0-react": "2.15.1",
-    "@babel/code-frame": "^7.27.1",
     "@babel/parser": "^7.27.1",
     "@babel/types": "^7.27.1",
     "@clerk/react": "^6.4.3",
@@ -292,7 +291,6 @@
     "@sentry/node": "^10.76.2",
     "@swc/core": "1.15.8",
     "@testing-library/react": "~16.3.0",
-    "@types/babel__code-frame": "^7.0.6",
     "@types/deep-equal": "1.0.4",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.4",
