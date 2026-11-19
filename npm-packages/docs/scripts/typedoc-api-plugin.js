@@ -12,6 +12,7 @@
 // names come from the classes of `app`'s components.
 
 const path = require("path");
+const { addPageBanner } = require("./page-banner.js");
 
 exports.load = function (app) {
   app.options.addDeclaration({
@@ -50,13 +51,6 @@ exports.load = function (app) {
     if (!banner || !page.contents) {
       return;
     }
-    const frontMatter = /^---\n[\s\S]*?\n---\n/.exec(page.contents);
-    const splitAt = frontMatter ? frontMatter[0].length : 0;
-    page.contents =
-      page.contents.slice(0, splitAt) +
-      "\n" +
-      banner +
-      "\n\n" +
-      page.contents.slice(splitAt);
+    page.contents = addPageBanner(page.contents, banner);
   });
 };

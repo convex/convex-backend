@@ -6,13 +6,19 @@
  *
  * Run from `npm-packages/convex/`:
  *
- *   npx tsx scripts/generate-cli-docs.ts --out <dir>
+ *   npx tsx scripts/generate-cli-docs.ts --out <dir> [--source <dir>]
+ *
+ * `--source` is the `convex` package whose CLI to document, e.g. an extracted
+ * release. It defaults to this package. Either way, this package's generator
+ * renders the pages.
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { buildProgram } from "../src/cli/program.js";
 import { generateDocs } from "../src/cli/lib/generateDocs.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const CATEGORY_FILE = "_category_.json";
 const CATEGORY_CONTENTS =
@@ -22,6 +28,7 @@ async function main() {
   const { values } = parseArgs({
     options: {
       out: { type: "string" },
+      source: { type: "string", default: resolve(__dirname, "..") },
     },
   });
   if (values.out === undefined) {
@@ -29,6 +36,9 @@ async function main() {
   }
   const outDir = resolve(values.out);
 
+  const { buildProgram } = await import(
+    pathToFileURL(join(resolve(values.source), "src/cli/program.ts")).href
+  );
   const generated: Record<string, string> = {
     [CATEGORY_FILE]: CATEGORY_CONTENTS,
     ...generateDocs(buildProgram()),
