@@ -39,6 +39,8 @@ pub enum DeploymentOp {
     WriteUsageLimits,
     ViewUsage,
     UseAiGateway,
+    ConfigurePeriodicBackups,
+    DisablePeriodicBackups,
     #[serde(other)]
     Unknown,
 }
@@ -76,6 +78,12 @@ impl From<DeploymentOp> for ProtoDeploymentOperation {
             DeploymentOp::WriteUsageLimits => ProtoDeploymentOperation::WriteUsageLimits,
             DeploymentOp::ViewUsage => ProtoDeploymentOperation::ViewUsage,
             DeploymentOp::UseAiGateway => ProtoDeploymentOperation::UseAiGateway,
+            DeploymentOp::ConfigurePeriodicBackups => {
+                ProtoDeploymentOperation::ConfigurePeriodicBackups
+            },
+            DeploymentOp::DisablePeriodicBackups => {
+                ProtoDeploymentOperation::DisablePeriodicBackups
+            },
             DeploymentOp::Unknown => ProtoDeploymentOperation::Unspecified,
         }
     }
@@ -111,6 +119,8 @@ impl From<ProtoDeploymentOperation> for DeploymentOp {
             ProtoDeploymentOperation::WriteUsageLimits => Self::WriteUsageLimits,
             ProtoDeploymentOperation::ViewUsage => Self::ViewUsage,
             ProtoDeploymentOperation::UseAiGateway => Self::UseAiGateway,
+            ProtoDeploymentOperation::ConfigurePeriodicBackups => Self::ConfigurePeriodicBackups,
+            ProtoDeploymentOperation::DisablePeriodicBackups => Self::DisablePeriodicBackups,
         }
     }
 }

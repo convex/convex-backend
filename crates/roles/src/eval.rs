@@ -295,6 +295,8 @@ pub const ALL_DEPLOYMENT_OPS: &[DeploymentOp] = &[
     DeploymentOp::WriteUsageLimits,
     DeploymentOp::ViewUsage,
     DeploymentOp::UseAiGateway,
+    DeploymentOp::ConfigurePeriodicBackups,
+    DeploymentOp::DisablePeriodicBackups,
 ];
 
 /// Authoritative mapping from a keybroker [`DeploymentOp`] to the
@@ -329,6 +331,8 @@ pub fn deployment_op_action(op: DeploymentOp) -> Option<RoleStatementAction> {
         O::WriteUsageLimits => A::WriteUsageLimits,
         O::ViewUsage => A::ViewDeploymentUsage,
         O::UseAiGateway => A::UseAiGateway,
+        O::ConfigurePeriodicBackups => A::ConfigurePeriodicBackups,
+        O::DisablePeriodicBackups => A::DisablePeriodicBackups,
         O::Unknown => return None,
     })
 }

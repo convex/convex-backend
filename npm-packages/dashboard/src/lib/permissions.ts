@@ -131,6 +131,8 @@ export const DEPLOYMENT_OP_TO_ACTION: Record<
   ViewIntegrations: "deployment:integrations:view",
   WriteIntegrations: "deployment:integrations:write",
   UseAiGateway: "deployment:aiGateway:use",
+  ConfigurePeriodicBackups: "deployment:backups:configurePeriodic",
+  DisablePeriodicBackups: "deployment:backups:disablePeriodic",
 };
 
 const READ_ONLY_ACTIONS: RoleStatementAction[] = [

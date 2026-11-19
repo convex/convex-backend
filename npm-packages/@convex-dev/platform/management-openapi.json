@@ -3693,7 +3693,9 @@
                 "deployment:usageLimits:view",
                 "deployment:usageLimits:write",
                 "deployment:usage:view",
-                "deployment:aiGateway:use"
+                "deployment:aiGateway:use",
+                "deployment:backups:configurePeriodic",
+                "deployment:backups:disablePeriodic"
               ]
             },
             "description": "Optional list of allowed operations for this deploy key. If omitted, the key is allowed every action the caller is currently allowed to perform on this deployment. Must contain at least one action if provided."
@@ -4074,7 +4076,9 @@
                 "deployment:usageLimits:view",
                 "deployment:usageLimits:write",
                 "deployment:usage:view",
-                "deployment:aiGateway:use"
+                "deployment:aiGateway:use",
+                "deployment:backups:configurePeriodic",
+                "deployment:backups:disablePeriodic"
               ]
             },
             "description": "The same operations as `allowedOperations`, in the colon-based action format (e.g. `\"deployment:data:view\"`). Unlike `allowedOperations`, this is always present: an unrestricted key (where `allowedOperations` is omitted) lists every deployment action here."
