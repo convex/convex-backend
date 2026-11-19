@@ -6959,31 +6959,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8dd856d451cc0da70e2ef2ce95a18e39a93b7558bedf10201ad28503f918568"
 
 [[package]]
-name = "managed_export"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrow-array",
- "aws-credential-types",
- "aws-sdk-glue",
- "aws-sdk-s3",
- "common",
- "errors",
- "fastrace",
- "futures",
- "iceberg",
- "iceberg-storage-opendal",
- "keybroker",
- "parquet",
- "pb",
- "prost 0.14.3",
- "serde_json",
- "tokio",
- "uuid",
- "value",
-]
-
-[[package]]
 name = "managed_export_worker"
 version = "0.1.0"
 dependencies = [
@@ -10015,6 +9990,31 @@ name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "s3_exports"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow-array",
+ "aws-credential-types",
+ "aws-sdk-glue",
+ "aws-sdk-s3",
+ "common",
+ "errors",
+ "fastrace",
+ "futures",
+ "iceberg",
+ "iceberg-storage-opendal",
+ "keybroker",
+ "parquet",
+ "pb",
+ "prost 0.14.3",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "value",
+]
 
 [[package]]
 name = "safe_arch"
