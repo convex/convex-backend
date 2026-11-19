@@ -1138,12 +1138,8 @@ impl<RT: Runtime> Transaction<RT> {
                     interval,
                     max_size: 100,
                 };
-                let Ok([result]): Result<[_; 1], _> = self
-                    .index
-                    .base_snapshot_mut()
-                    .range_batch(&[&request])
-                    .await
-                    .try_into()
+                let Ok([result]): Result<[_; 1], _> =
+                    self.index.range_no_deps(&[&request]).await.try_into()
                 else {
                     anyhow::bail!("returned wrong batch size")
                 };
@@ -1154,7 +1150,10 @@ impl<RT: Runtime> Transaction<RT> {
                     ..
                 } = request;
                 (_, interval) = request.interval.split(cursor, request.order);
-                for (_index_key, ts, _doc) in docs {
+                for (_index_key, _doc, ts) in docs {
+                    let WriteTimestamp::Committed(ts) = ts else {
+                        anyhow::bail!("unexpected pending write in {index_name:?}");
+                    };
                     sha256.update(&u64::to_le_bytes(ts.into()));
                 }
             }

@@ -611,6 +611,11 @@ impl IndexRegistry {
             .collect()
     }
 
+    /// Whether the registry holds an index with this ID, enabled or pending.
+    pub fn contains_index_id(&self, index_id: &IndexId) -> bool {
+        self.index_names_by_id.contains_key(index_id)
+    }
+
     pub fn enabled_index_by_index_id(&self, index_id: &IndexId) -> Option<&Index> {
         let name = self.index_names_by_id.get(index_id)?;
         self.enabled_indexes
