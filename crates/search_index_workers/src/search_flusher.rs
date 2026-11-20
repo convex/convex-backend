@@ -841,7 +841,7 @@ async fn incremental_table_scan_stream<'a, T: SearchIndex>(
 /// The cursor to resume the table scan from is written to `new_cursor` once
 /// the returned stream has been fully consumed.
 #[allow(clippy::too_many_arguments)]
-fn build_incremental_doc_stream<'a, T: SearchIndex>(
+pub fn build_incremental_doc_stream<'a, T: SearchIndex>(
     reader: &'a RepeatablePersistence,
     snapshot: &'a PersistenceSnapshot,
     previous_ts: RepeatableTimestamp,
