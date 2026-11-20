@@ -19,6 +19,7 @@
 const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { formatReferenceSourceBanner } = require("./reference-source-banner.js");
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const CONVEX_PACKAGE_DIR = "npm-packages/convex";
@@ -50,6 +51,18 @@ generate this page from the release instead, set
 \`${SOURCE_ENV_VAR}=release\`.
 
 :::`;
+
+function printBanner(source) {
+  // chalk is ESM-only; Node loads it with `require` since 22.12, the minimum
+  // in package.json's `engines`.
+  const { default: chalk } = require("chalk");
+  console.log(
+    formatReferenceSourceBanner(source, {
+      chalk,
+      hyperlinks: chalk.level > 0 && Boolean(process.stdout.isTTY),
+    }),
+  );
+}
 
 function git(...args) {
   return execFileSync("git", args, {
@@ -178,7 +191,7 @@ function releaseSourceLinks(commit) {
         `source links point at its main branch.`,
     );
   }
-  return { linkRepo: PUBLIC_REPO, linkRef: mirror ?? "main" };
+  return { mirrorRepo: PUBLIC_REPO, mirrorRef: mirror ?? "main" };
 }
 
 function versionAt(commit) {
@@ -239,11 +252,13 @@ function findRelease() {
   const tag = `npm/${version}`;
   if (ensureTag(tag)) {
     const commit = git("rev-parse", `${tag}^{commit}`);
-    console.log(
-      `📚 Reference docs: documenting convex@${version} from ${tag} ` +
-        `(${commit}), because ${SOURCE_ENV_VAR}=release.`,
-    );
-    return { commit, ...releaseSourceLinks(commit) };
+    return {
+      kind: "release",
+      version,
+      tag,
+      commit,
+      ...releaseSourceLinks(commit),
+    };
   }
 
   const commit = lastVersionCommit();
@@ -253,13 +268,13 @@ function findRelease() {
         `(${commit}) sets it to ${versionAt(commit)}, not ${version}`,
     );
   }
-  console.warn(
-    `⚠️  Reference docs: documenting convex@${version} from ${commit}, the ` +
-      `commit that set the version, because ${SOURCE_ENV_VAR}=release and ` +
-      `origin has no ${tag} tag. That's expected while releasing ${version}; ` +
-      "rebuild once the tag is pushed.",
-  );
-  return { commit, ...releaseSourceLinks(commit) };
+  return {
+    kind: "untagged",
+    version,
+    tag,
+    commit,
+    ...releaseSourceLinks(commit),
+  };
 }
 
 /**
@@ -275,11 +290,7 @@ function prepareReferenceSource() {
   const mode = process.env[SOURCE_ENV_VAR] || "branch";
   if (mode === "branch") {
     const commit = git("rev-parse", "HEAD");
-    console.log(
-      `📚 Reference docs: documenting the working tree (${commit}), with a ` +
-        `banner on every generated page, because ${SOURCE_ENV_VAR} isn't ` +
-        '"release" (Netlify sets it for production deploys).',
-    );
+    printBanner({ kind: "dev", head: commit, envVar: SOURCE_ENV_VAR });
     return {
       root: REPO_ROOT,
       packageDir: path.join(REPO_ROOT, CONVEX_PACKAGE_DIR),
@@ -294,16 +305,14 @@ function prepareReferenceSource() {
     );
   }
 
-  const { commit, linkRepo, linkRef } = findRelease();
-  extract(commit);
-  console.log(
-    `📚 Reference docs: source links point at ${linkRepo}@${linkRef}.`,
-  );
+  const release = findRelease();
+  extract(release.commit);
+  printBanner(release);
   return {
     root: EXTRACT_ROOT,
     packageDir: path.join(EXTRACT_ROOT, CONVEX_PACKAGE_DIR),
-    linkRepo,
-    linkRef,
+    linkRepo: release.mirrorRepo,
+    linkRef: release.mirrorRef,
     pageBanner: "",
   };
 }
