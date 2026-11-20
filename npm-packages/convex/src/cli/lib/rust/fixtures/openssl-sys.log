@@ -1,0 +1,16 @@
+warning: patch `reqwest v0.12.99 (/Users/tomasdomingos/convex-rs/crates/convex_reqwest)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling serde_core v1.0.229
+   Compiling openssl-sys v0.9.117
+   Compiling generic-array v0.14.7
+   Compiling fnv v1.0.7
+warning: openssl-sys@0.9.117: Could not find directory of OpenSSL installation, and this `-sys` crate cannot proceed without this knowledge. If OpenSSL is installed and this crate had trouble finding it,  you can set the `OPENSSL_DIR` envir
+error: failed to run custom build command for `openssl-sys v0.9.117`
+
+Caused by:
+  WASM32_WASIP1_OPENSSL_LIB_DIR unset
+  OPENSSL_LIB_DIR unset
+warning: build failed, waiting for other jobs to finish...

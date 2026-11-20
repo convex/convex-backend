@@ -15,6 +15,13 @@ import {
   getDeploymentSelection,
   type DeploymentSelection,
 } from "./lib/deploymentSelection.js";
+import {
+  RUST_RUNTIMES,
+  setRustBackend,
+  setRustBuildMode,
+  setRustRuntimeFlag,
+  setRustNoSimdFlag,
+} from "./lib/rust.js";
 import { checkVersionAndAiFilesStaleness } from "./lib/updates.js";
 
 export const dev = new Command("dev")
@@ -160,6 +167,18 @@ deployment, e.g. ${CONVEX_DEPLOYMENT_ENV_VAR_NAME} or ${CONVEX_SELF_HOSTED_URL_V
 Same format as .env.local or .env files, and overrides them.`,
     ),
   )
+  .addOption(
+    new Option(
+      "--no-simd",
+      "Build Rust wasm functions without SIMD (also CONVEX_RUST_NO_SIMD=1)",
+    ),
+  )
+  .addOption(
+    new Option(
+      "--rust-runtime <runtime>",
+      'Runtime for "use rust" actions: wasm (default), native, or auto',
+    ).choices(RUST_RUNTIMES),
+  )
   .addOption(new Option("--skip-push").default(false).hideHelp())
   .addOption(new Option("--admin-key <adminKey>").hideHelp())
   .addOption(new Option("--url <url>").hideHelp())
@@ -179,6 +198,10 @@ Same format as .env.local or .env files, and overrides them.`,
   .action(async (cmdOptions) => {
     const ctx = await oneoffContext(cmdOptions);
     installSigintHandler(ctx);
+    // Rust: use the fast incremental profile (deploy uses full release).
+    setRustBuildMode("dev");
+    setRustRuntimeFlag(cmdOptions.rustRuntime);
+    setRustNoSimdFlag(cmdOptions.simd === false);
 
     if (cmdOptions.deployment !== undefined) {
       return await ctx.crash({
@@ -279,6 +302,7 @@ Same format as .env.local or .env files, and overrides them.`,
     );
 
     announceDeploymentTarget("Developing against deployment:", credentials);
+    setRustBackend(credentials);
 
     await Promise.all([
       ...(!cmdOptions.skipPush

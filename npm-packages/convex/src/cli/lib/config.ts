@@ -22,6 +22,7 @@ import {
   entryPointsByEnvironment,
 } from "../../bundler/index.js";
 import { version } from "../version.js";
+import { bundleRust } from "./rust.js";
 import { deploymentDashboardUrlPage } from "./dashboard.js";
 import {
   functionsDir,
@@ -103,6 +104,9 @@ export interface ProjectConfig {
     | undefined;
 
   typescriptCompiler?: TypescriptCompiler | undefined;
+
+  // "use rust" settings: which runtime to build for (default wasm).
+  rust?: { runtime?: "wasm" | "native" | "auto" | undefined } | undefined;
 
   // WorkOS AuthKit integration configuration
   authKit?: AuthKitConfig | undefined;
@@ -361,6 +365,10 @@ const createProjectConfigSchema = (strict: boolean) => {
     $schema: z.string().optional(),
     // WorkOS AuthKit integration configuration
     authKit: AuthKitConfigSchema.optional(),
+    rust: z
+      .object({ runtime: z.enum(["wasm", "native", "auto"]).optional() })
+      .optional()
+      .describe('Settings for "use rust" actions'),
     aiFiles: AiFilesSchema.optional(),
 
     // Deprecated fields that have been deprecated for years, only here so we
@@ -688,6 +696,7 @@ export async function configFromProjectConfig(
   const modules = convexResult.modules;
   modules.push(...nodeResult.modules);
   modules.push(...(await bundleAuthConfig(ctx, baseDir)).modules);
+  modules.push(...(await bundleRust(ctx, baseDir)));
 
   const nodeDependencies: NodeDependency[] = [];
   for (const [moduleName, moduleVersion] of nodeResult.externalDependencies) {

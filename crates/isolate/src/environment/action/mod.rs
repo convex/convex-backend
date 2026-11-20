@@ -1,12 +1,12 @@
 mod async_syscall;
 mod fetch;
 mod phase;
-mod service_token;
+pub(crate) mod service_token;
 mod storage;
 mod stream;
 mod syscall;
-mod task;
-mod task_executor;
+pub(crate) mod task;
+pub(crate) mod task_executor;
 mod task_order;
 
 use std::{

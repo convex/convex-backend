@@ -2375,6 +2375,7 @@ fn outstanding_functions_metric(
     let env_str = match env {
         ModuleEnvironment::Isolate => "isolate",
         ModuleEnvironment::Node => "node",
+        ModuleEnvironment::Rust => "rust",
         ModuleEnvironment::Invalid => "invalid",
     };
     let state_str = match state {
