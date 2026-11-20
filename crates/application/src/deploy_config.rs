@@ -205,7 +205,7 @@ fn init_failure(
     component_path: &ComponentPath,
     details: &str,
 ) -> String {
-    format!("init {init_path} of component {component_path:?}:\n{details}")
+    format!("init {init_path} of component {component_path}:\n{details}")
 }
 
 pub struct PushAnalytics {
