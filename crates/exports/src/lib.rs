@@ -37,7 +37,10 @@ use database::{
     TableCount,
     COMPONENTS_TABLE,
 };
-use errors::ErrorMetadata;
+use errors::{
+    ErrorMetadata,
+    ErrorMetadataAnyhowExt,
+};
 use fastrace::future::FutureExt;
 use futures::{
     pin_mut,
@@ -149,10 +152,20 @@ where
         drop(tx);
         let mut database = components.database.clone();
         if database.snapshot.table_counts.is_none() {
-            database.load_table_summaries().await?;
+            // Counts only order tables and fill in progress totals, so a table
+            // summary checkpoint that fell behind document retention, which no
+            // retry can fix, must not block a backup.
+            match database.load_table_summaries().await {
+                Ok(()) => {},
+                Err(e) if e.is_out_of_retention() => tracing::warn!(
+                    "Exporting without table counts because table summaries are out of retention: \
+                     {e:#}"
+                ),
+                Err(e) => return Err(e),
+            }
         }
         let snapshot = &database.snapshot;
-        let table_counts = snapshot.must_table_counts()?;
+        let table_counts = snapshot.table_counts.as_ref();
         let tables: BTreeMap<_, _> = snapshot
             .table_registry
             .iter_active_user_tables()
@@ -163,7 +176,7 @@ where
                         table_namespace,
                         table_number,
                         table_name.clone(),
-                        table_counts.tablet_count(&tablet_id),
+                        table_counts.map(|counts| counts.tablet_count(&tablet_id)),
                     ),
                 )
             })
@@ -177,7 +190,7 @@ where
         let storage_table_counts: BTreeMap<TableNamespace, u64> = system_tables
             .iter()
             .filter(|((_, name), _)| *name == FILE_STORAGE_TABLE)
-            .map(|((ns, _), id)| (*ns, table_counts.tablet_count(id).num_values()))
+            .filter_map(|((ns, _), id)| Some((*ns, table_counts?.tablet_count(id).num_values())))
             .collect();
         (
             tables,
@@ -240,7 +253,7 @@ async fn write_tables_table<'a, 'b: 'a>(
     path_prefix: &str,
     zip_snapshot_upload: &'a mut ZipSnapshotUpload<'b>,
     namespace: TableNamespace,
-    tables: &'a BTreeMap<TabletId, (TableNamespace, TableNumber, TableName, TableCount)>,
+    tables: &'a BTreeMap<TabletId, (TableNamespace, TableNumber, TableName, Option<TableCount>)>,
 ) -> anyhow::Result<()> {
     // _tables
     let mut table_upload = zip_snapshot_upload
@@ -277,7 +290,7 @@ pub async fn write_table<'a, 'b: 'a, F, Fut, RT: Runtime>(
     by_id: &IndexRef,
     usage: &FunctionUsageTracker,
     update_progress: &F,
-    table_total_docs: u64,
+    table_total_docs: Option<u64>,
     in_component_str: &str,
 ) -> anyhow::Result<()>
 where
@@ -308,9 +321,8 @@ where
                  bytes written so far",
             );
             update_progress(format!(
-                "Backing up {table_name}{in_component_str}: {} / {} documents",
-                num_documents.separate_with_commas(),
-                table_total_docs.separate_with_commas(),
+                "Backing up {table_name}{in_component_str}: {} documents",
+                progress_count(num_documents, table_total_docs),
             ))
             .await?;
             last_log_time = Instant::now();
@@ -330,7 +342,7 @@ where
 async fn construct_zip_snapshot<F, Fut, RT: Runtime>(
     components: &ExportComponents<RT>,
     mut writer: ChannelWriter,
-    tables: BTreeMap<TabletId, (TableNamespace, TableNumber, TableName, TableCount)>,
+    tables: BTreeMap<TabletId, (TableNamespace, TableNumber, TableName, Option<TableCount>)>,
     mut table_iterator: MultiTableIterator<RT>,
     component_ids_to_paths: BTreeMap<ComponentId, ComponentPath>,
     by_id_indexes: BTreeMap<TabletId, IndexRef>,
@@ -377,7 +389,7 @@ where
 
     // sort tables small to large, and write them to the zip.
     let mut sorted_tables: Vec<_> = tables.iter().collect();
-    sorted_tables.sort_by_key(|(_, (_, _, _, table_count))| table_count.total_size());
+    sorted_tables.sort_by_key(|(_, (_, _, _, table_count))| table_count.map(|c| c.total_size()));
     for (tablet_id, (namespace, _, table_name, table_count)) in sorted_tables {
         let component_id: ComponentId = (*namespace).into();
         let Some(component_path) = component_ids_to_paths.get(&component_id) else {
@@ -416,7 +428,7 @@ where
             by_id,
             &usage,
             &update_progress,
-            table_count.num_values(),
+            table_count.map(|c| c.num_values()),
             &in_component_str,
         )
         .in_span(root)
@@ -445,7 +457,7 @@ where
                     ("dev.convex.table_name", "_storage".to_string()),
                 ]
             });
-            let storage_total_entries = storage_table_counts.get(&namespace).copied().unwrap_or(0);
+            let storage_total_entries = storage_table_counts.get(&namespace).copied();
             write_storage_table(
                 components,
                 &path_prefix,
@@ -471,6 +483,18 @@ where
     zip_snapshot_upload.complete().await?;
     writer.compat_write().close().await?;
     Ok(())
+}
+
+/// `"done / total"`, or just `"done"` when the total is unknown.
+fn progress_count(done: u64, total: Option<u64>) -> String {
+    match total {
+        Some(total) => format!(
+            "{} / {}",
+            done.separate_with_commas(),
+            total.separate_with_commas()
+        ),
+        None => done.separate_with_commas(),
+    }
 }
 
 fn get_export_path_prefix(component_path: &ComponentPath) -> String {
