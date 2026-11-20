@@ -1,0 +1,442 @@
+---
+# NOTE: imported from https://github.com/convex/convex-auth by
+# scripts/import-convex-auth-docs.js. Edit the source in that repo and
+# re-import with `just import-convex-auth-docs <tag>`. If you need to make
+# changes here, make sure to upstream them to the source repo too or
+# they'll be overwritten on the next import.
+sidebar_position: 4
+title: Magic link
+description: Sign users in with a link sent to their email address.
+---
+
+The magic link sign-in method lets users sign in with a link that they receive
+by email. There is no password, and one form serves both sign-in and sign-up:
+
+- A user who has an account opens the link and is signed in.
+- A user who has no account opens the link, and the account is created at that
+  moment. No account exists for an address until its owner opens a link.
+
+The form gives the same result whether or not the address has an account.
+
+A link works once, for 10 minutes, and only in the browser (or app) that asked
+for it: the client keeps a secret in its storage, and the sign-in requires both
+that secret and the code from the link. A user who reads their email on another
+device must open the link on the device where they asked for it.
+
+Emails are sent through the
+[`@convex-dev/resend`](https://www.convex.dev/components/resend) component.
+
+## Setting up magic link login in your app
+
+<StepByStep>
+
+<Step title="Follow the “Getting started” guide">
+
+First, install Convex Auth and set up the core as described in the
+[Getting started](../getting-started.mdx) guide.
+
+</Step>
+
+<Step title="Set up Resend">
+
+This method uses [Resend](https://resend.com) to send the sign-in emails.
+
+You will need a domain to send these emails from.
+
+Before going further:
+
+1. [Create a Resend account](https://resend.com/signup)
+2. [Set up your domain in Resend](https://resend.com/docs/add-a-domain)
+3. [Create a Resend API key](https://resend.com/docs/create-an-api-key)
+
+Then connect Resend to your Convex deployment:
+
+```bash
+npm install @convex-dev/resend
+npx convex env set RESEND_API_KEY # Press Enter then enter your Resend API key
+npx convex env set SENDER_EMAIL no-reply@my-domain.example # Replace this with an email address in your verified domain
+npx convex env set SENDER_NAME "My App" # Optional: replace this with the sender name of your emails
+npx convex env set SITE_URL https://my-app.example # Replace this with the origin of your frontend, which the emailed links open. Without it, the links open http://localhost:5173
+```
+
+</Step>
+
+<Step title="Register the components">
+
+Register the email component and the Resend component alongside the core in
+`convex/convex.config.ts`.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+import auth from "@convex-dev/auth/convex.config.js";
+// highlight-next-line
+import authEmail from "@convex-dev/auth/components/email/convex.config.js";
+// highlight-next-line
+import resend from "@convex-dev/resend/convex.config.js";
+
+const app = defineApp({
+  env: {
+    RESEND_API_KEY: v.string(),
+    SENDER_EMAIL: v.string(),
+    // Defaults in auth.ts.
+    SENDER_NAME: v.optional(v.string()),
+    SITE_URL: v.optional(v.string()),
+  },
+});
+
+app.use(auth);
+// highlight-next-line
+app.use(authEmail);
+// highlight-next-line
+app.use(resend);
+
+export default app;
+```
+
+</Step>
+
+<Step title={<>Add a <code>users</code> table to the schema</>}>
+
+Add a `users` table to your schema in `convex/schema.ts`. You don’t need to add
+any fields to it.
+
+```ts title="convex/schema.ts"
+import { defineSchema, defineTable } from "convex/server";
+
+export default defineSchema({
+  // highlight-next-line
+  users: defineTable({}),
+});
+```
+
+</Step>
+
+<Step title="Set up user creation">
+
+Write a `createUser` mutation that creates a row in your `users` table and
+returns its id. This function will be used the first time someone opens a
+sign-in link for an address that has no account.
+
+```ts title="convex/users.ts"
+import { internalMutation } from "./_generated/server";
+import { v } from "convex/values";
+
+export const createUser = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("emailMagicLink"),
+      profile: v.object({}),
+    }),
+  },
+  returns: v.id("users"),
+  handler: async (ctx) => {
+    return await ctx.db.insert("users", {});
+  },
+});
+```
+
+</Step>
+
+<Step title="Set up the public backend functions">
+
+Set up the `emailMagicLink` method with `setupEmailMagicLink` and export the
+mutations it hands back once you attach the callback that creates your user
+rows, in `convex/auth.ts`. The `url` option is the page of your app that the
+emailed link opens.
+
+```ts title="convex/auth.ts"
+import { components, internal } from "./_generated/api";
+import { env } from "./_generated/server";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+// highlight-next-line
+import { setupEmailMagicLink } from "@convex-dev/auth/methods/email-magic-link/server";
+
+// The frontend origin the emailed links point at. Set SITE_URL on the
+// deployment when the frontend does not run on the Vite default.
+const SITE_URL = env.SITE_URL ?? "http://localhost:5173";
+
+const auth = setupConvexAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+export const { sendEmailMagicLink, signInWithEmailMagicLink } =
+  setupEmailMagicLink(auth, {
+    component: components.authEmail,
+    emailSender: {
+      kind: "resend",
+      sendEmail: components.resend.lib.sendEmail,
+      apiKey: env.RESEND_API_KEY,
+      from: `${env.SENDER_NAME ?? "My App"} <${env.SENDER_EMAIL}>`,
+    },
+    url: `${SITE_URL}/sign-in-with-link`,
+    // highlight-next-line
+  }).attachUserCallbacks({
+    createUser: internal.users.createUser,
+  });
+```
+
+</Step>
+
+<Step title="Set up the provider on the client">
+
+Wrap your app in `ConvexAuthProvider`, passing it the `refreshSession` and
+`signOut` mutations and the `isAuthenticated` query in `src/main.tsx`:
+
+```tsx title="src/main.tsx"
+// highlight-next-line
+import { ConvexAuthProvider } from "@convex-dev/auth/react";
+import { ConvexReactClient } from "convex/react";
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import { api } from "../convex/_generated/api";
+import { App } from "./App";
+
+const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL!);
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    // highlight-start
+    <ConvexAuthProvider
+      client={convex}
+      api={{
+        refreshSession: api.auth.refreshSession,
+        signOut: api.auth.signOut,
+        isAuthenticated: api.auth.isAuthenticated,
+      }}
+    >
+      // highlight-end
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+      // highlight-next-line
+    </ConvexAuthProvider>
+  </StrictMode>,
+);
+```
+
+</Step>
+
+<Step title="Set up the sign-in page">
+
+In your front-end, set up a route with the form that asks for the link. The same
+form signs in a user who has an account and creates an account for a user who
+has none. Copy the following component into your app. Feel free to customize it,
+for instance to use your app’s design system.
+
+```tsx title="src/routes/signIn.tsx"
+import { useSendEmailMagicLink } from "@convex-dev/auth/methods/email-magic-link/react";
+import { useState } from "react";
+import { api } from "../../convex/_generated/api";
+
+/**
+ * The one form of the method. It serves a person who has an account and a
+ * person who has none: both receive a link, and the account of a new person
+ * is created when they open it.
+ */
+export function SignIn() {
+  const { sendMagicLink, pending } = useSendEmailMagicLink(api.auth);
+  const [email, setEmail] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+
+  if (sentTo !== null) {
+    return (
+      <>
+        <h1>Check your email</h1>
+        <p>
+          We sent a sign-in link to <strong>{sentTo}</strong>. It works for 10
+          minutes.
+        </p>
+        <p>
+          Open the link in <strong>this browser</strong>: the link only works in
+          the browser you started from.
+        </p>
+        <button onClick={() => setSentTo(null)}>Use another address</button>
+      </>
+    );
+  }
+
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setError(null);
+        const result = await sendMagicLink({ email });
+        if (result.success) {
+          setSentTo(email);
+          return;
+        }
+        setError(() => {
+          switch (result.userError.error) {
+            case "INVALID_EMAIL":
+              return "That email address doesn't look valid.";
+            case "RATE_LIMITED":
+              return `Too many attempts. Try again in ${Math.ceil(result.userError.retryAfterMs / 60_000)} minutes.`;
+            case "OTHER_ERROR":
+              console.error("Sign-in failed:", result.userError.cause);
+              return "Something went wrong. Please try again.";
+            default:
+              result.userError satisfies never;
+              return "Something went wrong. Please try again.";
+          }
+        });
+      }}
+    >
+      <h1>Sign in or create an account</h1>
+      <label>
+        Email
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          autoComplete="email"
+          required
+          disabled={pending}
+        />
+      </label>
+      {error ? (
+        <p role="alert">
+          <strong>{error}</strong>
+        </p>
+      ) : null}
+      <button type="submit" disabled={pending}>
+        {pending ? "Sending…" : "Continue with email"}
+      </button>
+    </form>
+  );
+}
+```
+
+</Step>
+
+<Step title="Set up the page that the link opens">
+
+Set up the landing page for the link in the email, at the `url` that you gave to
+`setupEmailMagicLink`. It must not require authentication.
+
+```tsx title="src/routes/signInWithLink.tsx"
+import { useSignInWithEmailMagicLink } from "@convex-dev/auth/methods/email-magic-link/react";
+import type { ReactNode } from "react";
+import { Navigate, useSearchParams } from "react-router-dom";
+import { api } from "../../convex/_generated/api";
+
+/**
+ * Landing page for the sign-in link (`/sign-in-with-link?code=…`). The hook
+ * presents the link as soon as the page opens, which signs the user in.
+ */
+export function SignInWithLink() {
+  const [params] = useSearchParams();
+  const emailCode = params.get("code");
+  if (emailCode === null) {
+    return <p>This link is incomplete. Use the link from your email.</p>;
+  }
+  return <SignInWithCode emailCode={emailCode} />;
+}
+
+function SignInWithCode({ emailCode }: { emailCode: string }) {
+  const state = useSignInWithEmailMagicLink(api.auth, { emailCode });
+
+  if (state.status === "loading") {
+    return <p>Signing you in…</p>;
+  }
+  if (state.status === "complete") {
+    return <Navigate to="/auth/convex-auth/" replace />;
+  }
+  switch (state.userError.error) {
+    case "MISSING_SECRET":
+      return (
+        // This browser has no pending sign-in: the link was requested from
+        // another browser, or this browser already used it.
+        <SignInError>
+          This link does not work here. For your security, a sign-in link only
+          works once, in the browser where you asked for it.
+        </SignInError>
+      );
+    case "INVALID_CHALLENGE":
+      return (
+        <SignInError>
+          This link is no longer valid. It may have expired or already been
+          used.
+        </SignInError>
+      );
+    case "INCORRECT_CODE":
+      return (
+        <SignInError>
+          This is not the latest link. Open the newest email we sent you.
+        </SignInError>
+      );
+    case "OTHER_ERROR":
+      console.error("Sign-in failed:", state.userError.cause);
+      return (
+        <SignInError>
+          Something went wrong. Reload the page to try again.
+        </SignInError>
+      );
+    default:
+      state.userError satisfies never;
+      return (
+        <SignInError>
+          Something went wrong. Reload the page to try again.
+        </SignInError>
+      );
+  }
+}
+
+function SignInError({
+  title = "Could not sign you in",
+  children,
+}: {
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <>
+      <h1>{title}</h1>
+      <p role="alert">
+        <strong>{children}</strong>
+      </p>
+      <p>
+        <a href="/auth/convex-auth/sign-in">Ask for a new link</a>.
+      </p>
+    </>
+  );
+}
+```
+
+</Step>
+
+</StepByStep>
+
+## Limitations
+
+- **Users can't change their email address yet.** The change-email flow of the
+  [email + password](./email-password.mdx) method requires the current password,
+  and an account created with a link has none.
+- **The text of the email can't be customized yet.**
+
+## Rate limits
+
+This method rate-limits the emails that it sends. When a limit is reached, the
+call returns a `RATE_LIMITED` error with `retryAfterMs`, the number of
+milliseconds until the next attempt can succeed. Show it to the user, as
+`signIn.tsx` does above.
+
+Each limit is a token bucket: the user can make as many attempts as the capacity
+at once, then the bucket refills at a steady rate.
+
+| Limit                          | Applies to                                              | Capacity | Refill         |
+| ------------------------------ | ------------------------------------------------------- | -------- | -------------- |
+| Emails per destination address | Sign-in links sent to one address                       | 5        | 1 every 12 min |
+| Emails per client IP           | The same emails, sent from one client IP to any address | 20       | 1 every 3 min  |
+
+Each sign-in sends an email, thus these limits also bound how often a user can
+sign in. Anyone can ask for links for an address, so a person who knows the
+address of a user can use up the limit of that address and keep the user from
+signing in for a while. If this is a concern for your app, offer a second
+sign-in method, such as [passkeys](./username-passkey.mdx).
+
+The limit per destination address is shared with the other emails of the email
+component, such as the password reset links of the email + password method.
+
+These values aren't configurable yet.

@@ -15,9 +15,9 @@ React client for the shared OAuth state, exported at
 
 OAuth is registered by default in `ConvexAuthProvider` and
 `ConvexAuthNextjsProvider`. If you set their `ambientSignIns` prop, include
-[oauth](#oauth) yourself. The Google, Apple and GitHub methods have their own
-hooks, at `@convex-dev/auth/methods/<provider>/react`. [useOauth](#useoauth)
-returns the state that isn't tied to one provider.
+[oauth](#oauth) yourself. The Google, Apple, GitHub and Discord methods have
+their own hooks, at `@convex-dev/auth/methods/<provider>/react`.
+[useOauth](#useoauth) returns the state that isn't tied to one provider.
 
 Under Next.js, add each provider's `completeSignIn*` function to the auth
 proxy's `signIn` allowlist. Its `startSignIn*` function runs on the Convex

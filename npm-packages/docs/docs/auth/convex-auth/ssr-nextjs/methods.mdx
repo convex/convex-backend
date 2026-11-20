@@ -49,6 +49,7 @@ method:
 | Password         | `signUpWithUsernamePassword`, `signInWithUsernamePassword`                               |
 | Passkey          | `finishSignUpWithUsernamePasskey`, `finishSignInWithUsernamePasskey`                     |
 | Email + password | `signInWithEmailPassword`, `completeSignUpWithEmailPassword`, `completePasswordRecovery` |
+| Magic link       | `signInWithEmailMagicLink`                                                               |
 | OAuth            | `completeSignInWith<Provider>`, like `completeSignInWithGithub`                          |
 
 Only list functions that create a session. The other functions a method exports,
@@ -257,9 +258,10 @@ export default function SignIn() {
 Your proxy decides which pages need a signed-in user. Make sure it lets
 signed-out users reach every page they need to sign in. That includes the
 sign-in and sign-up pages, and also the pages that emailed links open, like
-`/validate-email` and `/reset-password` in the email + password guide. For
-OAuth, that includes the page the provider redirects back to: the hook redeems
-the callback code there, and a redirect away from it drops the code.
+`/validate-email` and `/reset-password` in the email + password guide, or
+`/sign-in-with-link` in the magic link guide. For OAuth, that includes the page
+the provider redirects back to: the hook redeems the callback code there, and a
+redirect away from it drops the code.
 
 ### Use your Next.js origin in the method config
 
@@ -269,12 +271,14 @@ by default:
 
 - **Passkey:** set `origin` in `setupUsernamePasskey` to your Next.js origin
   (`http://localhost:3000` in development). `rpId` stays `localhost`.
-- **Email + password:** set the `SITE_URL` environment variable on your
-  deployment to your Next.js origin, so the emailed links open your Next.js app:
+- **Email + password and magic link:** set the `SITE_URL` environment variable
+  on your deployment to your Next.js origin, so the emailed links open your
+  Next.js app:
 
   ```sh
   npx convex env set SITE_URL http://localhost:3000
   ```
 
-- **OAuth:** set `allowedRedirectOrigins` in `setupApple`, `setupGoogle`, or
-  `setupGithub` to your Next.js origin (`http://localhost:3000` in development).
+- **OAuth:** set `allowedRedirectOrigins` in `setupApple`, `setupGoogle`,
+  `setupGithub`, or `setupDiscord` to your Next.js origin
+  (`http://localhost:3000` in development).

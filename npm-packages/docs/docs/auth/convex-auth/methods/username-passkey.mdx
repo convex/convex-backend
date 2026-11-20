@@ -48,13 +48,22 @@ username identifies:
 
 ```ts title="convex/convex.config.ts"
 import { defineApp } from "convex/server";
+import { v } from "convex/values";
 import auth from "@convex-dev/auth/convex.config.js";
 // highlight-next-line
 import authPasskey from "@convex-dev/auth/components/passkey/convex.config.js";
 // highlight-next-line
 import authUsername from "@convex-dev/auth/components/username/convex.config.js";
 
-const app = defineApp();
+const app = defineApp({
+  env: {
+    // Defaults in auth.ts.
+    // highlight-next-line
+    SITE_URL: v.optional(v.string()),
+    // highlight-next-line
+    RP_ID: v.optional(v.string()),
+  },
+});
 
 app.use(auth);
 // highlight-next-line
@@ -149,19 +158,39 @@ rows, in `convex/auth.ts`.
   ],
   ```
 
+The example reads `origin` from the `SITE_URL` environment variable and `rpId`
+from the `RP_ID` environment variable. Their defaults are the values for the
+Vite dev server. On your production deployment, set them to the origin and the
+domain of your frontend:
+
+```sh
+npx convex env set SITE_URL https://my-app.example
+npx convex env set RP_ID my-app.example
+```
+
 :::warning
 
 Passkeys are permanently bound to their `rpId`: a passkey created with
-`rpId: "localhost"` can never be used on your production domain. Set both values
-to the production domain before you deploy.
+`rpId: "localhost"` can never be used on your production domain. Set `RP_ID` on
+your production deployment before your users create passkeys.
 
 :::
 
 ```ts title="convex/auth.ts"
 import { components, internal } from "./_generated/api";
+import { env } from "./_generated/server";
 import { setupConvexAuth } from "@convex-dev/auth/server";
 // highlight-next-line
 import { setupUsernamePasskey } from "@convex-dev/auth/methods/username-passkey/server";
+
+// The origin of the frontend. Set SITE_URL on the deployment when the frontend
+// does not run on the Vite dev server.
+// highlight-next-line
+const SITE_URL = env.SITE_URL ?? "http://localhost:5173";
+// The domain that the passkeys belong to. Set RP_ID on the deployment to the
+// domain of SITE_URL, or to a parent domain of it.
+// highlight-next-line
+const RP_ID = env.RP_ID ?? "localhost";
 
 const auth = setupConvexAuth({ component: components.auth });
 export const { signOut, refreshSession, isAuthenticated } = auth;
@@ -175,10 +204,8 @@ export const {
 } = setupUsernamePasskey(auth, {
   component: components.authPasskey,
   usernameComponent: components.authUsername,
-  // The relying party ID and the origin of the Vite dev server. A deployed
-  // app uses its own domain here.
-  rpId: "localhost",
-  origin: "http://localhost:5173",
+  rpId: RP_ID,
+  origin: SITE_URL,
 }).attachUserCallbacks({ createUser: internal.users.createUser });
 // highlight-end
 ```
@@ -386,8 +413,16 @@ In `convex/auth.ts`, make sure the following functions are exported:
 
 ```ts title="convex/auth.ts"
 import { components, internal } from "./_generated/api";
+import { env } from "./_generated/server";
 import { setupConvexAuth } from "@convex-dev/auth/server";
 import { setupUsernamePasskey } from "@convex-dev/auth/methods/username-passkey/server";
+
+// The origin of the frontend. Set SITE_URL on the deployment when the frontend
+// does not run on the Vite dev server.
+const SITE_URL = env.SITE_URL ?? "http://localhost:5173";
+// The domain that the passkeys belong to. Set RP_ID on the deployment to the
+// domain of SITE_URL, or to a parent domain of it.
+const RP_ID = env.RP_ID ?? "localhost";
 
 const auth = setupConvexAuth({ component: components.auth });
 export const { signOut, refreshSession, isAuthenticated } = auth;
@@ -412,10 +447,8 @@ export const {
 } = setupUsernamePasskey(auth, {
   component: components.authPasskey,
   usernameComponent: components.authUsername,
-  // The relying party ID and the origin of the Vite dev server. A deployed
-  // app uses its own domain here.
-  rpId: "localhost",
-  origin: "http://localhost:5173",
+  rpId: RP_ID,
+  origin: SITE_URL,
 }).attachUserCallbacks({ createUser: internal.users.createUser });
 ```
 
@@ -445,6 +478,10 @@ import { api } from "../convex/_generated/api";
 export function PasskeySettings() {
   const query = useQuery(api.auth.listPasskeys, {});
   const { addPasskey, pending: adding } = useAddPasskey(api.auth);
+  // One remove hook for the whole list, thus two removals cannot run at the
+  // same time. `removingId` tells which row shows the spinner.
+  const { removePasskey, pending: removing } = useRemovePasskey(api.auth);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (query !== undefined && !query.success) {
@@ -460,6 +497,11 @@ export function PasskeySettings() {
   // passkey must add a second one before they can remove either.
   const canRemove = passkeys.length > 1;
 
+  // The browser runs only one passkey dialog at a time, and a second
+  // ceremony cancels the first. Thus, while a passkey is being added or
+  // removed, disable the buttons that start a ceremony.
+  const ceremonyRunning = adding || removing;
+
   return (
     <section>
       <h2>Your passkeys</h2>
@@ -468,7 +510,17 @@ export function PasskeySettings() {
           <PasskeyRow
             key={passkey.passkeyId}
             passkey={passkey}
-            canRemove={canRemove}
+            canRemove={canRemove && !ceremonyRunning}
+            removing={removing && removingId === passkey.passkeyId}
+            onRemove={async () => {
+              setError(null);
+              setRemovingId(passkey.passkeyId);
+              const result = await removePasskey(passkey.passkeyId);
+              setRemovingId(null);
+              if (!result.success) {
+                setError(errorMessage(result.userError));
+              }
+            }}
             onError={setError}
           />
         ))}
@@ -479,7 +531,7 @@ export function PasskeySettings() {
         </p>
       ) : null}
       <button
-        disabled={adding}
+        disabled={ceremonyRunning}
         onClick={async () => {
           setError(null);
           const result = await addPasskey();
@@ -497,6 +549,8 @@ export function PasskeySettings() {
 function PasskeyRow({
   passkey,
   canRemove,
+  removing,
+  onRemove,
   onError,
 }: {
   passkey: {
@@ -505,11 +559,10 @@ function PasskeyRow({
     createdAt: number;
   };
   canRemove: boolean;
+  removing: boolean;
+  onRemove: () => Promise<void>;
   onError: (message: string | null) => void;
 }) {
-  // Each row has its own remove hook, so `pending` drives only the spinner
-  // of this row.
-  const { removePasskey, pending: removing } = useRemovePasskey(api.auth);
   const renamePasskey = useMutation(api.auth.renamePasskey);
   return (
     <li>
@@ -539,16 +592,12 @@ function PasskeyRow({
         Rename
       </button>{" "}
       <button
-        disabled={removing || !canRemove}
+        disabled={!canRemove}
         onClick={async () => {
           if (!window.confirm("Remove this passkey?")) {
             return;
           }
-          onError(null);
-          const result = await removePasskey(passkey.passkeyId);
-          if (!result.success) {
-            onError(errorMessage(result.userError));
-          }
+          await onRemove();
         }}
       >
         {removing ? "Waiting for your passkey…" : "Remove"}
