@@ -32,7 +32,11 @@ use common::{
         PublicFunctionPath,
     },
     errors::JsError,
-    execution_context::RequestMetadata,
+    execution_context::{
+        ExecutionContext,
+        RequestContext,
+        RequestMetadata,
+    },
     knobs::{
         COMPONENT_ARGS_MAX_SIZE_BYTES,
         FINISH_PUSH_MAX_OCC_FAILURES,
@@ -51,6 +55,7 @@ use common::{
         AllowedVisibility,
         EnvVarName,
         EnvVarValue,
+        FunctionCaller,
         IndexName,
         ModuleEnvironment,
         NodeDependency,
@@ -184,7 +189,10 @@ use value::{
 };
 
 use crate::{
-    application_function_runner::ComponentInit,
+    application_function_runner::{
+        ComponentInit,
+        ComponentInitOutcome,
+    },
     schema_worker::table_shape_provider,
     validate_env_var_values,
     Application,
@@ -861,7 +869,7 @@ impl<RT: Runtime> Application<RT> {
     pub async fn finish_push(
         &self,
         identity: Identity,
-        request_metadata: RequestMetadata,
+        request_context: RequestContext,
         mut start_push: StartPushResponse,
         message: Option<PushMessage>,
     ) -> anyhow::Result<(FinishPushDiff, Timestamp)> {
@@ -885,13 +893,14 @@ impl<RT: Runtime> Application<RT> {
         let (diff, ts) = self
             .execute_with_audit_log_events_and_occ_retries_with_timestamp(
                 identity.clone(),
-                request_metadata,
+                request_context.request_metadata.clone(),
                 finish_push_write_source,
                 *FINISH_PUSH_MAX_OCC_FAILURES,
                 |tx| {
                     let start_push = &start_push;
                     let downloaded_source_packages = &downloaded_source_packages;
                     let message = &message;
+                    let request_context = &request_context;
                     async move {
                         // Validate that environment variables haven't changed since `start_push`.
                         let environment_variables =
@@ -993,7 +1002,8 @@ impl<RT: Runtime> Application<RT> {
 
                         // Run component inits after the transaction has the new modules and
                         // component tree
-                        self.run_component_inits(tx, start_push).await?;
+                        self.run_component_inits(tx, start_push, request_context.clone())
+                            .await?;
 
                         Ok((diff, audit_log_events))
                     }
@@ -1025,6 +1035,7 @@ impl<RT: Runtime> Application<RT> {
         &self,
         tx: &mut Transaction<RT>,
         start_push: &StartPushResponse,
+        request_context: RequestContext,
     ) -> anyhow::Result<()> {
         // Walk the component tree to resolve component arguments
         // Since parent components may forward their args to their child components, we
@@ -1061,14 +1072,32 @@ impl<RT: Runtime> Application<RT> {
             return Ok(());
         }
 
-        let outcomes = self.runner.run_component_inits(tx, requests).await?;
+        let context = ExecutionContext::new(request_context, &FunctionCaller::Push);
+        let outcomes = self
+            .runner
+            .run_component_inits(tx, context.clone(), requests)
+            .await?;
         let mut failures = Vec::new();
-        for (path, outcome) in outcomes {
-            let Err(js_error) = outcome.result else {
-                continue;
-            };
-            let failure = init_failure(&path.udf_path, &path.component_path, &js_error.to_string());
-            failures.push((path.component_path, failure));
+        for (
+            path,
+            ComponentInitOutcome {
+                execution_id,
+                outcome,
+            },
+        ) in outcomes
+        {
+            if let Err(js_error) = &outcome.result {
+                let failure =
+                    init_failure(&path.udf_path, &path.component_path, &js_error.to_string());
+                failures.push((path.component_path, failure));
+            }
+            let execution_time = outcome.user_execution_time.unwrap_or_default();
+            // N.B.: the init has not yet committed yet at this point, and we may roll back
+            // the push even if all the inits succeeded.
+            let mut init_context = context.clone();
+            init_context.execution_id = execution_id;
+            self.function_log
+                .log_component_init(outcome, execution_time, init_context);
         }
         if !failures.is_empty() {
             failures.sort_by(|(a, _), (b, _)| a.cmp(b));

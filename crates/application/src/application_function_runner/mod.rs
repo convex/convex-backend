@@ -34,7 +34,6 @@ use common::{
         ExecutionId,
         RequestContext,
         RequestId,
-        RequestMetadata,
     },
     fastrace_helpers::EncodedSpan,
     knobs::{
@@ -313,6 +312,11 @@ pub struct ComponentInit {
     pub path_and_args: ValidatedPathAndArgs,
     pub returns_validator: ReturnsValidator,
     pub table_mapping: NamespacedTableMapping,
+}
+
+pub struct ComponentInitOutcome {
+    pub execution_id: ExecutionId,
+    pub outcome: ValidatedUdfOutcome,
 }
 
 impl<RT: Runtime> FunctionRouter<RT> {
@@ -1294,30 +1298,29 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
     }
 
     /// Runs component inits and merges the result back into `tx`. The caller
-    /// is responsible for validating the init args.
+    /// is responsible for validating the init args. Each init runs with its
+    /// own `ExecutionId` in `context`'s request.
     pub async fn run_component_inits(
         &self,
         tx: &mut Transaction<RT>,
+        context: ExecutionContext,
         requests: Vec<ComponentInit>,
-    ) -> anyhow::Result<BTreeMap<ResolvedComponentFunctionPath, ValidatedUdfOutcome>> {
+    ) -> anyhow::Result<BTreeMap<ResolvedComponentFunctionPath, ComponentInitOutcome>> {
         self.database.check_write_throughput_limit()?;
         anyhow::ensure!(!requests.is_empty(), "No inits to run");
-        let context = ExecutionContext::new_from_parts(
-            RequestId::new(),
-            ExecutionId::new(),
-            None,
-            true,
-            RequestMetadata::system(),
-        );
         let identity = tx.identity().clone();
         let usage_tracker = tx.usage_tracker.clone();
+        let requests: Vec<_> = requests
+            .into_iter()
+            .map(|r| (r, ExecutionId::new()))
+            .collect();
         let mut outcomes = self
             .isolate_functions
             .execute_component_inits(
                 tx,
                 requests
                     .iter()
-                    .map(|r| (r.path_and_args.clone(), ExecutionId::new()))
+                    .map(|(r, execution_id)| (r.path_and_args.clone(), *execution_id))
                     .collect(),
                 context.clone(),
             )
@@ -1325,7 +1328,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
 
         let vars = AuditLogVars::from_context(context, identity.convex_actor_var(), &self.runtime)?;
         let mut validated = BTreeMap::new();
-        for request in requests {
+        for (request, execution_id) in requests {
             let path = request.path_and_args.path().clone();
             let outcome = outcomes
                 .remove(&path)
@@ -1342,12 +1345,15 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 .await?;
             validated.insert(
                 path,
-                ValidatedUdfOutcome::new(
-                    outcome,
-                    request.returns_validator,
-                    &request.table_mapping,
-                    None,
-                ),
+                ComponentInitOutcome {
+                    execution_id,
+                    outcome: ValidatedUdfOutcome::new(
+                        outcome,
+                        request.returns_validator,
+                        &request.table_mapping,
+                        None,
+                    ),
+                },
             );
         }
         Ok(validated)

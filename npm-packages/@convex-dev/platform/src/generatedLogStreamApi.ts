@@ -111,7 +111,7 @@ export interface components {
              * @description Why a function was executed.
              * @enum {string}
              */
-            run_reason: "initialSubscription" | "dataChange" | "identityChange" | "webSocket" | "httpApi" | "httpEndpoint" | "cron" | "scheduler" | "action" | "tester";
+            run_reason: "initialSubscription" | "dataChange" | "identityChange" | "webSocket" | "httpApi" | "httpEndpoint" | "cron" | "scheduler" | "action" | "tester" | "push";
             usage: {
                 /** Format: int64 */
                 database_read_bytes: number;

@@ -27,12 +27,13 @@ use common::{
         SerializedAuthInfo,
     },
     bootstrap_model::components::definition::SerializedComponentDefinitionMetadata,
-    execution_context::RequestMetadata,
+    execution_context::RequestContext,
     http::{
         extract::{
             Json,
             MtState,
         },
+        ExtractRequestId,
         ExtractRequestMetadata,
         HttpResponseError,
     },
@@ -446,7 +447,7 @@ pub struct FinishPushRequest {
 /// Internal version that returns the commit timestamp for use by conductor
 pub async fn finish_push_internal(
     st: &LocalAppState,
-    request_metadata: RequestMetadata,
+    request_context: RequestContext,
     req: FinishPushRequest,
 ) -> anyhow::Result<(SerializedFinishPushDiff, Option<common::types::Timestamp>)> {
     let identity = must_be_admin_from_key(
@@ -470,7 +471,7 @@ pub async fn finish_push_internal(
 
     let (resp, ts) = st
         .application
-        .finish_push(identity, request_metadata, start_push, message)
+        .finish_push(identity, request_context, start_push, message)
         .await
         .map_err(|e| e.wrap_error_message(|msg| format!("Hit an error while pushing:\n{msg}")))?;
     Ok((SerializedFinishPushDiff::try_from(resp)?, Some(ts)))
@@ -478,10 +479,12 @@ pub async fn finish_push_internal(
 
 pub async fn finish_push(
     MtState(st): MtState<LocalAppState>,
+    ExtractRequestId(request_id): ExtractRequestId,
     ExtractRequestMetadata(request_metadata): ExtractRequestMetadata,
     Json(req): Json<FinishPushRequest>,
 ) -> Result<impl IntoResponse, HttpResponseError> {
-    let (diff, _ts) = finish_push_internal(&st, request_metadata, req).await?;
+    let request_context = RequestContext::new(request_id, request_metadata);
+    let (diff, _ts) = finish_push_internal(&st, request_context, req).await?;
     Ok(Json(diff))
 }
 

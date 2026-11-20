@@ -66,6 +66,8 @@ pub enum FunctionRunReason {
     Action,
     /// Invoked by the custom function tester (e.g. in the dashboard).
     Tester,
+    /// Invoked by a code push.
+    Push,
 }
 
 impl FunctionRunReason {
@@ -80,6 +82,7 @@ impl FunctionRunReason {
             FunctionCaller::Cron => Self::Cron,
             FunctionCaller::Scheduler { .. } => Self::Scheduler,
             FunctionCaller::Action { .. } => Self::Action,
+            FunctionCaller::Push => Self::Push,
         };
         match query_invocation {
             None => caller_reason,
