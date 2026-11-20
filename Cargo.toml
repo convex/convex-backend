@@ -123,7 +123,7 @@ json_trait = { path = "crates/json_trait" }
 jsonschema = { version = "0.33", default-features = false }
 keybroker = { path = "crates/keybroker" }
 libc = "0.2"
-libsodium-sys-stable = { version = "1.22.2", features = [ "minimal" ] }
+libsodium-sys-stable = { version = "1.24.6", features = [ "minimal" ] }
 log_interleaver = { path = "crates/log_interleaver" }
 lru = "0.18.0"
 lz4_flex = "0.14"
