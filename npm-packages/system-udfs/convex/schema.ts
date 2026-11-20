@@ -564,7 +564,32 @@ export default defineSchema({
   _backend_state: backendStateTable,
   _snapshot_imports: snapshotImportsTable,
   _aws_lambda_versions: awsLambdaVersionsTable,
+  // Fields with `v.optional` are missing on documents written before they
+  // were added.
   _backend_info: defineTable({
-    auditLogRetentionDays: v.union(v.int64(), v.null()),
+    org: v.int64(),
+    project: v.int64(),
+    instance: v.int64(),
+    deploymentType: v.union(
+      v.literal("dev"),
+      v.literal("prod"),
+      v.literal("preview"),
+      v.literal("custom"),
+    ),
+    deploymentRef: v.optional(v.union(v.string(), v.null())),
+    streamingExportEnabled: v.optional(v.boolean()),
+    provisionConcurrency: v.optional(v.union(v.int64(), v.null())),
+    logStreamingEnabled: v.optional(v.boolean()),
+    projectName: v.optional(v.union(v.string(), v.null())),
+    projectSlug: v.optional(v.union(v.string(), v.null())),
+    auditLogRetentionDays: v.optional(v.union(v.int64(), v.null())),
+    sendLogsToClient: v.optional(v.union(v.boolean(), v.null())),
+    customAuditLogsInLogStreamsConfigEnabled: v.optional(
+      v.union(v.boolean(), v.null()),
+    ),
+    aiGatewayDisabled: v.optional(v.union(v.boolean(), v.null())),
+    periodicBackupsEnabled: v.optional(v.union(v.boolean(), v.null())),
+    maxCloudBackups: v.optional(v.union(v.int64(), v.null())),
+    defaultUdfRuntime: v.optional(v.union(v.literal("v8"), v.literal("wasm"))),
   }),
 });
