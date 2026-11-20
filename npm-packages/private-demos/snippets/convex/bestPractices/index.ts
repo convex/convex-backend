@@ -307,6 +307,7 @@ export const updateMovie_OMIT_2 = mutation({
 
 type TeamMember = {
   email: string;
+  role: "owner" | "member";
 };
 // @snippet start accessControl
 // ❌ -- no checks! anyone can update any team if they get the ID
@@ -364,6 +365,27 @@ export const updateTeam = mutation({
   },
 });
 
+// ✅ -- helpers that throw, so that each function states which access it needs
+async function ensureTeamMember(ctx: QueryCtx, id: Id<"teams">) {
+  const user = await ctx.auth.getUserIdentity();
+  if (user === null) {
+    throw new Error("Unauthorized");
+  }
+  const member: TeamMember | null = /* load the user's membership */ OMIT_ME;
+  if (member === null) {
+    throw new Error("Unauthorized");
+  }
+  return member;
+}
+
+async function assertTeamOwner(ctx: QueryCtx, id: Id<"teams">) {
+  const member = await ensureTeamMember(ctx, id);
+  if (member.role !== "owner") {
+    throw new Error("Unauthorized");
+  }
+  return member;
+}
+
 // ✅ -- separate functions which have different access control
 export const setTeamOwner = mutation({
   args: {
@@ -371,14 +393,7 @@ export const setTeamOwner = mutation({
     owner: v.id("users"),
   },
   handler: async (ctx, { id, owner }) => {
-    const user = await ctx.auth.getUserIdentity();
-    if (user === null) {
-      throw new Error("Unauthorized");
-    }
-    const isTeamOwner = /* check if user is the owner of the team */ OMIT_ME;
-    if (!isTeamOwner) {
-      throw new Error("Unauthorized");
-    }
+    await assertTeamOwner(ctx, id);
     await ctx.db.patch("teams", id, { owner: owner });
   },
 });
@@ -389,14 +404,7 @@ export const setTeamName = mutation({
     name: v.string(),
   },
   handler: async (ctx, { id, name }) => {
-    const user = await ctx.auth.getUserIdentity();
-    if (user === null) {
-      throw new Error("Unauthorized");
-    }
-    const isTeamMember = /* check if user is a member of the team */ OMIT_ME;
-    if (!isTeamMember) {
-      throw new Error("Unauthorized");
-    }
+    await ensureTeamMember(ctx, id);
     await ctx.db.patch("teams", id, { name: name });
   },
 });
