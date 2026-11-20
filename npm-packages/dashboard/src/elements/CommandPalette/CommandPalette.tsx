@@ -380,14 +380,12 @@ function CommandPaletteDialog({
                     />
                   )}
                   <div
-                    className={cn(
-                      "relative -mx-1 -mt-1.5 mb-1.5 flex items-center",
-                    )}
+                    className={cn("relative -mx-1 -mt-1.5 flex items-center")}
                   >
                     {/* The input's top padding is larger than its bottom, so
-                    center these on its text line (pt-4 + half of the 20px
+                    center these on its text line (pt-4 + half of the 24px
                     line box, less half the icon) rather than on its box. */}
-                    <MagnifyingGlassIcon className="pointer-events-none absolute top-4.5 left-3 size-4 text-content-tertiary" />
+                    <MagnifyingGlassIcon className="pointer-events-none absolute top-4.5 left-3.5 size-5 text-content-tertiary" />
                     <Command.Input
                       ref={inputRef}
                       autoFocus
@@ -418,7 +416,7 @@ function CommandPaletteDialog({
                   <Command.List
                     ref={listRef}
                     className={cn(
-                      "-mx-1 scrollbar px-1",
+                      "-mx-1 scrollbar px-1 pt-1.5",
                       !hasPinnedActions && "pb-2",
                       // Flex-fills the sizer so the pinned create bar sits at the
                       // list bottom (see commandPalette.css).

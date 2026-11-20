@@ -23,7 +23,7 @@
 }
 
 [cmdk-input] {
-  @apply bg-transparent border-b rounded-b-none pl-9 pr-3 pt-4 pb-2.5 text-sm block rounded-sm placeholder:text-content-tertiary border-0 w-full focus:outline-hidden;
+  @apply bg-transparent border-b rounded-b-none pl-11 pr-4 pt-4 pb-3 text-base block rounded-sm placeholder:text-content-tertiary border-0 w-full focus:outline-hidden;
 }
 
 [cmdk-overlay] {
