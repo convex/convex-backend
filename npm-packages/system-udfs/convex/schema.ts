@@ -537,7 +537,12 @@ export default defineSchema({
     }),
     executionTime: v.number(),
   }).index("by_name_and_ts", ["name", "ts"]),
-  _udf_config: defineTable({ serverVersion: v.string() }),
+  _udf_config: defineTable({
+    serverVersion: v.string(),
+    importPhaseRngSeed: v.bytes(),
+    // Nanoseconds since the Unix epoch.
+    importPhaseUnixTimestamp: v.int64(),
+  }),
   _schemas: defineTable(schemaMetadata).index("by_state", ["state"]),
   _schema_validations: defineTable({
     schemaId: v.id("_schemas"),
