@@ -852,6 +852,25 @@ pub fn database_operational_error(error: anyhow::Error) -> anyhow::Error {
         .context(ErrorMetadata::operational_internal_server_error())
 }
 
+/// A write hit a uniqueness constraint the persistence layer wasn't
+/// expecting to conflict with (e.g. a duplicate primary key). This is
+/// deliberately *not* an `is_transient_db_error`; most callers should treat
+/// this as a real, surfaced failure. It only becomes safe to ignore for a
+/// caller that knows it's re-sending a write it already attempted once, where
+/// a duplicate is proof the earlier, ambiguously-failed attempt actually landed.
+#[derive(thiserror::Error, Debug)]
+#[error(transparent)]
+pub struct DuplicateWriteError(anyhow::Error);
+pub fn duplicate_write_error(error: anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!(DuplicateWriteError(error))
+}
+
+/// True if `e` is a duplicate-write error. See [`DuplicateWriteError`] for
+/// when this is safe to treat as success rather than a real failure.
+pub fn is_duplicate_write_error(e: &anyhow::Error) -> bool {
+    e.is::<DuplicateWriteError>()
+}
+
 /// Not a [`DatabaseOperationalError`]: those are retried per statement, but a
 /// deadlock rolls back the whole transaction.
 #[derive(thiserror::Error, Debug)]
