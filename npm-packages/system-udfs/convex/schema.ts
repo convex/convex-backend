@@ -328,7 +328,11 @@ const backendStateTable = defineTable(backendState);
 
 export const cronJobState = v.union(
   v.object({ type: v.literal("pending") }),
-  v.object({ type: v.literal("inProgress") }),
+  v.object({
+    type: v.literal("inProgress"),
+    request_id: v.string(),
+    execution_id: v.string(),
+  }),
 );
 
 export default defineSchema({

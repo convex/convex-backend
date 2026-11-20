@@ -73,7 +73,13 @@ function cronJob({
       _id: `next${idCounter}` as Id<"_cron_next_run">,
       _creationTime: now - 30 * 24 * HOUR,
       cronJobId: id,
-      state: { type: running ? "inProgress" : "pending" },
+      state: running
+        ? {
+            type: "inProgress",
+            request_id: `request${idCounter}`,
+            execution_id: `execution${idCounter}`,
+          }
+        : { type: "pending" },
       prevTs: lastRunAgo === undefined ? null : tsNs(now - lastRunAgo),
       nextTs: tsNs(now + nextIn),
     },
