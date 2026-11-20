@@ -65,7 +65,7 @@
     "tailwind-merge": "^3.3.1",
     "tailwind-variants": "^3.0.0",
     "yup": "~0.32.11",
-    "zod": "^3.24.0",
+    "zod": "^4.6.6",
     "zod-error": "2.0.0",
     "@convex-dev/platform": "workspace:*"
   },

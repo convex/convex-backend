@@ -1,6 +1,5 @@
 import { RequestContext } from "../requestContext.js";
 import { ZodTypeAny, z } from "zod";
-import zodToJsonSchema from "zod-to-json-schema";
 import { TablesTool } from "./tables.js";
 import { DataTool } from "./data.js";
 import { StatusTool } from "./status.js";
@@ -29,7 +28,9 @@ export function mcpTool(tool: ConvexTool<ZodTypeAny, ZodTypeAny>): Tool {
   return {
     name: tool.name,
     description: tool.description,
-    inputSchema: zodToJsonSchema(tool.inputSchema) as ToolInput,
+    inputSchema: z.toJSONSchema(tool.inputSchema, {
+      target: "draft-7",
+    }) as ToolInput,
   };
 }
 

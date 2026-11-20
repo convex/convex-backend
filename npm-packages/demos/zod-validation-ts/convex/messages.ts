@@ -1,7 +1,7 @@
 import { mutationWithZod, queryWithZod } from "./lib/zod";
 import { z } from "zod";
 import { Doc } from "./_generated/dataModel";
-import { withSystemFields } from "convex-helpers/server/zod3";
+import { withSystemFields } from "convex-helpers/server/zod4";
 
 export const send = mutationWithZod({
   args: { body: z.string(), author: z.string() },

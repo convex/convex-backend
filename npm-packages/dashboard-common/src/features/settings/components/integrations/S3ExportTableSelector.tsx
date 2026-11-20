@@ -24,7 +24,7 @@ import {
   tableIncluded,
 } from "./s3ExportSelection";
 
-const schema = z.record(z.record(z.unknown()));
+const schema = z.record(z.string(), z.record(z.string(), z.unknown()));
 
 export function S3ExportTableSelector(props: {
   selection: SyncSelection;

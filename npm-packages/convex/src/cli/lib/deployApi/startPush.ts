@@ -28,8 +28,8 @@ export const startPushRequest = looseObject({
 export type StartPushRequest = z.infer<typeof startPushRequest>;
 
 export const schemaChange = looseObject({
-  allocatedComponentIds: z.any(),
-  schemaIds: z.any(),
+  allocatedComponentIds: z.any().optional(),
+  schemaIds: z.any().optional(),
   indexDiffs: z.record(componentPath, indexDiff).optional(),
 });
 export type SchemaChange = z.infer<typeof schemaChange>;

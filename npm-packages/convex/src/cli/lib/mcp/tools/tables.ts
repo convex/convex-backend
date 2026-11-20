@@ -86,7 +86,7 @@ const activeSchemaEntry = z.object({
   indexes: z.array(z.any()),
   searchIndexes: z.array(z.any()),
   vectorIndexes: z.array(z.any()),
-  documentType: z.any(),
+  documentType: z.any().optional(),
 });
 
 const activeSchema = z.object({ tables: z.array(activeSchemaEntry) });

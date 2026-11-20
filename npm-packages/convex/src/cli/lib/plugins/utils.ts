@@ -91,7 +91,7 @@ export async function fetchGitHubJson<T>(path: string): Promise<T | null> {
 
 /** Parses a JSON list from a harness CLI, or returns null and reports to Sentry when it isn't JSON or doesn't match. */
 export function parseList<T>(
-  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  schema: z.ZodType<T>,
   list: string,
   command: string,
 ): T | null {

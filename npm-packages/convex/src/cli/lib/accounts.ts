@@ -24,7 +24,7 @@ export type AccountSelection = {
 const settingsSchema = z
   .object({
     defaultAccount: z.string().optional(),
-    directories: z.record(z.string()).optional(),
+    directories: z.record(z.string(), z.string()).optional(),
   })
   .passthrough();
 

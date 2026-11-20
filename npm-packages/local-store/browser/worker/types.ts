@@ -80,8 +80,8 @@ export const storedMutationValidator = z.object({
   mutationName: z.string(),
   mutationId: z.string(),
   mutationPath: z.string(),
-  optUpdateArgs: z.any(),
-  serverArgs: z.any(),
+  optUpdateArgs: z.any().optional(),
+  serverArgs: z.any().optional(),
 });
 export type StoredMutation = z.infer<typeof storedMutationValidator>;
 
