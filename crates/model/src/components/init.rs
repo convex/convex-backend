@@ -12,6 +12,7 @@ use common::{
         Resource,
     },
     runtime::Runtime,
+    schemas::validator::ObjectValidator,
     types::UdfType,
 };
 use database::Transaction;
@@ -38,9 +39,12 @@ use super::{
     },
     types::EvaluatedComponentDefinition,
 };
-use crate::modules::module_versions::{
-    AnalyzedFunction,
-    Visibility,
+use crate::modules::{
+    function_validators::ArgsValidator,
+    module_versions::{
+        AnalyzedFunction,
+        Visibility,
+    },
 };
 
 /// Get the component's init function, if it exists.
@@ -87,15 +91,33 @@ fn invalid_component_argument(msg: String) -> ErrorMetadata {
     ErrorMetadata::bad_request("InvalidComponentArgs", msg)
 }
 
+/// The args validator of `component`'s init. Returns an empty object validator
+/// if the component has no init.
+pub fn init_args_validator(
+    component_path: &ComponentPath,
+    evaluated: &EvaluatedComponentDefinition,
+) -> anyhow::Result<ArgsValidator> {
+    let init = if component_path.is_root() {
+        None
+    } else {
+        init_function(component_path, evaluated)?
+    };
+    match init {
+        None => Ok(ArgsValidator::Validated(ObjectValidator(BTreeMap::new()))),
+        Some((_, function)) => function.args(),
+    }
+}
+
 pub async fn resolve_component_args<RT: Runtime>(
     tx: &mut Transaction<RT>,
     parent: &CheckedComponent,
+    parent_args_validator: &ArgsValidator,
     parent_args: &ConvexObject,
     instantiation: &ComponentInstantiation,
 ) -> anyhow::Result<ConvexObject> {
     let mut fields = BTreeMap::new();
     for (arg_name, arg) in &instantiation.args {
-        let value = resolve_component_arg(tx, parent, parent_args, arg)
+        let value = resolve_component_arg(tx, parent, parent_args_validator, parent_args, arg)
             .await
             .map_err(|e| {
                 e.wrap_error_message(|msg| {
@@ -105,22 +127,26 @@ pub async fn resolve_component_args<RT: Runtime>(
                     )
                 })
             })?;
-        fields.insert(FieldName::try_from(String::from(arg_name.clone()))?, value);
+        if let Some(value) = value {
+            fields.insert(FieldName::try_from(String::from(arg_name.clone()))?, value);
+        }
     }
     ConvexObject::try_from(fields)
 }
 
+/// Returns `None` for forwarded parent arguments that are undefined.
 #[async_recursion]
 async fn resolve_component_arg<RT>(
     tx: &mut Transaction<RT>,
     parent: &CheckedComponent,
+    parent_args_validator: &ArgsValidator,
     parent_args: &ConvexObject,
     arg: &ComponentArgument,
-) -> anyhow::Result<ConvexValue>
+) -> anyhow::Result<Option<ConvexValue>>
 where
     RT: Runtime,
 {
-    Ok(match arg {
+    let value = match arg {
         ComponentArgument::Value(value) => value.clone(),
         ComponentArgument::Function(udf_path) => {
             function_handle(
@@ -170,33 +196,57 @@ where
         },
         ComponentArgument::ParentArgument(arg_name) => {
             let field = FieldName::try_from(String::from(arg_name.clone()))?;
-            parent_args.get(&field).cloned().ok_or_else(|| {
+            if let Some(value) = parent_args.get(&field) {
+                value.clone()
+            } else {
+                let declared = match parent_args_validator {
+                    ArgsValidator::Unvalidated => true,
+                    ArgsValidator::Validated(validator) => validator.0.contains_key(&**arg_name),
+                };
                 let parent_path = &parent.component_path;
-                invalid_component_argument(if parent_path.is_root() {
-                    format!("The app has no argument named '{arg_name}'.")
-                } else {
-                    format!("Component '{parent_path}' has no argument named '{arg_name}'.")
-                })
-            })?
+                anyhow::ensure!(
+                    declared,
+                    invalid_component_argument(if parent_path.is_root() {
+                        format!("The app has no argument named '{arg_name}'.")
+                    } else {
+                        format!("Component '{parent_path}' has no argument named '{arg_name}'.")
+                    })
+                );
+                return Ok(None);
+            }
         },
         ComponentArgument::Object(fields) => {
             let mut resolved = BTreeMap::new();
             for (field, arg) in fields {
-                resolved.insert(
-                    field.clone(),
-                    resolve_component_arg(tx, parent, parent_args, arg).await?,
-                );
+                if let Some(value) =
+                    resolve_component_arg(tx, parent, parent_args_validator, parent_args, arg)
+                        .await?
+                {
+                    resolved.insert(field.clone(), value);
+                }
             }
             ConvexValue::Object(ConvexObject::try_from(resolved)?)
         },
         ComponentArgument::Array(elements) => {
             let mut resolved = Vec::with_capacity(elements.len());
             for arg in elements {
-                resolved.push(resolve_component_arg(tx, parent, parent_args, arg).await?);
+                let Some(value) =
+                    resolve_component_arg(tx, parent, parent_args_validator, parent_args, arg)
+                        .await?
+                else {
+                    let ComponentArgument::ParentArgument(name) = arg else {
+                        anyhow::bail!("Only a parent argument can resolve to nothing: {arg:?}");
+                    };
+                    anyhow::bail!(invalid_component_argument(format!(
+                        "Parent argument '{name}' is unset and can't be included in an array."
+                    )));
+                };
+                resolved.push(value);
             }
             ConvexValue::Array(ConvexArray::try_from(resolved)?)
         },
-    })
+    };
+    Ok(Some(value))
 }
 
 #[async_recursion]

@@ -109,6 +109,7 @@ use model::{
         },
         file_based_routing::file_based_exports,
         init::{
+            init_args_validator,
             init_function,
             resolve_component_args,
         },
@@ -1047,13 +1048,15 @@ impl<RT: Runtime> Application<RT> {
                 .analysis
                 .get(&component.definition_path)
                 .context("Missing analysis for component definition")?;
+            let args_validator = init_args_validator(&component.component_path, evaluated)?;
             for instantiation in &evaluated.definition.child_components {
                 let child = component
                     .child_components
                     .get(&instantiation.name)
                     .with_context(|| format!("Missing child component {:?}", instantiation.name))?;
                 let child_args =
-                    resolve_component_args(tx, component, &args, instantiation).await?;
+                    resolve_component_args(tx, component, &args_validator, &args, instantiation)
+                        .await?;
                 stack.push((child, child_args));
             }
             // init is only available within components, not the app.
