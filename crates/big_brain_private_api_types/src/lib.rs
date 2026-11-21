@@ -9,6 +9,7 @@ use common::types::{
     DeploymentClass,
     DeploymentId,
     DeploymentType,
+    FullyQualifiedObjectKey,
     ProjectId,
     TeamId,
 };
@@ -137,6 +138,28 @@ pub struct AccessTokenDeploymentAuthResponse {
     pub app_client_id: Option<String>,
     #[serde(default)]
     pub legacy_admin_key: Option<LegacyAdminKeyOutcome>,
+}
+
+/// Sent by a destination deployment to authorize restoring a backup held by a
+/// different (source) deployment.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizeBackupRestoreArgs {
+    /// The access token presented to the destination deployment, in either the
+    /// `deployment|token` or the bare token form.
+    pub access_token: AdminKey,
+    pub source_deployment_name: String,
+    pub destination_deployment_name: String,
+    /// Id of the backup's `_exports` document in the source deployment.
+    pub export_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizeBackupRestoreResponse {
+    pub zip_object_key: FullyQualifiedObjectKey,
+    /// Nanoseconds since the Unix epoch.
+    pub expiration_ts_ns: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
