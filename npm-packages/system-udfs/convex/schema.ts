@@ -433,6 +433,22 @@ export default defineSchema({
     // Absolute path this component's HTTP routes are served under: the app's
     // `httpPrefix` for the root, the mount path in the parent for children.
     httpPrefix: v.optional(v.union(v.string(), v.null())),
+    // `[name, binding]` pairs for a child component and null for the app.
+    // Missing on documents written before component env vars existed.
+    env: v.optional(
+      v.union(
+        v.array(
+          v.array(
+            v.union(
+              v.string(),
+              v.object({ type: v.literal("value"), value: v.string() }),
+              v.object({ type: v.literal("envVar"), name: v.string() }),
+            ),
+          ),
+        ),
+        v.null(),
+      ),
+    ),
   }),
   _modules: defineTable({
     path: v.string(),
