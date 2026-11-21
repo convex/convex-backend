@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import udfs from "@common/udfs";
 import { useRouter } from "next/router";
@@ -34,6 +34,15 @@ export function DeploymentEnvironmentVariables({
   const environmentVariables: undefined | Array<EnvironmentVariable> = useQuery(
     udfs.listEnvironmentVariables.default,
     canViewEnvVars ? {} : "skip",
+  );
+  // The form edits values as strings, and a secret has none to show.
+  const formEnvironmentVariables = useMemo(
+    () =>
+      environmentVariables?.map((envVar) => ({
+        ...envVar,
+        value: envVar.value ?? "",
+      })),
+    [environmentVariables],
   );
   const updateEnvironmentVariables = useUpdateEnvVars();
 
@@ -106,7 +115,7 @@ export function DeploymentEnvironmentVariables({
             action="deployment:env:write"
           />
         }
-        environmentVariables={environmentVariables}
+        environmentVariables={formEnvironmentVariables}
         updateEnvironmentVariables={async (
           creations,
           modifications,
@@ -173,6 +182,10 @@ export const diffEnvironmentVariables = (
   const deploymentEnvVarMap = new Map(
     deploymentEnvVariables.map((e) => [e.name, e.value]),
   );
+  // A secret's value can't be compared with the project default.
+  const secretNames = new Set(
+    deploymentEnvVariables.filter((e) => e.secret).map((e) => e.name),
+  );
   const projectEnvVariableArray: [string, string][] =
     projectEnvVariables.configs
       .filter((config) => config.deploymentTypes.includes(deploymentType))
@@ -180,7 +193,7 @@ export const diffEnvironmentVariables = (
   const projectEnvVariableMap = new Map(projectEnvVariableArray);
   const missingOrDifferent = new Map<string, string>();
   for (const [name, value] of projectEnvVariableMap) {
-    if (deploymentEnvVarMap.get(name) !== value) {
+    if (!secretNames.has(name) && deploymentEnvVarMap.get(name) !== value) {
       missingOrDifferent.set(name, value);
     }
   }
