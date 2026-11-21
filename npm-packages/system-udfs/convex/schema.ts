@@ -357,6 +357,65 @@ export const cronJobState = v.union(
   }),
 );
 
+// Fields with `v.optional` below are missing on index documents last written
+// before they were added.
+
+// Rust serializes these cursors as arrays of byte values.
+const tableScanCursor = v.array(v.int64());
+
+const textIndexSegment = v.object({
+  segment_key: v.string(),
+  id_tracker_key: v.string(),
+  deleted_terms_table_key: v.string(),
+  alive_bitset_key: v.string(),
+  num_indexed_documents: v.int64(),
+  num_deleted_documents: v.int64(),
+  size_bytes_total: v.int64(),
+  id: v.string(),
+});
+
+const textIndexSnapshot = {
+  data: v.object({
+    data_type: v.literal("MultiSegment"),
+    segments: v.array(textIndexSegment),
+  }),
+  ts: v.int64(),
+  version: v.int64(),
+};
+
+const textIndexOnDiskState = v.union(
+  v.object({
+    state: v.literal("backfilling"),
+    staged: v.optional(v.union(v.boolean(), v.null())),
+  }),
+  v.object({
+    state: v.literal("backfilling2"),
+    segments: v.optional(v.union(v.array(textIndexSegment), v.null())),
+    // Rust sets both cursor fields or neither (`cursor` is null), and fails to
+    // read anything else.
+    cursor: v.optional(
+      v.union(
+        v.object({
+          table_scan_cursor: tableScanCursor,
+          last_segment_ts: v.int64(),
+        }),
+        v.null(),
+      ),
+    ),
+    staged: v.optional(v.union(v.boolean(), v.null())),
+  }),
+  v.object({
+    state: v.literal("backfilled2"),
+    snapshot: v.object(textIndexSnapshot),
+    staged: v.boolean(),
+  }),
+  v.object({
+    // "backfilled" is the legacy name of "snapshotted".
+    state: v.union(v.literal("backfilled"), v.literal("snapshotted")),
+    ...textIndexSnapshot,
+  }),
+);
+
 export default defineSchema({
   _tables: defineTable({
     name: v.string(),
@@ -407,20 +466,7 @@ export default defineSchema({
         type: v.literal("search"),
         searchField: v.string(),
         filterFields: v.array(v.string()),
-        onDiskState: v.union(
-          v.object({
-            state: v.union(
-              v.literal("backfilling"),
-              v.literal("backfilling2"),
-              v.literal("backfilled2"),
-            ),
-            // skip some fields here
-            staged: v.optional(v.boolean()),
-          }),
-          v.object({
-            state: v.union(v.literal("backfilled"), v.literal("snapshotted")),
-          }),
-        ),
+        onDiskState: textIndexOnDiskState,
       }),
       v.object({
         type: v.literal("vector"),
