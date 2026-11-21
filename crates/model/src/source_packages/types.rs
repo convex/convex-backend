@@ -44,7 +44,7 @@ pub fn check_node_default_memory_mb_for_push(memory_mb: u32) -> anyhow::Result<(
 }
 
 /// Rejects a `node.defaultMemoryMb` that this backend's Node executor can't
-/// run. Only the AWS Lambda executor supports sizes above the smallest.
+/// run.
 pub fn check_node_default_memory_mb_supported(
     memory_mb: u32,
     supported_memory_mb: &[u32],
