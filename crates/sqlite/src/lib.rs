@@ -49,7 +49,6 @@ use common::{
     },
     query::Order,
     runtime::CoopStreamExt as _,
-    try_anyhow,
     types::{
         IndexId,
         IndexRef,
@@ -72,6 +71,7 @@ use rusqlite::{
     params,
     types::Null,
     Connection,
+    OptionalExtension as _,
     Row,
     ToSql,
 };
@@ -113,16 +113,6 @@ impl SqlitePersistence {
         retention_validator: Arc<dyn RetentionValidator>,
     ) {
         retention_validator.validate_snapshot(ts).await?;
-    }
-
-    #[allow(clippy::needless_lifetimes)]
-    #[try_stream(ok = T, error = anyhow::Error)]
-    async fn validate_document_snapshot<T: 'static>(
-        &self,
-        ts: Timestamp,
-        retention_validator: Arc<dyn RetentionValidator>,
-    ) {
-        retention_validator.validate_document_snapshot(ts).await?;
     }
 
     fn _index_scan_inner(
@@ -426,63 +416,126 @@ impl Persistence for SqlitePersistence {
     }
 }
 
+/// The last row of a document-log page. The next page starts strictly after
+/// it in `(ts, table_id, id)` order.
+struct DocumentLogCursor {
+    ts: Timestamp,
+    id: InternalDocumentId,
+}
+
 impl SqlitePersistence {
-    /// Read the document log in `range`, restricted to `tablet_id` if given.
-    ///
-    /// Rows are collected eagerly, so restricting in SQL keeps the untargeted
-    /// ones out of memory entirely.
-    fn stream_document_log(
+    /// Read bounded pages in primary-key order without retaining the history.
+    /// Release the connection before validation or yielding: validation can
+    /// read persistence itself, and consumers can pause the stream between
+    /// entries.
+    #[try_stream(ok = DocumentLogEntry, error = anyhow::Error)]
+    async fn stream_document_log(
         &self,
         tablet_id: Option<TabletId>,
         range: TimestampRange,
         order: Order,
+        page_size: u32,
         retention_validator: Arc<dyn RetentionValidator>,
-    ) -> DocumentStream<'_> {
-        let entries = try_anyhow!({
-            let connection = &self.inner.lock().connection;
-            let load_docs_query = load_docs(range, order, tablet_id.is_some());
-            let mut stmt = connection.prepare(load_docs_query.as_str())?;
-
-            let tablet_id_bytes = tablet_id.map(|tablet_id| tablet_id.0);
-            let tablet_id_slice = tablet_id_bytes.as_ref().map(|tablet_id| &tablet_id[..]);
-            let params: Vec<&dyn ToSql> = match tablet_id_slice {
-                Some(ref tablet_id) => vec![tablet_id],
-                None => vec![],
+    ) {
+        let page_size = page_size.clamp(1, 1000);
+        let mut cursor: Option<DocumentLogCursor> = None;
+        loop {
+            let entries = {
+                let inner = self.inner.lock();
+                let query = load_docs(
+                    range,
+                    order,
+                    tablet_id.is_some(),
+                    cursor.as_ref(),
+                    page_size,
+                );
+                let mut stmt = inner.connection.prepare_cached(&query)?;
+                let tablet_bytes = tablet_id.map(|tablet| tablet.0);
+                let tablet_slice = tablet_bytes.as_ref().map(|tablet| &tablet[..]);
+                let cursor_ts = cursor.as_ref().map(|cursor| i64::from(cursor.ts));
+                let cursor_table = cursor.as_ref().map(|cursor| cursor.id.table().0);
+                let cursor_table = cursor_table.as_ref().map(|table| &table[..]);
+                let cursor_id = cursor.as_ref().map(|cursor| cursor.id.internal_id());
+                let cursor_id = cursor_id.as_ref().map(|id| &id[..]);
+                let mut parameters: Vec<&dyn ToSql> = vec![];
+                if let Some(ref tablet) = tablet_slice {
+                    parameters.push(tablet);
+                }
+                if cursor.is_some() {
+                    parameters.push(&cursor_ts);
+                    if tablet_id.is_none() {
+                        parameters.push(&cursor_table);
+                    }
+                    parameters.push(&cursor_id);
+                }
+                let mut entries = Vec::new();
+                for row in stmt.query_map(parameters.as_slice(), load_document_row)? {
+                    let (id, ts, value, prev_ts) = row_to_document(row)?;
+                    entries.push(DocumentLogEntry {
+                        ts,
+                        id,
+                        value,
+                        prev_ts,
+                    });
+                }
+                entries
             };
-
-            let mut entries = vec![];
-            for row in stmt.query_map(params.as_slice(), load_document_row)? {
-                let (document_id, ts, document, prev_ts) = row_to_document(row)?;
-                entries.push(Ok(DocumentLogEntry {
-                    ts,
-                    id: document_id,
-                    value: document,
-                    prev_ts,
-                }));
+            retention_validator
+                .validate_document_snapshot(range.min_timestamp_inclusive())
+                .await?;
+            let done = entries.len() < page_size as usize;
+            if let Some(last) = entries.last() {
+                cursor = Some(DocumentLogCursor {
+                    ts: last.ts,
+                    id: last.id,
+                });
             }
-            entries
-        });
-        // The caller isn't async so we have to validate snapshot as part of the
-        // stream.
-        let validate =
-            self.validate_document_snapshot(range.min_timestamp_inclusive(), retention_validator);
-        match entries {
-            Ok(s) => validate.chain(stream::iter(s).cooperative()).boxed(),
-            Err(e) => stream::once(async { Err(e) }).boxed(),
+            for entry in entries {
+                yield entry;
+            }
+            if done {
+                break;
+            }
         }
     }
 }
 
 #[async_trait]
 impl PersistenceReader for SqlitePersistence {
+    async fn max_ts(&self) -> anyhow::Result<Option<Timestamp>> {
+        // A timestamp lookup does not need to deserialize a document payload.
+        // Use a covering primary-key seek and preserve the repeatable timestamp.
+        let max_committed_ts = {
+            let inner = self.inner.lock();
+            inner
+                .connection
+                .query_row(
+                    "SELECT ts FROM documents ORDER BY ts DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+        }
+        .map(Timestamp::try_from)
+        .transpose()?;
+        let max_repeatable_ts = self
+            .get_persistence_global(PersistenceGlobalKey::MaxRepeatableTimestamp)
+            .await?
+            .map(Timestamp::try_from)
+            .transpose()?;
+        Ok(cmp::max(max_committed_ts, max_repeatable_ts))
+    }
+
     fn load_documents(
         &self,
         range: TimestampRange,
         order: Order,
-        _page_size: u32,
+        page_size: u32,
         retention_validator: Arc<dyn RetentionValidator>,
     ) -> DocumentStream<'_> {
-        self.stream_document_log(None, range, order, retention_validator)
+        self.stream_document_log(None, range, order, page_size, retention_validator)
+            .cooperative()
+            .boxed()
     }
 
     fn load_documents_from_table(
@@ -490,10 +543,18 @@ impl PersistenceReader for SqlitePersistence {
         tablet_id: TabletId,
         range: TimestampRange,
         order: Order,
-        _page_size: u32,
+        page_size: u32,
         retention_validator: Arc<dyn RetentionValidator>,
     ) -> DocumentStream<'_> {
-        self.stream_document_log(Some(tablet_id), range, order, retention_validator)
+        self.stream_document_log(
+            Some(tablet_id),
+            range,
+            order,
+            page_size,
+            retention_validator,
+        )
+        .cooperative()
+        .boxed()
     }
 
     async fn previous_revisions(
@@ -620,6 +681,8 @@ CREATE TABLE IF NOT EXISTS documents (
     PRIMARY KEY (ts, table_id, id)
 );
 CREATE INDEX IF NOT EXISTS documents_by_table_and_id ON documents (table_id, id, ts);
+-- Table-scoped log pages need the same timestamp ordering as the global log.
+CREATE INDEX IF NOT EXISTS documents_by_table_and_ts ON documents (table_id, ts, id);
 "#;
 
 const INDEXES_INIT: &str = r#"
@@ -673,27 +736,48 @@ fn row_to_document(
     Ok((document_id, prev_ts, document, prev_prev_ts))
 }
 
-fn load_docs(range: TimestampRange, order: Order, tablet_filter: bool) -> String {
-    let order_str = match order {
-        Order::Asc => " ORDER BY ts ASC, table_id ASC, id ASC ",
-        Order::Desc => " ORDER BY ts DESC, table_id DESC, id DESC ",
+fn load_docs(
+    range: TimestampRange,
+    order: Order,
+    tablet_filter: bool,
+    cursor: Option<&DocumentLogCursor>,
+    page_size: u32,
+) -> String {
+    let columns = if tablet_filter {
+        "ts, id"
+    } else {
+        "ts, table_id, id"
+    };
+    // SQLite assigns $name parameters by appearance; ?N preserves bind positions.
+    let parameters = if tablet_filter {
+        "?2, ?3"
+    } else {
+        "?1, ?2, ?3"
+    };
+    let lower = range.min_timestamp_inclusive();
+    let upper = range.max_timestamp_exclusive();
+    let bounds = match (cursor, order) {
+        (Some(_), Order::Asc) => format!("({columns}) > ({parameters}) AND ts < {upper}"),
+        (Some(_), Order::Desc) => format!("ts >= {lower} AND ({columns}) < ({parameters})"),
+        (None, _) => format!("ts >= {lower} AND ts < {upper}"),
+    };
+    let direction = match order {
+        Order::Asc => "ASC",
+        Order::Desc => "DESC",
+    };
+    let ordering = if tablet_filter {
+        format!("ts {direction}, id {direction}")
+    } else {
+        format!("ts {direction}, table_id {direction}, id {direction}")
+    };
+    let filter = if tablet_filter {
+        "AND table_id = ?1"
+    } else {
+        ""
     };
     format!(
-        r#"
-SELECT id, ts, table_id, json_value, deleted, prev_ts
-FROM documents
-WHERE ts >= {} AND ts < {}
-{}
-{}
-"#,
-        range.min_timestamp_inclusive(),
-        range.max_timestamp_exclusive(),
-        if tablet_filter {
-            "AND table_id = $1"
-        } else {
-            ""
-        },
-        order_str,
+        "SELECT id, ts, table_id, json_value, deleted, prev_ts FROM documents WHERE {bounds} \
+         {filter} ORDER BY {ordering} LIMIT {page_size}"
     )
 }
 
@@ -748,3 +832,217 @@ WHERE
     ts = $3
 ORDER BY ts ASC, table_id ASC, id ASC
 "#;
+
+#[cfg(test)]
+mod memory_tests {
+    use std::sync::atomic::{
+        AtomicBool,
+        Ordering,
+    };
+
+    use common::persistence::NoopRetentionValidator;
+    use futures::TryStreamExt as _;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn max_ts_skips_payloads_and_keeps_repeatable_ts() -> anyhow::Result<()> {
+        let persistence = SqlitePersistence::new(":memory:")?;
+        assert_eq!(persistence.max_ts().await?, None);
+        {
+            let inner = persistence.inner.lock();
+            // Invalid JSON makes eager document deserialization fail. A timestamp
+            // lookup must never read the document payload, even for the last row.
+            inner.connection.execute(
+                "INSERT INTO documents VALUES (zeroblob(16), 100, zeroblob(16), 'invalid', 0, \
+                 NULL)",
+                [],
+            )?;
+        }
+        assert_eq!(
+            persistence.max_ts().await?,
+            Some(Timestamp::try_from(100i64)?)
+        );
+        persistence
+            .write_persistence_global(
+                PersistenceGlobalKey::MaxRepeatableTimestamp,
+                serde_json::json!(200),
+            )
+            .await?;
+        assert_eq!(
+            persistence.max_ts().await?,
+            Some(Timestamp::try_from(200i64)?)
+        );
+        {
+            let inner = persistence.inner.lock();
+            inner.connection.execute(
+                "INSERT INTO documents VALUES (zeroblob(16), 300, zeroblob(16), NULL, 1, 100)",
+                [],
+            )?;
+        }
+        assert_eq!(
+            persistence.max_ts().await?,
+            Some(Timestamp::try_from(300i64)?)
+        );
+        persistence
+            .inner
+            .lock()
+            .connection
+            .execute("DELETE FROM documents", [])?;
+        assert_eq!(
+            persistence.max_ts().await?,
+            Some(Timestamp::try_from(200i64)?)
+        );
+        Ok(())
+    }
+
+    fn log_fixture() -> anyhow::Result<SqlitePersistence> {
+        let persistence = SqlitePersistence::new(":memory:")?;
+        for (ts, table, id) in [
+            (10i64, 1u8, 1u8),
+            (10, 1, 2),
+            (10, 2, 1),
+            (11, 1, 1),
+            (12, 2, 2),
+            (13, 1, 3),
+            (14, 2, 1),
+        ] {
+            persistence.inner.lock().connection.execute(
+                "INSERT INTO documents VALUES (?, ?, ?, NULL, 1, ?)",
+                params![&[id; 16][..], ts, &[table; 16][..], ts - 1],
+            )?;
+        }
+        Ok(persistence)
+    }
+
+    #[tokio::test]
+    async fn log_pages_preserve_ties_ranges_tables_and_tombstones() -> anyhow::Result<()> {
+        let persistence = log_fixture()?;
+        let range = TimestampRange::new(Timestamp::try_from(10i64)?..Timestamp::try_from(14i64)?);
+        for page_size in [0, 1, 2, 3, u32::MAX] {
+            for order in [Order::Asc, Order::Desc] {
+                for table in [
+                    None,
+                    Some(TabletId(InternalId([1; 16]))),
+                    Some(TabletId(InternalId([3; 16]))),
+                ] {
+                    let stream = match table {
+                        Some(table) => persistence.load_documents_from_table(
+                            table,
+                            range,
+                            order,
+                            page_size,
+                            Arc::new(NoopRetentionValidator),
+                        ),
+                        None => persistence.load_documents(
+                            range,
+                            order,
+                            page_size,
+                            Arc::new(NoopRetentionValidator),
+                        ),
+                    };
+                    let rows = stream.try_collect::<Vec<_>>().await?;
+                    let actual: Vec<_> = rows
+                        .iter()
+                        .map(|entry| {
+                            assert!(entry.value.is_none());
+                            assert_eq!(entry.prev_ts.map(i64::from), Some(i64::from(entry.ts) - 1));
+                            (
+                                i64::from(entry.ts),
+                                entry.id.table().0[0],
+                                entry.id.internal_id()[0],
+                            )
+                        })
+                        .collect();
+                    let mut expected: Vec<_> = [
+                        (10, 1, 1),
+                        (10, 1, 2),
+                        (10, 2, 1),
+                        (11, 1, 1),
+                        (12, 2, 2),
+                        (13, 1, 3),
+                    ]
+                    .into_iter()
+                    .filter(|(_, t, _)| table.is_none_or(|table| table.0[0] == *t))
+                    .collect();
+                    if order == Order::Desc {
+                        expected.reverse();
+                    }
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+        assert!(persistence
+            .load_documents(
+                TimestampRange::empty(),
+                Order::Asc,
+                1,
+                Arc::new(NoopRetentionValidator)
+            )
+            .try_collect::<Vec<_>>()
+            .await?
+            .is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn log_pages_do_not_parse_unrequested_history() -> anyhow::Result<()> {
+        let persistence = log_fixture()?;
+        persistence.inner.lock().connection.execute(
+            "UPDATE documents SET deleted = 0, json_value = 'invalid' WHERE ts = 14",
+            [],
+        )?;
+        let mut rows = persistence.load_documents(
+            TimestampRange::all(),
+            Order::Asc,
+            1,
+            Arc::new(NoopRetentionValidator),
+        );
+        for _ in 0..6 {
+            assert!(rows.try_next().await?.is_some());
+        }
+        assert!(rows.try_next().await.is_err());
+        Ok(())
+    }
+
+    struct ExpiringRetention(AtomicBool);
+
+    #[async_trait::async_trait]
+    impl RetentionValidator for ExpiringRetention {
+        fn optimistic_validate_snapshot(&self, _ts: Timestamp) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn validate_snapshot(&self, _ts: Timestamp) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn validate_document_snapshot(&self, _ts: Timestamp) -> anyhow::Result<()> {
+            anyhow::ensure!(!self.0.load(Ordering::SeqCst), "expired snapshot");
+            Ok(())
+        }
+
+        async fn min_snapshot_ts(&self) -> anyhow::Result<common::types::RepeatableTimestamp> {
+            Ok(common::types::RepeatableTimestamp::MIN)
+        }
+
+        async fn min_document_snapshot_ts(
+            &self,
+        ) -> anyhow::Result<common::types::RepeatableTimestamp> {
+            Ok(common::types::RepeatableTimestamp::MIN)
+        }
+    }
+
+    #[tokio::test]
+    async fn log_pages_revalidate_retention_without_holding_the_connection() -> anyhow::Result<()> {
+        let persistence = log_fixture()?;
+        let validator = Arc::new(ExpiringRetention(AtomicBool::new(false)));
+        let mut rows =
+            persistence.load_documents(TimestampRange::all(), Order::Asc, 1, validator.clone());
+        assert!(rows.try_next().await?.is_some());
+        assert!(persistence.inner.try_lock().is_some());
+        validator.0.store(true, Ordering::SeqCst);
+        assert!(rows.try_next().await.is_err());
+        Ok(())
+    }
+}
