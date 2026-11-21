@@ -132,9 +132,9 @@ function processHttpRoute(f: {
     path: string;
     method: string;
   };
-  pos?: ResolvedSourcePos;
+  pos?: ResolvedSourcePos | null;
   lineno?: bigint;
-  args?: string;
+  args?: string | null;
 }) {
   const lineno = f.pos?.start_lineno ?? f.lineno;
   return {
@@ -147,11 +147,11 @@ function processHttpRoute(f: {
 
 function processFunction(f: {
   name: string;
-  pos?: ResolvedSourcePos;
+  pos?: ResolvedSourcePos | null;
   lineno?: bigint;
   udfType: UdfType;
   visibility?: Visibility | null;
-  args?: string;
+  args?: string | null;
 }): AnalyzedModuleFunction {
   const lineno = f.pos?.start_lineno ?? f.lineno;
   return {

@@ -53,13 +53,20 @@ const analyzedSourcePosition = v.object({
 
 const analyzedFunction = v.object({
   name: v.string(),
-  // Exactly one of these two will be defined
+
+  // Older modules have `lineno` and newer ones `pos`, which is null when the
+  // analyzer can't find the function's source position.
   lineno: v.optional(v.int64()),
-  pos: v.optional(analyzedSourcePosition),
+  pos: v.optional(v.union(analyzedSourcePosition, v.null())),
+
   udfType,
   visibility: v.optional(v.union(v.null(), udfVisibility)),
-  args: v.optional(v.string()),
-  returns: v.union(v.string(), v.null()),
+
+  // Serialized validators. Missing on modules analyzed before validators
+  // existed, and null once such a module is rewritten without being
+  // re-analyzed. Rust reads both as unvalidated.
+  args: v.optional(v.union(v.string(), v.null())),
+  returns: v.optional(v.union(v.string(), v.null())),
 });
 
 const analyzedHttpRoute = v.object({
@@ -67,10 +74,16 @@ const analyzedHttpRoute = v.object({
     path: v.string(),
     method: v.string(),
   }),
-  // Exactly one of the two will be defined
+
+  // Older modules have `lineno` and newer ones `pos`, which is null when the
+  // analyzer can't find the route's source position.
   lineno: v.optional(v.int64()),
-  pos: v.optional(analyzedSourcePosition),
+  pos: v.optional(v.union(analyzedSourcePosition, v.null())),
 });
+
+// Null when the developer leaves the minute to the backend, which picks one
+// per job to spread load.
+const minuteUTC = v.optional(v.union(v.int64(), v.null()));
 
 const CronSchedule = v.union(
   v.object({
@@ -79,23 +92,23 @@ const CronSchedule = v.union(
   }),
   v.object({
     type: v.literal("hourly"),
-    minuteUTC: v.optional(v.int64()),
+    minuteUTC,
   }),
   v.object({
     type: v.literal("daily"),
-    minuteUTC: v.optional(v.int64()),
+    minuteUTC,
     hourUTC: v.int64(),
   }),
   v.object({
     type: v.literal("weekly"),
     dayOfWeek: v.int64(),
     hourUTC: v.int64(),
-    minuteUTC: v.optional(v.int64()),
+    minuteUTC,
   }),
   v.object({
     type: v.literal("monthly"),
     day: v.int64(),
-    minuteUTC: v.optional(v.int64()),
+    minuteUTC,
     hourUTC: v.int64(),
   }),
   v.object({
@@ -142,6 +155,8 @@ const analyzedModule = v.object({
     ),
   ),
   sourceMapped: v.union(mappedModule, v.null()),
+  // Written only when true.
+  reuseContext: v.optional(v.boolean()),
 });
 
 const exportRequestor = v.union(
