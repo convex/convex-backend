@@ -75,7 +75,7 @@ function JobItemImpl({
   const { useIsOperationAllowed } = useContext(PermissionsContext);
   const canCancelJobs = useIsOperationAllowed("WriteData");
 
-  if (nextTs === null) {
+  if (nextTs === null || nextTs === undefined) {
     throw new Error("Could not find timestamp to run scheduled job at");
   }
   const date = new Date(Number(nextTs / BigInt(1000000))).toLocaleString();
@@ -116,7 +116,7 @@ function JobItemImpl({
             <FunctionNameOption
               label={functionIdentifierValue(
                 udfPath,
-                componentPath,
+                componentPath ?? undefined,
                 componentId ?? undefined,
               )}
               oneLine

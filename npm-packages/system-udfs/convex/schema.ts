@@ -530,16 +530,38 @@ export default defineSchema({
     ),
   ).index("by_requestor", ["requestor"]),
   _deployment_audit_log: deploymentAuditLogTable,
+  // A job stays pending until its scheduled time, so documents written by
+  // older backends can lack any field with `v.optional`.
   _scheduled_jobs: defineTable({
-    nextTs: v.union(v.int64(), v.null()),
+    nextTs: v.optional(v.union(v.int64(), v.null())),
+    completedTs: v.optional(v.union(v.int64(), v.null())),
+    originalScheduledTs: v.optional(v.union(v.int64(), v.null())),
     udfPath: v.string(),
     state: v.union(
       v.object({ type: v.literal("pending") }),
-      v.object({ type: v.literal("inProgress") }),
+
+      // Only actions go through this state.
+      v.object({
+        type: v.literal("inProgress"),
+        request_id: v.string(),
+        execution_id: v.string(),
+      }),
+
+      v.object({ type: v.literal("success") }),
+      v.object({ type: v.literal("failed"), error: v.string() }),
+      v.object({ type: v.literal("canceled") }),
     ),
     udfArgs: v.nullable(v.bytes()),
-    argsId: v.nullable(v.id("_scheduled_job_args")),
-    component: v.optional(v.string()),
+    argsId: v.optional(v.nullable(v.id("_scheduled_job_args"))),
+    component: v.optional(v.nullable(v.string())),
+    attempts: v.optional(
+      v.nullable(
+        v.object({
+          systemErrors: v.int64(),
+          occErrors: v.int64(),
+        }),
+      ),
+    ),
   })
     .index("by_udf_path_and_next_event_ts", ["udfPath", "nextTs"])
     .index("by_next_ts", ["nextTs"]),
