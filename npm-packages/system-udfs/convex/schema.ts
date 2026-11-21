@@ -20,15 +20,22 @@ export const udfType = v.union(
 );
 
 const schemaState = v.union(
-  v.literal("pending"),
-  v.literal("validated"),
-  v.literal("active"),
-  v.literal("failed"),
-  v.literal("overwritten"),
+  v.object({ state: v.literal("pending") }),
+  v.object({ state: v.literal("validated") }),
+  v.object({ state: v.literal("active") }),
+  v.object({
+    state: v.literal("failed"),
+    error: v.string(),
+
+    // The table that failed validation. Missing on schemas that failed before
+    // it was recorded.
+    table_name: v.optional(v.union(v.string(), v.null())),
+  }),
+  v.object({ state: v.literal("overwritten") }),
 );
 
 const schemaMetadata = v.object({
-  state: v.object({ state: schemaState, error: v.optional(v.string()) }),
+  state: schemaState,
   // This is a string because the rust code serializes the DatabaseSchema structure to a string.
   schema: v.optional(v.string()),
 });
