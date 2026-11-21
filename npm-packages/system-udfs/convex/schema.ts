@@ -436,8 +436,14 @@ export default defineSchema({
   }),
   _modules: defineTable({
     path: v.string(),
-    latestVersion: v.int64(),
-    deleted: v.boolean(),
+
+    // Only on modules last written before mid-2024. Rust ignores them.
+    latestVersion: v.optional(v.int64()),
+    deleted: v.optional(v.boolean()),
+
+    // Base64 SHA-256 of the module's source and source map.
+    sha256: v.string(),
+
     analyzeResult: v.union(analyzedModule, v.null()),
     sourcePackageId: v.string(),
     environment: v.union(
