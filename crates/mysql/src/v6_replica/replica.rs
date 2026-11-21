@@ -480,8 +480,18 @@ impl<RT: Runtime> ReplicaWriter<RT> {
                 v6.reconcile_index_backfill(*index).await?;
                 Ok(0)
             },
+            // V5 keeps no markers, and a reply that misses `apply_wait` counts
+            // as zero, so the caller may stop after one call. Draining here
+            // keeps that from leaving markers in V6.
             ReplayOperation::DeleteIndexBackfillMarkers { index } => {
-                v6.delete_index_backfill_markers_chunk(*index).await
+                let mut deleted = 0;
+                loop {
+                    let chunk = v6.delete_index_backfill_markers_chunk(*index).await?;
+                    if chunk == 0 {
+                        return Ok(deleted);
+                    }
+                    deleted += chunk;
+                }
             },
             ReplayOperation::DeleteDocuments { documents } => {
                 Ok(v6.delete(documents.clone()).await? as u64)

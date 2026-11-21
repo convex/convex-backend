@@ -89,6 +89,7 @@ use value::{
 };
 
 use crate::{
+    metrics::log_index_backfill_markers_deleted,
     retention::{
         IndexRetentionSource,
         LeaderRetentionWorkers,
@@ -427,6 +428,9 @@ impl<RT: Runtime> IndexWriter<RT> {
     /// - The selected indexes are fully backfilled at `start_ts`, or the latest
     ///   documents at `end_ts` have already been snapshot-backfilled.
     /// - No concurrent writes target the selected indexes.
+    /// - Every backfill marker of the selected indexes is at most `end_ts`, and
+    ///   no snapshot backfill of them runs at a snapshot older than `end_ts`,
+    ///   since this deletes their markers.
     ///
     /// Postconditions:
     /// - The selected indexes represent the documents at `end_ts`.
@@ -506,6 +510,26 @@ impl<RT: Runtime> IndexWriter<RT> {
                 self.persistence.reconcile_index_backfill(*index).await
             })
             .await?;
+            // By the preconditions every marker is at most `end_ts`, and a
+            // marker only removes older entries, so none can apply to later
+            // writes. Left in place, each later call would reconcile every
+            // marker since the first call.
+            loop {
+                let deleted = retry_persistence_operation(
+                    "delete_index_backfill_markers",
+                    retry_config,
+                    || async {
+                        self.persistence
+                            .delete_index_backfill_markers_chunk(*index)
+                            .await
+                    },
+                )
+                .await?;
+                if deleted == 0 {
+                    break;
+                }
+                log_index_backfill_markers_deleted(deleted);
+            }
         }
         Ok(())
     }
