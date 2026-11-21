@@ -5,6 +5,7 @@ use std::{
 
 use common::types::{
     AccessTokenId,
+    AdminKey,
     DeploymentClass,
     DeploymentId,
     DeploymentType,
@@ -115,7 +116,7 @@ pub struct DeploymentAuthResponse {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessTokenDeploymentAuthArgs {
-    pub access_token: String,
+    pub access_token: AdminKey,
     pub deployment_name: String,
     #[serde(default)]
     pub deployment_type: Option<DeploymentType>,
