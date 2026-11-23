@@ -203,7 +203,7 @@ fn skipped_an_occurrence(
 }
 
 /// The next time this schedule runs after `ts`.
-fn next_occurrence_after(cron: &Cron, ts: Timestamp) -> anyhow::Result<Timestamp> {
+pub(crate) fn next_occurrence_after(cron: &Cron, ts: Timestamp) -> anyhow::Result<Timestamp> {
     let occurrence_utc = cron
         .next_after(Utc.timestamp_nanos(ts.into()))
         .context("Could not compute next timestamp for cron")?;
