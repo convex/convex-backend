@@ -64,6 +64,8 @@ export interface Filesystem {
   exists(path: string): boolean;
   stat(path: string): Stats;
   lstat(path: string): Stats;
+  // Resolves symlinks in `path`, returning its canonical absolute path.
+  realpath(path: string): string;
   readUtf8File(path: string): string;
   // createReadStream returns a stream for which [Symbol.asyncIterator]
   // yields chunks of size highWaterMark (until the last one), or 64KB if
@@ -157,6 +159,9 @@ export class NodeFs implements Filesystem {
   }
   lstat(path: string) {
     return stdFs.lstatSync(path);
+  }
+  realpath(path: string) {
+    return stdFs.realpathSync(path);
   }
   readUtf8File(path: string) {
     return stdFs.readFileSync(path, { encoding: "utf-8" });
@@ -338,6 +343,13 @@ export class RecordingFs implements Filesystem {
       }
       throw err;
     }
+  }
+
+  // Records the stat of `path`, which follows symlinks, so pointing a symlink
+  // at a different target invalidates the recording.
+  realpath(path: string): string {
+    this.stat(path);
+    return nodeFs.realpath(path);
   }
 
   exists(path: string): boolean {
