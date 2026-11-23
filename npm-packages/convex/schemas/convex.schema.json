@@ -123,7 +123,7 @@
         },
         "nodeVersion": {
           "type": "string",
-          "description": "The Node.js version to use for Node.js actions. The currently supported values are '22' and '24'.\n\nAfter you push a new Node.js version, your functions may keep running on the previous version for a few minutes.\n\nDocumentation: https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version"
+          "description": "The Node.js version to use for Node.js actions. The currently supported values are '22', '24', and '26'.\n\nAfter you push a new Node.js version, your functions may keep running on the previous version for a few minutes.\n\nDocumentation: https://docs.convex.dev/config/convex.json#configuring-the-nodejs-version"
         },
         "defaultMemoryMb": {
           "type": "integer",
