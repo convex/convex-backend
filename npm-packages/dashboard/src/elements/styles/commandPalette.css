@@ -1,25 +1,69 @@
+/* The dialog content is a full-screen flex column that lays out the centered
+   ⌘K palette: the padding is its minimum margin from the viewport edges, and
+   the 1:2 spacers put it a third of the way down the free space, so it sits
+   high on a tall screen and centered, edge margins only, on a short one. */
+[cmdk-dialog] {
+  @apply fixed inset-0 z-50 flex flex-col items-center p-4;
+
+  &::before,
+  &::after {
+    content: "";
+  }
+  &::before {
+    flex: 1 1 0;
+  }
+  &::after {
+    flex: 2 1 0;
+  }
+}
+
+/* Only the list shrinks when the viewport is too short for the whole palette;
+   the breadcrumbs, search input and footer keep their size. */
 [cmdk-root] {
-  @apply px-1 py-1.5 bg-background-secondary/90 dark:bg-background-secondary/70 backdrop-blur-xl border fixed left-1/2 top-1/3 z-50 -translate-x-1/2 -translate-y-1/2 shadow-xl max-w-[640px] w-[calc(100%-2rem)] overflow-hidden rounded-2xl;
-}
+  @apply flex min-h-0 w-full max-w-[640px] shrink flex-col overflow-hidden rounded-2xl border bg-background-secondary/90 px-1 py-1.5 shadow-xl backdrop-blur-xl dark:bg-background-secondary/70;
 
-@media (max-height: 700px) {
-  [cmdk-root] {
-    @apply top-4 -translate-x-1/2 translate-y-0;
+  & > * {
+    @apply shrink-0;
+  }
+  & > [cmdk-list] {
+    @apply min-h-0 shrink;
   }
 }
 
-/* Opened from a trigger (the project switcher): a compact menu attached just
-   below it. `left`/`top` come from the trigger's rect as inline styles; this
-   only needs to undo the centered layout's translate and narrow the width. The
-   higher-specificity selector wins over the base and the media query above. */
+/* Opened from a trigger (a header switcher or the backup deployment picker):
+   a menu positioned against the trigger by Floating UI, which sets `left`,
+   `top` and `--palette-max-height` (the room left between the trigger and the
+   viewport edge, less a margin) inline. Its list fits its content, so a short
+   list ends visibly instead of padding out empty space, and only scrolls once
+   the menu reaches that maximum. Only the list shrinks, so the input, footer
+   and pinned actions are never cut off, and the menu stops shrinking at
+   `--palette-min-height` (or the viewport, less its margins): the menu only
+   stays anchored where there's room for that (see `useAnchoredPosition`). */
 [cmdk-root].command-palette--anchored {
-  @apply w-[38rem] max-w-[calc(100vw-1rem)] translate-x-0 translate-y-0;
+  max-height: var(--palette-max-height);
+  min-height: min(var(--palette-min-height), 100dvh - 2rem);
+
+  & > [cmdk-list] {
+    /* `--cmdk-list-height` is cmdk's measurement of the list's content, so a
+       content-box height excludes the list's own padding. The 13rem floor is
+       a preferred height for short lists, not a minimum, so the list can still
+       shrink to keep the rest of the menu in view. */
+    box-sizing: content-box;
+    height: max(var(--cmdk-list-height), 13rem);
+  }
+
+  /* The list's wider end gap, for pages whose list ends with a pinned create
+     bar: it opens above the bar once the list is scrolled to its end (or fits
+     whole), while the bar stays stuck to the bottom over a scrolling list. */
+  & [data-pinned] {
+    @apply mt-6;
+  }
 }
 
-@media (max-height: 700px) {
-  [cmdk-root].command-palette--anchored {
-    @apply translate-x-0 translate-y-0;
-  }
+/* Too little room around the trigger: the menu lays out like the ⌘K palette,
+   centered in the dialog, whose padding bounds its height. */
+[cmdk-root].command-palette--anchored.command-palette--centered {
+  max-height: none;
 }
 
 [cmdk-input] {
@@ -144,7 +188,7 @@
 }
 
 [cmdk-list] {
-  @apply h-[min(330px,40vh)] overflow-auto overscroll-contain transition-[height] duration-100 ease-[ease] focus:outline-hidden;
+  @apply h-[330px] overflow-auto overscroll-contain transition-[height] duration-100 ease-[ease] focus:outline-hidden;
 
   /* cmdk scrolls the selected item with `scrollIntoView({ block: "nearest" })`,
      which honors scroll-padding. Keep a little breathing room above and below
@@ -169,12 +213,18 @@
   @apply mt-2;
 }
 
-[cmdk-list].command-palette-list--pinned > [cmdk-list-sizer] {
+/* Pin the create bar to the bottom of the ⌘K palette's fixed-height list even
+   when the list is short. An anchored menu's list is as tall as its content,
+   so its bar is already at the bottom, and a full-height sizer there would
+   feed back into the list height cmdk measures from it. */
+[cmdk-root]:not(.command-palette--anchored)
+  > [cmdk-list].command-palette-list--pinned
+  > [cmdk-list-sizer] {
   @apply flex h-full flex-col;
-}
 
-[data-pinned] {
-  @apply mt-auto;
+  & [data-pinned] {
+    @apply mt-auto;
+  }
 }
 
 [cmdk-group-heading] {

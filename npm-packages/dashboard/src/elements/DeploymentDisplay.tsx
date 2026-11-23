@@ -465,12 +465,10 @@ function useDeploymentSwitcherTrigger(
         return;
       }
       trackOpened("deployment-selector");
-      const rect = button.getBoundingClientRect();
       openCommandPalette({
         pages: [{ type: "deployments", project }],
         anchor: {
-          left: rect.left,
-          top: rect.bottom + 8,
+          reference: button,
           source: "deployment-switcher",
         },
       });

@@ -3,9 +3,17 @@ import { Title as DialogTitle } from "@radix-ui/react-dialog";
 import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
 import { ErrorBoundary } from "@sentry/nextjs";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  autoUpdate,
+  offset,
+  shift,
+  size,
+  useFloating,
+  useMergeRefs,
+} from "@floating-ui/react";
 import { useRouter } from "next/router";
 import { useHotkeys } from "react-hotkeys-hook";
-import { createGlobalState, useClickAway, useWindowSize } from "react-use";
+import { createGlobalState, useClickAway } from "react-use";
 import { cn } from "@ui/cn";
 import { isApplePlatform } from "@ui/KeyboardShortcut";
 import { useCurrentTeam } from "api/teams";
@@ -55,20 +63,19 @@ export const useCommandPaletteInitialPages = createGlobalState<
   PalettePage[] | null
 >(null);
 
-// The viewport point (a trigger's bottom-left) to anchor the palette under when
-// it's opened from the project switcher, rendering a compact menu attached to
-// the trigger instead of the centered dialog. `null` for the default centered
-// dialog. Unlike the initial page, this persists for the whole open session so
-// the trigger can show a selected state and the dialog stays anchored.
+// The trigger to attach the palette to when it's opened from a switcher,
+// rendering a compact menu next to the trigger instead of the centered dialog.
+// `null` for the default centered dialog. Unlike the initial page, this
+// persists for the whole open session so the trigger can show a selected state
+// and the menu follows the trigger as the page scrolls or resizes.
 export type PaletteAnchor = {
-  left: number;
-  top: number;
+  reference: Element;
+  // Which of the trigger's edges the menu lines up with: its left edge
+  // ("start", the default) or its right edge ("end").
+  align?: "start" | "end";
   // Which trigger opened it, so that trigger (and only it) can show a selected
   // state while several switchers share the header.
   source?: string;
-  // Pin the menu to this width (px) to match the trigger it hangs off of;
-  // defaults to the anchored width in commandPalette.css when unset.
-  width?: number;
 };
 export const useCommandPaletteAnchor = createGlobalState<PaletteAnchor | null>(
   null,
@@ -243,27 +250,11 @@ function CommandPaletteDialog({
   const hasPinnedActions =
     drillPage?.type === "teams" || drillPage?.type === "projects";
 
-  // Keep an anchored menu fully on-screen: cap its width to the viewport and
-  // clamp its left edge so it never spills past either side — a right-aligned
-  // trigger or a narrow screen would otherwise push it off-frame. Falls back to
-  // the 38rem / 0.5rem-inset defaults from commandPalette.css.
-  const { width: viewportWidth } = useWindowSize();
-  const anchorStyle = (() => {
-    if (!anchor) {
-      return undefined;
-    }
-    const EDGE_GAP = 8;
-    const DEFAULT_WIDTH = 608; // 38rem
-    const width = Math.min(
-      anchor.width ?? DEFAULT_WIDTH,
-      viewportWidth - 2 * EDGE_GAP,
-    );
-    const left = Math.max(
-      EDGE_GAP,
-      Math.min(anchor.left, viewportWidth - width - EDGE_GAP),
-    );
-    return { left, top: anchor.top, width };
-  })();
+  const { refs, floatingStyles, isPositioned, centered } =
+    useAnchoredPosition(anchor);
+  const ref = useRef<HTMLDivElement>(null);
+  const rootRef = useMergeRefs([ref, refs.setFloating]);
+  useClickAway(ref, onClose);
 
   // Anchored mode opens directly on a drill page (its base), so "going back"
   // and the breadcrumbs only apply once the user has drilled *past* that base.
@@ -315,9 +306,6 @@ function CommandPaletteDialog({
     [router, onClose],
   );
 
-  const ref = useRef<HTMLDivElement>(null);
-  useClickAway(ref, onClose);
-
   // Used as a signal to what action should be performed by the selected list item in the palette.
   // Updated when the event handler detects the user is using a modifier key.
   const drillModifier = useRef(false);
@@ -353,7 +341,7 @@ function CommandPaletteDialog({
               <PaletteLinkContext.Provider value={linkRegistry}>
                 <Command.Dialog
                   open
-                  ref={ref}
+                  ref={rootRef}
                   label="Convex Command Palette"
                   // No `loop`: with infinite-scroll lists, wrapping from the last
                   // loaded item back to the first snaps past not-yet-loaded pages,
@@ -361,10 +349,28 @@ function CommandPaletteDialog({
                   filter={paletteFilter}
                   onKeyDown={handleKeyDown}
                   // When launched from a trigger, drop the centered layout and
-                  // attach a compact menu just below it (see commandPalette.css).
-                  // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- custom class defined in commandPalette.css
-                  className={anchor ? "command-palette--anchored" : undefined}
-                  style={anchorStyle}
+                  // attach a compact menu to it, unless there's too little room
+                  // around the trigger (see commandPalette.css).
+                  className={cn(
+                    // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- custom class defined in commandPalette.css
+                    anchor && "command-palette--anchored",
+                    // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- custom class defined in commandPalette.css
+                    anchor && centered && "command-palette--centered",
+                  )}
+                  style={
+                    anchor
+                      ? {
+                          ...(centered ? {} : floatingStyles),
+                          width: `min(${ANCHORED_WIDTH}px, 100vw - ${2 * HORIZONTAL_EDGE_GAP}px)`,
+                          ["--palette-min-height" as string]: `${MIN_MENU_HEIGHT}px`,
+                          // Floating UI positions asynchronously, so hide the
+                          // menu for the frame before its first position. With
+                          // opacity rather than `visibility`, which would make
+                          // the search input unfocusable when it autofocuses.
+                          opacity: centered || isPositioned ? undefined : 0,
+                        }
+                      : undefined
+                  }
                 >
                   {/* cmdk renders a Radix Dialog with only an aria-label; Radix still
             requires a Dialog.Title inside the content for screen readers, so
@@ -417,7 +423,9 @@ function CommandPaletteDialog({
                     ref={listRef}
                     className={cn(
                       "-mx-1 scrollbar px-1 pt-1.5",
-                      !hasPinnedActions && "pb-2",
+                      // An anchored menu's list ends with a wider gap so a list that
+                      // shows all its items reads as finished, not cut off.
+                      !hasPinnedActions && (anchor ? "pb-6" : "pb-2"),
                       // Flex-fills the sizer so the pinned create bar sits at the
                       // list bottom (see commandPalette.css).
                       // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- custom class defined in commandPalette.css
@@ -548,4 +556,105 @@ function CommandPaletteDialog({
       </PaletteLoadingContext.Provider>
     </DrillModifierContext.Provider>
   );
+}
+
+const ANCHORED_WIDTH = 608; // 38rem
+const ANCHOR_OFFSET = 8;
+const HORIZONTAL_EDGE_GAP = 8;
+// The far vertical edge gets a wide margin so a menu that reaches its maximum
+// height visibly ends short of the viewport edge rather than looking cut off by
+// it; the gap at the top edge only keeps a menu opened upward off the edge.
+const TOP_EDGE_GAP = 16;
+const BOTTOM_EDGE_GAP = 64;
+// Below this much room under the trigger, the menu opens above it instead when
+// there's more room there.
+const MIN_COMFORTABLE_HEIGHT = 360;
+// The shortest an anchored menu gets: room for its search input, footer and
+// pinned actions plus a few rows. With less room than this on either side of
+// the trigger, it opens centered in the viewport like the ⌘K palette instead,
+// and it never shrinks below this (or the viewport, less its margins).
+const MIN_MENU_HEIGHT = 320;
+
+type AnchoredPlacement = "bottom" | "top" | "centered";
+
+// Positions an anchored menu against its trigger. The placement is picked from
+// the room around the trigger rather than by Floating UI's `flip`: the menu's
+// height follows its content, so flipping on overflow would make it jump
+// between sides as the user types. It's re-picked whenever the trigger may
+// have moved: on window resize, and on Floating UI's updates (an ancestor
+// scrolling, or the layout shifting) while the menu is attached.
+//
+// The first placement is picked during render, so the first position Floating
+// UI computes already uses it; a placement corrected after mount would race
+// that first computation, which can land last and leave the menu on the wrong
+// side.
+function useAnchoredPosition(anchor: PaletteAnchor | null) {
+  // Tagged with the anchor it was measured for, so a new anchor is measured
+  // during render instead of inheriting the previous one's placement.
+  const [measured, setMeasured] = useState<{
+    anchor: PaletteAnchor;
+    placement: AnchoredPlacement;
+  } | null>(null);
+  const remeasure = useCallback(() => {
+    if (!anchor) {
+      return;
+    }
+    const placement = pickPlacement(anchor.reference);
+    // Returning the previous state when nothing changed skips the re-render,
+    // which matters since Floating UI calls this on every ancestor scroll.
+    setMeasured((prev) =>
+      prev?.anchor === anchor && prev.placement === placement
+        ? prev
+        : { anchor, placement },
+    );
+  }, [anchor]);
+  useEffect(() => {
+    if (!anchor) {
+      return;
+    }
+    window.addEventListener("resize", remeasure);
+    return () => window.removeEventListener("resize", remeasure);
+  }, [anchor, remeasure]);
+  const placement: AnchoredPlacement = !anchor
+    ? "bottom"
+    : measured?.anchor === anchor
+      ? measured.placement
+      : pickPlacement(anchor.reference);
+  const centered = placement === "centered";
+  const floating = useFloating({
+    open: anchor !== null && !centered,
+    elements: { reference: centered ? null : (anchor?.reference ?? null) },
+    placement: `${centered ? "bottom" : placement}-${anchor?.align ?? "start"}`,
+    strategy: "fixed",
+    whileElementsMounted: (reference, floatingElement, update) =>
+      autoUpdate(reference, floatingElement, () => {
+        update();
+        remeasure();
+      }),
+    middleware: [
+      offset(ANCHOR_OFFSET),
+      shift({ padding: HORIZONTAL_EDGE_GAP }),
+      size({
+        padding: { top: TOP_EDGE_GAP, bottom: BOTTOM_EDGE_GAP },
+        apply({ availableHeight, elements }) {
+          elements.floating.style.setProperty(
+            "--palette-max-height",
+            `${availableHeight}px`,
+          );
+        },
+      }),
+    ],
+  });
+  return { ...floating, centered };
+}
+
+function pickPlacement(reference: Element): AnchoredPlacement {
+  const rect = reference.getBoundingClientRect();
+  const below =
+    window.innerHeight - rect.bottom - ANCHOR_OFFSET - BOTTOM_EDGE_GAP;
+  const above = rect.top - ANCHOR_OFFSET - TOP_EDGE_GAP;
+  if (Math.max(below, above) < MIN_MENU_HEIGHT) {
+    return "centered";
+  }
+  return below >= MIN_COMFORTABLE_HEIGHT || below >= above ? "bottom" : "top";
 }

@@ -58,7 +58,7 @@ export function Breadcrumbs({
 }) {
   const crumbs = breadcrumbTrail(pages, baseDepth);
   return (
-    <div className="-mx-1 -mt-1.5 mb-1.5 flex animate-fadeInFromLoading items-center gap-1 border-b bg-background-tertiary/40 px-3 pt-3 pb-2 select-none">
+    <div className="-mx-1 -mt-1.5 mb-1.5 flex animate-fadeInFromLoading items-center gap-1 border-b bg-background-tertiary/40 p-3 select-none">
       {crumbs.map((crumb, i) => (
         <React.Fragment key={`${crumb.depth}:${crumb.label}`}>
           {i > 0 && (
