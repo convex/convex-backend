@@ -162,6 +162,10 @@ const TREE_STYLE = {
   "--trees-border-radius-override": "0",
   "--trees-item-margin-x-override": "0",
   "--trees-indent-guide-bg-override": "var(--color-border-transparent)",
+  // The tree also paints this behind a truncated name's "…" marker, so
+  // hovering must go through it rather than a `background-color` rule.
+  "--trees-bg-muted-override":
+    "color-mix(in srgb, var(--color-util-accent) 20%, transparent)",
   "--trees-selected-bg-override":
     "color-mix(in srgb, var(--color-util-accent) 30%, transparent)",
   "--trees-selected-fg-override": "var(--color-content-primary)",
@@ -175,9 +179,6 @@ const TREE_STYLE = {
 // Selection (the open function) fills the row; focus (keyboard navigation in
 // the tree, or the search cursor) outlines it.
 const UNSAFE_CSS = `
-  button[data-type='item']:hover:not([data-item-selected]) {
-    background-color: color-mix(in srgb, var(--color-util-accent) 20%, transparent);
-  }
   button[${SEARCH_CURSOR_ATTRIBUTE}]::before {
     content: "";
     position: absolute;
