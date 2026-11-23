@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { withSecretValueHidden } from "../environmentVariables";
 import { queryPrivateSystem } from "../secretSystemTables";
 
 // This query returns a new result every time
@@ -6,11 +7,17 @@ import { queryPrivateSystem } from "../secretSystemTables";
 export default queryPrivateSystem("ViewEnvironmentVariables")({
   args: {},
   handler: async ({ db }) => {
-    return await db
+    const docs = await db
       .query("_environment_variables")
       .withIndex("by_name")
       .order("asc")
       .collect();
+    // `secret` is null for an undecided variable. CLIs tell that apart from
+    // a deployment that predates secrets, whose variables have no `secret`.
+    return docs.map((doc) => ({
+      ...withSecretValueHidden(doc),
+      secret: doc.secret ?? null,
+    }));
   },
 });
 
