@@ -832,7 +832,7 @@ pub static INDEX_BACKFILL_MARKER_CLEANUP_IDLE_INTERVAL_SECONDS: LazyLock<Duratio
     LazyLock::new(|| {
         Duration::from_secs_f64(env_config(
             "INDEX_BACKFILL_MARKER_CLEANUP_IDLE_INTERVAL_SECONDS",
-            60.0,
+            600.0,
         ))
     });
 
