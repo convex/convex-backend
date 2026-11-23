@@ -220,6 +220,10 @@ export const integrationState = v.union(
   v.object({
     type: v.literal("deleting"),
   }),
+  // Set on active integrations while the backend restarts them.
+  v.object({
+    type: v.literal("restarting"),
+  }),
 );
 
 // The subscribable log stream topics.
@@ -242,6 +246,9 @@ export const logTopic = v.union(
 // topics, including ones added in the future.
 const subscribedTopics = v.optional(v.array(logTopic));
 
+// Rust writes unset optional config fields as null.
+const optionalNullableString = v.optional(v.union(v.string(), v.null()));
+
 export const datadogConfig = v.object({
   type: v.literal("datadog"),
   siteLocation: v.union(
@@ -254,7 +261,7 @@ export const datadogConfig = v.object({
   ),
   ddApiKey: v.string(),
   ddTags: v.array(v.string()),
-  service: v.optional(v.string()),
+  service: optionalNullableString,
   version: v.optional(v.union(v.literal("1"), v.literal("2"))),
   topics: subscribedTopics,
 });
@@ -278,29 +285,29 @@ export const axiomConfig = v.object({
     }),
   ),
   version: v.optional(v.union(v.literal("1"), v.literal("2"))),
-  ingestUrl: v.optional(v.string()),
+  ingestUrl: optionalNullableString,
   topics: subscribedTopics,
 });
 
 export const sentryConfig = v.object({
   type: v.literal("sentry"),
   dsn: v.string(),
-  tags: v.optional(v.record(v.string(), v.string())),
+  tags: v.optional(v.union(v.record(v.string(), v.string()), v.null())),
   version: v.optional(v.union(v.literal("1"), v.literal("2"))),
 });
 
 export const postHogLogsConfig = v.object({
   type: v.literal("postHogLogs"),
   apiKey: v.string(),
-  host: v.optional(v.string()),
-  serviceName: v.optional(v.string()),
+  host: optionalNullableString,
+  serviceName: optionalNullableString,
   topics: subscribedTopics,
 });
 
 export const postHogErrorTrackingConfig = v.object({
   type: v.literal("postHogErrorTracking"),
   apiKey: v.string(),
-  host: v.optional(v.string()),
+  host: optionalNullableString,
 });
 
 const s3ExportProgress = v.union(
@@ -323,13 +330,21 @@ export const s3ExportConfig = v.object({
   type: v.literal("s3Export"),
   bucket: v.string(),
   region: v.string(),
-  prefix: v.optional(v.string()),
+  prefix: optionalNullableString,
   accessKeyId: v.optional(v.string()),
   secretAccessKey: v.optional(v.string()),
   // Empty until the admin pastes the ARN from their CloudFormation stack.
   roleArn: v.optional(v.string()),
   roleExternalId: v.optional(v.string()),
   selection: syncSelection,
+
+  // Left on configs written before the sync period was removed and the
+  // export progress moved to `_s3_export_state`. Rust ignores them.
+  period: v.optional(
+    v.union(v.literal("continuous"), v.literal("hourly"), v.literal("daily")),
+  ),
+  cursor: v.optional(v.union(v.string(), v.null())),
+  progress: v.optional(v.union(s3ExportProgress, v.null())),
 });
 
 export const integrationConfig = v.union(

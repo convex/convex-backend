@@ -85,7 +85,11 @@ export function S3ExportStatus({ existing }: { existing: S3Export }) {
 function S3ExportDetails({ existing }: { existing: S3Export }) {
   const deploymentName = useDeploymentName();
   const { bucket, region, prefix } = existing.config;
-  const dataLakePath = `${exportRoot(prefix, deploymentName)}/data-lake/`;
+  const dataLakePath = `${exportRoot(
+    // An unset prefix is stored as null, or missing on older configs.
+    prefix ?? undefined,
+    deploymentName,
+  )}/data-lake/`;
   const database = glueDatabaseName(deploymentName);
   const status = syncStatus(existing);
   const components = componentTablesIncluded(existing.config.selection);
