@@ -25,12 +25,33 @@ const REPO_ROOT = path.resolve(__dirname, "../../..");
 const CONVEX_PACKAGE_DIR = "npm-packages/convex";
 const PACKAGE_JSON = `${CONVEX_PACKAGE_DIR}/package.json`;
 const SOURCE_ENV_VAR = "CONVEX_DOCS_REFERENCE_SOURCE";
-// Holds the extracted release and the generated tsconfig. The release is laid
-// out like the repository, so that paths relative to it are also paths in the
-// GitHub repository.
+// Holds the checkout of the release and the generated tsconfig.
 const CACHE_DIR = path.resolve(__dirname, "../.reference-source");
-const EXTRACT_ROOT = path.join(CACHE_DIR, "release");
-const MANIFEST_PATH = path.join(EXTRACT_ROOT, "manifest.json");
+// A sparse, detached worktree at the release, so that paths relative to it are
+// also paths in the GitHub repository. It's kept between builds, and checking
+// out the next release only rewrites the files that changed.
+const CHECKOUT_ROOT = path.join(CACHE_DIR, "release");
+// The commit whose dependencies CHECKOUT_ROOT has finished installing.
+const CHECKOUT_MANIFEST_PATH = path.join(CACHE_DIR, "release.json");
+const WORKSPACE_DIR = "npm-packages";
+// Everything the reference pages read from the release, plus the workspace
+// files that `pnpm install` needs to install the package's dependencies from
+// the release's lockfile. The workspace's other packages stay unchecked-out:
+// the lockfile lists them, but installing only `convex` doesn't read them.
+const SPARSE_CHECKOUT_PATTERNS = [
+  `/${CONVEX_PACKAGE_DIR}/src/`,
+  `/${CONVEX_PACKAGE_DIR}/tsconfig.json`,
+  // TypeDoc renders the README closest to the entry points' package.json.
+  `/${PACKAGE_JSON}`,
+  `/${CONVEX_PACKAGE_DIR}/README.md`,
+  // Its `packageManager` pins the pnpm that wrote the lockfile.
+  `/${WORKSPACE_DIR}/package.json`,
+  `/${WORKSPACE_DIR}/pnpm-workspace.yaml`,
+  `/${WORKSPACE_DIR}/pnpm-lock.yaml`,
+  `/${WORKSPACE_DIR}/.npmrc`,
+  // Patch files belong here too once pnpm-workspace.yaml has
+  // `patchedDependencies`.
+];
 // How many commits to fetch at a time when the commit that set the version is
 // missing from a shallow clone.
 const DEEPEN_BY = 500;
@@ -198,43 +219,57 @@ function versionAt(commit) {
   return JSON.parse(git("show", `${commit}:${PACKAGE_JSON}`)).version;
 }
 
-function extract(commit) {
-  if (fs.existsSync(MANIFEST_PATH)) {
-    const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, "utf8"));
-    if (manifest.commit === commit) {
-      return;
-    }
+function readCheckoutManifest() {
+  try {
+    return JSON.parse(fs.readFileSync(CHECKOUT_MANIFEST_PATH, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+// Checks out `commit` into CHECKOUT_ROOT and installs the release's own
+// dependencies there, so the CLI and the documented types run against the
+// versions the release shipped with rather than the working tree's.
+function checkOut(commit) {
+  const isWorktree = fs.existsSync(path.join(CHECKOUT_ROOT, ".git"));
+  if (isWorktree && readCheckoutManifest()?.commit === commit) {
+    return;
   }
 
-  fs.rmSync(EXTRACT_ROOT, { recursive: true, force: true });
-  fs.mkdirSync(EXTRACT_ROOT, { recursive: true });
-  const archive = execFileSync(
-    "git",
+  const checkoutGit = (...args) =>
+    execFileSync("git", ["-C", CHECKOUT_ROOT, ...args], { encoding: "utf8" });
+  if (!isWorktree) {
+    // Replaces what's there, e.g. a `git archive` extraction from before this
+    // was a worktree, and drops the registration of a worktree whose
+    // directory was deleted by hand.
+    fs.rmSync(CHECKOUT_ROOT, { recursive: true, force: true });
+    git("worktree", "prune");
+    git("worktree", "add", "--detach", "--no-checkout", CHECKOUT_ROOT, commit);
+    checkoutGit(
+      "sparse-checkout",
+      "set",
+      "--no-cone",
+      ...SPARSE_CHECKOUT_PATTERNS,
+    );
+  }
+  fs.rmSync(CHECKOUT_MANIFEST_PATH, { force: true });
+  checkoutGit("checkout", "--quiet", "--force", "--detach", commit);
+
+  // The release's package has no install scripts that the docs need.
+  execFileSync(
+    "pnpm",
     [
-      "archive",
-      "--format=tar",
-      commit,
-      "--",
-      `${CONVEX_PACKAGE_DIR}/src`,
-      `${CONVEX_PACKAGE_DIR}/tsconfig.json`,
-      // TypeDoc renders the README closest to the entry points' package.json.
-      PACKAGE_JSON,
-      `${CONVEX_PACKAGE_DIR}/README.md`,
+      "install",
+      "--filter",
+      "convex",
+      "--frozen-lockfile",
+      "--ignore-scripts",
+      "--config.confirmModulesPurge=false",
     ],
-    { cwd: REPO_ROOT, maxBuffer: 256 * 1024 * 1024 },
-  );
-  execFileSync("tar", ["-x", "-C", EXTRACT_ROOT], { input: archive });
-
-  // The release resolves its dependencies from the working tree's
-  // `node_modules`. They can be newer than the release's, which only matters
-  // if a documented type or the CLI's behavior changed.
-  fs.symlinkSync(
-    path.join(REPO_ROOT, CONVEX_PACKAGE_DIR, "node_modules"),
-    path.join(EXTRACT_ROOT, CONVEX_PACKAGE_DIR, "node_modules"),
-    "dir",
+    { cwd: path.join(CHECKOUT_ROOT, WORKSPACE_DIR), stdio: "inherit" },
   );
 
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify({ commit }) + "\n");
+  fs.writeFileSync(CHECKOUT_MANIFEST_PATH, JSON.stringify({ commit }) + "\n");
 }
 
 function findRelease() {
@@ -306,11 +341,11 @@ function prepareReferenceSource() {
   }
 
   const release = findRelease();
-  extract(release.commit);
+  checkOut(release.commit);
   printBanner(release);
   return {
-    root: EXTRACT_ROOT,
-    packageDir: path.join(EXTRACT_ROOT, CONVEX_PACKAGE_DIR),
+    root: CHECKOUT_ROOT,
+    packageDir: path.join(CHECKOUT_ROOT, CONVEX_PACKAGE_DIR),
     linkRepo: release.mirrorRepo,
     linkRef: release.mirrorRef,
     pageBanner: "",

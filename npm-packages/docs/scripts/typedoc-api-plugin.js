@@ -2,9 +2,8 @@
 //
 // - Builds the "Defined in" links from `sourceLinkTemplate`, with `{path}`
 //   relative to `sourceLinkRoot` and `{gitRevision}` from `gitRevision`.
-//   TypeDoc's own `{path}` is relative to the package, and TypeDoc only links
-//   files that `git ls-files` lists, while release builds document an
-//   untracked copy of a release (see reference-source.js).
+//   TypeDoc's own `{path}` is relative to the package, and release builds
+//   document a separate checkout of a release (see reference-source.js).
 // - Adds `pageBanner` (Markdown) to the top of every page, after the front
 //   matter.
 //
