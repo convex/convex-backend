@@ -33,6 +33,10 @@
       "description": "Add Stripe billing/payments to the Convex app via @convex-dev/stripe (checkout + webhook + gating)."
     },
     {
+      "name": "convex-bundle-size",
+      "description": "Debug and shrink a Convex deployment's bundle with @convex-dev/bundle-analyzer: find duplicate packages, \"use node\" code leaking into the Convex runtime, dev dependencies and test files in deployed code, then fix and measure before/after."
+    },
+    {
       "name": "convex-cost",
       "description": "Preview Convex spend — rank functions by bytes/documents-read × call-volume from insights, project each cost driver's growth curve, name the cheapest fix; confirm-cost for paid actions."
     },
