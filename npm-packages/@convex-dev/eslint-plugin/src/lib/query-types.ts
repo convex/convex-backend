@@ -1,4 +1,5 @@
 import type ts from "typescript";
+import { findConvexServerExports } from "./convex-types.js";
 
 // `OrderedQuery` is an interface, so `getTypeOfSymbolAtLocation` returns an
 // error type that every receiver is assignable to, and its declared type is the
@@ -7,7 +8,7 @@ import type ts from "typescript";
 // behind it, is `OrderedQuery` or extends it (as `Query` does).
 export function isOrderedQuery(
   type: ts.Type,
-  orderedQuerySymbol: ts.Symbol,
+  orderedQuerySymbols: ReadonlySet<ts.Symbol>,
   checker: ts.TypeChecker,
 ): boolean {
   const seen = new Set<ts.Type>();
@@ -17,7 +18,8 @@ export function isOrderedQuery(
     // `q?.filter(...)` sees `OrderedQuery<...> | undefined`.
     if (t.isUnionOrIntersection()) return t.types.some(visit);
     const target = (t as ts.TypeReference).target ?? t;
-    if (target.getSymbol() === orderedQuerySymbol) return true;
+    const symbol = target.getSymbol();
+    if (symbol && orderedQuerySymbols.has(symbol)) return true;
     if (!target.isClassOrInterface()) {
       // A type parameter such as `T extends OrderedQuery<...>` is judged by
       // its constraint.
@@ -29,32 +31,15 @@ export function isOrderedQuery(
   return visit(type);
 }
 
-export function findOrderedQuerySymbol(
+export function findOrderedQuerySymbols(
   program: ts.Program,
   checker: ts.TypeChecker,
-): ts.Symbol | null {
-  try {
-    for (const sf of program.getSourceFiles()) {
-      // Prefer the source file from the convex package.
-      // In this monorepo it's `npm-packages/convex/src/server/query.ts`, but be
-      // permissive about path separators and .d.ts builds.
-      const fname = sf.fileName.replace(/\\/g, "/");
-      if (!fname.includes("/convex/")) continue;
-      if (
-        !fname.endsWith("/server/query.ts") &&
-        !fname.endsWith("/server/query.d.ts")
-      ) {
-        continue;
-      }
-      const sourceFileSymbol = checker.getSymbolAtLocation(sf);
-      if (!sourceFileSymbol) continue;
-      const exports = checker.getExportsOfModule(sourceFileSymbol);
-      const orderedQuerySymbol = exports.find((e) => e.name === "OrderedQuery");
-      if (!orderedQuerySymbol) continue;
-      return orderedQuerySymbol;
-    }
-  } catch {
-    // ignore and fall back
-  }
-  return null;
+): Set<ts.Symbol> | null {
+  const symbols = findConvexServerExports(
+    program,
+    checker,
+    "query",
+    "OrderedQuery",
+  );
+  return symbols.length > 0 ? new Set(symbols) : null;
 }
