@@ -1,4 +1,11 @@
-import { Form, Formik, FormikTouched, getIn, useFormikContext } from "formik";
+import {
+  Form,
+  Formik,
+  FormikTouched,
+  getIn,
+  setIn,
+  useFormikContext,
+} from "formik";
 
 import {
   ClipboardCopyIcon,
@@ -835,22 +842,31 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
     formState.values.newVars.length > 0 ||
     formState.values.deletedVars.length > 0;
 
-  const handlePaste = (envVars: Array<BaseEnvironmentVariable>) => {
-    const newVars = formState.values.newVars.filter(
-      ({ name, value }) => name !== "" || value !== "",
-    );
-
-    const transformedEnvVars = envVars.map(({ name, value }) =>
+  const handlePaste = (
+    index: number,
+    envVars: Array<BaseEnvironmentVariable>,
+  ) => {
+    const pastedVars = envVars.map(({ name, value }) =>
       initEnvVar({ name, value }),
     );
+    const { newVars } = formState.values;
+    const previousTouched = formState.touched.newVars;
+    const newVarsTouched = newVars.map((_, rowIndex) =>
+      Array.isArray(previousTouched) ? previousTouched[rowIndex] : undefined,
+    );
 
-    void formState.setFieldValue("newVars", transformedEnvVars, true);
-
-    // https://github.com/jaredpalmer/formik/issues/2059#issuecomment-612733378
-    setTimeout(() =>
-      formState.setTouched({
-        newVars: newVars.map(() => ({ name: true, value: true })),
-      } as any),
+    void formState.setFieldValue("newVars", [
+      ...newVars.slice(0, index),
+      ...pastedVars,
+      ...newVars.slice(index + 1),
+    ]);
+    void formState.setTouched(
+      setIn(formState.touched, "newVars", [
+        ...newVarsTouched.slice(0, index),
+        ...pastedVars.map(() => ({ name: true, value: true })),
+        ...newVarsTouched.slice(index + 1),
+      ]),
+      false,
     );
   };
 
@@ -878,7 +894,7 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
                     } as any);
                   });
                 }}
-                onPasteVariables={(input) => handlePaste(input)}
+                onPasteVariables={(input) => handlePaste(index, input)}
                 isLastVariable={index === formState.values.newVars.length - 1}
                 renderEditExtra={renderEditExtra}
               />
