@@ -335,7 +335,7 @@ export function ActionText({ event }: { event: DeploymentAuditLogEvent }) {
           <span> table</span>
           <ComponentSuffix
             component={event.metadata.component}
-            componentId={event.metadata.component_id}
+            componentId={event.metadata.component_id ?? null}
           />
         </>
       );
