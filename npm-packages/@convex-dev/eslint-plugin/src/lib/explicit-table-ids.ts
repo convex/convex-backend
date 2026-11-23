@@ -6,6 +6,7 @@ import type {
 } from "@typescript-eslint/utils/ts-eslint";
 import { AST_NODE_TYPES } from "@typescript-eslint/types";
 import type ts from "typescript";
+import { findConvexServerExports } from "./convex-types.js";
 
 /**
  * Rule to enforce explicit table names in database calls
@@ -49,59 +50,10 @@ export const explicitTableIds = createRule({
       typeof tsNodeMap.get === "function"
     );
 
-    // Get DatabaseReader and DatabaseWriter types for proper subtype checking
-    // We need to find these types in the type system
-    let anyDatabaseReader: ts.Type | null = null;
-    let anyDatabaseWriter: ts.Type | null = null;
-
-    if (hasTypeInfo && services?.program) {
-      try {
-        // Try to get the database types from the program
-        const sourceFiles = services.program.getSourceFiles();
-        for (const sf of sourceFiles) {
-          if (sf.fileName.includes("_generated/server")) {
-            const sourceFileSymbol = checker.getSymbolAtLocation(sf);
-            if (sourceFileSymbol) {
-              const exports = checker.getExportsOfModule(sourceFileSymbol);
-              for (const exp of exports) {
-                const type = checker.getTypeOfSymbolAtLocation(exp, sf);
-                const typeString = checker.typeToString(type);
-                if (
-                  typeString.includes("DatabaseReader") ||
-                  typeString.includes("GenericDatabaseReader")
-                ) {
-                  // Get the type that has the methods we care about
-                  const dbProp = type.getProperty("db");
-                  if (dbProp) {
-                    const dbType = checker.getTypeOfSymbolAtLocation(
-                      dbProp,
-                      sf,
-                    );
-                    anyDatabaseReader = dbType;
-                  }
-                }
-                if (
-                  typeString.includes("DatabaseWriter") ||
-                  typeString.includes("GenericDatabaseWriter")
-                ) {
-                  const dbProp = type.getProperty("db");
-                  if (dbProp) {
-                    const dbType = checker.getTypeOfSymbolAtLocation(
-                      dbProp,
-                      sf,
-                    );
-                    anyDatabaseWriter = dbType;
-                  }
-                }
-              }
-            }
-            break;
-          }
-        }
-      } catch {
-        // If we can't get the types, we'll fall back to pattern matching
-      }
-    }
+    const databaseMethods =
+      hasTypeInfo && services?.program
+        ? findDatabaseMethodDeclarations(services.program, checker)
+        : null;
 
     return {
       CallExpression(node: TSESTree.CallExpression) {
@@ -116,45 +68,35 @@ export const explicitTableIds = createRule({
         }
 
         const methodName = memberExpr.property.name;
-        const validMethods = ["get", "replace", "patch", "delete"];
-        if (!validMethods.includes(methodName)) {
+        if (!(DATABASE_METHODS as readonly string[]).includes(methodName)) {
           return;
         }
 
-        // Check if the object is a database by checking its type or pattern.
-        // The type-based check only runs when type info is available.
-        let isDatabaseType = false;
-        if (hasTypeInfo) {
-          const objectTsNode = tsNodeMap.get(memberExpr.object);
-          const objectType = checker.getTypeAtLocation(objectTsNode);
-
-          // Use proper subtype checking if we have the database types available
-          if (anyDatabaseReader || anyDatabaseWriter) {
-            isDatabaseType =
-              (anyDatabaseReader !== null &&
-                methodName === "get" &&
-                checker.isTypeAssignableTo(objectType, anyDatabaseReader)) ||
-              (anyDatabaseWriter !== null &&
-                checker.isTypeAssignableTo(objectType, anyDatabaseWriter));
-          } else {
-            // Fall back to string matching if we couldn't get the types
-            const typeString = checker.typeToString(objectType);
-            isDatabaseType =
-              typeString.includes("DatabaseReader") ||
-              typeString.includes("DatabaseWriter") ||
-              typeString.includes("GenericDatabaseReader") ||
-              typeString.includes("GenericDatabaseWriter");
+        // With Convex's types in the program, the called method decides: it
+        // must be one Convex declares on its database interfaces. The pure-AST
+        // `<obj>.db.<method>(...)` heuristic covers linting without type info,
+        // receivers typed `any`, and programs without Convex's types.
+        let isDatabaseCall: boolean | null = null;
+        if (hasTypeInfo && databaseMethods) {
+          const objectType = checker.getTypeAtLocation(
+            tsNodeMap.get(memberExpr.object),
+          );
+          const objectTypeString = checker.typeToString(objectType);
+          if (objectTypeString !== "any" && objectTypeString !== "unknown") {
+            const method = checker.getSymbolAtLocation(
+              tsNodeMap.get(memberExpr.property),
+            );
+            isDatabaseCall =
+              method?.declarations?.some((d) => databaseMethods.has(d)) ??
+              false;
           }
         }
-
-        // Also check for common patterns like ctx.db. This pure-AST heuristic is
-        // the fallback detector when type info is unavailable.
-        const isCtxDb =
+        isDatabaseCall ??=
           memberExpr.object.type === AST_NODE_TYPES.MemberExpression &&
           memberExpr.object.property.type === AST_NODE_TYPES.Identifier &&
           memberExpr.object.property.name === "db";
 
-        if (!isDatabaseType && !isCtxDb) {
+        if (!isDatabaseCall) {
           return;
         }
 
@@ -226,6 +168,37 @@ export const explicitTableIds = createRule({
     };
   },
 });
+
+const DATABASE_METHODS = ["get", "replace", "patch", "delete"] as const;
+
+/**
+ * Declarations of the database methods that take an optional table name.
+ * `GenericDatabaseWriter` inherits `get` from `BaseDatabaseReader`, so these
+ * also match `get` on `GenericDatabaseReader` and on `db.system`. Matching the
+ * declarations rather than type names leaves alone other libraries' methods,
+ * such as table-scoped writers whose `patch(id, value)` already knows its
+ * table.
+ */
+function findDatabaseMethodDeclarations(
+  program: ts.Program,
+  checker: ts.TypeChecker,
+): Set<ts.Declaration> | null {
+  const declarations = new Set<ts.Declaration>();
+  for (const writer of findConvexServerExports(
+    program,
+    checker,
+    "database",
+    "GenericDatabaseWriter",
+  )) {
+    const writerType = checker.getDeclaredTypeOfSymbol(writer);
+    for (const method of DATABASE_METHODS) {
+      for (const d of writerType.getProperty(method)?.declarations ?? []) {
+        declarations.add(d);
+      }
+    }
+  }
+  return declarations.size > 0 ? declarations : null;
+}
 
 /**
  * Creates a fix that inserts the table name as the first argument

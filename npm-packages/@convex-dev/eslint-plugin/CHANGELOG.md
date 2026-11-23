@@ -6,6 +6,13 @@
   as a warning) that detects queries whose results depend on the current time or
   random values, including through local helpers and helpers imported via
   relative paths.
+- Fix false positives in `@convex-dev/explicit-table-ids` with type-aware
+  linting. The rule never found Convex's database types, so it reported `get`,
+  `replace`, `patch` and `delete` on any type whose name contains
+  `DatabaseReader` or `DatabaseWriter`, such as Confect's table-scoped
+  `DatabaseWriterTableAccessor`, and its autofix broke those calls. It now only
+  reports calls to Convex's database methods, including `db.system.get`. Thanks
+  to [@codeBelt](https://github.com/codeBelt) for the report.
 - Fix missed reports in `@convex-dev/no-filter-in-query` and
   `@convex-dev/no-collect-in-query` with type-aware linting when the program
   includes more than one version of `convex`, such as when a dependency pins a
