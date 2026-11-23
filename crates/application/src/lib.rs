@@ -259,7 +259,10 @@ use model::{
         DeploymentAuditLogModel,
     },
     environment_variables::{
-        types::EnvironmentVariable,
+        types::{
+            EnvironmentVariable,
+            SECRET_ENV_VAR_PLACEHOLDER,
+        },
         EnvironmentVariablesModel,
     },
     exports::{
@@ -1892,6 +1895,32 @@ impl<RT: Runtime> Application<RT> {
                 ));
             }
         }
+
+        // `npx convex env list` prints a placeholder in place of each
+        // secret's value. A secret set to that placeholder keeps its value,
+        // so the listing can be fed back to `npx convex env set`.
+        let mut model = EnvironmentVariablesModel::new(tx);
+        let mut retained_changes = Vec::with_capacity(changes.len());
+        for change in changes {
+            if let EnvVarChange::Set(variable) = &change
+                && variable.value().as_ref() == SECRET_ENV_VAR_PLACEHOLDER
+            {
+                anyhow::ensure!(
+                    model.is_secret(variable.name()).await?,
+                    ErrorMetadata::bad_request(
+                        "EnvironmentVariableValueIsPlaceholder",
+                        format!(
+                            "{SECRET_ENV_VAR_PLACEHOLDER} stands for the hidden value of a \
+                             secret, so {} can't be set to it. Provide the real value.",
+                            variable.name()
+                        ),
+                    )
+                );
+                continue;
+            }
+            retained_changes.push(change);
+        }
+        let changes = retained_changes;
 
         let set_vars: BTreeMap<EnvVarName, EnvVarValue> = changes
             .iter()

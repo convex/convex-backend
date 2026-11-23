@@ -132,6 +132,28 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
             .transpose()
     }
 
+    /// Whether a variable called `name` exists and is a secret.
+    pub async fn is_secret(&mut self, name: &EnvVarName) -> anyhow::Result<bool> {
+        Ok(self
+            .get_persisted(name)
+            .await?
+            .is_some_and(|env_var| env_var.is_secret()))
+    }
+
+    /// The variable called `name` along with its visibility.
+    pub async fn get_persisted(
+        &mut self,
+        name: &EnvVarName,
+    ) -> anyhow::Result<Option<PersistedEnvironmentVariable>> {
+        let query = value_query_from_env_var(name)?;
+        let mut query_stream = ResolvedQuery::new(self.tx, TableNamespace::Global, query)?;
+        let Some(doc) = query_stream.expect_at_most_one(self.tx).await? else {
+            return Ok(None);
+        };
+        let doc: ParsedDocument<PersistedEnvironmentVariable> = doc.parse()?;
+        Ok(Some(doc.into_value()))
+    }
+
     pub async fn get_by_id_legacy(
         &mut self,
         id: ResolvedDocumentId,

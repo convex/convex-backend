@@ -9,6 +9,12 @@ use serde::{
 };
 use value::codegen_convex_serialization;
 
+/// Value that `npx convex env list` prints in place of a secret's real
+/// value. Setting a secret to this value keeps the stored one, so the output
+/// of `env list` can be fed back to `env set`. Kept in sync with
+/// `SECRET_ENV_VAR_PLACEHOLDER` in `npm-packages/system-udfs`.
+pub const SECRET_ENV_VAR_PLACEHOLDER: &str = "[Secret omitted]";
+
 /// Who can read an environment variable's value. Functions read every
 /// variable through `process.env` regardless of its visibility.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
