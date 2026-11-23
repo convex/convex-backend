@@ -260,6 +260,7 @@ use model::{
     },
     environment_variables::{
         types::{
+            EnvVarVisibility,
             EnvironmentVariable,
             SECRET_ENV_VAR_PLACEHOLDER,
         },
@@ -577,7 +578,22 @@ pub struct FunctionError {
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum EnvVarChange {
     Unset(EnvVarName),
-    Set(EnvironmentVariable),
+    Set {
+        variable: EnvironmentVariable,
+        /// `None` keeps the visibility of the variable being replaced, and
+        /// leaves the visibility of a new variable undecided.
+        visibility: Option<EnvVarVisibility>,
+    },
+}
+
+impl EnvVarChange {
+    /// Sets a variable without choosing its visibility.
+    pub fn set(variable: EnvironmentVariable) -> Self {
+        Self::Set {
+            variable,
+            visibility: None,
+        }
+    }
 }
 
 pub(crate) fn validate_env_var_values(
@@ -1874,7 +1890,7 @@ impl<RT: Runtime> Application<RT> {
             .iter()
             .filter_map(|c| match c {
                 EnvVarChange::Unset(name) => Some(name.to_string()),
-                EnvVarChange::Set(_) => None,
+                EnvVarChange::Set { .. } => None,
             })
             .collect();
         if !unset_names.is_empty() {
@@ -1896,17 +1912,26 @@ impl<RT: Runtime> Application<RT> {
             }
         }
 
-        // `npx convex env list` prints a placeholder in place of each
-        // secret's value. A secret set to that placeholder keeps its value,
-        // so the listing can be fed back to `npx convex env set`.
+        // A client that lists the variables and writes them back sends the
+        // placeholder it was served for each secret. Those secrets keep
+        // their value.
         let mut model = EnvironmentVariablesModel::new(tx);
         let mut retained_changes = Vec::with_capacity(changes.len());
         for change in changes {
-            if let EnvVarChange::Set(variable) = &change
+            if let EnvVarChange::Set {
+                variable,
+                visibility,
+            } = &change
                 && variable.value().as_ref() == SECRET_ENV_VAR_PLACEHOLDER
             {
+                let keeps_secret = match visibility {
+                    Some(EnvVarVisibility::Secret) | None => {
+                        model.is_secret(variable.name()).await?
+                    },
+                    Some(EnvVarVisibility::Config) => false,
+                };
                 anyhow::ensure!(
-                    model.is_secret(variable.name()).await?,
+                    keeps_secret,
                     ErrorMetadata::bad_request(
                         "EnvironmentVariableValueIsPlaceholder",
                         format!(
@@ -1925,8 +1950,8 @@ impl<RT: Runtime> Application<RT> {
         let set_vars: BTreeMap<EnvVarName, EnvVarValue> = changes
             .iter()
             .filter_map(|c| match c {
-                EnvVarChange::Set(env_var) => {
-                    Some((env_var.name().clone(), env_var.value().clone()))
+                EnvVarChange::Set { variable, .. } => {
+                    Some((variable.name().clone(), variable.value().clone()))
                 },
                 EnvVarChange::Unset(_) => None,
             })
@@ -1938,9 +1963,12 @@ impl<RT: Runtime> Application<RT> {
         let mut model = EnvironmentVariablesModel::new(tx);
         for change in changes {
             match change {
-                EnvVarChange::Set(env_var) => {
-                    let name = env_var.name();
-                    let existing = model.delete(name).await?;
+                EnvVarChange::Set {
+                    variable,
+                    visibility,
+                } => {
+                    let name = variable.name().clone();
+                    let existing = model.delete(&name).await?;
                     if existing.is_some() {
                         audit_events.push(DeploymentAuditLogEvent::UpdateEnvironmentVariable {
                             name: name.clone(),
@@ -1950,10 +1978,10 @@ impl<RT: Runtime> Application<RT> {
                             name: name.clone(),
                         });
                     }
-                    // Replacing a variable keeps its visibility.
-                    let visibility = existing.and_then(|existing| existing.visibility);
+                    let visibility =
+                        visibility.or(existing.and_then(|existing| existing.visibility));
                     model
-                        .create_with_visibility(env_var, visibility, &self.system_env_var_names)
+                        .create_with_visibility(variable, visibility, &self.system_env_var_names)
                         .await?;
                 },
                 EnvVarChange::Unset(name) => {

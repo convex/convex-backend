@@ -47,6 +47,19 @@ use crate::{
 pub struct UpdateEnvVarRequest {
     name: String,
     value: Option<String>, // None → delete existing
+    /// Whether the variable is a secret: functions can read it, but the
+    /// dashboard, the CLI and this API can only overwrite or delete it.
+    /// When omitted, a variable that is already a secret or a config
+    /// variable stays one. A new variable is left undecided: readable like
+    /// a config variable until a later update decides.
+    ///
+    /// Setting a secret to `[Secret omitted]`, the placeholder that
+    /// `npx convex env list` prints in place of its value, leaves the value
+    /// as it is.
+    // Left out of the OpenAPI spec until secrets are released.
+    #[serde(default)]
+    #[schema(ignore)]
+    secret: Option<bool>,
 }
 
 impl UpdateEnvVarRequest {
@@ -55,11 +68,33 @@ impl UpdateEnvVarRequest {
             UpdateEnvVarRequest {
                 name,
                 value: Some(value),
+                secret,
             } => {
-                let env_var = validate_env_var(&name, &value)?;
-                Ok(vec![EnvVarChange::Set(env_var)])
+                let variable = validate_env_var(&name, &value)?;
+                let visibility = secret.map(|secret| match secret {
+                    true => EnvVarVisibility::Secret,
+                    false => EnvVarVisibility::Config,
+                });
+                Ok(vec![EnvVarChange::Set {
+                    variable,
+                    visibility,
+                }])
             },
-            UpdateEnvVarRequest { name, value: None } => {
+            UpdateEnvVarRequest {
+                name,
+                value: None,
+                secret,
+            } => {
+                anyhow::ensure!(
+                    secret.is_none(),
+                    ErrorMetadata::bad_request(
+                        "SecretWithoutValue",
+                        format!(
+                            "`secret` was given for {name} without a value. To change whether a \
+                             variable is a secret, set its value in the same change."
+                        ),
+                    )
+                );
                 let name = name.parse()?;
                 Ok(vec![EnvVarChange::Unset(name)])
             },
