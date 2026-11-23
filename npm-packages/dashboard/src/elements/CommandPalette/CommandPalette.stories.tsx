@@ -264,10 +264,15 @@ export const NavigatingRowsAreLinks: Story = {
   },
   play: async () => {
     const user = userEvent.setup();
+    const dialog = await screen.findByRole("dialog", {
+      name: "Convex Command Palette",
+    });
 
     // Rows that navigate are real links, so the browser's own ⌘-click /
     // open-in-new-tab affordances work on them.
-    const schema = await screen.findByRole("option", { name: /^Schema/ });
+    const schema = await within(dialog).findByRole("option", {
+      name: /^Schema/,
+    });
     const schemaLink = within(schema).getByRole("link");
     await expect(schemaLink).toHaveAttribute(
       "href",

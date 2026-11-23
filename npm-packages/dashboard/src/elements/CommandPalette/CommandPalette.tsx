@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { Title as DialogTitle } from "@radix-ui/react-dialog";
+import * as Dialog from "@radix-ui/react-dialog";
 import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
 import { ErrorBoundary } from "@sentry/nextjs";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -193,6 +193,24 @@ export function CommandPalette() {
   );
 }
 
+function PaletteDialog(props: React.ComponentPropsWithRef<typeof Command>) {
+  const label = "Convex Command Palette";
+
+  // Keep the dialog and its title in the same Radix module instance:
+  // cmdk's bundled dialog can use a separate instance with its own context.
+  return (
+    <Dialog.Root open>
+      <Dialog.Portal>
+        <Dialog.Overlay cmdk-overlay="" />
+        <Dialog.Content cmdk-dialog="" aria-describedby={undefined}>
+          <Dialog.Title className="sr-only">{label}</Dialog.Title>
+          <Command {...props} label={label} />
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function CommandPaletteDialog({
   onClose,
   onOpenDetail,
@@ -339,10 +357,8 @@ function CommandPaletteDialog({
           <PaletteConfirmContext.Provider value={setConfirmAction}>
             <PaletteCopyContext.Provider value={copyRegistry}>
               <PaletteLinkContext.Provider value={linkRegistry}>
-                <Command.Dialog
-                  open
+                <PaletteDialog
                   ref={rootRef}
-                  label="Convex Command Palette"
                   // No `loop`: with infinite-scroll lists, wrapping from the last
                   // loaded item back to the first snaps past not-yet-loaded pages,
                   // so arrow/Tab navigation stops at the ends instead.
@@ -372,12 +388,6 @@ function CommandPaletteDialog({
                       : undefined
                   }
                 >
-                  {/* cmdk renders a Radix Dialog with only an aria-label; Radix still
-            requires a Dialog.Title inside the content for screen readers, so
-            provide a visually hidden one. */}
-                  <DialogTitle className="sr-only">
-                    Convex Command Palette
-                  </DialogTitle>
                   {inSubPage && (
                     <Breadcrumbs
                       pages={pages}
@@ -548,7 +558,7 @@ function CommandPaletteDialog({
                     )}
                   </Command.List>
                   <Footer inSubPage={inSubPage} status={footerStatus} />
-                </Command.Dialog>
+                </PaletteDialog>
               </PaletteLinkContext.Provider>
             </PaletteCopyContext.Provider>
           </PaletteConfirmContext.Provider>
