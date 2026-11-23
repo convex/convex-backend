@@ -164,20 +164,31 @@ const exportRequestor = v.union(
   v.literal("cloudBackup"),
 );
 
+const exportFormat = v.object({
+  format: v.literal("zip"),
+  include_storage: v.boolean(),
+});
+
+// Null for the app.
+const exportComponent = v.union(v.string(), v.null());
+
 export const completedExport = v.object({
   state: v.literal("completed"),
   complete_ts: v.int64(),
   expiration_ts: v.int64(),
   start_ts: v.int64(),
+
+  // Legacy field that Rust ignores.
   tables: v.optional(v.array(v.array(v.string()))),
-  zip_object_key: v.optional(v.string()),
-  format: v.optional(
-    v.object({
-      format: v.literal("zip"),
-      include_storage: v.boolean(),
-    }),
-  ),
+
+  zip_object_key: v.string(),
+  format: exportFormat,
+  component: exportComponent,
   requestor: exportRequestor,
+
+  // Size of the zip in bytes. Missing on exports completed before it was
+  // recorded.
+  size: v.optional(v.int64()),
 });
 
 const cronJobStatus = v.union(
@@ -570,22 +581,35 @@ export default defineSchema({
         state: v.literal("failed"),
         start_ts: v.int64(),
         failed_ts: v.int64(),
+        format: exportFormat,
+        component: exportComponent,
         requestor: exportRequestor,
       }),
       v.object({
         state: v.literal("in_progress"),
         start_ts: v.int64(),
+        expiration_ts: v.int64(),
+        format: exportFormat,
+        component: exportComponent,
         requestor: exportRequestor,
         progress_message: v.optional(v.union(v.null(), v.string())),
+
+        // Opaque state for resuming the export after a restart.
+        resumption_token: v.optional(v.record(v.string(), v.any())),
       }),
       v.object({
         state: v.literal("requested"),
+        expiration_ts: v.int64(),
+        format: exportFormat,
+        component: exportComponent,
         requestor: exportRequestor,
       }),
       v.object({
         state: v.literal("canceled"),
         start_ts: v.optional(v.union(v.null(), v.int64())),
         canceled_ts: v.int64(),
+        format: exportFormat,
+        component: exportComponent,
         requestor: exportRequestor,
       }),
     ),

@@ -43,17 +43,21 @@ const baseExport = {
   _id: EXPORT_ID,
   _creationTime: NOW - 60_000,
   requestor: "snapshotExport" as const,
+  format: { format: "zip" as const, include_storage: true },
+  component: null,
 };
 
 const requestedExport: Export = {
   ...baseExport,
   state: "requested",
+  expiration_ts: toNanoseconds(NOW + 7 * DAY),
 };
 
 const inProgressExport: Export = {
   ...baseExport,
   state: "in_progress",
   start_ts: toNanoseconds(NOW - 45_000),
+  expiration_ts: toNanoseconds(NOW + 7 * DAY),
   progress_message: "Backing up messages: 1,000 / 5,000 documents",
 };
 
