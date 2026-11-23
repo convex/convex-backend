@@ -333,6 +333,13 @@ pub trait Persistence: Sync + Send + 'static {
 
     fn reader(&self) -> Arc<dyn PersistenceReader>;
 
+    /// The timestamp (nanoseconds since the Unix epoch) of the lease this
+    /// persistence acquired, or `None` for a persistence without leases. A
+    /// later lease holder has a larger timestamp.
+    fn lease_ts(&self) -> Option<i64> {
+        None
+    }
+
     /// Writes documents and the respective derived indexes.
     async fn write<'a>(
         &self,

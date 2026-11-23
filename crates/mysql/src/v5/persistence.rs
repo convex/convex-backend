@@ -407,6 +407,10 @@ impl<RT: Runtime> PersistenceTrait for Persistence<RT> {
         self.newly_created.load(SeqCst)
     }
 
+    fn lease_ts(&self) -> Option<i64> {
+        Some(self.lease.timestamp())
+    }
+
     fn reader(&self) -> Arc<dyn PersistenceReader> {
         Arc::new(Reader {
             db_name: self.db_name.clone(),
@@ -1367,10 +1371,6 @@ impl<RT: Runtime> Lease<RT> {
         self.multitenant
     }
 
-    #[allow(
-        dead_code,
-        reason = "Consumed by the opt-in shadow implementation in the follow-up PR"
-    )]
     pub(crate) fn timestamp(&self) -> i64 {
         self.lease_ts
     }
