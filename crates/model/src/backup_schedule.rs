@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use common::{
+    cron::next_occurrence_after,
     document::ParsedDocument,
     runtime::Runtime,
 };
@@ -22,7 +23,6 @@ use value::{
 };
 
 use crate::{
-    cron_jobs::next_ts::next_occurrence_after,
     SystemIndex,
     SystemTable,
 };
