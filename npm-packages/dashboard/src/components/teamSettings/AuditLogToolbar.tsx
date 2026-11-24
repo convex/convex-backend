@@ -24,7 +24,7 @@ const AUDIT_LOG_ACTIONS = [
   "project:receive",
   "project:update",
   "project:delete",
-  "project:undelete",
+  "project:recover",
   "project:updateMemberRole",
   "project:token:create",
   "project:token:update",

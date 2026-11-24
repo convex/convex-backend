@@ -3559,7 +3559,7 @@
           "receiveProject",
           "updateProject",
           "deleteProject",
-          "undeleteProject",
+          "recoverProject",
           "createProjectEnvironmentVariable",
           "updateProjectEnvironmentVariable",
           "deleteProjectEnvironmentVariable",

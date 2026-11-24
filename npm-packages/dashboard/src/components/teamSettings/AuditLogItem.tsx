@@ -118,7 +118,7 @@ function EntryAction({
     case "project:create":
     case "project:update":
     case "project:delete":
-    case "project:undelete":
+    case "project:recover":
       return (
         <ProjectEntryAction team={team} action={action} metadata={metadata} />
       );
@@ -842,8 +842,8 @@ function ProjectEntryAction({
   }
 
   const verb =
-    action === "project:undelete"
-      ? "restored"
+    action === "project:recover"
+      ? "recovered"
       : metadata.previous && metadata.current
         ? "updated"
         : metadata.previous
