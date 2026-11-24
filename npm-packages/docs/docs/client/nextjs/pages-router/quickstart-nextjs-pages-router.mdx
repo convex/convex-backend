@@ -10,8 +10,8 @@ description:
 
 import sampleData from "!!raw-loader!@site/../private-demos/quickstarts/nextjs/sampleData.jsonl";
 import tasks from "!!raw-loader!@site/../private-demos/quickstarts/nextjs/convex/tasks.ts";
-import app from "!!raw-loader!@site/../private-demos/quickstarts/nextjs/pages/_app.js";
-import index from "!!raw-loader!@site/../private-demos/quickstarts/nextjs/pages/index.js";
+import app from "!!raw-loader!@site/../private-demos/quickstarts/nextjs/pages/_app.tsx";
+import index from "!!raw-loader!@site/../private-demos/quickstarts/nextjs/pages/index.tsx";
 import ConvexDevStep from "@site/docs/quickstart/_convex_dev_step.mdx";
 
 Learn how to query data from Convex in a Next.js app using the Pages Router.
@@ -20,14 +20,14 @@ Alternatively see the [App Router](/quickstart/nextjs.mdx) version of this
 quickstart.
 
 <StepByStep>
-  <Step title="Create a React app">
+  <Step title="Create a Next.js app">
     Create a Next.js app using the `npx create-next-app` command.
 
     Choose the default option for every prompt (hit Enter).
 
 
     ```sh
-    npx create-next-app@latest my-app --no-app --js
+    npx create-next-app@latest my-app --no-app --ts
     ```
 
   </Step>
@@ -91,24 +91,24 @@ quickstart.
   </Step>
 
   <Step title="Connect the app to your backend">
-    In `pages/_app.js`, create a `ConvexReactClient` and pass it to a `ConvexProvider`
+    In `pages/_app.tsx`, create a `ConvexReactClient` and pass it to a `ConvexProvider`
     wrapping your app.
 
     <Snippet
       source={app}
-      title="pages/_app.js"
+      title="pages/_app.tsx"
       highlightPatterns={[ "Convex", ]}
     />
 
   </Step>
 
   <Step title="Display the data in your app">
-    In `pages/index.js`, use the `useQuery` hook to fetch from your `api.tasks.get`
+    In `pages/index.tsx`, use the `useQuery` hook to fetch from your `api.tasks.get`
     API function.
 
     <Snippet
       source={index}
-      title="pages/index.js"
+      title="pages/index.tsx"
       highlightPatterns={[ "useQuery", "tasks", "text", "\\)\\)\\}" ]}
     />
 

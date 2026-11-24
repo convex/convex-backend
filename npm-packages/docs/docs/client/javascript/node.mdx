@@ -37,10 +37,12 @@ options so that TypeScript will compile the `api.js` file as well.
 
 ## TypeScript without a compile step
 
-If you want to run your TypeScript script directly without a compile step,
-installing [ts-node-esm](https://www.npmjs.com/package/ts-node) and running your
-script with ts-node-esm should work if you use `"type": "module"` in your
-`package.json`.
+Node.js 22.18 and later run TypeScript files directly by stripping their types,
+so with `"type": "module"` in your `package.json` you can run `node script.ts`.
+Type stripping supports only
+[erasable TypeScript syntax](https://nodejs.org/api/typescript.html#type-stripping),
+so features like `enum` need a compile step or a runner like
+[`tsx`](https://www.npmjs.com/package/tsx).
 
 ## JavaScript with CommonJS (`require()` syntax)
 
