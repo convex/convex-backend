@@ -85,6 +85,7 @@ declare_strings!(
     getContinuationPreservedEmbedderData,
     op,
     path,
+    QuotaExceededError,
     runRequest,
     setContinuationPreservedEmbedderData,
     setup,

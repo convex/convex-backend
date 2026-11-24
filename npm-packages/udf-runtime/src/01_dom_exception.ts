@@ -150,3 +150,94 @@ export const setupDOMException = (global: any) => {
     value: DOMException,
   });
 };
+
+function validateQuotaOption(value: unknown, member: string) {
+  if (value === undefined) {
+    return null;
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    throw new TypeError(
+      `Failed to construct 'QuotaExceededError': The provided ${member} value is non-finite.`,
+    );
+  }
+  if (number < 0) {
+    throw new RangeError(
+      `Failed to construct 'QuotaExceededError': The ${member} value cannot be negative.`,
+    );
+  }
+  return number;
+}
+
+/**
+ * The WebIDL `QuotaExceededError` interface, which replaced the
+ * "QuotaExceededError" `DOMException` name.
+ * https://webidl.spec.whatwg.org/#quotaexceedederror
+ *
+ * It extends the global `DOMException` rather than the class above because the
+ * wasm runtime's global `DOMException` is QuickJS's native one.
+ */
+export const setupQuotaExceededError = (global: any) => {
+  class QuotaExceededError extends global.DOMException {
+    #quota: number | null;
+    #requested: number | null;
+
+    constructor(message: unknown = "", options: unknown = {}) {
+      if (
+        options !== undefined &&
+        options !== null &&
+        typeof options !== "object" &&
+        typeof options !== "function"
+      ) {
+        throw new TypeError(
+          "Failed to construct 'QuotaExceededError': The provided value is not of type 'QuotaExceededErrorOptions'.",
+        );
+      }
+      const { quota, requested } = (options ?? {}) as {
+        quota?: unknown;
+        requested?: unknown;
+      };
+      const validatedQuota = validateQuotaOption(quota, "quota");
+      const validatedRequested = validateQuotaOption(requested, "requested");
+      if (
+        validatedQuota !== null &&
+        validatedRequested !== null &&
+        validatedRequested < validatedQuota
+      ) {
+        throw new RangeError(
+          "Failed to construct 'QuotaExceededError': The requested value cannot be less than the quota value.",
+        );
+      }
+      super(message, "QuotaExceededError");
+      this.#quota = validatedQuota;
+      this.#requested = validatedRequested;
+    }
+
+    get quota() {
+      return this.#quota;
+    }
+
+    get requested() {
+      return this.#requested;
+    }
+  }
+
+  for (const key of ["quota", "requested"]) {
+    Object.defineProperty(QuotaExceededError.prototype, key, {
+      enumerable: true,
+    });
+  }
+  Object.defineProperty(QuotaExceededError.prototype, Symbol.toStringTag, {
+    value: "QuotaExceededError",
+    enumerable: false,
+    writable: false,
+    configurable: true,
+  });
+
+  Object.defineProperty(global, "QuotaExceededError", {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: QuotaExceededError,
+  });
+};

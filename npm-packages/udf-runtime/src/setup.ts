@@ -4,7 +4,10 @@ import { setupDate } from "./00_date.js";
 import { setupMisc } from "./00_misc.js";
 import { patchDateTimeFormat, setupTemporal } from "./00_temporal.js";
 import { setupWeakRefs } from "./00_weakref.js";
-import { setupDOMException } from "./01_dom_exception.js";
+import {
+  setupDOMException,
+  setupQuotaExceededError,
+} from "./01_dom_exception.js";
 import { setupConsole } from "./02_console";
 import { setupEvent } from "./02_event";
 import { setupTimers } from "./02_timers.js";
@@ -46,6 +49,7 @@ export function setup(global: any) {
   setupURL(global);
   setupCrypto(global);
   setupDOMException(global);
+  setupQuotaExceededError(global);
   setupConsole(global);
   setupEvent(global);
   setupStructuredClone(global);

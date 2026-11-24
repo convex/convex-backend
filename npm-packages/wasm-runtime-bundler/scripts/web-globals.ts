@@ -6,6 +6,7 @@
 import { setupDate } from "udf-runtime/src/00_date.js";
 import { setupMisc } from "udf-runtime/src/00_misc";
 import { setupWeakRefs } from "udf-runtime/src/00_weakref";
+import { setupQuotaExceededError } from "udf-runtime/src/01_dom_exception";
 import { setupConsole } from "udf-runtime/src/02_console";
 import { setupStructuredClone } from "udf-runtime/src/02_structured_clone";
 import { setupEvent } from "udf-runtime/src/02_event";
@@ -26,6 +27,8 @@ import { setupTextEncodingStreams } from "./text-encoding-streams";
 setupDate(globalThis);
 setupMisc(globalThis);
 setupWeakRefs(globalThis);
+// Extends QuickJS's native `DOMException`, which the guest installs.
+setupQuotaExceededError(globalThis);
 setupConsole(globalThis);
 setupStructuredClone(globalThis);
 setupEvent(globalThis);

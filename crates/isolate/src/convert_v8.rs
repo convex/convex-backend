@@ -131,14 +131,28 @@ impl ToV8 for DOMException {
         scope: &mut v8::PinScope<'s, '_>,
     ) -> anyhow::Result<v8::Local<'s, v8::Value>> {
         // TODO: do not read off of the global object, which is mutable by JS
-        let dom_exception_str = strings::DOMException.create(scope)?;
         let global = scope.get_current_context().global(scope);
+        let message = v8::String::new(scope, &self.message).context("failed to create string")?;
+        // WebIDL replaced the "QuotaExceededError" name with an interface of
+        // that name, whose constructor takes the message and options.
+        if let DOMExceptionName::QuotaExceededError = self.name {
+            let class_str = strings::QuotaExceededError.create(scope)?;
+            let class = global
+                .get(scope, class_str.into())
+                .context("missing QuotaExceededError")?
+                .try_cast::<v8::Function>()
+                .context("QuotaExceededError isn't v8::Function")?;
+            return Ok(class
+                .new_instance(scope, &[message.into()])
+                .context("failed to create QuotaExceededError")?
+                .into());
+        }
+        let dom_exception_str = strings::DOMException.create(scope)?;
         let dom_exception_class = global
             .get(scope, dom_exception_str.into())
             .context("missing DOMException")?
             .try_cast::<v8::Function>()
             .context("DOMException isn't v8::Function")?;
-        let message = v8::String::new(scope, &self.message).context("failed to create string")?;
         let name = v8::String::new_from_utf8(
             scope,
             <&str>::from(self.name).as_bytes(),
