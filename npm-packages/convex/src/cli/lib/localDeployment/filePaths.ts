@@ -221,11 +221,17 @@ export async function loadDeploymentConfigFromDir(
   let json: unknown;
   try {
     json = JSON.parse(content);
-  } catch (e) {
-    logVerbose(
-      `Failed to parse local deployment config at ${dir}: ${e as any}`,
-    );
-    return null;
+  } catch {
+    // The messages below are deliberately generic: JSON.parse errors quote the
+    // file contents, and this file holds the admin key.
+    return await ctx.crash({
+      exitCode: 1,
+      errorType: "fatal",
+      printedMessage: `Invalid local deployment config in ${configFile}: file is not valid JSON.`,
+      errForSentry: new LocalDeploymentError(
+        "Local deployment config is not valid JSON",
+      ),
+    });
   }
   const result = localDeploymentConfigSchema.safeParse(json);
   if (!result.success) {
