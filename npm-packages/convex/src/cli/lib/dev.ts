@@ -94,7 +94,7 @@ export async function devAgainstDeployment(
     credentials.deploymentType === "anonymous" &&
     credentials.deploymentName !== null
   ) {
-    const deploymentConfig = loadDeploymentConfig(
+    const deploymentConfig = await loadDeploymentConfig(
       ctx,
       "anonymous",
       credentials.deploymentName,

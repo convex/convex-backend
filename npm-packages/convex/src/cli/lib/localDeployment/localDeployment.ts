@@ -190,7 +190,7 @@ export async function loadLocalDeploymentCredentials(
   deploymentUrl: string;
   adminKey: string;
 }> {
-  const config = loadDeploymentConfig(ctx, "local", deploymentName);
+  const config = await loadDeploymentConfig(ctx, "local", deploymentName);
   if (config === null) {
     return ctx.crash({
       exitCode: 1,
@@ -272,14 +272,15 @@ async function getLegacyLocalDeployments(ctx: Context): Promise<
       }
       return true;
     });
-  return deploymentNames.flatMap((deploymentName) => {
+  const deployments = [];
+  for (const deploymentName of deploymentNames) {
     const legacyDir = legacyDeploymentStateDir("local", deploymentName);
-    const config = loadDeploymentConfigFromDir(ctx, legacyDir);
+    const config = await loadDeploymentConfigFromDir(ctx, legacyDir);
     if (config !== null) {
-      return [{ deploymentName, config }];
+      deployments.push({ deploymentName, config });
     }
-    return [];
-  });
+  }
+  return deployments;
 }
 
 /** Copies the default dev env vars from big brain the first time the local dev backend is started */

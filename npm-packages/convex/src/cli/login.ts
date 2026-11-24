@@ -402,7 +402,7 @@ async function handleLinkingDeployments(
   }
 
   // No project-local deployment - check for legacy deployments
-  const legacyDeployments = listLegacyAnonymousDeployments(ctx);
+  const legacyDeployments = await listLegacyAnonymousDeployments(ctx);
   if (legacyDeployments.length === 0) {
     if (args.interactive) {
       logMessage(
@@ -467,7 +467,7 @@ async function handleLinkingDeployments(
 
   // Interactive mode: let user choose which legacy deployments to link
   while (true) {
-    const currentLegacyDeployments = listLegacyAnonymousDeployments(ctx);
+    const currentLegacyDeployments = await listLegacyAnonymousDeployments(ctx);
     if (currentLegacyDeployments.length === 0) {
       logMessage("All deployments have been linked.");
       break;

@@ -53,8 +53,9 @@ import { Context } from "../../../bundler/context.js";
 import { logVerbose } from "../../../bundler/log.js";
 import { recursivelyDelete } from "../fsUtils.js";
 import crypto from "crypto";
+import { z } from "zod";
 import { LocalDeploymentError } from "./errors.js";
-import { isValidLocalDeploymentName } from "./utils.js";
+import { isValidBackendVersion, isValidLocalDeploymentName } from "./utils.js";
 
 /**
  * Ensure the `.convex/.gitignore` file exists with the right content.
@@ -171,46 +172,73 @@ export function deploymentStateDirUnchecked(projectDir?: string): string {
   return projectLocalStateDir(projectDir);
 }
 
-export type LocalDeploymentConfig = {
-  ports: {
-    cloud: number;
-    site: number;
-  };
-  backendVersion: string;
-  adminKey: string;
+const portSchema = z.number().int().min(1).max(65535);
+
+// Validating the config.json value to avoid bugs and adversarial configs.
+// Unknown keys are kept so that saving a config written by a newer CLI version
+// preserves them.
+const localDeploymentConfigSchema = z.looseObject({
+  ports: z.looseObject({
+    cloud: portSchema,
+    site: portSchema,
+  }),
+  backendVersion: z.string().refine(isValidBackendVersion, {
+    error: "Invalid backend version",
+  }),
+  adminKey: z.string(),
   // If not present, use the default instance secret for local backends
-  instanceSecret?: string;
+  instanceSecret: z.string().optional(),
   // The deployment name (e.g., "local-my_team-my_project" or "anonymous-chess")
   // This is stored in the config for project-local storage where the directory
   // name is always "default" rather than the deployment name.
-  deploymentName?: string;
+  deploymentName: z
+    .string()
+    .refine(isValidLocalDeploymentName, {
+      error: "Invalid deployment name",
+    })
+    .optional(),
   // Numeric id of the cloud project this local deployment is registered under.
   // Used to detect when the cloud project has changed since the last time it
   // was used (e.g. through `npx convex deployment select`).
-  cloudProjectId: number | undefined;
-};
+  cloudProjectId: z.number().int().optional(),
+});
+
+export type LocalDeploymentConfig = z.infer<typeof localDeploymentConfigSchema>;
 
 /**
  * Load deployment config from a specific directory.
  * This is used when we already know the directory path.
  */
-export function loadDeploymentConfigFromDir(
+export async function loadDeploymentConfigFromDir(
   ctx: Context,
   dir: string,
-): LocalDeploymentConfig | null {
+): Promise<LocalDeploymentConfig | null> {
   const configFile = path.join(dir, "config.json");
   if (!ctx.fs.exists(configFile)) {
     return null;
   }
   const content = ctx.fs.readUtf8File(configFile);
+  let json: unknown;
   try {
-    return JSON.parse(content);
+    json = JSON.parse(content);
   } catch (e) {
     logVerbose(
       `Failed to parse local deployment config at ${dir}: ${e as any}`,
     );
     return null;
   }
+  const result = localDeploymentConfigSchema.safeParse(json);
+  if (!result.success) {
+    return await ctx.crash({
+      exitCode: 1,
+      errorType: "fatal",
+      printedMessage: `Invalid local deployment config in ${configFile}:\n${z.prettifyError(result.error)}`,
+      errForSentry: new LocalDeploymentError(
+        `Invalid local deployment config: ${result.error.message}`,
+      ),
+    });
+  }
+  return result.data;
 }
 
 /**
@@ -223,20 +251,8 @@ export async function loadProjectLocalConfig(
   projectDir?: string,
 ): Promise<{ deploymentName: string; config: LocalDeploymentConfig } | null> {
   const localDir = projectLocalStateDir(projectDir);
-  const config = loadDeploymentConfigFromDir(ctx, localDir);
+  const config = await loadDeploymentConfigFromDir(ctx, localDir);
   if (config !== null && config.deploymentName) {
-    // This file lives in the project directory, which may come from an
-    // untrusted repository, and its name is later joined onto `~/.convex`.
-    if (!isValidLocalDeploymentName(config.deploymentName)) {
-      return await ctx.crash({
-        exitCode: 1,
-        errorType: "fatal",
-        printedMessage: `Invalid local deployment name in ${path.join(localDir, "config.json")}: ${JSON.stringify(config.deploymentName)}`,
-        errForSentry: new LocalDeploymentError(
-          "Invalid local deployment name in the project-local config",
-        ),
-      });
-    }
     logVerbose(
       `Found project-local deployment config for ${config.deploymentName}`,
     );
@@ -252,15 +268,15 @@ export async function loadProjectLocalConfig(
  * 1. Project-local directory if it has a matching config
  * 2. Legacy home directory
  */
-export function loadDeploymentConfig(
+export async function loadDeploymentConfig(
   ctx: Context,
   deploymentKind: LocalDeploymentKind,
   deploymentName: string,
   projectDir?: string,
-): LocalDeploymentConfig | null {
+): Promise<LocalDeploymentConfig | null> {
   // Check project-local location first - matches deploymentStateDir priority
   const localDir = projectLocalStateDir(projectDir);
-  const localConfig = loadDeploymentConfigFromDir(ctx, localDir);
+  const localConfig = await loadDeploymentConfigFromDir(ctx, localDir);
   if (localConfig !== null) {
     // Only use if config matches the requested deployment name
     // (project-local can hold different deployments at different times)
@@ -280,7 +296,7 @@ export function loadDeploymentConfig(
 
   // Check legacy location
   const legacyDir = legacyDeploymentStateDir(deploymentKind, deploymentName);
-  const legacyConfig = loadDeploymentConfigFromDir(ctx, legacyDir);
+  const legacyConfig = await loadDeploymentConfigFromDir(ctx, legacyDir);
   if (legacyConfig !== null) {
     logVerbose(
       `Found deployment config in legacy location for ${deploymentName}`,

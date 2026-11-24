@@ -186,7 +186,7 @@ export async function loadAnonymousDeployment(
   ctx: Context,
   deploymentName: string,
 ): Promise<LocalDeploymentConfig> {
-  const config = loadDeploymentConfig(ctx, "anonymous", deploymentName);
+  const config = await loadDeploymentConfig(ctx, "anonymous", deploymentName);
   if (config === null) {
     return ctx.crash({
       exitCode: 1,
@@ -201,10 +201,12 @@ export async function loadAnonymousDeployment(
  * List legacy anonymous deployments from the home directory.
  * These are deployments stored in ~/.convex/anonymous-convex-backend-state/
  */
-export function listLegacyAnonymousDeployments(ctx: Context): Array<{
-  deploymentName: string;
-  config: LocalDeploymentConfig;
-}> {
+export async function listLegacyAnonymousDeployments(ctx: Context): Promise<
+  Array<{
+    deploymentName: string;
+    config: LocalDeploymentConfig;
+  }>
+> {
   const deployments: Array<{
     deploymentName: string;
     config: LocalDeploymentConfig;
@@ -229,7 +231,7 @@ export function listLegacyAnonymousDeployments(ctx: Context): Array<{
       });
     for (const deploymentName of deploymentNames) {
       const legacyDir = legacyDeploymentStateDir("anonymous", deploymentName);
-      const config = loadDeploymentConfigFromDir(ctx, legacyDir);
+      const config = await loadDeploymentConfigFromDir(ctx, legacyDir);
       if (config !== null) {
         deployments.push({ deploymentName, config });
       }
@@ -260,7 +262,7 @@ export async function listExistingAnonymousDeployments(ctx: Context): Promise<
   }
 
   // Check legacy home directory, avoiding duplicates
-  for (const legacy of listLegacyAnonymousDeployments(ctx)) {
+  for (const legacy of await listLegacyAnonymousDeployments(ctx)) {
     if (!deployments.some((d) => d.deploymentName === legacy.deploymentName)) {
       deployments.push(legacy);
     }
@@ -337,7 +339,7 @@ async function chooseDeployment(
   }
 
   // No project-local data - check for legacy deployments in home directory
-  const legacyDeployments = listLegacyAnonymousDeployments(ctx);
+  const legacyDeployments = await listLegacyAnonymousDeployments(ctx);
 
   // No legacy deployments - auto-create a new project without prompting
   if (legacyDeployments.length === 0) {
@@ -426,7 +428,11 @@ export async function handleLinkToProject(
   logVerbose(
     `Linking ${args.deploymentName} to a project in team ${args.teamSlug}`,
   );
-  const config = loadDeploymentConfig(ctx, "anonymous", args.deploymentName);
+  const config = await loadDeploymentConfig(
+    ctx,
+    "anonymous",
+    args.deploymentName,
+  );
   if (config === null) {
     return ctx.crash({
       exitCode: 1,
@@ -468,7 +474,11 @@ export async function handleLinkToProject(
     await generateLocalDevSecretsWithLatestBinary(ctx, {
       deploymentName: localDeploymentName,
     });
-  const localConfig = loadDeploymentConfig(ctx, "local", localDeploymentName);
+  const localConfig = await loadDeploymentConfig(
+    ctx,
+    "local",
+    localDeploymentName,
+  );
   if (localConfig !== null) {
     return ctx.crash({
       exitCode: 1,

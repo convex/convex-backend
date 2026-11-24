@@ -451,7 +451,11 @@ async function startEphemeralLocalBackend(
   const deploymentKind: LocalDeploymentKind =
     args.deploymentType === "anonymous" ? "anonymous" : "local";
 
-  const config = loadDeploymentConfig(ctx, deploymentKind, args.deploymentName);
+  const config = await loadDeploymentConfig(
+    ctx,
+    deploymentKind,
+    args.deploymentName,
+  );
   if (config === null) {
     return ctx.crash({
       exitCode: 1,
