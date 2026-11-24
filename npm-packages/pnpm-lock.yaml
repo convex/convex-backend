@@ -50,7 +50,7 @@ overrides:
   diff@>=8.0.0 <8.0.3: ^8.0.3
   diff@>=4.0.0 <4.0.4: ^4.0.4
   dompurify@>=3.0.0 <3.4.17: ^3.4.17
-  effect@>=3.0.0 <3.20.0: ^3.20.0
+  effect@>=3.0.0 <3.22.1: ^3.22.1
   esbuild@<=0.24.2: 0.25.0
   estree-util-value-to-estree@>=3.0.0 <3.3.3: ^3.3.3
   follow-redirects@>=1.15.0 <1.16.2: ^1.16.2
@@ -6090,8 +6090,8 @@ importers:
         specifier: workspace:*
         version: link:../../convex
       effect3:
-        specifier: npm:effect@3.21.2
-        version: effect@3.21.2
+        specifier: npm:effect@3.22.4
+        version: effect@3.22.4
       effect4:
         specifier: npm:effect@4.0.0-beta.103
         version: effect@4.0.0-beta.103
@@ -14179,9 +14179,6 @@ packages:
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
 
-  '@standard-schema/spec@1.0.0':
-    resolution: {integrity: sha512-m2bOd0f2RT9k8QJx1JN85cZYyH1RqFBdlwtkSlf4tBDYLCiiZnv1fIIwacK6cqwXavOydf0NPToMQgpKq+dVlA==}
-
   '@standard-schema/spec@1.0.0-beta.3':
     resolution: {integrity: sha512-0ifF3BjA1E8SY9C+nUew8RefNOIq0cDlYALPty4rhUm8Rrl6tCM8hBT4bhGhx7I7iXD0uAgt50lgo8dD73ACMw==}
 
@@ -19069,11 +19066,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@3.21.0:
-    resolution: {integrity: sha512-PPN80qRokCd1f015IANNhrwOnLO7GrrMQfk4/lnZRE/8j7UPWrNNjPV0uBrZutI/nHzernbW+J0hdqQysHiSnQ==}
-
-  effect@3.21.2:
-    resolution: {integrity: sha512-rXd2FGDM8KdjSIrc+mqEELo7ScW7xTVxEf1iInmPSpIde9/nyGuFM710cjTo7/EreGXiUX2MOonPpprbz2XHCg==}
+  effect@3.22.4:
+    resolution: {integrity: sha512-RNshu7AXVxxDh6aS4lothhJ+QoZ4xSykbWNaaVdvDN72RMyVwhCGdALkyl1TbEydgAmRIdD1eTyJqBUGwSBGDA==}
 
   effect@4.0.0-beta.103:
     resolution: {integrity: sha512-pE8TxF4m2tQzVI+77dIlm3s+81TACV1AiX1JEkvY+zVuxgQQ8aGSkqXNJF6b/ST+coCSk5cUdbULpQ7sm4oHyw==}
@@ -38707,8 +38701,6 @@ snapshots:
 
   '@stablelib/base64@1.0.1': {}
 
-  '@standard-schema/spec@1.0.0': {}
-
   '@standard-schema/spec@1.0.0-beta.3': {}
 
   '@standard-schema/spec@1.1.0': {}
@@ -45678,14 +45670,9 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@3.21.0:
+  effect@3.22.4:
     dependencies:
       '@standard-schema/spec': 1.1.0
-      fast-check: 3.23.2
-
-  effect@3.21.2:
-    dependencies:
-      '@standard-schema/spec': 1.0.0
       fast-check: 3.23.2
 
   effect@4.0.0-beta.103:
@@ -55911,7 +55898,7 @@ snapshots:
       compression: 1.8.2(supports-color@10.2.2)
       depcheck: 1.4.7(supports-color@10.2.2)
       digraph-js: 2.2.4
-      effect: 3.21.0
+      effect: 3.22.4
       estree-walker: 3.0.3
       fp-ts: 2.5.0
       fs-tree-structure: 0.0.5
