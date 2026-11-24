@@ -43,6 +43,7 @@ example.
 | [`@convex-dev/no-schema-import-cycle`](#no-schema-import-cycle)<br/>Prevent using the schema in a file that the schema imports          |     ✅      |              |
 | [`@convex-dev/no-duplicate-indexes`](#no-duplicate-indexes)<br/>Warn on indexes whose fields are a prefix of another index's            |     ✅      |              |
 | [`@convex-dev/no-process-env`](#no-process-env)<br/>Prefer the typed `env` object over `process.env`                                    |     ✅      |      🔧      |
+| [`@convex-dev/no-time-or-random-in-queries`](#no-time-or-random-in-queries)<br/>Disallow reading the time or random values in queries   |     ✅      |              |
 | [`@convex-dev/import-wrong-runtime`](#import-wrong-runtime)<br/>Prevent Convex runtime files from importing from Node runtime files     |             |              |
 | [`@convex-dev/no-collect-in-query`](#no-collect-in-query)<br/>Prefer `.take()` / `.paginate()` over `.collect()` in queries             |             |              |
 | [`@convex-dev/require-access-control`](#require-access-control)<br/>Require an access control check in public functions                 |             |              |
@@ -539,3 +540,69 @@ When using this rule, please consider the following limitations:
 - This rule doesn’t check HTTP actions.
 - This rule doesn’t check
   [custom functions](https://github.com/convex/convex-helpers/blob/main/packages/convex-helpers/README.md#custom-functions).
+
+### no-time-or-random-in-queries
+
+Disallow reading the current time or generating random values in Convex queries.
+
+Convex [queries](/functions/query-functions) are
+[automatically cached](/functions/query-functions#caching--reactivity--consistency).
+A query that reads the time can return an outdated result, and it can also cause
+the query cache to be invalidated more often than necessary (see
+[Don’t use `Date.now()` in queries](/understanding/best-practices/#date-in-queries)).
+A query that generates random values keeps returning the same value until its
+cache is invalidated, which is rarely what you want; use a mutation instead.
+Passing the time in as an argument keeps that dependency explicit.
+
+This rule detects calls that observe the current time or random state, including
+`Date()`, `Date.now()`, `new Date()` (with no arguments), the `Temporal.Now`
+methods that read the clock (`instant()`, `plainDateISO()`,
+`plainDateTimeISO()`, `plainTimeISO()`, and `zonedDateTimeISO()`),
+`performance.now()`, `Math.random()`, `crypto.randomUUID()`, and
+`crypto.getRandomValues()`. It checks `query` and `internalQuery` handlers,
+including calls made transitively through local helper functions and, in ESLint,
+helpers imported through relative paths.
+
+```ts
+// ✅ Allowed by this rule:
+export const list = query({
+  args: { since: v.number() },
+  handler: async (ctx, { since }) => {
+    return await ctx.db
+      .query("messages")
+      .withIndex("by_time", (q) => q.gte("time", since))
+      .collect();
+  },
+});
+
+// ❌ Not allowed by this rule:
+export const list = query({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - 60000;
+    return await ctx.db
+      .query("messages")
+      .withIndex("by_time", (q) => q.gte("time", cutoff))
+      .collect();
+  },
+});
+```
+
+Callbacks passed to other functions are treated as if they run, since most
+callbacks in query code (like `.map()` callbacks) do. Each time or random call
+in a handler is reported separately, so disabling the rule for one line doesn't
+hide the others. A call to a helper that reads the time or random values is
+reported once, where the handler calls it.
+
+Limitations:
+
+- This rule doesn’t check
+  [custom functions](https://github.com/convex/convex-helpers/blob/main/packages/convex-helpers/README.md#custom-functions).
+
+If you intentionally read the time or random values in a query, you can disable
+the rule for that line:
+
+```ts
+// eslint-disable-next-line @convex-dev/no-time-or-random-in-queries
+const index = Math.floor(Math.random() * items.length);
+```

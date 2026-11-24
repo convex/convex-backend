@@ -36,6 +36,8 @@ fall back to matching code by name:
 - [`no-collect-in-query`](/linting/overview#no-collect-in-query) and
   [`no-filter-in-query`](/linting/overview#no-filter-in-query) are a little less
   precise, and `no-collect-in-query` doesn’t suggest replacements.
+- [`no-time-or-random-in-queries`](/linting/overview#no-time-or-random-in-queries)
+  follows helper calls only within the same file, not into imported files.
 
 Every other rule and autofix works the same as in ESLint. Oxlint’s
 `--type-aware` flag doesn’t change this, since it only applies to Oxlint’s
