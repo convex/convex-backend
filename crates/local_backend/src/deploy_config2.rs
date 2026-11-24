@@ -38,6 +38,7 @@ use common::{
         HttpResponseError,
     },
     schemas::TableValidationOutcome,
+    types::Timestamp,
 };
 use errors::{
     ErrorMetadata,
@@ -61,6 +62,7 @@ use model::{
         },
         types::PushMessage,
     },
+    environment_variables::types::EnvVarName,
     external_packages::types::ExternalDepsPackageId,
     modules::module_versions::SerializedAnalyzedModule,
     source_packages::types::SourcePackage,
@@ -91,16 +93,50 @@ use crate::{
     LocalAppState,
 };
 
+/// Each timestamp is sent as a decimal string under `environmentVariables`.
+/// The CLI treats every entry as an opaque string and sends the map back
+/// unchanged to `finish_push`.
+fn serialize_env_var_commit_timestamps(
+    commit_timestamps: BTreeMap<EnvVarName, Timestamp>,
+) -> BTreeMap<String, String> {
+    commit_timestamps
+        .into_iter()
+        .map(|(name, ts)| (String::from(name), ts.to_string()))
+        .collect()
+}
+
+fn parse_env_var_commit_timestamps(
+    serialized: BTreeMap<String, String>,
+) -> anyhow::Result<BTreeMap<EnvVarName, Timestamp>> {
+    serialized
+        .into_iter()
+        .map(|(name, ts)| {
+            // A `start_push` served by a backend from before commit timestamps
+            // sent values instead. Retrying the push resolves it, like any
+            // other change to the variables during a push.
+            let ts = ts
+                .parse::<u64>()
+                .ok()
+                .and_then(|ts| Timestamp::try_from(ts).ok())
+                .ok_or_else(|| {
+                    ErrorMetadata::bad_request(
+                        "RaceDetected",
+                        "The deployment was updated during this push. Please run the push again.",
+                    )
+                })?;
+            Ok((name.parse()?, ts))
+        })
+        .collect()
+}
+
 impl TryFrom<StartPushResponse> for SerializedStartPushResponse {
     type Error = anyhow::Error;
 
     fn try_from(value: StartPushResponse) -> Result<Self, Self::Error> {
         Ok(Self {
-            environment_variables: value
-                .environment_variables
-                .into_iter()
-                .map(|(k, v)| Ok((String::from(k), String::from(v))))
-                .collect::<anyhow::Result<_>>()?,
+            environment_variables: serialize_env_var_commit_timestamps(
+                value.environment_variable_commit_timestamps,
+            ),
             external_deps_id: value
                 .external_deps_id
                 .map(|id| String::from(DeveloperDocumentId::from(id))),
@@ -130,11 +166,9 @@ impl TryFrom<SerializedStartPushResponse> for StartPushResponse {
 
     fn try_from(value: SerializedStartPushResponse) -> Result<Self, Self::Error> {
         Ok(Self {
-            environment_variables: value
-                .environment_variables
-                .into_iter()
-                .map(|(k, v)| Ok((k.parse()?, v.parse()?)))
-                .collect::<anyhow::Result<_>>()?,
+            environment_variable_commit_timestamps: parse_env_var_commit_timestamps(
+                value.environment_variables,
+            )?,
             external_deps_id: value
                 .external_deps_id
                 .map(|id| {

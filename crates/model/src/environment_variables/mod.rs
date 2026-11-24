@@ -24,6 +24,8 @@ use common::{
     types::{
         env_var_name_forbidden,
         env_var_name_not_unique,
+        Timestamp,
+        WriteTimestamp,
     },
 };
 use database::{
@@ -211,6 +213,33 @@ impl<'a, RT: Runtime> EnvironmentVariablesModel<'a, RT> {
             anyhow::ensure!(old_value.is_none(), "Duplicate environment variable");
         }
         Ok(environment_variables)
+    }
+
+    /// The commit timestamp of each variable's document, by name. It changes
+    /// on every write to a variable, even one that keeps its value, and holds
+    /// no values, so it is safe to hand to a client. Variables written by the
+    /// current transaction have no commit timestamp yet, so this is only for
+    /// transactions that haven't written any.
+    pub async fn get_all_commit_timestamps(
+        &mut self,
+    ) -> anyhow::Result<BTreeMap<EnvVarName, Timestamp>> {
+        let query = Query::full_table_scan(ENVIRONMENT_VARIABLES_TABLE, Order::Asc);
+        let mut query_stream = ResolvedQuery::new(self.tx, TableNamespace::Global, query)?;
+        let mut commit_timestamps = BTreeMap::new();
+        while let Some((document, write_timestamp)) =
+            query_stream.next_with_ts(self.tx, None).await?
+        {
+            let env_var: ParsedDocument<PersistedEnvironmentVariable> = document.parse()?;
+            let WriteTimestamp::Committed(commit_ts) = write_timestamp else {
+                anyhow::bail!(
+                    "Environment variable {} was written by this transaction",
+                    env_var.variable.name()
+                );
+            };
+            let old_ts = commit_timestamps.insert(env_var.variable.name().to_owned(), commit_ts);
+            anyhow::ensure!(old_ts.is_none(), "Duplicate environment variable");
+        }
+        Ok(commit_timestamps)
     }
 
     /// Every variable as it is stored, by name. This includes the value of

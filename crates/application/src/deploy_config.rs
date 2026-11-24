@@ -230,7 +230,7 @@ struct EvaluatedPushContents {
     component_definition_packages: BTreeMap<ComponentDefinitionPath, SourcePackage>,
     evaluated_components: BTreeMap<ComponentDefinitionPath, EvaluatedComponentDefinition>,
     external_deps_id: Option<ExternalDepsPackageId>,
-    user_environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
+    environment_variable_commit_timestamps: BTreeMap<EnvVarName, Timestamp>,
     app_functions: Vec<ModuleConfig>,
 }
 
@@ -249,7 +249,7 @@ impl<RT: Runtime> Application<RT> {
             component_definition_packages,
             mut evaluated_components,
             external_deps_id,
-            user_environment_variables,
+            environment_variable_commit_timestamps,
             app_functions,
         } = self.evaluate_push_contents(config).await?;
 
@@ -282,7 +282,7 @@ impl<RT: Runtime> Application<RT> {
         }
 
         let resp = StartPushResponse {
-            environment_variables: user_environment_variables,
+            environment_variable_commit_timestamps,
             external_deps_id,
             component_definition_packages,
             app_auth: auth_info,
@@ -315,12 +315,18 @@ impl<RT: Runtime> Application<RT> {
             .get(&ComponentDefinitionPath::root())
             .context("No package for app?")?;
 
-        let (user_environment_variables, system_env_var_overrides) = {
+        let (
+            user_environment_variables,
+            environment_variable_commit_timestamps,
+            system_env_var_overrides,
+        ) = {
             let mut tx = self.begin(Identity::system()).await?;
-            let vars = EnvironmentVariablesModel::new(&mut tx).get_all().await?;
+            let mut model = EnvironmentVariablesModel::new(&mut tx);
+            let vars = model.get_all().await?;
+            let commit_timestamps = model.get_all_commit_timestamps().await?;
             let system_env_var_overrides = system_env_var_overrides(&mut tx).await?;
             tx.into_token()?;
-            (vars, system_env_var_overrides)
+            (vars, commit_timestamps, system_env_var_overrides)
         };
         let (auth_module, app_analysis) = self
             .analyze_modules_with_auth_config(
@@ -383,7 +389,7 @@ impl<RT: Runtime> Application<RT> {
             component_definition_packages,
             evaluated_components,
             external_deps_id,
-            user_environment_variables,
+            environment_variable_commit_timestamps,
             app_functions,
         })
     }
@@ -904,9 +910,10 @@ impl<RT: Runtime> Application<RT> {
                     let request_context = &request_context;
                     async move {
                         // Validate that environment variables haven't changed since `start_push`.
-                        let environment_variables =
-                            EnvironmentVariablesModel::new(tx).get_all().await?;
-                        if environment_variables != start_push.environment_variables {
+                        let mut env_var_model = EnvironmentVariablesModel::new(tx);
+                        let environment_variables = env_var_model.get_all().await?;
+                        let commit_timestamps = env_var_model.get_all_commit_timestamps().await?;
+                        if commit_timestamps != start_push.environment_variable_commit_timestamps {
                             anyhow::bail!(ErrorMetadata::bad_request(
                                 "RaceDetected",
                                 "Environment variables have changed during push"
@@ -1384,8 +1391,9 @@ impl StartPushRequest {
 #[derive(Clone, Debug)]
 pub struct StartPushResponse {
     // We read the current environment variables when evaluating the definitions, so we need to
-    // cancel the push if they change before the commit point.
-    pub environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
+    // cancel the push if they change before the commit point. The client sees commit timestamps
+    // rather than the variables because the variables' values may be secrets.
+    pub environment_variable_commit_timestamps: BTreeMap<EnvVarName, Timestamp>,
 
     pub external_deps_id: Option<ExternalDepsPackageId>,
     pub component_definition_packages: BTreeMap<ComponentDefinitionPath, SourcePackage>,
