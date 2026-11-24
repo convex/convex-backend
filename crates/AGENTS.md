@@ -3,16 +3,18 @@
 ## Development workflow
 
 ```sh
+# Quick compile check
+cargo check -p <package>
+
 # When a change is ready
 just lint-rust <package>
 cargo test -p <package>
 cargo test -p <package> "test_name" # for a specific test or test group
 ```
 
-```sh
-# Before committing or presenting the output
-just format-rust
-```
+Integration and smoke suites run in CI. On Linux the dev setup doesn't install
+Postgres or MySQL, so tests that open them (the `postgres` and `mysql` crates,
+Big Brain) also run in CI.
 
 ## Compatibility with older clients
 
@@ -48,3 +50,10 @@ is a wire format shared with every version still in use:
   methods like `into_foo()` or `to_foo()`. Use an inherent method when the
   conversion needs arguments or is non-canonical. Avoid using trait impls for
   complex types like `&'a Foo` or `(Foo, Bar)` unless necessary for generics.
+- Never hand-write mechanical `match`-based methods on enums — `name()`,
+  `label()`, `as_str()`, string parsing, lists of every variant — when a derive
+  produces the same mapping. Use `strum` derives for enum↔string conversions
+  (`IntoStaticStr`, `Display`, `EnumString`, usually with
+  `#[strum(serialize_all = "snake_case")]`) and for iterating variants
+  (`EnumIter`), and `serde` derives for serialization. If an impl is a pure
+  function of the variant names, derive it.
