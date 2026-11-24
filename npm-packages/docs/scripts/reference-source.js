@@ -272,7 +272,7 @@ function checkOut(commit) {
   fs.writeFileSync(CHECKOUT_MANIFEST_PATH, JSON.stringify({ commit }) + "\n");
 }
 
-function findRelease() {
+function documentedVersion() {
   const version = JSON.parse(
     fs.readFileSync(path.join(REPO_ROOT, PACKAGE_JSON), "utf8"),
   ).version;
@@ -283,33 +283,40 @@ function findRelease() {
         "document the working tree.",
     );
   }
+  return version;
+}
 
+function checkSetsVersion(commit, version) {
+  if (versionAt(commit) !== version) {
+    throw new Error(
+      `${commit} sets the version in ${PACKAGE_JSON} to ` +
+        `${versionAt(commit)}, not ${version}`,
+    );
+  }
+}
+
+/**
+ * Returns the commit of the release that release mode documents, fetching
+ * from `origin` what the clone is missing to find it.
+ *
+ * - `{ kind: "release", version, tag, commit }`: the release's tag.
+ * - `{ kind: "untagged", version, tag, commit }`: the commit that last changed
+ *   the version, while the release is untagged.
+ */
+function resolveRelease() {
+  const version = documentedVersion();
   const tag = `npm/${version}`;
   if (ensureTag(tag)) {
-    const commit = git("rev-parse", `${tag}^{commit}`);
     return {
       kind: "release",
       version,
       tag,
-      commit,
-      ...releaseSourceLinks(commit),
+      commit: git("rev-parse", `${tag}^{commit}`),
     };
   }
-
   const commit = lastVersionCommit();
-  if (versionAt(commit) !== version) {
-    throw new Error(
-      `The last commit that changes the version in ${PACKAGE_JSON} ` +
-        `(${commit}) sets it to ${versionAt(commit)}, not ${version}`,
-    );
-  }
-  return {
-    kind: "untagged",
-    version,
-    tag,
-    commit,
-    ...releaseSourceLinks(commit),
-  };
+  checkSetsVersion(commit, version);
+  return { kind: "untagged", version, tag, commit };
 }
 
 /**
@@ -340,7 +347,8 @@ function prepareReferenceSource() {
     );
   }
 
-  const release = findRelease();
+  const resolved = resolveRelease();
+  const release = { ...resolved, ...releaseSourceLinks(resolved.commit) };
   checkOut(release.commit);
   printBanner(release);
   return {
@@ -378,3 +386,8 @@ function writeEntryPointsTsconfig(source, entryPoints) {
 }
 
 module.exports = { prepareReferenceSource, writeEntryPointsTsconfig };
+
+// Prints the commit that release mode documents.
+if (require.main === module) {
+  console.log(resolveRelease().commit);
+}
