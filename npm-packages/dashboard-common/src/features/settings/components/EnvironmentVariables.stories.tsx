@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
 import { Sheet } from "@ui/Sheet";
-import { fn } from "storybook/test";
+import { expect, fn, userEvent, waitFor } from "storybook/test";
 import {
   EnvironmentVariables,
   BaseEnvironmentVariable,
@@ -41,6 +41,39 @@ type Story = StoryObj<typeof meta>;
 export const Empty: Story = {
   args: {
     environmentVariables: [],
+  },
+};
+
+export const PasteMultipleNewVariables: Story = {
+  args: {
+    environmentVariables: [],
+    updateEnvironmentVariables: fn().mockResolvedValue(true),
+  },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByRole("button", { name: "Add" }));
+    await userEvent.click(canvas.getByRole("textbox", { name: "Name" }));
+    await userEvent.paste("API_URL=https://api.example.com");
+
+    await userEvent.click(canvas.getByRole("button", { name: "Add" }));
+    await userEvent.click(canvas.getAllByRole("textbox", { name: "Name" })[1]);
+    await userEvent.paste("LOG_LEVEL=info");
+
+    const names = canvas.getAllByRole("textbox", { name: "Name" });
+    await expect(names).toHaveLength(2);
+    await expect(names[0]).toHaveValue("API_URL");
+    await expect(names[1]).toHaveValue("LOG_LEVEL");
+
+    await userEvent.click(canvas.getByRole("button", { name: "Save All" }));
+    await waitFor(() =>
+      expect(args.updateEnvironmentVariables).toHaveBeenCalledWith(
+        [
+          { name: "API_URL", value: "https://api.example.com" },
+          { name: "LOG_LEVEL", value: "info" },
+        ],
+        [],
+        [],
+      ),
+    );
   },
 };
 
