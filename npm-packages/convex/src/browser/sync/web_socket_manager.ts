@@ -128,7 +128,7 @@ const serverDisconnectErrors = {
   TableSummariesUnavailable: { timeout: 1000 },
   // More ErrorMetadata::overloaded()
   VectorIndexTooLarge: { timeout: 3000 },
-  SearchIndexTooLarge: { timeout: 3000 },
+  TextIndexTooLarge: { timeout: 3000 },
   TooManyWritesInTimePeriod: { timeout: 3000 },
 } as const satisfies Record<string, { timeout: number }>;
 
