@@ -6,6 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use common::{
+    fastrace_helpers::get_sampled_span,
     knobs::{
         DATABASE_WORKERS_POLL_INTERVAL,
         INDEX_WORKERS_INITIAL_BACKOFF,
@@ -25,6 +26,10 @@ use database::{
     Database,
     SearchFlusherWakeSubscriber,
     Token,
+};
+use fastrace::{
+    future::FutureExt as _,
+    Span,
 };
 use futures::{
     future::BoxFuture,
@@ -285,7 +290,19 @@ impl<RT: Runtime> SearchIndexWorker<RT> {
     ) -> anyhow::Result<()> {
         let mut wake_subscriber = self.wake_subscriber();
         loop {
-            let (metrics, token, presence) = self.step().await?;
+            let root = get_sampled_span(
+                db.deployment_name(),
+                &format!("search_index_worker/{name}"),
+                &mut rt.rng(),
+            );
+            let (metrics, token, presence) = self
+                .step()
+                .in_span(Span::enter_with_parent("step", &root))
+                .await?;
+            if metrics.is_empty() {
+                root.cancel();
+            }
+            drop(root);
 
             if !metrics.is_empty() {
                 // We did some useful work this loop iteration that we expect is committed.

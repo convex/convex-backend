@@ -39,6 +39,10 @@ use database::{
     SystemMetadataModel,
     Transaction,
 };
+use fastrace::{
+    future::FutureExt as _,
+    Span,
+};
 use governor::Quota;
 use itertools::Itertools;
 use keybroker::Identity;
@@ -134,6 +138,7 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexMetadataWriter<RT, T> {
     /// in the index metadata when compaction started and the current snapshot
     /// timestamp. Each time we see a delete, we'll check to see if that
     /// document is in our new segment and if it is, we'll write the delete.
+    #[fastrace::trace]
     pub(crate) async fn commit_compaction(
         &self,
         index_id: ResolvedDocumentId,
@@ -172,6 +177,7 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexMetadataWriter<RT, T> {
     /// to the new snapshot time we're about to write. If we find any deletes in
     /// the document log, we'll try and write them to all current segments. Then
     /// we can append our new segment (if present) and write the updated result.
+    #[fastrace::trace]
     pub(crate) async fn commit_flush(
         &self,
         job: &IndexBuild<T>,
@@ -213,7 +219,11 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexMetadataWriter<RT, T> {
 
     async fn inner(&self, waiter: SearchWriterLockWaiter) -> MutexGuard<'_, Inner<RT, T>> {
         let lock_timer = search_writer_lock_wait_timer(waiter, T::search_type());
-        let inner = self.inner.lock().await;
+        let inner = self
+            .inner
+            .lock()
+            .in_span(Span::enter_with_local_parent("search_writer_lock_wait"))
+            .await;
         drop(lock_timer);
         inner
     }
@@ -605,6 +615,7 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
         Ok(())
     }
 
+    #[fastrace::trace]
     async fn merge_deletes(
         &self,
         segments_to_update: Vec<T::Segment>,
@@ -618,6 +629,7 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
         let runtime = self.runtime.clone();
         let database = self.database.clone();
         let build_index_args = self.build_index_args.clone();
+        let span = Span::enter_with_local_parent("merge_deletes_on_thread");
         self.thread_pool
             .execute_async(move || async move {
                 Self::merge_deletes_on_thread(
@@ -632,6 +644,7 @@ impl<RT: Runtime, T: SearchIndex> Inner<RT, T> {
                     build_index_args,
                     schema,
                 )
+                .in_span(span)
                 .await
             })
             .await?

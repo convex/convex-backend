@@ -185,6 +185,7 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
         Ok((to_build, tx.into_token()?, presence))
     }
 
+    #[fastrace::trace]
     async fn build_one(&self, job: CompactionJob<T>) -> anyhow::Result<u64> {
         let timer = compaction_build_one_timer(Self::search_type(), job.compaction_reason);
         match self.build_one_inner(job).await {
@@ -448,6 +449,7 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
         Ok(None)
     }
 
+    #[fastrace::trace]
     async fn compact(
         &self,
         spec: &T::Spec,

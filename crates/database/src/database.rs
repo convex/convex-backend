@@ -326,6 +326,7 @@ pub struct Database<RT: Runtime> {
     /// `None` until the worker has published for the first time.
     table_shapes: Arc<ArcSwapOption<TableShapes>>,
     pub(crate) runtime: RT,
+    deployment_name: String,
     reader: Arc<dyn PersistenceReader>,
     write_commits_since_load: Arc<AtomicUsize>,
     retention_manager: Arc<LeaderRetentionManager<RT>>,
@@ -1130,7 +1131,7 @@ impl<RT: Runtime> Database<RT> {
             shutdown,
             virtual_system_mapping.clone(),
             index_cache_handle.clone(),
-            deployment_name,
+            deployment_name.clone(),
         );
         let table_mapping_snapshot_cache =
             AsyncLru::new(runtime.clone(), 20, 2, 200, "table_mapping_snapshot");
@@ -1143,6 +1144,7 @@ impl<RT: Runtime> Database<RT> {
             committer,
             subscriptions,
             runtime,
+            deployment_name,
             log: log_reader,
             retention_manager,
             retention_workers,
@@ -2792,6 +2794,10 @@ impl<RT: Runtime> Database<RT> {
 
     pub fn runtime(&self) -> &RT {
         &self.runtime
+    }
+
+    pub fn deployment_name(&self) -> &str {
+        &self.deployment_name
     }
 
     /// Subscribe to be woken when an in-memory index of `search_type` grows

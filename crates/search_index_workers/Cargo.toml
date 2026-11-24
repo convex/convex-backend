@@ -32,6 +32,7 @@ common = { workspace = true }
 database = { workspace = true }
 errors = { workspace = true }
 events = { workspace = true }
+fastrace = { workspace = true }
 futures = { workspace = true }
 futures-async-stream = { workspace = true }
 governor = { workspace = true }

@@ -27,6 +27,7 @@ use common::{
         Timestamp,
     },
 };
+use fastrace::local::LocalSpan;
 use futures::TryStreamExt;
 use storage::Storage;
 use tantivy::{
@@ -423,7 +424,10 @@ pub async fn build_new_segment(
         return Ok(None);
     }
     // Finalize the segment and write to trackers
-    segment_writer.finalize()?;
+    {
+        let _span = LocalSpan::enter_with_local_parent("finalize_segment");
+        segment_writer.finalize()?;
+    }
     let new_deletion_tracker = MemoryDeletionTracker::new(new_id_tracker.num_ids() as u32);
     let alive_bit_set_path = dir.join(ALIVE_BITSET_PATH);
     let deleted_terms_path = dir.join(DELETED_TERMS_PATH);
@@ -466,6 +470,7 @@ async fn get_size(path: &PathBuf) -> anyhow::Result<u64> {
     Ok(total)
 }
 
+#[fastrace::trace]
 pub async fn fetch_term_ordinals_and_remap_deletes(
     storage: Arc<dyn Storage>,
     segment_term_metadata_fetcher: Arc<dyn SegmentTermMetadataFetcher>,

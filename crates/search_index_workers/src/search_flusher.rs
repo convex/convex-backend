@@ -60,6 +60,10 @@ use database::{
     Token,
 };
 use errors::ErrorMetadataAnyhowExt;
+use fastrace::{
+    future::FutureExt as _,
+    Span,
+};
 use futures::{
     StreamExt,
     TryStreamExt,
@@ -248,6 +252,7 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
         T::search_type()
     }
 
+    #[fastrace::trace]
     pub(crate) async fn build_one(
         &self,
         job: IndexBuild<T>,
@@ -605,6 +610,7 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
         let rate_limit_pages_per_second = job.build_reason.read_max_pages_per_second();
         let spec = job.index_config.spec.clone();
         let params = self.params.clone();
+        let span = Span::enter_with_local_parent("build_multipart_segment_on_thread");
         let handle = self
             .runtime
             .spawn_thread("build_multipart_segment", move || async move {
@@ -620,6 +626,7 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
                     previous_segments,
                     build_index_args,
                 )
+                .in_span(span)
                 .await;
                 let _ = tx.send(result);
             });
@@ -747,10 +754,13 @@ impl<RT: Runtime, T: SearchIndex + 'static> SearchFlusher<RT, T> {
         let (tx, rx) = oneshot::channel();
         let rt = self.runtime.clone();
         let storage = self.storage.clone();
+        let span = Span::enter_with_local_parent("upload_new_segment");
         let handle = self
             .runtime
             .spawn_thread("upload_new_segment", move || async move {
-                let result = T::upload_new_segment(&rt, storage, new_segment).await;
+                let result = T::upload_new_segment(&rt, storage, new_segment)
+                    .in_span(span)
+                    .await;
                 let _ = tx.send(result);
             });
         handle.join().await?;

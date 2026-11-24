@@ -189,6 +189,7 @@ impl SearchIndex for VectorSearchIndex {
         QdrantSchema::new(config)
     }
 
+    #[fastrace::trace]
     async fn download_previous_segments(
         storage: Arc<dyn Storage>,
         segments: Vec<Self::Segment>,
@@ -203,6 +204,7 @@ impl SearchIndex for VectorSearchIndex {
         Ok(PreviousVectorSegments(segments))
     }
 
+    #[fastrace::trace]
     async fn upload_previous_segments(
         storage: Arc<dyn Storage>,
         segments: Self::PreviousSegments,
@@ -264,6 +266,7 @@ impl SearchIndex for VectorSearchIndex {
         scan_doc_stream.chain(log_stream).boxed()
     }
 
+    #[fastrace::trace]
     async fn build_disk_index(
         schema: &Self::Schema,
         index_path: &PathBuf,
@@ -340,6 +343,7 @@ impl SearchIndex for VectorSearchIndex {
             .await
     }
 
+    #[fastrace::trace]
     async fn merge_deletes(
         previous_segments: &mut Self::PreviousSegments,
         mut documents: DocumentStream<'_>,

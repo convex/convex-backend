@@ -181,6 +181,7 @@ impl SearchIndex for TextSearchIndex {
         TantivySearchIndexSchema::new(config)
     }
 
+    #[fastrace::trace]
     async fn download_previous_segments(
         storage: Arc<dyn Storage>,
         segments: Vec<Self::Segment>,
@@ -199,6 +200,7 @@ impl SearchIndex for TextSearchIndex {
         Ok(PreviousTextSegments(segments))
     }
 
+    #[fastrace::trace]
     async fn upload_previous_segments(
         storage: Arc<dyn Storage>,
         segments: Self::PreviousSegments,
@@ -267,6 +269,7 @@ impl SearchIndex for TextSearchIndex {
         scan_doc_stream.chain(log_stream).boxed()
     }
 
+    #[fastrace::trace]
     async fn build_disk_index(
         schema: &Self::Schema,
         index_path: &PathBuf,
@@ -343,6 +346,7 @@ impl SearchIndex for TextSearchIndex {
             .await
     }
 
+    #[fastrace::trace]
     async fn merge_deletes(
         previous_segments: &mut Self::PreviousSegments,
         revision_stream: DocumentRevisionStream<'_>,

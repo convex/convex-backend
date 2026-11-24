@@ -10187,6 +10187,7 @@ dependencies = [
  "database",
  "errors",
  "events",
+ "fastrace",
  "futures",
  "futures-async-stream",
  "governor",
