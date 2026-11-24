@@ -708,7 +708,7 @@ const mockConnectedDeploymentWithComponents = {
 export const ComponentDropdown: Story = {
   parameters: {
     screenshotSelector:
-      '[data-testid="combobox-button-Select component"], [role="listbox"], [data-testid="home-link"]',
+      '[id^="headlessui-popover-button"], [id^="headlessui-popover-panel"], [data-testid="home-link"]',
   },
   render: () => (
     <ConnectedDeploymentContext.Provider
@@ -740,14 +740,12 @@ export const ComponentDropdown: Story = {
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await waitFor(async () => {
-      await expect(
-        canvas.queryByTestId("combobox-button-Select component"),
-      ).toBeTruthy();
-    });
     await userEvent.click(
-      canvas.getByTestId("combobox-button-Select component"),
+      await canvas.findByRole("button", { name: /^Component: / }),
     );
+    await expect(
+      await screen.findByRole("tree", { name: "Components" }),
+    ).toBeVisible();
   },
 };
 

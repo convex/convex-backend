@@ -118,7 +118,6 @@ export const mockDeploymentInfo: DeploymentInfo = {
   s3ExportIntegrationEnabled: false,
   connectionStateCheckIntervalMs: 2500,
   showFivetranSyncProgress: false,
-  componentSwitcherTreeEnabled: false,
   virtualizedFunctionsSidebarEnabled: false,
   estimateUsageLimitsCost: false,
   openFeedbackForm: () => {},

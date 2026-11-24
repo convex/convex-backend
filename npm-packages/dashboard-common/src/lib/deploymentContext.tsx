@@ -362,8 +362,6 @@ export type DeploymentInfo = (
   /** Whether the Fivetran integration card reports the progress of active
    *  data syncs. */
   showFivetranSyncProgress: boolean;
-  /** Shows the component switcher as a tree of nested components. */
-  componentSwitcherTreeEnabled: boolean;
   /** Renders the functions sidebar as a virtualized tree. */
   virtualizedFunctionsSidebarEnabled: boolean;
   /** Shows the approximate cost of each usage limit. */

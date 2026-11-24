@@ -14,7 +14,6 @@ export const flagDefaults: {
   showFivetranSyncProgress: boolean;
   supportTicketForAllPlans: boolean;
   healthDeployProgress: boolean;
-  componentSwitcherTreeEnabled: boolean;
   virtualizedFunctionsSidebar: boolean;
   preAuthorizeStarterPlan: boolean;
   preAuthorizePaymentMethodChange: boolean;
@@ -36,7 +35,6 @@ export const flagDefaults: {
   showFivetranSyncProgress: false,
   supportTicketForAllPlans: false,
   healthDeployProgress: false,
-  componentSwitcherTreeEnabled: false,
   virtualizedFunctionsSidebar: false,
   preAuthorizeStarterPlan: false,
   preAuthorizePaymentMethodChange: false,
