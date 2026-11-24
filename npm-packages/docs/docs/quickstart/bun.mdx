@@ -9,6 +9,7 @@ sidebar_position: 450
 import sampleData from "!!raw-loader!@site/../private-demos/quickstarts/bun/sampleData.jsonl";
 import tasks from "!!raw-loader!@site/../private-demos/quickstarts/bun/convex/tasks.ts";
 import script from "!!raw-loader!@site/../private-demos/quickstarts/bun/index.ts";
+import ConvexDevStep from "@site/docs/quickstart/_convex_dev_step.mdx";
 
 Learn how to query data from Convex in a Bun project.
 
@@ -35,15 +36,7 @@ For instructions for subscriptions instead of point-in-time queries see
 
   </Step>
   <Step title="Set up a Convex dev deployment">
-    Next, run `bunx convex dev`. This
-    will prompt you to log in with GitHub,
-    create a project, and save your production and deployment URLs.
-
-    It will also create a `convex/` folder for you
-    to write your backend API functions in. The `dev` command
-    will then continue running to sync your functions
-    with your dev deployment in the cloud.
-
+    <ConvexDevStep cli="bunx" />
 
     ```sh
     bunx convex dev

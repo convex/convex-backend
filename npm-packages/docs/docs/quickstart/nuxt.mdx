@@ -10,6 +10,7 @@ import sampleData from "!!raw-loader!@site/../private-demos/quickstarts/vue/samp
 import tasks from "!!raw-loader!@site/../private-demos/quickstarts/nuxt/convex/tasks.ts";
 import schema from "!!raw-loader!@site/../private-demos/quickstarts/nuxt/convex/schema.ts";
 import App from "!!raw-loader!@site/../private-demos/quickstarts/nuxt/app/app.vue";
+import ConvexDevStep from "@site/docs/quickstart/_convex_dev_step.mdx";
 
 Learn how to query data from Convex in a Nuxt app.
 
@@ -58,15 +59,7 @@ client for Convex.
   </Step>
 
   <Step title="Set up a Convex dev deployment">
-    Next, run `npx convex dev`. This
-    will prompt you to log in with GitHub,
-    create a project, and save your production and deployment URLs.
-
-    It will also create a `convex/` folder for you
-    to write your backend API functions in. The `dev` command
-    will then continue running to sync your functions
-    with your dev deployment in the cloud.
-
+    <ConvexDevStep />
 
     ```sh
     npx convex dev

@@ -10,6 +10,7 @@ import sampleData from "!!raw-loader!@site/../private-demos/quickstarts/svelteki
 import layout from "!!raw-loader!@site/../private-demos/quickstarts/sveltekit/src/routes/+layout.svelte";
 import tasks from "!!raw-loader!@site/../private-demos/quickstarts/sveltekit/src/convex/tasks.ts";
 import page from "!!raw-loader!@site/../private-demos/quickstarts/sveltekit/src/routes/+page.svelte";
+import ConvexDevStep from "@site/docs/quickstart/_convex_dev_step.mdx";
 
 Learn how to query data from Convex in a Svelte app.
 
@@ -53,15 +54,7 @@ Learn how to query data from Convex in a Svelte app.
   </Step>
 
   <Step title="Set up a Convex dev deployment">
-    Next, run `npx convex dev`. This
-    will prompt you to log in with GitHub,
-    create a project, and save your production and deployment URLs.
-
-    It will also create a `src/convex/` folder for you
-    to write your backend API functions in. The `dev` command
-    will then continue running to sync your functions
-    with your dev deployment in the cloud.
-
+    <ConvexDevStep functionsDir="src/convex/" />
 
     ```sh
     npx convex dev

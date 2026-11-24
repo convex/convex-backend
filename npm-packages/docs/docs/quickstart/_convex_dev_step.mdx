@@ -1,0 +1,14 @@
+{/* Shared by the "Set up a Convex dev deployment" step of every quickstart.
+Props: `cli` (default "npx") and `functionsDir` (default "convex/"). */}
+
+Next, run <code>{props.cli ?? "npx"} convex dev</code> and choose **Start
+without an account** to run Convex [locally](/cli/local-deployments), or log in
+to create a deployment in the cloud.
+
+Coding agents get a local deployment automatically
+([Agent Mode](/cli/agent-mode)). You can link it to an account later with{" "}
+<code>{props.cli ?? "npx"} convex login</code>.
+
+<code>{props.cli ?? "npx"} convex dev</code> creates a{" "}
+<code>{props.functionsDir ?? "convex/"}</code> folder for your backend functions
+and keeps running to sync them.

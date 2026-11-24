@@ -11,6 +11,7 @@ import appRoutesRoot from "!!raw-loader!@site/../private-demos/quickstarts/tanst
 import router from "!!raw-loader!@site/../private-demos/quickstarts/tanstack-start/src/router.tsx";
 import index from "!!raw-loader!@site/../private-demos/quickstarts/tanstack-start/src/routes/index.tsx";
 import tasks from "!!raw-loader!@site/../private-demos/quickstarts/tanstack-start/convex/tasks.ts";
+import ConvexDevStep from "@site/docs/quickstart/_convex_dev_step.mdx";
 
 To get setup quickly with Convex and TanStack Start run
 
@@ -73,15 +74,7 @@ Create a TanStack Start app using the `create-start-app` command:
   </Step>
 
   <Step title="Set up a Convex dev deployment">
-    Next, run `npx convex dev`. This
-    will prompt you to log in with GitHub,
-    create a project, and save your production and deployment URLs.
-
-    It will also create a `convex/` folder for you
-    to write your backend API functions in. The `dev` command
-    will then continue running to sync your functions
-    with your dev deployment in the cloud.
-
+    <ConvexDevStep />
 
     ```sh
     npx convex dev
