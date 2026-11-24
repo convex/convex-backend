@@ -4,6 +4,7 @@
 #![feature(try_blocks_heterogeneous)]
 mod chunks;
 mod connection;
+mod connection_rate_limiter;
 mod deployment_deletion;
 mod document_encoding;
 mod leases;
