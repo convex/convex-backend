@@ -268,7 +268,7 @@ export async function createLocalDeployment(
   select: boolean,
   baseDeployment: { teamSlug: string; projectSlug: string } | null,
 ): Promise<void> {
-  const existing = loadProjectLocalConfig(ctx);
+  const existing = await loadProjectLocalConfig(ctx);
   if (existing) {
     return await ctx.crash({
       exitCode: 1,

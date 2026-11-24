@@ -676,7 +676,7 @@ async function handleRefInProject(
     case "local": {
       // The mismatch check for `[team:project:]local` has already happened in
       // `_getDeploymentSelection`, so we only need to load credentials here.
-      const localConfig = loadProjectLocalConfig(ctx);
+      const localConfig = await loadProjectLocalConfig(ctx);
       if (localConfig === null) {
         return ctx.crash({
           exitCode: 1,

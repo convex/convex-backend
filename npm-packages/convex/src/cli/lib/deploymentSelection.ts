@@ -26,6 +26,7 @@ import {
   ParsedDeploymentSelector,
 } from "./deploymentSelector.js";
 import { loadProjectLocalConfig } from "./localDeployment/filePaths.js";
+import { assertValidLocalDeploymentName } from "./localDeployment/utils.js";
 import {
   checkLocalConfigMatchesProject,
   targetProjectForLocalSelector,
@@ -647,7 +648,7 @@ async function resolveLocalDeploymentSelection(
   selectionWithinProject: DeploymentSelectionWithinProject,
   currentSelection: DeploymentSelection | null,
 ): Promise<DeploymentSelection> {
-  const localConfig = loadProjectLocalConfig(ctx);
+  const localConfig = await loadProjectLocalConfig(ctx);
   if (localConfig === null) {
     return ctx.crash({
       exitCode: 1,
@@ -843,6 +844,9 @@ async function getDeploymentSelectionFromEnv(
     // Commands can select a deployment within the project that this deployment belongs to.
     const targetDeploymentName = stripDeploymentTypePrefix(convexDeployment);
     const isAnonymous = isAnonymousDeployment(targetDeploymentName);
+    if (isAnonymous || targetDeploymentType === "local") {
+      await assertValidLocalDeploymentName(ctx, targetDeploymentName);
+    }
     if (isAnonymous) {
       if (!shouldAllowAnonymousDevelopment()) {
         return {

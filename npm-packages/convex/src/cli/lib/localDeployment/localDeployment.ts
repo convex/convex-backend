@@ -29,6 +29,7 @@ import { handlePotentialUpgradeAndStart } from "./upgrade.js";
 import { LocalDeploymentError, printLocalDeploymentOnError } from "./errors.js";
 import {
   chooseLocalBackendPorts,
+  isValidLocalDeploymentName,
   printLocalDeploymentWelcomeMessage,
 } from "./utils.js";
 import { ensureBackendBinaryDownloaded } from "./download.js";
@@ -215,7 +216,7 @@ async function getExistingDeployment(
   const { projectSlug, teamSlug } = options;
 
   // Check project-local storage first - this is the new default location
-  const projectLocal = loadProjectLocalConfig(ctx);
+  const projectLocal = await loadProjectLocalConfig(ctx);
   if (projectLocal !== null) {
     // Verify this deployment is for the expected project (matches the naming pattern)
     const expectedPrefix = `local-${teamSlug.replace(/-/g, "_")}-${projectSlug.replace(/-/g, "_")}`;
@@ -259,7 +260,18 @@ async function getLegacyLocalDeployments(ctx: Context): Promise<
   const deploymentNames = ctx.fs
     .listDir(dir)
     .map((d) => d.name)
-    .filter((d) => d.startsWith("local-"));
+    .filter((d) => {
+      if (!d.startsWith("local-")) {
+        return false;
+      }
+      if (!isValidLocalDeploymentName(d)) {
+        logVerbose(
+          `Skipping local deployment directory with an invalid name: ${JSON.stringify(d)}`,
+        );
+        return false;
+      }
+      return true;
+    });
   return deploymentNames.flatMap((deploymentName) => {
     const legacyDir = legacyDeploymentStateDir("local", deploymentName);
     const config = loadDeploymentConfigFromDir(ctx, legacyDir);

@@ -2,6 +2,7 @@ import { Context } from "../../../bundler/context.js";
 import { logMessage } from "../../../bundler/log.js";
 import { detect } from "detect-port";
 import { chalkStderr } from "chalk";
+import { LocalDeploymentError } from "./errors.js";
 
 export async function choosePorts(
   ctx: Context,
@@ -101,4 +102,30 @@ export function releaseDate(version: string): string | null {
 
 export function isValidBackendVersion(version: string): boolean {
   return /^precompiled-\d{4}-\d{2}-\d{2}-[\w.-]+$/.test(version);
+}
+
+// Local deployment names are `local-{team}-{project}[-{n}]` (built by Big
+// Brain). Anonymous deployment names are `anonymous-` followed by the project
+// directory's basename (or, in older CLI versions, a name the user typed), so
+// they may contain any character that a single path segment can. The name is
+// joined onto a state directory in `~/.convex`, so it must never contain a path
+// separator.
+export function isValidLocalDeploymentName(deploymentName: string): boolean {
+  return /^(?:local|anonymous)-[^/\\\0]*$/.test(deploymentName);
+}
+
+export async function assertValidLocalDeploymentName(
+  ctx: Context,
+  deploymentName: string,
+) {
+  if (!isValidLocalDeploymentName(deploymentName)) {
+    return await ctx.crash({
+      exitCode: 1,
+      errorType: "fatal",
+      printedMessage: "Invalid local deployment name",
+      errForSentry: new LocalDeploymentError(
+        `Invalid local deployment name: ${JSON.stringify(deploymentName)}`,
+      ),
+    });
+  }
 }

@@ -115,7 +115,7 @@ async function handleLocalSelect(
   parsed: ParsedDeploymentSelector,
   currentSelection: DeploymentSelection,
 ): Promise<void> {
-  const existing = loadProjectLocalConfig(ctx);
+  const existing = await loadProjectLocalConfig(ctx);
 
   if (existing === null) {
     // No local deployment on disk. Offer to create one (interactive only).

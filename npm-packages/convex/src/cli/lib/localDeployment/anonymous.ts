@@ -26,7 +26,10 @@ import { rootDeploymentStateDir } from "./filePaths.js";
 import { LocalDeploymentConfig } from "./filePaths.js";
 import { ensureBackendStopped, localDeploymentUrl } from "./run.js";
 import { handlePotentialUpgradeAndStart } from "./upgrade.js";
-import { chooseLocalBackendPorts } from "./utils.js";
+import {
+  chooseLocalBackendPorts,
+  isValidLocalDeploymentName,
+} from "./utils.js";
 import { recursivelyDelete, recursivelyCopy } from "../fsUtils.js";
 import { ensureBackendBinaryDownloaded } from "./download.js";
 import { DeploymentDetails, isAnonymousDeployment } from "../deployment.js";
@@ -212,7 +215,18 @@ export function listLegacyAnonymousDeployments(ctx: Context): Array<{
     const deploymentNames = ctx.fs
       .listDir(dir)
       .map((d) => d.name)
-      .filter((d) => isAnonymousDeployment(d));
+      .filter((d) => {
+        if (!isAnonymousDeployment(d)) {
+          return false;
+        }
+        if (!isValidLocalDeploymentName(d)) {
+          logVerbose(
+            `Skipping anonymous deployment directory with an invalid name: ${JSON.stringify(d)}`,
+          );
+          return false;
+        }
+        return true;
+      });
     for (const deploymentName of deploymentNames) {
       const legacyDir = legacyDeploymentStateDir("anonymous", deploymentName);
       const config = loadDeploymentConfigFromDir(ctx, legacyDir);
@@ -237,7 +251,7 @@ export async function listExistingAnonymousDeployments(ctx: Context): Promise<
   }> = [];
 
   // Check project-local storage first
-  const projectLocal = loadProjectLocalConfig(ctx);
+  const projectLocal = await loadProjectLocalConfig(ctx);
   if (
     projectLocal !== null &&
     isAnonymousDeployment(projectLocal.deploymentName)
@@ -277,7 +291,7 @@ async function chooseDeployment(
     }
 > {
   // Check for existing project-local deployment first - use it if it exists
-  const projectLocal = loadProjectLocalConfig(ctx);
+  const projectLocal = await loadProjectLocalConfig(ctx);
   if (projectLocal !== null) {
     if (isAnonymousDeployment(projectLocal.deploymentName)) {
       // Already an anonymous deployment - use it as-is

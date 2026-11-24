@@ -53,6 +53,8 @@ import { Context } from "../../../bundler/context.js";
 import { logVerbose } from "../../../bundler/log.js";
 import { recursivelyDelete } from "../fsUtils.js";
 import crypto from "crypto";
+import { LocalDeploymentError } from "./errors.js";
+import { isValidLocalDeploymentName } from "./utils.js";
 
 /**
  * Ensure the `.convex/.gitignore` file exists with the right content.
@@ -103,6 +105,16 @@ export function legacyDeploymentStateDir(
   deploymentKind: LocalDeploymentKind,
   deploymentName: string,
 ): string {
+  if (!isValidLocalDeploymentName(deploymentName)) {
+    // Callers validate names from user input (`CONVEX_DEPLOYMENT` and the
+    // project-local `config.json`) with `ctx.crash` and skip directory entries
+    // with invalid names, so reaching this is a CLI bug. It keeps a name with a
+    // path separator from escaping `~/.convex`.
+    // eslint-disable-next-line no-restricted-syntax
+    throw new LocalDeploymentError(
+      `Invalid local deployment name: ${JSON.stringify(deploymentName)}`,
+    );
+  }
   return path.join(rootDeploymentStateDir(deploymentKind), deploymentName);
 }
 
@@ -206,13 +218,25 @@ export function loadDeploymentConfigFromDir(
  * This returns the config from `.convex/local/default/` if it exists.
  * Returns both the config and the deployment name stored in it.
  */
-export function loadProjectLocalConfig(
+export async function loadProjectLocalConfig(
   ctx: Context,
   projectDir?: string,
-): { deploymentName: string; config: LocalDeploymentConfig } | null {
+): Promise<{ deploymentName: string; config: LocalDeploymentConfig } | null> {
   const localDir = projectLocalStateDir(projectDir);
   const config = loadDeploymentConfigFromDir(ctx, localDir);
   if (config !== null && config.deploymentName) {
+    // This file lives in the project directory, which may come from an
+    // untrusted repository, and its name is later joined onto `~/.convex`.
+    if (!isValidLocalDeploymentName(config.deploymentName)) {
+      return await ctx.crash({
+        exitCode: 1,
+        errorType: "fatal",
+        printedMessage: `Invalid local deployment name in ${path.join(localDir, "config.json")}: ${JSON.stringify(config.deploymentName)}`,
+        errForSentry: new LocalDeploymentError(
+          "Invalid local deployment name in the project-local config",
+        ),
+      });
+    }
     logVerbose(
       `Found project-local deployment config for ${config.deploymentName}`,
     );

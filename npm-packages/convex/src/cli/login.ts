@@ -373,7 +373,7 @@ async function handleLinkingDeployments(
   }
 
   // Check for project-local anonymous deployment first - this takes priority
-  const projectLocal = loadProjectLocalConfig(ctx);
+  const projectLocal = await loadProjectLocalConfig(ctx);
   if (
     projectLocal !== null &&
     isAnonymousDeployment(projectLocal.deploymentName)
