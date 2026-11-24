@@ -15,6 +15,28 @@
       ],
       // Picks the convex commit the reference pages document.
       "env": ["CONVEX_DOCS_REFERENCE_SOURCE"]
+    },
+    // `build` with CONVEX_DOCS_REFERENCE_SOURCE=release, which Netlify's
+    // production deploys set in netlify.toml: the reference pages document the
+    // release of the `convex` version instead of the branch (see
+    // scripts/reference-source.js). It rewrites the outputs of `build`, which
+    // `test` reads, so it runs after both.
+    "build:release": {
+      "dependsOn": ["^build", "build", "test"],
+      "outputs": [
+        "build/**",
+        ".docusaurus/**",
+        "typedoc-sidebar.js",
+        "docs/api/**",
+        "docs/cli/reference/**",
+        "docs/management-api/**",
+        "docs/deployment-api/**",
+        "docs/public-deployment-api/**",
+        ".openapi-filtered/**"
+      ],
+      // The commit to document, resolved before the build (see
+      // scripts/reference-source.js).
+      "env": ["CONVEX_DOCS_REFERENCE_COMMIT"]
     }
   }
 }

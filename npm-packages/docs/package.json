@@ -6,6 +6,7 @@
     "dev": "npm run start",
     "start": "node scripts/start-dev.js",
     "build": "node scripts/build-docs.js",
+    "build:release": "CONVEX_DOCS_REFERENCE_SOURCE=release node scripts/build-docs.js",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",

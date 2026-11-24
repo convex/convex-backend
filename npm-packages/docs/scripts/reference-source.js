@@ -25,6 +25,9 @@ const REPO_ROOT = path.resolve(__dirname, "../../..");
 const CONVEX_PACKAGE_DIR = "npm-packages/convex";
 const PACKAGE_JSON = `${CONVEX_PACKAGE_DIR}/package.json`;
 const SOURCE_ENV_VAR = "CONVEX_DOCS_REFERENCE_SOURCE";
+// In release mode, the commit to document, as printed by running this script.
+// CI resolves it in a step that can read `origin` and builds without access.
+const COMMIT_ENV_VAR = "CONVEX_DOCS_REFERENCE_COMMIT";
 // Holds the checkout of the release and the generated tsconfig.
 const CACHE_DIR = path.resolve(__dirname, "../.reference-source");
 // A sparse, detached worktree at the release, so that paths relative to it are
@@ -319,6 +322,18 @@ function resolveRelease() {
   return { kind: "untagged", version, tag, commit };
 }
 
+// Describes `commit`, which an earlier resolveRelease() returned, without
+// reading from `origin`.
+function describeResolvedRelease(commit) {
+  const version = documentedVersion();
+  const tag = `npm/${version}`;
+  checkSetsVersion(commit, version);
+  const tagged =
+    git("tag", "--list", tag) === tag &&
+    git("rev-parse", `${tag}^{commit}`) === commit;
+  return { kind: tagged ? "release" : "untagged", version, tag, commit };
+}
+
 /**
  * Returns the `convex` package that the generated reference pages document.
  *
@@ -347,7 +362,10 @@ function prepareReferenceSource() {
     );
   }
 
-  const resolved = resolveRelease();
+  const resolvedCommit = process.env[COMMIT_ENV_VAR];
+  const resolved = resolvedCommit
+    ? describeResolvedRelease(resolvedCommit)
+    : resolveRelease();
   const release = { ...resolved, ...releaseSourceLinks(resolved.commit) };
   checkOut(release.commit);
   printBanner(release);
