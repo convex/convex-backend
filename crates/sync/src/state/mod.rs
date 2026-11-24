@@ -48,7 +48,10 @@ use sync_types::{
     StateVersion,
 };
 
-use self::queries::SyncedQueries;
+use self::queries::{
+    SubscriptionsForIdentity,
+    SyncedQueries,
+};
 use crate::metrics;
 
 mod queries;
@@ -334,11 +337,11 @@ impl SyncState {
         Ok(())
     }
 
-    pub fn take_subscriptions(&mut self) -> BTreeMap<QueryId, Arc<dyn SubscriptionTrait>> {
+    pub fn take_subscriptions(&mut self, identity: &Identity) -> SubscriptionsForIdentity {
         if !self.queries.is_empty() {
             self.refill_needed = true;
         }
-        self.queries.take_subscriptions()
+        self.queries.take_subscriptions(identity)
     }
 
     /// Which queries do not have a token?

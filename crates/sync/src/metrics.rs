@@ -6,6 +6,7 @@ use metrics::{
     log_distribution_with_labels,
     register_convex_counter,
     register_convex_histogram,
+    IntoLabel,
     StaticMetricLabel,
     StatusTimer,
     STATUS_LABEL,
@@ -176,6 +177,25 @@ pub fn log_query_result_dedup(partition_id: u64, same_value: bool) {
         vec![StaticMetricLabel::new(
             "partition_id",
             partition_id.to_string(),
+        )],
+    );
+}
+
+register_convex_counter!(
+    SYNC_IDENTITY_CHANGE_QUERY_RERUNS_TOTAL,
+    "Number of queries the sync worker reran because the sync session reauthenticated. \
+     `equivalent_identity=true` counts reruns under an identity with the same variant and cache \
+     key as the one the queries' previous results came from (e.g. a token refresh), which can't \
+     change their results",
+    &["equivalent_identity"]
+);
+pub fn log_identity_change_query_reruns(equivalent_identity: bool, count: usize) {
+    log_counter_with_labels(
+        &SYNC_IDENTITY_CHANGE_QUERY_RERUNS_TOTAL,
+        count as u64,
+        vec![StaticMetricLabel::new(
+            "equivalent_identity",
+            equivalent_identity.as_label(),
         )],
     );
 }

@@ -1,10 +1,12 @@
 use std::{
     collections::BTreeMap,
+    mem,
     sync::Arc,
 };
 
 use application::api::SubscriptionTrait;
 use futures::future::AbortHandle;
+use keybroker::Identity;
 use sync_types::{
     Query,
     QueryId,
@@ -55,6 +57,16 @@ impl SyncedQuery {
 #[derive(Default)]
 pub struct SyncedQueries {
     by_id: BTreeMap<QueryId, SyncedQuery>,
+    /// The identity passed to the latest `take_subscriptions`. Every
+    /// subscription came from the transition that took them under it.
+    identity: Option<Identity>,
+}
+
+pub struct SubscriptionsForIdentity {
+    pub subscriptions: BTreeMap<QueryId, Arc<dyn SubscriptionTrait>>,
+    /// Whether the subscriptions' results came from an identity that is
+    /// `equivalent_identities` to the one they were taken under.
+    pub equivalent_identity: bool,
 }
 
 impl SyncedQueries {
@@ -98,7 +110,10 @@ impl SyncedQueries {
         self.by_id.is_empty()
     }
 
-    pub fn take_subscriptions(&mut self) -> BTreeMap<QueryId, Arc<dyn SubscriptionTrait>> {
+    pub fn take_subscriptions(&mut self, identity: &Identity) -> SubscriptionsForIdentity {
+        let previous = self.identity.replace(identity.clone());
+        let equivalent_identity =
+            previous.is_some_and(|previous| equivalent_identities(&previous, identity));
         let mut subscriptions = BTreeMap::new();
         for (query_id, query) in self.by_id.iter_mut() {
             if let Some(subscription) = query.subscription.take() {
@@ -108,6 +123,20 @@ impl SyncedQueries {
                 handle.abort();
             }
         }
-        subscriptions
+        SubscriptionsForIdentity {
+            subscriptions,
+            equivalent_identity,
+        }
     }
+}
+
+/// Whether identity `a` is equivalent to identity `b` for the purpose of
+/// running a query.
+///
+/// It judges that by the cache_key (which captures everything identity related
+/// that's important for queries) and compares the `Identity` discriminant since
+/// the cache_key for a user and an admin acting as a user are equivalent but
+/// the identities are truly different.
+fn equivalent_identities(a: &Identity, b: &Identity) -> bool {
+    mem::discriminant(a) == mem::discriminant(b) && a.cache_key() == b.cache_key()
 }

@@ -948,21 +948,6 @@ impl<RT: Runtime> SyncWorker<RT> {
         let (modifications, new_query_version, new_identity_version) =
             self.state.take_modifications();
 
-        let mut identity_version = current_version.identity;
-        let identity_changed = new_identity_version > identity_version;
-        if identity_changed {
-            // If the identity version has changed, invalidate all existing tokens.
-            // TODO(CX-737): Don't invalidate queries that don't examine auth state.
-            // TODO(CX-737): Don't invalidate the queries if the User the is the same
-            // only with refreshed token. This is a bit tricky because:
-            // - We need to prove that query does not depend on token issue/expiration time.
-            // - We need to make rpc to backend to compare the properties since Usher can't
-            // validate auth tokens. Alternatively, we make Usher be able to validate tokens
-            // long term.
-            self.state.take_subscriptions();
-            identity_version = new_identity_version;
-        }
-
         // Step 1: Add or remove queries from our query set.
         let mut state_modifications = BTreeMap::new();
         for modification in modifications {
@@ -979,13 +964,40 @@ impl<RT: Runtime> SyncWorker<RT> {
         }
 
         // Step 2: Take all remaining subscriptions.
-        let remaining_subscriptions = self.state.take_subscriptions();
+        let taken = self.state.take_subscriptions(&identity);
+        let mut identity_version = current_version.identity;
+        let identity_changed = new_identity_version > identity_version;
+        if identity_changed {
+            // If the identity version has changed, invalidate all existing tokens.
+            // TODO(CX-737): Don't invalidate queries that don't examine auth state.
+            // TODO(CX-737): Don't invalidate the queries if the User the is the same
+            // only with refreshed token. This is a bit tricky because:
+            // - We need to prove that query does not depend on token issue/expiration time.
+            // - We need to make rpc to backend to compare the properties since Usher can't
+            // validate auth tokens. Alternatively, we make Usher be able to validate tokens
+            // long term.
+            identity_version = new_identity_version;
+        }
+        let remaining_subscriptions = if identity_changed {
+            BTreeMap::new()
+        } else {
+            taken.subscriptions
+        };
 
         // Step 3: Refresh subscriptions up to new_ts and run queries which
         // subscriptions are no longer current.
         let api = self.api.clone();
         let rt = self.rt.clone();
         let need_fetch: Vec<_> = self.state.need_fetch().collect();
+        if identity_changed {
+            metrics::log_identity_change_query_reruns(
+                taken.equivalent_identity,
+                need_fetch
+                    .iter()
+                    .filter(|query| query.has_run_before)
+                    .count(),
+            );
+        }
         let host = self.host.clone();
         let client_version = self.config.client_version.clone();
         let partition_id = self.partition_id;
