@@ -108,9 +108,7 @@ function indexFieldsAndState(config: IndexConfig): {
             ? ("backfilled" as const)
             : ("done" as const);
       const staged =
-        stateType === "backfilling" ||
-        stateType === "backfilled" ||
-        stateType === "backfilled2"
+        stateType === "backfilling" || stateType === "backfilled2"
           ? (config.onDiskState.staged ?? false)
           : false;
       return {

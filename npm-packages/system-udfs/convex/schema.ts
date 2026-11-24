@@ -400,11 +400,18 @@ const textIndexSegment = v.object({
   id: v.string(),
 });
 
+// Rust keeps snapshot data in a format it doesn't recognize (for example, one
+// written by a newer backend) as an opaque object and writes it back unchanged.
+const unknownIndexSnapshotData = v.record(v.string(), v.any());
+
 const textIndexSnapshot = {
-  data: v.object({
-    data_type: v.literal("MultiSegment"),
-    segments: v.array(textIndexSegment),
-  }),
+  data: v.union(
+    v.object({
+      data_type: v.literal("MultiSegment"),
+      segments: v.array(textIndexSegment),
+    }),
+    unknownIndexSnapshotData,
+  ),
   ts: v.int64(),
   version: v.int64(),
 };
@@ -439,6 +446,57 @@ const textIndexOnDiskState = v.union(
     // "backfilled" is the legacy name of "snapshotted".
     state: v.union(v.literal("backfilled"), v.literal("snapshotted")),
     ...textIndexSnapshot,
+  }),
+);
+
+const vectorIndexSegment = v.object({
+  segment_key: v.string(),
+  id_tracker_key: v.string(),
+  deleted_bitset_key: v.string(),
+  num_vectors: v.int64(),
+  num_deleted: v.int64(),
+  id: v.string(),
+});
+
+const vectorIndexSnapshot = {
+  data: v.union(
+    v.object({
+      data_type: v.literal("MultiSegment"),
+      segments: v.array(vectorIndexSegment),
+    }),
+    unknownIndexSnapshotData,
+  ),
+  ts: v.int64(),
+};
+
+const vectorIndexBackfilling = {
+  state: v.literal("backfilling"),
+  segments: v.optional(v.union(v.array(vectorIndexSegment), v.null())),
+  staged: v.optional(v.union(v.boolean(), v.null())),
+};
+
+const vectorIndexOnDiskState = v.union(
+  // Rust sets both cursor fields or neither, and fails to read anything else.
+  v.object({
+    ...vectorIndexBackfilling,
+    table_scan_cursor: tableScanCursor,
+    last_segment_ts: v.int64(),
+  }),
+  v.object({
+    ...vectorIndexBackfilling,
+    table_scan_cursor: v.optional(v.null()),
+    last_segment_ts: v.optional(v.null()),
+  }),
+
+  v.object({
+    state: v.literal("backfilled2"),
+    snapshot: v.object(vectorIndexSnapshot),
+    staged: v.boolean(),
+  }),
+  v.object({
+    // "backfilled" is the legacy name of "snapshotted".
+    state: v.union(v.literal("backfilled"), v.literal("snapshotted")),
+    ...vectorIndexSnapshot,
   }),
 );
 
@@ -499,17 +557,7 @@ export default defineSchema({
         vectorField: v.string(),
         dimensions: v.int64(),
         filterFields: v.array(v.string()),
-        onDiskState: v.union(
-          v.object({
-            state: v.union(
-              v.literal("backfilling"),
-              v.literal("backfilled"),
-              v.literal("backfilled2"),
-            ),
-            staged: v.optional(v.boolean()),
-          }),
-          v.object({ state: v.literal("snapshotted") }),
-        ),
+        onDiskState: vectorIndexOnDiskState,
       }),
     ),
   }),
