@@ -205,6 +205,13 @@ impl IdTracker for VectorMemoryIdTracker {
 }
 
 impl VectorMemoryIdTracker {
+    /// Makes a dropped point live again at its offset. A dropped point keeps
+    /// its offset, so qdrant's `upsert_point` overwrites it in place and
+    /// leaves it deleted unless it is restored first.
+    pub fn restore(&mut self, internal_id: PointOffsetType) -> anyhow::Result<()> {
+        self.deleted.undelete(internal_id)
+    }
+
     pub fn write_uuids(&mut self, out: impl Write) -> anyhow::Result<()> {
         self.memory_id_tracker.write_id_tracker(out)
     }

@@ -49,6 +49,7 @@ use qdrant_segment::{
         },
     },
     entry::entry_point::SegmentEntry,
+    id_tracker::IdTracker,
     json_path::JsonPath,
     segment::Segment,
     spaces::{
@@ -373,11 +374,23 @@ impl QdrantSchema {
                 .value
                 .as_ref()
                 .and_then(|document| self.index(document));
+            // The stream can hold several revisions of one document, so an
+            // earlier revision may already have dropped this point from the
+            // segment.
+            let dropped_offset = {
+                let id_tracker = id_tracker.borrow();
+                id_tracker
+                    .internal_id(*point_id)
+                    .filter(|offset| id_tracker.is_deleted_point(*offset))
+            };
             if let Some(qdrant_doc) = qdrant_doc {
+                if let Some(offset) = dropped_offset {
+                    id_tracker.borrow_mut().restore(offset)?;
+                }
                 memory_segment.upsert_point(op_num, *point_id, qdrant_doc.qdrant_vector())?;
                 let payload = qdrant_doc.encode_payload(entry.ts)?;
                 memory_segment.set_payload(op_num, *point_id, &payload.into(), &None)?;
-            } else {
+            } else if dropped_offset.is_none() {
                 // The document was deleted or its vector field became invalid.
                 // If it was inserted earlier in this batch, then we might need
                 // to remove a vector we just added to this segment.

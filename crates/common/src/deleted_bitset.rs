@@ -93,6 +93,16 @@ impl DeletedBitset {
         Ok(())
     }
 
+    pub fn undelete(&mut self, internal_id: u32) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (internal_id as usize) < self.deleted.len() && self.deleted[internal_id as usize],
+            "Trying to undelete {internal_id:?}, which is not deleted"
+        );
+        self.deleted.set(internal_id as usize, false);
+        self.num_deleted -= 1;
+        Ok(())
+    }
+
     pub fn write_to_path(&mut self, path: PathBuf) -> anyhow::Result<()> {
         let mut out = BufWriter::new(File::create(path)?);
         self.write(&mut out)?;
