@@ -369,18 +369,18 @@ impl QdrantSchema {
         futures::pin_mut!(revision_stream);
         while let Some(entry) = revision_stream.try_next().await? {
             let point_id = QdrantExternalId::try_from(&entry.id)?;
-            if let Some(document) = entry.value {
-                let Some(qdrant_doc) = self.index(&document) else {
-                    tracing::trace!("Skipping an invalid doc: {:?}", document);
-                    continue;
-                };
+            let qdrant_doc = entry
+                .value
+                .as_ref()
+                .and_then(|document| self.index(document));
+            if let Some(qdrant_doc) = qdrant_doc {
                 memory_segment.upsert_point(op_num, *point_id, qdrant_doc.qdrant_vector())?;
                 let payload = qdrant_doc.encode_payload(entry.ts)?;
                 memory_segment.set_payload(op_num, *point_id, &payload.into(), &None)?;
             } else {
-                // If the document was inserted and then deleted in this batch,
-                // then we might need to remove a vector we just
-                // added to this segment.
+                // The document was deleted or its vector field became invalid.
+                // If it was inserted earlier in this batch, then we might need
+                // to remove a vector we just added to this segment.
                 if memory_segment.delete_point(op_num, *point_id)? {
                     tracing::trace!("Delete a point");
                 } else {

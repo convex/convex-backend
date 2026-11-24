@@ -109,9 +109,6 @@ export function Snippet({
     if (invalidSnippet !== undefined) {
       throw new Error(`Invalid snippet="${invalidSnippet}"`);
     }
-    console.log(
-      ...spans.map(([_, span]) => nonSnippetLines.slice(span.start, span.end)),
-    );
     finalSource = trimLeftWhitespace(
       (prefix?.split("\n") ?? []).concat(
         ...spans.map(([_, span]) =>

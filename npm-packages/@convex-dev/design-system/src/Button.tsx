@@ -76,6 +76,19 @@ export const Button = forwardRef<HTMLElement, ButtonProps>(function Button(
     "href" in props
       ? { ...props, type: undefined }
       : { ...props, href: undefined, target: undefined };
+  // A tooltip only describes its trigger (and only while open), so it doesn't
+  // give an icon-only button an accessible name. Use a string `tip` as the
+  // default name. Buttons with a non-string `tip` need an explicit
+  // `aria-label`. The `button-tip-needs-aria-label` lint rule catches the
+  // common case of a JSX `tip` written inline.
+  const isIconOnly =
+    children === undefined ||
+    children === null ||
+    children === false ||
+    children === "";
+  const ariaLabel =
+    htmlProps["aria-label"] ??
+    (isIconOnly && typeof tip === "string" ? tip : undefined);
   const buttonClassName =
     variant === "unstyled"
       ? className
@@ -109,6 +122,7 @@ export const Button = forwardRef<HTMLElement, ButtonProps>(function Button(
           target={target}
           onClick={onClickOfAnchorLink}
           {...htmlProps}
+          aria-label={ariaLabel}
         >
           {icon && <div>{icon}</div>}
           {children}
@@ -136,6 +150,7 @@ export const Button = forwardRef<HTMLElement, ButtonProps>(function Button(
         // There is something weird here with `forwardRef`, I’d expect this to work without `any`
         ref={ref as any}
         {...htmlProps}
+        aria-label={ariaLabel}
       >
         {/* This needs to be wrapped in a dom element to
           fix an issue with the google translate extension

@@ -7,7 +7,7 @@ import {
   isTerminalQueryCall,
   unwrapExpression,
 } from "./query-ast.js";
-import { findOrderedQuerySymbol, isOrderedQuery } from "./query-types.js";
+import { findOrderedQuerySymbols, isOrderedQuery } from "./query-types.js";
 
 type MessageIds = "no-filter-in-query";
 
@@ -37,9 +37,9 @@ export const noFilterInQuery = createRule<[], MessageIds>({
     const tsNodeMap = services?.esTreeNodeToTSNodeMap;
     const hasTypeInfo = !!(checker && tsNodeMap);
 
-    const orderedQuerySymbol =
+    const orderedQuerySymbols =
       hasTypeInfo && services?.program
-        ? findOrderedQuerySymbol(services.program, checker)
+        ? findOrderedQuerySymbols(services.program, checker)
         : null;
 
     // Variables initialized from a `db.query(...)` chain, so `q.filter(...)`
@@ -118,8 +118,8 @@ export const noFilterInQuery = createRule<[], MessageIds>({
               // The receiver's type gives a concrete verdict; don't let the
               // AST heuristic override it.
               isConvexQuery =
-                !!orderedQuerySymbol &&
-                isOrderedQuery(receiverType, orderedQuerySymbol, checker);
+                !!orderedQuerySymbols &&
+                isOrderedQuery(receiverType, orderedQuerySymbols, checker);
             }
           } catch {
             // Fall back below.

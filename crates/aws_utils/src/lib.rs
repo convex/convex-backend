@@ -75,6 +75,7 @@ pub async fn must_config_from_env() -> anyhow::Result<ConfigLoader> {
 }
 
 fn config_with_credentials(region: Region, credentials: SharedCredentialsProvider) -> ConfigLoader {
+    #[expect(deprecated)]
     aws_config::defaults(BehaviorVersion::v2026_01_12())
         .region(region)
         .credentials_provider(credentials)

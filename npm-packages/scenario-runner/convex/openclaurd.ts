@@ -72,6 +72,7 @@ export const findRandomOpenclaurd = query({
       return null;
     }
 
+    // eslint-disable-next-line @convex-dev/no-time-or-random-in-queries -- This benchmark deliberately selects a random result.
     const percentage = rand() / RAND_MAX;
     const range = highestDoc.rand - lowestDoc.rand;
     const targetItemRand = percentage * range + lowestDoc.rand;

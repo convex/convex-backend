@@ -10,7 +10,7 @@ import type {
 } from "convex/server";
 import * as IdEncoding from "id-encoding";
 
-import { ZodLiteral, z } from "zod";
+import { z } from "zod";
 import { UNDEFINED_PLACEHOLDER } from "./values";
 
 export interface FilterExpression {
@@ -124,10 +124,6 @@ export const isTypeFilterOp = (op: Filter["op"]): op is TypeFilterOp => {
 export type Filter = FilterCommon &
   (FilterByBuiltin | FilterByOr | FilterByType);
 
-const TypeFilterSchema = TypeFilterValueKeys.map<ZodLiteral<string>>((k) =>
-  z.literal(k),
-);
-
 const FilterSchema = z.array(
   z.union([
     z.object({
@@ -147,9 +143,7 @@ const FilterSchema = z.array(
     z.object({
       op: z.union([z.literal("type"), z.literal("notype")]),
       field: z.string().optional(),
-      // @ts-expect-error I don't know how to fix this type error,
-      // but i'll test to make sure this works.
-      value: z.union(TypeFilterSchema).optional(),
+      value: z.enum(TypeFilterValueKeys).optional(),
       id: z.string().optional(),
       enabled: z.boolean().optional(),
     }),

@@ -10,7 +10,7 @@ use common::{
     document::ParsedDocument,
     errors::report_error,
     execution_context::ExecutionId,
-    fastrace_helpers::get_sampled_span,
+    fastrace_helpers::get_sampled_span_at_least,
     knobs::DISABLE_S3_EXPORT,
     log_streaming::{
         LogEvent,
@@ -78,6 +78,11 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const CONTINUOUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// About five minutes of retries, with the backoff capped at a minute.
 const MAX_CONSECUTIVE_FAILED_SYNCS: u32 = 10;
+/// Share of an initial sync's pages that are traced whatever
+/// `REQUEST_TRACE_SAMPLE_CONFIG` says, so each one shows where its pages
+/// spend their time.
+const SNAPSHOT_PAGE_TRACE_RATIO: f64 = 0.05;
+
 /// A caught-up export syncs every few seconds, and customers pay log stream
 /// egress per event.
 const STATS_INTERVAL: Duration = Duration::from_secs(60);
@@ -172,10 +177,18 @@ impl<RT: Runtime> S3ExportWorker<RT> {
         let page = {
             let database_snapshot = self.database.latest_database_snapshot()?;
             let timer = s3_export_sync_timer();
-            let span = get_sampled_span(
+            let snapshotting = previous_checkpoint.as_ref().is_none_or(|checkpoint| {
+                matches!(checkpoint.progress, S3ExportProgress::Snapshotting { .. })
+            });
+            let span = get_sampled_span_at_least(
                 &self.instance_name,
                 "s3_export_worker/sync",
                 &mut self.runtime.rng(),
+                if snapshotting {
+                    SNAPSHOT_PAGE_TRACE_RATIO
+                } else {
+                    0.0
+                },
             );
             let page = self
                 .export_provider

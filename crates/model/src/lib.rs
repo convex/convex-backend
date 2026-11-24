@@ -52,6 +52,10 @@ use backend_state::{
     BackendStateTable,
     BACKEND_STATE_TABLE,
 };
+use backup_schedule::{
+    BackupScheduleTable,
+    BACKUP_SCHEDULE_TABLE,
+};
 use canonical_urls::CANONICAL_URLS_TABLE;
 use common::{
     bootstrap_model::{
@@ -238,6 +242,7 @@ pub mod auth;
 pub mod aws_lambda_versions;
 pub mod backend_info;
 pub mod backend_state;
+pub mod backup_schedule;
 pub mod canonical_urls;
 pub mod components;
 pub mod config;
@@ -305,9 +310,10 @@ enum DefaultTableNumber {
     NextPersistenceIndexId = 42,
     SchemaValidations = 43,
     S3ExportState = 44,
+    BackupSchedule = 45,
     // Keep this number and your user name up to date. The number makes it easy to know
     // what to use next. The username on the same line detects merge conflicts
-    // Next Number - 45 - nipunn
+    // Next Number - 46 - nipunn
 }
 
 impl From<DefaultTableNumber> for TableNumber {
@@ -339,6 +345,7 @@ impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
             DefaultTableNumber::CronJobLogs => &CronJobLogsTable,
             DefaultTableNumber::Integrations => &IntegrationsTable,
             DefaultTableNumber::S3ExportState => &S3ExportStateTable,
+            DefaultTableNumber::BackupSchedule => &BackupScheduleTable,
             DefaultTableNumber::BackendState => &BackendStateTable,
             DefaultTableNumber::ExternalPackages => &ExternalPackagesTable,
             DefaultTableNumber::ScheduledJobs => &ScheduledJobsTable,
@@ -600,6 +607,7 @@ pub fn app_system_tables() -> Vec<&'static dyn ErasedSystemTable> {
         &SessionRequestsTable,
         &BackendStateTable,
         &ExportsTable,
+        &BackupScheduleTable,
         &SnapshotImportsTable,
         &FunctionHandlesTable,
         &CanonicalUrlsTable,
@@ -683,6 +691,7 @@ pub static FIRST_SEEN_TABLE: LazyLock<BTreeMap<TableName, DatabaseVersion>> = La
         AWS_LAMBDA_VERSIONS_TABLE.clone() => 44,
         BACKEND_INFO_TABLE.clone() => 44,
         EXPORTS_TABLE.clone() => 44,
+        BACKUP_SCHEDULE_TABLE.clone() => 135,
         INTEGRATIONS_TABLE.clone() => 68,
         S3_EXPORT_STATE_TABLE.clone() => 134,
         TABLES_TABLE.clone() => 44,

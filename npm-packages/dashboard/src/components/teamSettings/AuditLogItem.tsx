@@ -118,6 +118,7 @@ function EntryAction({
     case "project:create":
     case "project:update":
     case "project:delete":
+    case "project:undelete":
       return (
         <ProjectEntryAction team={team} action={action} metadata={metadata} />
       );
@@ -841,11 +842,13 @@ function ProjectEntryAction({
   }
 
   const verb =
-    metadata.previous && metadata.current
-      ? "updated"
-      : metadata.previous
-        ? "deleted"
-        : "created";
+    action === "project:undelete"
+      ? "restored"
+      : metadata.previous && metadata.current
+        ? "updated"
+        : metadata.previous
+          ? "deleted"
+          : "created";
 
   return (
     <span>

@@ -27,6 +27,7 @@
     "@headlessui/react": "^2.2.9",
     "@heroicons/react": "2.2.0",
     "@monaco-editor/react": "4.7.0",
+    "@pierre/trees": "1.0.0",
     "@radix-ui/react-switch": "~1.2.6",
     "@radix-ui/react-tooltip": "~1.2.0",
     "@tanstack/react-table": "~8.21.3",
@@ -64,7 +65,7 @@
     "tailwind-merge": "^3.3.1",
     "tailwind-variants": "^3.0.0",
     "yup": "~0.32.11",
-    "zod": "^3.24.0",
+    "zod": "^4.6.6",
     "zod-error": "2.0.0",
     "@convex-dev/platform": "workspace:*"
   },

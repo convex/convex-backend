@@ -226,6 +226,8 @@ pub enum FunctionCaller {
         parent_scheduled_job: Option<(ComponentId, DeveloperDocumentId)>,
         parent_execution_id: Option<ExecutionId>,
     },
+    /// A component's init, run by a push.
+    Push,
 }
 
 impl FunctionCaller {
@@ -237,7 +239,8 @@ impl FunctionCaller {
             FunctionCaller::HttpEndpoint
             | FunctionCaller::Cron
             | FunctionCaller::Scheduler { .. }
-            | FunctionCaller::Action { .. } => None,
+            | FunctionCaller::Action { .. }
+            | FunctionCaller::Push => None,
         }
         .cloned()
     }
@@ -248,7 +251,8 @@ impl FunctionCaller {
             | FunctionCaller::HttpApi(_)
             | FunctionCaller::Tester(_)
             | FunctionCaller::HttpEndpoint
-            | FunctionCaller::Cron => None,
+            | FunctionCaller::Cron
+            | FunctionCaller::Push => None,
             FunctionCaller::Scheduler {
                 job_id,
                 component_id,
@@ -267,7 +271,8 @@ impl FunctionCaller {
             | FunctionCaller::Tester(_)
             | FunctionCaller::HttpEndpoint
             | FunctionCaller::Cron
-            | FunctionCaller::Scheduler { .. } => None,
+            | FunctionCaller::Scheduler { .. }
+            | FunctionCaller::Push => None,
             FunctionCaller::Action {
                 parent_execution_id,
                 ..
@@ -282,7 +287,8 @@ impl FunctionCaller {
             | FunctionCaller::Tester(_)
             | FunctionCaller::HttpEndpoint
             | FunctionCaller::Cron
-            | FunctionCaller::Scheduler { .. } => true,
+            | FunctionCaller::Scheduler { .. }
+            | FunctionCaller::Push => true,
             FunctionCaller::Action { .. } => false,
         }
     }
@@ -298,7 +304,8 @@ impl FunctionCaller {
             | FunctionCaller::Tester(_) => true,
             FunctionCaller::Cron
             | FunctionCaller::Scheduler { .. }
-            | FunctionCaller::Action { .. } => false,
+            | FunctionCaller::Action { .. }
+            | FunctionCaller::Push => false,
         }
     }
 
@@ -314,7 +321,8 @@ impl FunctionCaller {
             FunctionCaller::Tester(_)
             | FunctionCaller::Cron
             | FunctionCaller::Scheduler { .. }
-            | FunctionCaller::Action { .. } => AllowedVisibility::All,
+            | FunctionCaller::Action { .. }
+            | FunctionCaller::Push => AllowedVisibility::All,
         }
     }
 }
@@ -329,6 +337,7 @@ impl fmt::Display for FunctionCaller {
             FunctionCaller::Cron => "Cron",
             FunctionCaller::Scheduler { .. } => "Scheduler",
             FunctionCaller::Action { .. } => "Action",
+            FunctionCaller::Push => "Push",
         };
         write!(f, "{s}")
     }
@@ -373,6 +382,7 @@ impl From<FunctionCaller> for pb::common::FunctionCaller {
                 };
                 pb::common::function_caller::Caller::Action(caller)
             },
+            FunctionCaller::Push => pb::common::function_caller::Caller::Push(()),
         };
         Self {
             caller: Some(caller),
@@ -398,6 +408,7 @@ impl TryFrom<pb::common::FunctionCaller> for FunctionCaller {
                 FunctionCaller::HttpEndpoint
             },
             Some(pb::common::function_caller::Caller::Cron(())) => FunctionCaller::Cron,
+            Some(pb::common::function_caller::Caller::Push(())) => FunctionCaller::Push,
             Some(pb::common::function_caller::Caller::Scheduler(caller)) => {
                 let pb::common::SchedulerFunctionCaller {
                     job_id,

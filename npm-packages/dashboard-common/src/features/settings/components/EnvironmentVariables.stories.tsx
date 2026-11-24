@@ -95,6 +95,16 @@ export const WithCopyFormattingWarnings: Story = {
   },
 };
 
+export const WithSecrets: Story = {
+  args: {
+    environmentVariables: [
+      { name: "CLIENT_ORIGIN", value: "https://app.example.com" },
+      { name: "OPENAI_API_KEY", value: "", secret: true },
+      { name: "STRIPE_SECRET_KEY", value: "", secret: true },
+    ],
+  },
+};
+
 export const AtLimit: Story = {
   args: {
     environmentVariables: Array.from({ length: 100 }, (_, i) => ({

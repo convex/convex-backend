@@ -1,6 +1,9 @@
 use std::sync::Arc;
 use anyhow::Context;
-use common::runtime::Runtime;
+use common::{
+    runtime::Runtime,
+    types::AdminKey,
+};
 use errors::ErrorMetadata;
 use keybroker::{
     legacy_admin_key_disabled_error,
@@ -42,17 +45,18 @@ impl<RT: Runtime> ApplicationAuth<RT> {
     }
 
     pub async fn check_key(&self, admin_key_or_access_token: String) -> anyhow::Result<Identity> {
+        let admin_key_or_access_token = AdminKey::new(admin_key_or_access_token);
         let now = self.rt.system_time();
         tracing::debug!("Checking admin_key/access token at {now:?}");
 
         if self
             .key_broker
-            .is_encrypted_admin_key(&admin_key_or_access_token)
+            .is_encrypted_admin_key(admin_key_or_access_token.as_str())
         {
             // assume this is a legacy Deploy Key
             let result = self
                 .key_broker
-                .check_admin_key(&admin_key_or_access_token, self.rt.system_time())
+                .check_admin_key(admin_key_or_access_token.as_str(), self.rt.system_time())
                 .context(ErrorMetadata::unauthenticated(
                     "BadAdminKey",
                     "The provided admin key was invalid for this instance",

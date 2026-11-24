@@ -256,13 +256,14 @@ can check access in each Convex function instead of checking access for each
 document.
 
 Helper functions for common checks and common operations can also be useful --
-e.g. `isTeamMember`, `isTeamAdmin`, `loadTeam` (which throws if the current user
-does not have access to the team).
+e.g. `ensureTeamMember`, `assertTeamOwner`, `loadTeam` (all of which throw if
+the current user does not have access to the team).
 
-If you name these helpers consistently, the
+Naming these helpers with a consistent prefix like `require`, `assert`, `check`,
+`ensure`, `can` or `has` lets the
 [`@convex-dev/require-access-control` lint rule](/linting/overview#require-access-control)
-can check that every public function calls one of them, so that you don't forget
-a check as your app grows.
+check that every public function calls one of them, so that you don't forget a
+check as your app grows.
 
 ## Only schedule and `ctx.run*` internal functions
 

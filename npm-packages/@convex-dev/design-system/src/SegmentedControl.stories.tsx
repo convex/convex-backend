@@ -1,4 +1,5 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
+import { GridIcon, ListBulletIcon } from "@radix-ui/react-icons";
 import { fn } from "storybook/test";
 import { useState } from "react";
 import { SegmentedControl, SegmentedControlOption } from "./SegmentedControl";
@@ -18,9 +19,9 @@ function Interactive<T extends string>({
   defaultValue,
 }: {
   options: SegmentedControlOption<T>[];
-  defaultValue: T;
+  defaultValue: T | null;
 }) {
-  const [value, setValue] = useState(defaultValue);
+  const [value, setValue] = useState<T | null>(defaultValue);
   return (
     <SegmentedControl options={options} value={value} onChange={setValue} />
   );
@@ -140,4 +141,57 @@ export const FourOptionsConstrained: Story = {
       />
     </div>
   ),
+};
+
+const viewOptions: SegmentedControlOption<"list" | "grid">[] = [
+  {
+    label: <ListBulletIcon aria-label="List" />,
+    value: "list",
+    tip: "List view",
+  },
+  {
+    label: <GridIcon aria-label="Grid" />,
+    value: "grid",
+    tip: "Grid view",
+  },
+];
+
+export const IconsWithTooltips: Story = {
+  args: {
+    options: viewOptions,
+    value: "list",
+  },
+  render: () => <Interactive options={viewOptions} defaultValue="list" />,
+};
+
+const periodOptions: SegmentedControlOption<"day" | "week" | "month">[] = [
+  { label: "Day", value: "day" },
+  { label: "Week", value: "week" },
+  {
+    label: "Month",
+    value: "month",
+    disabled: true,
+    tip: "Monthly data is only available on paid plans.",
+  },
+];
+
+export const DisabledOptionWithTooltip: Story = {
+  args: {
+    options: periodOptions,
+    value: "day",
+  },
+  render: () => <Interactive options={periodOptions} defaultValue="day" />,
+};
+
+const visibilityOptions: SegmentedControlOption<"public" | "private">[] = [
+  { label: "Public", value: "public" },
+  { label: "Private", value: "private" },
+];
+
+export const NoSelection: Story = {
+  args: {
+    options: visibilityOptions,
+    value: null,
+  },
+  render: () => <Interactive options={visibilityOptions} defaultValue={null} />,
 };

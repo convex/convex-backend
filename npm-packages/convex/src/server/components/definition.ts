@@ -22,14 +22,22 @@ export type ComponentDefinitionType = {
   name: string;
   args: [string, { type: "value"; value: string }][];
 };
+
+// This reflects the SerializedComponentArgument type on the server.
+export type SerializedComponentArg =
+  | { type: "value"; value: string }
+  | { type: "reference"; reference: string }
+  | { type: "parentArgument"; name: string }
+  | { type: "object"; fields: [string, SerializedComponentArg][] }
+  | { type: "array"; elements: SerializedComponentArg[] };
 export type AppDefinitionType = { type: "app" };
 
 type ComponentInstantiation = {
   name: string;
   // This is a ComponentPath.
   path: string;
-  args: [string, { type: "value"; value: string }][];
   env: [string, { type: "value"; value: string }][] | null;
+  args: [string, SerializedComponentArg][];
 };
 
 export type HttpMount = string;
@@ -47,6 +55,7 @@ export type ComponentDefinitionAnalysis = {
   httpMounts: Record<string, HttpMount>;
   exports: ComponentExport;
   envVars?: [string, SerializedValidator & { optional?: boolean }][];
+  init?: string;
 };
 export type AppDefinitionAnalysis = {
   definitionType: AppDefinitionType;

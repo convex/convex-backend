@@ -301,17 +301,19 @@ impl<RT: Runtime> SearchIndexWorker<RT> {
             // 2. Our soft index size is exceeded so we need to flush to disk - Implement
             //    via a signal from the committer, and via polling as a backstop in case no
             //    commits arrive to trigger the signal. Polling also catches indexes that
-            //    become too old to leave unflushed.
+            //    become too old to leave unflushed. This is only relevant for flushers;
+            //    compactors don't poll, they only need to react to `_index` changes.
             //
             // Polling only finds work on existing indexes, and the subscription covers the
             // whole `_index` table, so a deployment without indexes of this search type
             // skips the poll until one is created.
+            let should_poll = presence == SearchIndexPresence::Present
+                && matches!(self, Self::VectorFlusher(_) | Self::TextFlusher(_));
             let poll = async {
-                match presence {
-                    SearchIndexPresence::Present => {
-                        timeout_with_jitter(rt, *DATABASE_WORKERS_POLL_INTERVAL).await
-                    },
-                    SearchIndexPresence::Absent => std::future::pending().await,
+                if should_poll {
+                    timeout_with_jitter(rt, *DATABASE_WORKERS_POLL_INTERVAL).await
+                } else {
+                    std::future::pending().await
                 }
             };
             pin_mut!(poll);

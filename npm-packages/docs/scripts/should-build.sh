@@ -7,6 +7,9 @@
 # - npm-packages/convex/src/{browser,server,react,react-auth0,react-clerk,nextjs,values}/ (TypeDoc entry points)
 # - npm-packages/convex/src/{common,type_utils.ts} (cross-imported by TypeDoc entry points)
 # - npm-packages/convex/tsconfig.json (TypeDoc config)
+# - npm-packages/convex/src/cli/ and scripts/generate-cli-docs.ts (CLI reference)
+# - npm-packages/convex/package.json (its version picks the release that
+#   production documents, see scripts/reference-source.js)
 # - npm-packages/@convex-dev/platform/*-openapi.json (OpenAPI specs)
 
 WATCHED_PATHS=(
@@ -21,6 +24,9 @@ WATCHED_PATHS=(
   npm-packages/convex/src/common/
   npm-packages/convex/src/type_utils.ts
   npm-packages/convex/tsconfig.json
+  npm-packages/convex/src/cli/
+  npm-packages/convex/scripts/generate-cli-docs.ts
+  npm-packages/convex/package.json
   npm-packages/@convex-dev/platform/management-openapi.json
   npm-packages/@convex-dev/platform/public-deployment-openapi.json
   npm-packages/@convex-dev/platform/deployment-openapi.json

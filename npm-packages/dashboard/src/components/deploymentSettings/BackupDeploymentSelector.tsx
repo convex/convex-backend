@@ -15,8 +15,6 @@ import { FullDeploymentName } from "./BackupListItem";
 
 const PALETTE_SOURCE = "backup-restore-from";
 
-const MENU_WIDTH = 448;
-
 export function BackupDeploymentSelector({
   selectedDeployment,
   onChange,
@@ -76,8 +74,8 @@ function RestoreFromButton({
     selectedDeployment.id === targetDeployment.id;
 
   const openMenu = () => {
-    const rect = buttonRef.current?.getBoundingClientRect();
-    if (!rect) {
+    const button = buttonRef.current;
+    if (!button) {
       return;
     }
     trackOpened(PALETTE_SOURCE);
@@ -92,10 +90,9 @@ function RestoreFromButton({
       anchor: {
         // Right-aligned under the trigger, which sits at the right edge of the
         // backup list (the header switchers hang off their left edge instead).
-        left: rect.right - MENU_WIDTH,
-        top: rect.bottom + 8,
+        reference: button,
+        align: "end",
         source: PALETTE_SOURCE,
-        width: MENU_WIDTH,
       },
       picker: {
         onSelect: onChange,

@@ -5,9 +5,6 @@
 When doing changes in `/npm-packages/<package>`:
 
 ```sh
-# After each modification
-just format-js
-
 # When the change is ready
 just lint-js
 just turbo run build --filter=<package>...

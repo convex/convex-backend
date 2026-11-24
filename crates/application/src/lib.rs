@@ -259,7 +259,11 @@ use model::{
         DeploymentAuditLogModel,
     },
     environment_variables::{
-        types::EnvironmentVariable,
+        types::{
+            EnvVarVisibility,
+            EnvironmentVariable,
+            SECRET_ENV_VAR_PLACEHOLDER,
+        },
         EnvironmentVariablesModel,
     },
     exports::{
@@ -313,11 +317,9 @@ use model::{
             NodeVersion,
             PackageSize,
             SourcePackage,
+            SourcePackageEnvironment,
         },
-        upload_download::{
-            download_package,
-            upload_package,
-        },
+        upload_download::upload_package,
         SourcePackageModel,
     },
     udf_config::{
@@ -574,7 +576,22 @@ pub struct FunctionError {
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub enum EnvVarChange {
     Unset(EnvVarName),
-    Set(EnvironmentVariable),
+    Set {
+        variable: EnvironmentVariable,
+        /// `None` keeps the visibility of the variable being replaced, and
+        /// leaves the visibility of a new variable undecided.
+        visibility: Option<EnvVarVisibility>,
+    },
+}
+
+impl EnvVarChange {
+    /// Sets a variable without choosing its visibility.
+    pub fn set(variable: EnvironmentVariable) -> Self {
+        Self::Set {
+            variable,
+            visibility: None,
+        }
+    }
 }
 
 pub(crate) fn validate_env_var_values(
@@ -1871,7 +1888,7 @@ impl<RT: Runtime> Application<RT> {
             .iter()
             .filter_map(|c| match c {
                 EnvVarChange::Unset(name) => Some(name.to_string()),
-                EnvVarChange::Set(_) => None,
+                EnvVarChange::Set { .. } => None,
             })
             .collect();
         if !unset_names.is_empty() {
@@ -1893,11 +1910,46 @@ impl<RT: Runtime> Application<RT> {
             }
         }
 
+        // A client that lists the variables and writes them back sends the
+        // placeholder it was served for each secret. Those secrets keep
+        // their value.
+        let mut model = EnvironmentVariablesModel::new(tx);
+        let mut retained_changes = Vec::with_capacity(changes.len());
+        for change in changes {
+            if let EnvVarChange::Set {
+                variable,
+                visibility,
+            } = &change
+                && variable.value().as_ref() == SECRET_ENV_VAR_PLACEHOLDER
+            {
+                let keeps_secret = match visibility {
+                    Some(EnvVarVisibility::Secret) | None => {
+                        model.is_secret(variable.name()).await?
+                    },
+                    Some(EnvVarVisibility::Config) => false,
+                };
+                anyhow::ensure!(
+                    keeps_secret,
+                    ErrorMetadata::bad_request(
+                        "EnvironmentVariableValueIsPlaceholder",
+                        format!(
+                            "{SECRET_ENV_VAR_PLACEHOLDER} stands for the hidden value of a \
+                             secret, so {} can't be set to it. Provide the real value.",
+                            variable.name()
+                        ),
+                    )
+                );
+                continue;
+            }
+            retained_changes.push(change);
+        }
+        let changes = retained_changes;
+
         let set_vars: BTreeMap<EnvVarName, EnvVarValue> = changes
             .iter()
             .filter_map(|c| match c {
-                EnvVarChange::Set(env_var) => {
-                    Some((env_var.name().clone(), env_var.value().clone()))
+                EnvVarChange::Set { variable, .. } => {
+                    Some((variable.name().clone(), variable.value().clone()))
                 },
                 EnvVarChange::Unset(_) => None,
             })
@@ -1909,9 +1961,12 @@ impl<RT: Runtime> Application<RT> {
         let mut model = EnvironmentVariablesModel::new(tx);
         for change in changes {
             match change {
-                EnvVarChange::Set(env_var) => {
-                    let name = env_var.name();
-                    let existing = model.delete(name).await?;
+                EnvVarChange::Set {
+                    variable,
+                    visibility,
+                } => {
+                    let name = variable.name().clone();
+                    let existing = model.delete(&name).await?;
                     if existing.is_some() {
                         audit_events.push(DeploymentAuditLogEvent::UpdateEnvironmentVariable {
                             name: name.clone(),
@@ -1921,10 +1976,10 @@ impl<RT: Runtime> Application<RT> {
                             name: name.clone(),
                         });
                     }
-                    // Replacing a variable keeps its visibility.
-                    let visibility = existing.and_then(|existing| existing.visibility);
+                    let visibility =
+                        visibility.or(existing.and_then(|existing| existing.visibility));
                     model
-                        .create_with_visibility(env_var, visibility, &self.system_env_var_names)
+                        .create_with_visibility(variable, visibility, &self.system_env_var_names)
                         .await?;
                 },
                 EnvVarChange::Unset(name) => {
@@ -2421,15 +2476,7 @@ impl<RT: Runtime> Application<RT> {
                 .unchanged_runtime_module_hashes
                 .is_empty()
             {
-                // Query existing packages from the database
                 let mut tx = self.begin(Identity::system()).await?;
-
-                // Get existing package for root component
-                let existing_root_package =
-                    SourcePackageModel::new(&mut tx, TableNamespace::Global)
-                        .get_latest()
-                        .await?;
-
                 let module_metadata: BTreeMap<
                     CanonicalizedModulePath,
                     Arc<ParsedDocument<ModuleMetadata>>,
@@ -2439,20 +2486,10 @@ impl<RT: Runtime> Application<RT> {
                     .into_iter()
                     .map(|module| (module.path.clone(), module))
                     .collect();
-
+                let existing_app_modules = ModuleModel::new(&mut tx)
+                    .get_application_modules(ComponentId::Root, self.modules_storage())
+                    .await?;
                 tx.into_token()?;
-
-                // Download root package
-                let existing_app_modules: BTreeMap<CanonicalizedModulePath, ModuleConfig> =
-                    if let Some(root_pkg) = existing_root_package {
-                        download_package(self.modules_storage().clone(), &root_pkg)
-                            .await?
-                            .into_values()
-                            .map(|v| (v.path.clone().canonicalize(), v))
-                            .collect()
-                    } else {
-                        anyhow::bail!("Failed to download source package for root component.");
-                    };
 
                 // Add unchanged modules to app_functions
                 for unchanged_module in config.app_definition.unchanged_runtime_module_hashes.iter()
@@ -2496,6 +2533,7 @@ impl<RT: Runtime> Application<RT> {
                     external_deps_id_and_pkg.clone(),
                     config.node_version,
                     config.node_default_memory_mb,
+                    SourcePackageEnvironment::Combined,
                 )
                 .await?;
             drop(permit);
@@ -2514,7 +2552,13 @@ impl<RT: Runtime> Application<RT> {
                 // Components share the deployment's Lambda, so their Node actions
                 // run and bill at the app's size.
                 let component_pkg = app
-                    .upload_package(&component_modules, None, None, node_default_memory_mb)
+                    .upload_package(
+                        &component_modules,
+                        None,
+                        None,
+                        node_default_memory_mb,
+                        SourcePackageEnvironment::Combined,
+                    )
                     .await?;
                 drop(permit);
                 anyhow::Ok((definition_path, component_pkg))
@@ -2704,6 +2748,7 @@ impl<RT: Runtime> Application<RT> {
         external_deps_id_and_pkg: Option<(ExternalDepsPackageId, ExternalDepsPackage)>,
         node_version: Option<NodeVersion>,
         node_default_memory_mb: Option<u32>,
+        environment: SourcePackageEnvironment,
     ) -> anyhow::Result<SourcePackage> {
         // If there are any node actions, turn on the lambdas.
         if modules
@@ -2753,6 +2798,7 @@ impl<RT: Runtime> Application<RT> {
             package_size,
             node_version,
             node_default_memory_mb,
+            environment,
         })
     }
 
@@ -2807,7 +2853,13 @@ impl<RT: Runtime> Application<RT> {
         // This will become a dangling reference since the _modules entry won't
         // be committed to the database, but we have to deal with those anyway.
         let source_package = self
-            .upload_package(&vec![module.clone()], None, None, None)
+            .upload_package(
+                &vec![module.clone()],
+                None,
+                None,
+                None,
+                SourcePackageEnvironment::Combined,
+            )
             .await?;
 
         let mut tx = self.begin(identity.clone()).await?;

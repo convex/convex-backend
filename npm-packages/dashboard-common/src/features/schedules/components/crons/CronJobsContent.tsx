@@ -97,12 +97,8 @@ function Details({
               variant="neutral"
               inline
               onClick={back}
-              icon={
-                <ChevronLeftIcon
-                  className="size-4"
-                  aria-label="Back to cron jobs"
-                />
-              }
+              aria-label="Back to cron jobs"
+              icon={<ChevronLeftIcon className="size-4" />}
             />
             <h3 className="whitespace-nowrap">{cronJob.name}</h3>
           </div>

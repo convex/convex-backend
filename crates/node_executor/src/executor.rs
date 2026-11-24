@@ -85,6 +85,7 @@ use model::{
     source_packages::types::{
         PackageSize,
         SourcePackageId,
+        NODE_MEMORY_MB_OPTIONS,
     },
 };
 use serde::Deserialize;
@@ -147,9 +148,10 @@ const NODE_ANALYZE_MAX_BACKOFF: Duration = Duration::from_secs(5);
 #[async_trait]
 pub trait NodeExecutor: Sync + Send {
     fn enable(&self) -> anyhow::Result<()>;
-    /// Memory sizes, in MB, that this executor can run Node actions at.
+    /// Memory sizes, in MB, that this executor can run Node actions at. The
+    /// local executor sets no memory limit, so it accepts every size.
     fn supported_memory_mb(&self) -> &'static [u32] {
-        &[512]
+        &NODE_MEMORY_MB_OPTIONS
     }
     async fn invoke(
         &self,

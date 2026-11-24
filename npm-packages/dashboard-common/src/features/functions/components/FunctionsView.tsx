@@ -4,7 +4,7 @@ import {
   useCurrentOpenFunction,
   useModuleFunctions,
 } from "@common/lib/functions/FunctionsProvider";
-import { DirectorySidebar } from "@common/features/functions/components/DirectorySidebar";
+import { FunctionsSidebar } from "@common/features/functions/components/FunctionsSidebar";
 import { FunctionSummary } from "@common/features/functions/components/FunctionSummary";
 import { PerformanceGraphs } from "@common/features/functions/components/PerformanceGraphs";
 import { SingleGraph } from "@common/features/functions/components/SingleGraph";
@@ -116,7 +116,7 @@ function Functions() {
     <SidebarDetailLayout
       resizeHandleTitle="Functions"
       panelSizeKey={`${deploymentId}/functions`}
-      sidebarComponent={<DirectorySidebar onChangeFunction={() => {}} />}
+      sidebarComponent={<FunctionsSidebar onChangeFunction={() => {}} />}
       contentComponent={content}
     />
   );

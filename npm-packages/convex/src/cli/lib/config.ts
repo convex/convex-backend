@@ -47,21 +47,21 @@ export { productionProvisionHost, provisionHost } from "./utils/utils.js";
 
 /** Type representing WorkOS AuthKit integration configuration. */
 export interface AuthKitConfigureSettings {
-  redirectUris?: string[];
-  appHomepageUrl?: string;
-  corsOrigins?: string[];
+  redirectUris?: string[] | undefined;
+  appHomepageUrl?: string | undefined;
+  corsOrigins?: string[] | undefined;
 }
 
 export interface AuthKitEnvironmentConfig {
-  environmentType?: "development" | "staging" | "production";
-  configure?: false | AuthKitConfigureSettings;
-  localEnvVars?: false | Record<string, string>;
+  environmentType?: "development" | "staging" | "production" | undefined;
+  configure?: false | AuthKitConfigureSettings | undefined;
+  localEnvVars?: false | Record<string, string> | undefined;
 }
 
 export interface AuthKitConfig {
-  dev?: AuthKitEnvironmentConfig;
-  preview?: AuthKitEnvironmentConfig;
-  prod?: AuthKitEnvironmentConfig;
+  dev?: AuthKitEnvironmentConfig | undefined;
+  preview?: AuthKitEnvironmentConfig | undefined;
+  prod?: AuthKitEnvironmentConfig | undefined;
 }
 /**
  * convex.json file parsing notes
@@ -92,32 +92,38 @@ export interface ProjectConfig {
   codegen: {
     staticApi: boolean;
     staticDataModel: boolean;
-    legacyComponentApi?: boolean;
-    fileType?: "ts" | "js/dts";
+    legacyComponentApi?: boolean | undefined;
+    fileType?: "ts" | "js/dts" | undefined;
   };
 
-  bundler?: {
-    includeSourcesContent?: boolean;
-  };
+  bundler?:
+    | {
+        includeSourcesContent?: boolean;
+      }
+    | undefined;
 
-  typescriptCompiler?: TypescriptCompiler;
+  typescriptCompiler?: TypescriptCompiler | undefined;
 
   // WorkOS AuthKit integration configuration
   authKit?: AuthKitConfig | undefined;
 
   // Convex AI files user preferences.
-  aiFiles?: {
-    // When false, disables all AI files prompts and staleness messages.
-    enabled?: boolean;
-    // @deprecated use `enabled` instead.
-    disableStalenessMessage?: boolean;
-    // Configuration for agent skills installed by Convex.
-    skills?: {
-      // List of agents to install skills for (e.g. 'claude-code', 'codex', 'cursor').
-      // Defaults to ['claude-code', 'codex'].
-      agents?: string[];
-    };
-  };
+  aiFiles?:
+    | {
+        // When false, disables all AI files prompts and staleness messages.
+        enabled?: boolean | undefined;
+        // @deprecated use `enabled` instead.
+        disableStalenessMessage?: boolean | undefined;
+        // Configuration for agent skills installed by Convex.
+        skills?:
+          | {
+              // List of agents to install skills for (e.g. 'claude-code', 'codex', 'cursor').
+              // Defaults to ['claude-code', 'codex'].
+              agents?: string[] | undefined;
+            }
+          | undefined;
+      }
+    | undefined;
 }
 
 export interface Config {
@@ -211,7 +217,7 @@ const AuthKitConfigureSchema = z.union([
 
 const AuthKitLocalEnvVarsSchema = z.union([
   z.literal(false),
-  z.record(z.string()),
+  z.record(z.string(), z.string()),
 ]);
 
 const AuthKitEnvironmentConfigSchema = z.object({
@@ -342,7 +348,7 @@ const createProjectConfigSchema = (strict: boolean) => {
       staticApi: false,
       staticDataModel: false,
     }),
-    bundler: bundlerSchema.default({ includeSourcesContent: false }).optional(),
+    bundler: bundlerSchema.optional(),
     generateCommonJSApi: z.boolean().default(false),
     typescriptCompiler: z
       .enum(["tsc", "tsgo"])

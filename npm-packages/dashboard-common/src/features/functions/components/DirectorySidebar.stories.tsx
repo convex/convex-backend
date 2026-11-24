@@ -42,15 +42,14 @@ function withDeployment(modules: ReturnType<typeof rootModules>) {
 const meta = {
   component: DirectorySidebar,
   args: { onChangeFunction: () => {} },
-  // The functions page shows the sidebar in a resizable panel of about this
-  // width.
   decorators: [
     (Story) => (
-      <div className="h-screen w-72">
+      <div className="h-screen">
         <Story />
       </div>
     ),
   ],
+  parameters: { layout: "fullscreen" },
 } satisfies Meta<typeof DirectorySidebar>;
 
 export default meta;

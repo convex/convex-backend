@@ -4,7 +4,6 @@ import {
   TeamMember,
 } from "@convex-dev/platform/managementApi";
 
-import { Sheet } from "@ui/Sheet";
 import { LoadingTransition } from "@ui/Loading";
 import { TextInput } from "@ui/TextInput";
 import { useState } from "react";
@@ -23,6 +22,7 @@ import { useCancelInvite, useCreateInvite } from "api/invitations";
 import sortBy from "lodash/sortBy";
 import { TeamMemberInviteListItem } from "./TeamMemberInviteListItem";
 import { TeamMemberListItem } from "./TeamMemberListItem";
+import { ListTable, ListTableHeaderDetail } from "elements/ListTable";
 import { TeamMemberListSkeleton } from "./TeamMemberListSkeleton";
 
 type TeamMemberListProps = {
@@ -105,8 +105,8 @@ export function TeamMemberList({
 
   return (
     <>
-      <Sheet className="min-w-[20rem]">
-        <div className="mb-4 flex w-full items-center justify-between gap-2">
+      <section className="flex min-w-[20rem] flex-col gap-3">
+        <div className="flex w-full items-center justify-between gap-2">
           <h3 className="grow">Team Members</h3>
           <div className="w-48">
             <TextInput
@@ -120,43 +120,30 @@ export function TeamMemberList({
         </div>
         <LoadingTransition>
           {profile && members && projectRoles && (
-            <div className="flex w-full flex-col">
-              {/* Always show self at the top */}
-              {me && (
-                <TeamMemberListItem
-                  team={team}
-                  member={me}
-                  members={members}
-                  canChangeRole={false}
-                  myProfile={profile}
-                  customRoles={customRoles}
-                  customRolesEnabled={customRolesEnabled}
-                  onChangeRole={onChangeRole}
-                  onRemoveMember={onRemoveMember}
-                  canUpdateRole={canUpdateRole}
-                  canRemoveMember={canRemoveMember}
-                  projectRoles={projectRoles?.filter(
-                    (role) => role.memberId === me.id,
-                  )}
-                  onUpdateProjectRoles={updateProjectRoles}
-                />
-              )}
-              {!filteredMembersWithoutMe ? (
-                <TeamMemberListSkeleton />
-              ) : filteredMembers && filteredMembers.length === 0 ? (
-                <div className="my-4 flex w-full justify-center text-content-secondary">
-                  No members match your search.
-                </div>
-              ) : (
-                sortBy(filteredMembersWithoutMe, (member) =>
-                  (member.name || member.email).toLocaleLowerCase(),
-                ).map((member) => (
+            <ListTable
+              surface="page"
+              header={
+                <>
+                  Member
+                  <ListTableHeaderDetail>
+                    {countLabel(
+                      filteredMembers?.length ?? members.length,
+                      members.length,
+                      memberSearch,
+                    )}{" "}
+                    member{members.length === 1 ? "" : "s"}
+                  </ListTableHeaderDetail>
+                </>
+              }
+            >
+              <div className="divide-y">
+                {/* Always show self at the top */}
+                {me && (
                   <TeamMemberListItem
-                    key={`member${member.id}`}
                     team={team}
-                    member={member}
+                    member={me}
                     members={members}
-                    canChangeRole
+                    canChangeRole={false}
                     myProfile={profile}
                     customRoles={customRoles}
                     customRolesEnabled={customRolesEnabled}
@@ -165,19 +152,49 @@ export function TeamMemberList({
                     canUpdateRole={canUpdateRole}
                     canRemoveMember={canRemoveMember}
                     projectRoles={projectRoles?.filter(
-                      (role) => role.memberId === member.id,
+                      (role) => role.memberId === me.id,
                     )}
                     onUpdateProjectRoles={updateProjectRoles}
                   />
-                ))
-              )}
-            </div>
+                )}
+                {!filteredMembersWithoutMe ? (
+                  <TeamMemberListSkeleton />
+                ) : filteredMembers && filteredMembers.length === 0 ? (
+                  <div className="my-4 flex w-full justify-center text-content-secondary">
+                    No members match your search.
+                  </div>
+                ) : (
+                  sortBy(filteredMembersWithoutMe, (member) =>
+                    (member.name || member.email).toLocaleLowerCase(),
+                  ).map((member) => (
+                    <TeamMemberListItem
+                      key={`member${member.id}`}
+                      team={team}
+                      member={member}
+                      members={members}
+                      canChangeRole
+                      myProfile={profile}
+                      customRoles={customRoles}
+                      customRolesEnabled={customRolesEnabled}
+                      onChangeRole={onChangeRole}
+                      onRemoveMember={onRemoveMember}
+                      canUpdateRole={canUpdateRole}
+                      canRemoveMember={canRemoveMember}
+                      projectRoles={projectRoles?.filter(
+                        (role) => role.memberId === member.id,
+                      )}
+                      onUpdateProjectRoles={updateProjectRoles}
+                    />
+                  ))
+                )}
+              </div>
+            </ListTable>
           )}
         </LoadingTransition>
-      </Sheet>
+      </section>
       {invites && invites.length > 0 && (
-        <Sheet>
-          <div className="mb-4 flex w-full items-center justify-between gap-2">
+        <section className="flex flex-col gap-3">
+          <div className="flex w-full items-center justify-between gap-2">
             <h3 className="grow">Pending Invitations</h3>
             <div className="w-48">
               <TextInput
@@ -189,30 +206,53 @@ export function TeamMemberList({
               />
             </div>
           </div>
-          <div className="flex flex-col">
-            {!filteredInvites ? (
-              <TeamMemberListSkeleton />
-            ) : filteredInvites.length === 0 ? (
-              <div className="my-4 flex w-full justify-center text-content-secondary">
-                No invites match your search.
-              </div>
-            ) : (
-              filteredInvites.map((invite, idx) => (
-                <TeamMemberInviteListItem
-                  key={`invite${idx}`}
-                  invite={invite}
-                  teamSlug={team.slug}
-                  canInvite={canInvite}
-                  canCancelInvite={canCancelInvite}
-                  hasSyncedDirectory={hasSyncedDirectory}
-                  onCreateInvite={onCreateInvite}
-                  onCancelInvite={onCancelInvite}
-                />
-              ))
-            )}
-          </div>
-        </Sheet>
+          <ListTable
+            surface="page"
+            header={
+              <>
+                Email
+                <ListTableHeaderDetail>
+                  {countLabel(
+                    filteredInvites?.length ?? invites.length,
+                    invites.length,
+                    inviteSearch,
+                  )}{" "}
+                  pending
+                </ListTableHeaderDetail>
+              </>
+            }
+          >
+            <div className="divide-y">
+              {!filteredInvites ? (
+                <TeamMemberListSkeleton />
+              ) : filteredInvites.length === 0 ? (
+                <div className="my-4 flex w-full justify-center text-content-secondary">
+                  No invites match your search.
+                </div>
+              ) : (
+                filteredInvites.map((invite, idx) => (
+                  <TeamMemberInviteListItem
+                    key={`invite${idx}`}
+                    invite={invite}
+                    teamSlug={team.slug}
+                    canInvite={canInvite}
+                    canCancelInvite={canCancelInvite}
+                    hasSyncedDirectory={hasSyncedDirectory}
+                    onCreateInvite={onCreateInvite}
+                    onCancelInvite={onCancelInvite}
+                  />
+                ))
+              )}
+            </div>
+          </ListTable>
+        </section>
       )}
     </>
   );
+}
+
+// While searching, show how many of the total match so the count agrees with
+// the rows shown below it.
+function countLabel(shown: number, total: number, search: string) {
+  return search ? `${shown} of ${total}` : `${total}`;
 }

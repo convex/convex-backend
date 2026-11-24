@@ -1,5 +1,8 @@
 use std::{
-    collections::BTreeMap,
+    collections::{
+        btree_map,
+        BTreeMap,
+    },
     mem,
     str::FromStr,
     sync::Arc,
@@ -184,22 +187,24 @@ impl<RT: Runtime> ActionPhase<RT> {
                 let module_metadata = ModuleModel::new(&mut tx)
                     .get_all_metadata(component_id)
                     .await?;
-                let source_package = SourcePackageModel::new(&mut tx, component_id.into())
-                    .get_latest()
-                    .await?;
+                let mut source_packages = BTreeMap::new();
                 let mut modules = BTreeMap::new();
                 for metadata in module_metadata {
                     if metadata.path.is_system() {
                         continue;
                     }
+                    let source_package = match source_packages.entry(metadata.environment) {
+                        btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                        btree_map::Entry::Vacant(entry) => entry.insert(
+                            SourcePackageModel::new(&mut tx, component_id.into())
+                                .get_latest(metadata.environment)
+                                .await?
+                                .context("source package not found")?,
+                        ),
+                    };
                     let path = metadata.path.clone();
                     let module = module_loader
-                        .get_module_with_metadata(
-                            &metadata,
-                            source_package
-                                .as_ref()
-                                .context("source package not found")?,
-                        )
+                        .get_module_with_metadata(&metadata, source_package)
                         .await?;
                     modules.insert(path, (metadata, module));
                 }

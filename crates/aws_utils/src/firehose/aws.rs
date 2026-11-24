@@ -1,11 +1,16 @@
 use anyhow::Context;
 use async_trait::async_trait;
 use aws_sdk_firehose::{
+    error::{
+        ProvideErrorMetadata,
+        SdkError,
+    },
     primitives::Blob,
     types::Record,
 };
 
 use super::{
+    BatchRejected,
     BatchResult,
     Firehose,
     RecordFailure,
@@ -46,8 +51,33 @@ impl Firehose for AwsFirehose {
             .delivery_stream_name(&self.stream_name)
             .set_records(Some(records))
             .send()
-            .await?;
+            .await
+            .map_err(request_error)?;
         Ok(batch_result(result.request_responses()))
+    }
+}
+
+/// AWS codes indicating a permanent error with the batch.
+/// Leads to a BatchRejected error
+const REJECTED_REQUEST_CODES: &[&str] = &[
+    "InvalidArgumentException",
+    "ResourceNotFoundException",
+    "ValidationException",
+];
+
+fn request_error<E, R>(error: SdkError<E, R>) -> anyhow::Error
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+    R: std::fmt::Debug + Send + Sync + 'static,
+{
+    let rejected = error
+        .code()
+        .is_some_and(|code| REJECTED_REQUEST_CODES.contains(&code));
+    let error = anyhow::Error::from(error);
+    if rejected {
+        error.context(BatchRejected)
+    } else {
+        error
     }
 }
 

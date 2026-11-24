@@ -31,7 +31,6 @@
               "requestId",
               "executionId",
               "usageStats",
-              "willRetry",
               "executionTimestamp",
               "identityType",
               "environment",
@@ -126,7 +125,10 @@
                 ]
               },
               "willRetry": {
-                "type": "boolean"
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               },
               "executionTimestamp": {
                 "type": "number",

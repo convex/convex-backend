@@ -18,7 +18,7 @@
     },
     {
       "name": "convex-auth",
-      "description": "Add authentication (passkeys/OAuth) to the current Convex app, including the auth.config.ts wiring."
+      "description": "Add Convex Auth sign-in (passkeys by default, other methods on request) to a new or existing Convex app, including auth.config.ts."
     },
     {
       "name": "convex-authz",
@@ -31,6 +31,10 @@
     {
       "name": "convex-billing",
       "description": "Add Stripe billing/payments to the Convex app via @convex-dev/stripe (checkout + webhook + gating)."
+    },
+    {
+      "name": "convex-bundle-size",
+      "description": "Debug and shrink a Convex deployment's bundle with @convex-dev/bundle-analyzer: find duplicate packages, \"use node\" code leaking into the Convex runtime, dev dependencies and test files in deployed code, then fix and measure before/after."
     },
     {
       "name": "convex-cost",

@@ -832,7 +832,7 @@ pub static INDEX_BACKFILL_MARKER_CLEANUP_IDLE_INTERVAL_SECONDS: LazyLock<Duratio
     LazyLock::new(|| {
         Duration::from_secs_f64(env_config(
             "INDEX_BACKFILL_MARKER_CLEANUP_IDLE_INTERVAL_SECONDS",
-            60.0,
+            600.0,
         ))
     });
 
@@ -1268,6 +1268,24 @@ pub static MYSQL_MAX_FILL_CHUNK_ROWS: LazyLock<usize> =
 
 /// Timeout for all operations on MySQL connections
 pub static MYSQL_TIMEOUT: LazyLock<u64> = LazyLock::new(|| env_config("MYSQL_TIMEOUT_SECONDS", 19));
+
+/// Timeout for opening one MySQL connection. Shorter than `MYSQL_TIMEOUT` so
+/// that a caller can retry a stalled connect within its own deadline.
+pub static MYSQL_CONNECT_TIMEOUT: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("MYSQL_CONNECT_TIMEOUT_SECS", 5)));
+
+/// Maximum number of MySQL connections a pool opens concurrently.
+pub static MYSQL_MAX_CONCURRENT_CONNECTS: LazyLock<usize> =
+    LazyLock::new(|| env_config("MYSQL_MAX_CONCURRENT_CONNECTS", 16).max(1));
+
+/// Initial pool-wide backoff after a failed MySQL connect.
+pub static MYSQL_CONNECT_INITIAL_BACKOFF: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_millis(env_config("MYSQL_CONNECT_INITIAL_BACKOFF_MS", 100)));
+
+/// Maximum pool-wide backoff after failed MySQL connects. This bounds how long
+/// a pool takes to notice that the database has recovered.
+pub static MYSQL_CONNECT_MAX_BACKOFF: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_millis(env_config("MYSQL_CONNECT_MAX_BACKOFF_MS", 5000)));
 
 /// Maximum number of connections to MySQL
 pub static MYSQL_MAX_CONNECTIONS: LazyLock<usize> =
@@ -2181,6 +2199,11 @@ pub static ENV_VAR_LIMIT: LazyLock<usize> = LazyLock::new(|| env_config("ENV_VAR
 /// Maximum total size in bytes of all environment variables (names + values).
 pub static ENV_VAR_TOTAL_SIZE_LIMIT: LazyLock<usize> =
     LazyLock::new(|| env_config("ENV_VAR_TOTAL_SIZE_LIMIT", 512 * 1024));
+
+/// Maximum size in bytes of the serialized arguments a component passes to one
+/// child component.
+pub static COMPONENT_ARGS_MAX_SIZE_BYTES: LazyLock<usize> =
+    LazyLock::new(|| env_config("COMPONENT_ARGS_MAX_SIZE_BYTES", 16 * 1024));
 
 /// If set, disable the /metrics endpoint
 pub static DISABLE_METRICS_ENDPOINT: LazyLock<bool> =

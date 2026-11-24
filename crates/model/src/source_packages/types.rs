@@ -3,7 +3,10 @@ use std::{
     str::FromStr,
 };
 
-use common::types::ObjectKey;
+use common::types::{
+    ModuleEnvironment,
+    ObjectKey,
+};
 use errors::ErrorMetadata;
 use humansize::{
     FormatSize,
@@ -44,7 +47,7 @@ pub fn check_node_default_memory_mb_for_push(memory_mb: u32) -> anyhow::Result<(
 }
 
 /// Rejects a `node.defaultMemoryMb` that this backend's Node executor can't
-/// run. Only the AWS Lambda executor supports sizes above the smallest.
+/// run.
 pub fn check_node_default_memory_mb_supported(
     memory_mb: u32,
     supported_memory_mb: &[u32],
@@ -182,6 +185,30 @@ pub struct SourcePackage {
     /// setting and not part of the code, so `upload_package` should not
     /// take it.
     pub node_default_memory_mb: Option<u32>,
+    pub environment: SourcePackageEnvironment,
+}
+
+/// Which of a push's modules a source package holds.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, strum::Display, strum::EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum SourcePackageEnvironment {
+    /// Every module of the push.
+    Combined,
+    /// The isolate modules, and any module whose environment is `Invalid`.
+    Isolate,
+    Node,
+}
+
+impl SourcePackageEnvironment {
+    pub fn contains(&self, environment: ModuleEnvironment) -> bool {
+        match (self, environment) {
+            (Self::Combined, _) => true,
+            (Self::Isolate, ModuleEnvironment::Isolate | ModuleEnvironment::Invalid) => true,
+            (Self::Node, ModuleEnvironment::Node) => true,
+            (Self::Isolate, ModuleEnvironment::Node)
+            | (Self::Node, ModuleEnvironment::Isolate | ModuleEnvironment::Invalid) => false,
+        }
+    }
 }
 
 impl SourcePackage {
@@ -191,6 +218,7 @@ impl SourcePackage {
         self.node_version == other.node_version
             && self.node_default_memory_mb == other.node_default_memory_mb
             && self.external_deps_package_id == other.external_deps_package_id
+            && self.environment == other.environment
     }
 }
 
@@ -236,7 +264,7 @@ impl PackageSize {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "ModulesTooLarge",
                 format!(
-                    "Total module size exceeded the unzipped maximum ({} > maximum size {})",
+                    "Total module size exceeded the maximum ({} > maximum size {})",
                     self.unzipped_size_bytes.format_size(BINARY),
                     MAX_UNZIPPED_PACKAGES_SIZE.format_size(BINARY)
                 ),
@@ -325,6 +353,7 @@ pub struct SerializedSourcePackage {
     node_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     node_default_memory_mb: Option<u32>,
+    environment: Option<String>,
 }
 
 impl TryFrom<SourcePackage> for SerializedSourcePackage {
@@ -340,6 +369,10 @@ impl TryFrom<SourcePackage> for SerializedSourcePackage {
             package_size: Some(value.package_size.try_into()?),
             node_version: value.node_version.map(String::from),
             node_default_memory_mb: value.node_default_memory_mb,
+            environment: match value.environment {
+                SourcePackageEnvironment::Combined => None,
+                environment => Some(environment.to_string()),
+            },
         })
     }
 }
@@ -362,6 +395,10 @@ impl TryFrom<SerializedSourcePackage> for SourcePackage {
             None => None,
             Some(s) => Some(s.parse()?),
         };
+        let environment = match value.environment {
+            None => SourcePackageEnvironment::Combined,
+            Some(s) => s.parse()?,
+        };
         Ok(Self {
             storage_key,
             sha256,
@@ -369,6 +406,7 @@ impl TryFrom<SerializedSourcePackage> for SourcePackage {
             package_size,
             node_version,
             node_default_memory_mb: value.node_default_memory_mb,
+            environment,
         })
     }
 }

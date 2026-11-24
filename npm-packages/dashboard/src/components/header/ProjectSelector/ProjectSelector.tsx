@@ -49,10 +49,9 @@ export function ProjectSelector({
     source: string,
   ) => {
     trackOpened("project-selector");
-    const rect = event.currentTarget.getBoundingClientRect();
     openCommandPalette({
       pages: [page],
-      anchor: { left: rect.left, top: rect.bottom + 8, source },
+      anchor: { reference: event.currentTarget, source },
     });
   };
 

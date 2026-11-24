@@ -4,6 +4,7 @@ import {
   ClipboardCopyIcon,
   EyeNoneIcon,
   EyeOpenIcon,
+  LockClosedIcon,
   MinusCircledIcon,
   Pencil2Icon,
   PlusCircledIcon,
@@ -28,13 +29,22 @@ import { cn } from "@ui/cn";
 import cloneDeep from "lodash/cloneDeep";
 import { formatEnvValueForDotfile } from "./formatEnvValueForDotfile";
 
+// Copied in place of a secret's value, which the dashboard never receives.
+const SECRET_ENV_VAR_PLACEHOLDER = "[Secret omitted]";
+
 export const ENVIRONMENT_VARIABLES_ROW_CLASSES =
   "grid grid-cols-[minmax(0,1fr)_6.5rem] gap-x-4 gap-y-2 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_6.5rem]";
 export const ENVIRONMENT_VARIABLE_NAME_COLUMN = "col-span-2 md:col-span-1";
 
 const ERROR_ENV_VAR_NOT_UNIQUE = "Environment variable name is not unique";
 
-export type BaseEnvironmentVariable = { name: string; value: string };
+export type BaseEnvironmentVariable = {
+  name: string;
+  // Empty for a saved secret: the dashboard never receives its value.
+  value: string;
+  // true for a secret, whose value can't be read.
+  secret?: boolean;
+};
 
 type FormState<T extends BaseEnvironmentVariable> = {
   editedVars: {
@@ -463,6 +473,7 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
 }) {
   const formState = useFormikContext<FormState<T>>();
   const [showValue, setShowValue] = useState(false);
+  const isSecret = environmentVariable.secret === true;
 
   return (
     <div className={ENVIRONMENT_VARIABLES_ROW_CLASSES}>
@@ -472,50 +483,64 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
           renderDisplayExtra={renderDisplayExtra}
         />
       </div>
-      <div className="flex min-h-(--env-var-contents-height) min-w-0 items-center gap-1 font-mono">
-        <Button
-          tip={showValue ? "Hide" : "Show"}
-          aria-label={showValue ? "Hide" : "Show"}
-          type="button"
-          onClick={() => setShowValue(!showValue)}
-          variant="neutral"
-          inline
-          size="sm"
-          className="h-full"
-          icon={showValue ? <EyeNoneIcon /> : <EyeOpenIcon />}
-        />
-        <div className="min-w-0 flex-1">
-          {showValue ? (
-            <pre className="animate-fadeInFromLoading cursor-not-allowed rounded-md border bg-background-primary p-1.5 px-2 break-all whitespace-pre-wrap text-content-primary">
-              {environmentVariable.value}
-            </pre>
-          ) : (
-            <span
-              title="Hidden environment variable"
-              className="block truncate text-xs text-content-primary"
-            >
-              •••••••••••••••
-            </span>
-          )}
+      {isSecret ? (
+        <div className="flex min-h-(--env-var-contents-height) items-center gap-1.5 text-xs text-content-secondary">
+          <LockClosedIcon className="size-3.5" />
+          Secret
         </div>
-      </div>
+      ) : (
+        <div className="flex min-h-(--env-var-contents-height) min-w-0 items-center gap-1 font-mono">
+          <Button
+            tip={showValue ? "Hide" : "Show"}
+            aria-label={showValue ? "Hide" : "Show"}
+            type="button"
+            onClick={() => setShowValue(!showValue)}
+            variant="neutral"
+            inline
+            size="sm"
+            className="h-full"
+            icon={showValue ? <EyeNoneIcon /> : <EyeOpenIcon />}
+          />
+          <div className="min-w-0 flex-1">
+            {showValue ? (
+              <pre className="animate-fadeInFromLoading cursor-not-allowed rounded-md border bg-background-primary p-1.5 px-2 break-all whitespace-pre-wrap text-content-primary">
+                {environmentVariable.value}
+              </pre>
+            ) : (
+              <span
+                title="Hidden environment variable"
+                className="block truncate text-xs text-content-primary"
+              >
+                •••••••••••••••
+              </span>
+            )}
+          </div>
+        </div>
+      )}
       <div className="flex h-(--env-var-contents-height) justify-between gap-2">
+        {/* TODO(nicolas): let this button replace the value of a secret. */}
         <Button
           tip={
             !canEdit
               ? (disabledTipForEdit ??
                 "You do not have permission to edit environment variables.")
-              : "Edit"
+              : isSecret
+                ? "A secret can't be edited."
+                : "Edit"
           }
           aria-label="Edit"
           type="button"
           onClick={() => onEdit()}
           variant="neutral"
           icon={<Pencil2Icon />}
-          disabled={formState.isSubmitting || !canEdit}
+          disabled={formState.isSubmitting || !canEdit || isSecret}
         />
         <Button
-          tip="Copy Name and Value"
+          tip={
+            isSecret
+              ? "The value of a secret can't be copied."
+              : "Copy Name and Value"
+          }
           aria-label="Copy Name and Value"
           type="button"
           onClick={async () => {
@@ -547,7 +572,7 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
           }}
           variant="neutral"
           icon={<ClipboardCopyIcon />}
-          disabled={formState.isSubmitting}
+          disabled={formState.isSubmitting || isSecret}
         />
         <Button
           tip={
@@ -693,9 +718,7 @@ function EditEnvVarForm<T extends BaseEnvironmentVariable>({
   );
 }
 
-function EnvironmentVariableListItem<
-  T extends { name: string; value: string },
->({
+function EnvironmentVariableListItem<T extends BaseEnvironmentVariable>({
   environmentVariable,
   canEdit,
   canDelete,
@@ -897,9 +920,10 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
               variant="neutral"
               onClick={async () => {
                 const formattedEnvVars = existingEnvVars.map(
-                  ({ name, value }) => {
-                    const { formatted, warning } =
-                      formatEnvValueForDotfile(value);
+                  ({ name, value, secret }) => {
+                    const { formatted, warning } = formatEnvValueForDotfile(
+                      secret ? SECRET_ENV_VAR_PLACEHOLDER : value,
+                    );
                     return { name, formatted, warning };
                   },
                 );

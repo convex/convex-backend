@@ -170,6 +170,7 @@ export const TextInput = forwardRef<
               inline
               icon={<Icon className="size-3.5" />}
               tip={iconTooltip}
+              aria-label={iconTooltip}
             />
           )}
         </div>

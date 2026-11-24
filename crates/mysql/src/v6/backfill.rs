@@ -70,19 +70,26 @@ impl<RT: Runtime, L: BackfillLease> Backfill<'_, RT, L> {
     }
 
     pub(crate) async fn marker_indexes(&self) -> anyhow::Result<Vec<PersistenceIndexId>> {
-        self.pool
+        let mut connection = self
+            .pool
             .acquire("v6_backfill_marker_indexes", self.db_name)
-            .await?
-            .query_collect(
-                sql::LIST_BACKFILL_MARKER_INDEXES,
-                vec![self.deployment_id.into()],
-                16,
-                |row| {
-                    let id: u32 = row.get_opt(0).context("index_id")??;
-                    PersistenceIndexId::try_from(id)
-                },
+            .await?;
+        let mut indexes = Vec::new();
+        // `u64` so the bound past `u32::MAX` matches no marker instead of
+        // overflowing.
+        let mut next: u64 = 0;
+        while let Some(row) = connection
+            .query_optional(
+                sql::NEXT_BACKFILL_MARKER_INDEX,
+                vec![self.deployment_id.into(), next.into()],
             )
-            .await
+            .await?
+        {
+            let id: u32 = row.get_opt(0).context("index_id")??;
+            indexes.push(PersistenceIndexId::try_from(id)?);
+            next = u64::from(id) + 1;
+        }
+        Ok(indexes)
     }
 
     /// READ COMMITTED allows concurrent marker inserts for other indexes

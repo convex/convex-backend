@@ -101,6 +101,7 @@ export function ProjectForm({
                 onChange={formState.handleChange}
                 value={formState.values.slug}
                 Icon={CopyIcon}
+                iconTooltip="Copy project slug"
                 action={() => copyToClipboard(formState.values.slug)}
                 id="slug"
                 error={formState.errors.slug}

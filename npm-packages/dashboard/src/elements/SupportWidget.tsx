@@ -192,6 +192,7 @@ function SupportForm() {
           variant="neutral"
           icon={<ChevronLeftIcon />}
           onClick={() => setOpenState(true)}
+          aria-label="Back"
         />
         <h5>Get in touch</h5>
         <ClosePanelButton

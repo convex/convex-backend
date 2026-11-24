@@ -26,10 +26,12 @@ use common::{
         ComponentId,
         ComponentPath,
         PublicFunctionPath,
+        ResolvedComponentFunctionPath,
     },
     errors::JsError,
     execution_context::{
         ExecutionContext,
+        ExecutionId,
         RequestContext,
         RequestId,
     },
@@ -134,6 +136,7 @@ use model::{
         FileStorageId,
     },
     modules::{
+        function_validators::ReturnsValidator,
         module_versions::{
             AnalyzedModule,
             ModuleSource,
@@ -199,6 +202,7 @@ use value::{
     id_v6::DeveloperDocumentId,
     serialized_args_ext::SerializedArgsExt,
     JsonPackedValue,
+    NamespacedTableMapping,
     Size as _,
     TableNamespace,
 };
@@ -300,6 +304,19 @@ impl<RT: Runtime> FunctionRouter<RT> {
             action_limiter,
         }
     }
+}
+
+/// A component's init, with its path and arguments already
+/// validated against the transaction it will run in.
+pub struct ComponentInit {
+    pub path_and_args: ValidatedPathAndArgs,
+    pub returns_validator: ReturnsValidator,
+    pub table_mapping: NamespacedTableMapping,
+}
+
+pub struct ComponentInitOutcome {
+    pub execution_id: ExecutionId,
+    pub outcome: ValidatedUdfOutcome,
 }
 
 impl<RT: Runtime> FunctionRouter<RT> {
@@ -423,6 +440,55 @@ impl<RT: Runtime> FunctionRouter<RT> {
 
     // Drain the concurrency permits for `udf_type` to deterministically
     // exercise the concurrency limit in tests.
+    #[fastrace::trace]
+    pub(crate) async fn execute_component_inits(
+        &self,
+        tx: &mut Transaction<RT>,
+        inits: Vec<(ValidatedPathAndArgs, ExecutionId)>,
+        context: ExecutionContext,
+    ) -> anyhow::Result<BTreeMap<ResolvedComponentFunctionPath, FunctionOutcome>> {
+        let in_memory_index_last_modified = self
+            .database
+            .snapshot(tx.begin_timestamp())?
+            .in_memory_indexes
+            .in_memory_indexes_last_modified();
+        let timer = function_run_timer(UdfType::Init);
+        let (function_tx, outcomes, usage_stats) = self
+            .function_runner
+            .run_component_inits(
+                tx.identity().clone(),
+                tx.begin_timestamp(),
+                FunctionWrites {
+                    updates: tx.writes().as_flat()?.coalesced_writes().cloned().collect(),
+                },
+                inits,
+                self.default_system_env_vars.clone(),
+                in_memory_index_last_modified,
+                context,
+            )
+            .await?;
+        timer.finish();
+
+        tx.usage_tracker.add(usage_stats);
+        let FunctionReads {
+            reads,
+            num_intervals,
+            user_tx_size,
+            system_tx_size,
+        } = function_tx.reads;
+        tx.apply_function_runner_tx(
+            function_tx.begin_timestamp,
+            reads,
+            num_intervals,
+            user_tx_size,
+            system_tx_size,
+            function_tx.writes.updates,
+            function_tx.rows_read_by_tablet,
+            function_tx.uploaded_files,
+        )?;
+        Ok(outcomes)
+    }
+
     #[fastrace::trace]
     async fn function_runner_execute(
         &self,
@@ -1231,6 +1297,68 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             .await
     }
 
+    /// Runs component inits and merges the result back into `tx`. The caller
+    /// is responsible for validating the init args. Each init runs with its
+    /// own `ExecutionId` in `context`'s request.
+    pub async fn run_component_inits(
+        &self,
+        tx: &mut Transaction<RT>,
+        context: ExecutionContext,
+        requests: Vec<ComponentInit>,
+    ) -> anyhow::Result<BTreeMap<ResolvedComponentFunctionPath, ComponentInitOutcome>> {
+        self.database.check_write_throughput_limit()?;
+        anyhow::ensure!(!requests.is_empty(), "No inits to run");
+        let identity = tx.identity().clone();
+        let usage_tracker = tx.usage_tracker.clone();
+        let requests: Vec<_> = requests
+            .into_iter()
+            .map(|r| (r, ExecutionId::new()))
+            .collect();
+        let mut outcomes = self
+            .isolate_functions
+            .execute_component_inits(
+                tx,
+                requests
+                    .iter()
+                    .map(|(r, execution_id)| (r.path_and_args.clone(), *execution_id))
+                    .collect(),
+                context.clone(),
+            )
+            .await?;
+
+        let vars = AuditLogVars::from_context(context, identity.convex_actor_var(), &self.runtime)?;
+        let mut validated = BTreeMap::new();
+        for (request, execution_id) in requests {
+            let path = request.path_and_args.path().clone();
+            let outcome = outcomes
+                .remove(&path)
+                .with_context(|| format!("Missing outcome for init {path:?}"))?;
+            let outcome = match outcome {
+                FunctionOutcome::Mutation(o) => o,
+                _ => anyhow::bail!("Received non-mutation outcome for an init"),
+            };
+            self.audit_log_client
+                .send_logs(
+                    outcome.audit_log_lines.resolve_bodies(&vars)?,
+                    &usage_tracker,
+                )
+                .await?;
+            validated.insert(
+                path,
+                ComponentInitOutcome {
+                    execution_id,
+                    outcome: ValidatedUdfOutcome::new(
+                        outcome,
+                        request.returns_validator,
+                        &request.table_mapping,
+                        None,
+                    ),
+                },
+            );
+        }
+        Ok(validated)
+    }
+
     /// Attempts to run a mutation once using the given transaction.
     /// The caller handles retries and UDF logging.
     ///
@@ -1587,7 +1715,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             },
             ModuleEnvironment::Node => {
                 let source_package = SourcePackageModel::new(&mut tx, path.component.into())
-                    .get_latest()
+                    .get_latest(ModuleEnvironment::Node)
                     .await?
                     .context("no source package?")?;
                 let memory_mb: u32 = match source_package.node_default_memory_mb {

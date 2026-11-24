@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - The package is no longer marked as alpha.
 - For devDependencies imported by application code, `dev-dependency-bundled`

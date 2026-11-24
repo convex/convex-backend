@@ -31,6 +31,13 @@ use crate::must_s3_config_from_env;
 #[derive(Clone, Debug)]
 pub struct S3Client(pub Client);
 
+pub struct DeleteS3FilesResult {
+    pub deleted: usize,
+    pub failed: usize,
+}
+
+const MAX_DELETE_BATCH_SIZE: usize = 1000;
+
 static S3_TRASH_FOLDER: &str = ".trash/";
 
 static S3_OPERATION_ATTEMPT_TIMEOUT: LazyLock<Duration> =
@@ -121,22 +128,57 @@ impl S3Client {
             })
     }
 
+    /// Counts individual delete failures in S3 responses and continues with
+    /// later batches. A stream or request error can leave earlier batches
+    /// already deleted.
     pub async fn delete_s3_files(
         &self,
         bucket: String,
-        objects: impl Stream<Item = ObjectIdentifier> + Unpin,
-    ) -> anyhow::Result<()> {
-        let mut stream = objects.chunks(1000);
-        while let Some(chunk) = stream.next().await {
-            let req = self.0.delete_objects().bucket(&bucket).delete(
-                Delete::builder()
-                    .set_objects(Some(chunk))
-                    .quiet(true)
-                    .build()?,
-            );
-            req.send().await?;
+        mut objects: impl Stream<Item = anyhow::Result<ObjectIdentifier>> + Unpin,
+    ) -> anyhow::Result<DeleteS3FilesResult> {
+        let mut deleted = 0;
+        let mut failed = 0;
+        loop {
+            let mut batch = Vec::with_capacity(MAX_DELETE_BATCH_SIZE);
+            while batch.len() < MAX_DELETE_BATCH_SIZE {
+                let Some(object) = objects.try_next().await? else {
+                    break;
+                };
+                batch.push(object);
+            }
+            if batch.is_empty() {
+                break;
+            }
+            let batch_size = batch.len();
+            let response = self
+                .0
+                .delete_objects()
+                .bucket(&bucket)
+                .delete(
+                    Delete::builder()
+                        .set_objects(Some(batch))
+                        .quiet(true)
+                        .build()?,
+                )
+                .send()
+                .await?;
+            let errors = response.errors();
+            if let Some(first_error) = errors.first() {
+                tracing::warn!(
+                    %bucket,
+                    failed = errors.len(),
+                    error_code = ?first_error.code(),
+                    error_message = ?first_error.message(),
+                    "S3 returned per-object deletion errors"
+                );
+            }
+            deleted += batch_size - errors.len();
+            failed += errors.len();
+            if batch_size < MAX_DELETE_BATCH_SIZE {
+                break;
+            }
         }
-        Ok(())
+        Ok(DeleteS3FilesResult { deleted, failed })
     }
 
     pub async fn delete_s3_file(
@@ -243,8 +285,14 @@ impl S3Client {
                     .expect("Building ObjectIdentifier failed unexpectedly")
             });
 
-            let stream = futures::stream::iter(identifiers_iter);
-            self.delete_s3_files(bucket.clone(), stream).await?;
+            let stream = futures::stream::iter(identifiers_iter.map(Ok));
+            let result = self.delete_s3_files(bucket.clone(), stream).await?;
+            anyhow::ensure!(
+                result.failed == 0,
+                "Failed to remove {} delete markers in bucket {bucket} for deployment \
+                 {deployment_name}",
+                result.failed
+            );
             tracing::info!(
                 "Recovered {num_markers_found} deleted files for instance {deployment_name}"
             );

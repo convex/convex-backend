@@ -107,6 +107,9 @@ const databaseIndex = v.object({
   name: v.optional(v.string()),
   type: v.literal("database"),
   fields: v.array(v.string()),
+
+  // Missing on events written before staged indexes existed.
+  staged: v.optional(v.boolean()),
 });
 
 const searchIndex = v.object({
@@ -114,6 +117,7 @@ const searchIndex = v.object({
   type: v.literal("search"),
   searchField: v.string(),
   filterFields: v.array(v.string()),
+  staged: v.optional(v.boolean()),
 });
 
 const vectorIndex = v.object({
@@ -121,7 +125,8 @@ const vectorIndex = v.object({
   type: v.literal("vector"),
   vectorField: v.string(),
   filterFields: v.array(v.string()),
-  dimensions: v.number(),
+  dimensions: v.int64(),
+  staged: v.optional(v.boolean()),
 });
 
 export const indexMetadata = v.union(databaseIndex, searchIndex, vectorIndex);
@@ -135,6 +140,10 @@ export const buildIndexes = auditLogEventValidator("build_indexes", {
 export const indexDiff = v.object({
   added_indexes: indexConfigs,
   removed_indexes: indexConfigs,
+
+  // Missing on events written before staged indexes existed.
+  enabled_indexes: v.optional(indexConfigs),
+  disabled_indexes: v.optional(indexConfigs),
 });
 
 export const authDiff = v.object({
@@ -171,8 +180,9 @@ export const schemaDiffType = v.optional(
   v.union(
     v.null(),
     v.object({
-      previous_schema_id: v.union(v.id("_schemas"), v.null()),
-      next_schema_id: v.union(v.id("_schemas"), v.null()),
+      // Older events have the schema IDs, newer ones the schemas themselves.
+      previous_schema_id: v.optional(v.union(v.id("_schemas"), v.null())),
+      next_schema_id: v.optional(v.union(v.id("_schemas"), v.null())),
       previous_schema: v.optional(v.union(v.string(), v.null())),
       next_schema: v.optional(v.union(v.string(), v.null())),
     }),
@@ -184,6 +194,15 @@ export const pushConfig = auditLogEventValidator("push_config", {
   server_version: serverVersion,
   modules: moduleDiff,
   crons: cronDiffType,
+  indexes: v.optional(
+    v.union(
+      v.object({
+        added: v.array(v.string()),
+        dropped: v.array(v.string()),
+      }),
+      v.null(),
+    ),
+  ),
   schema: schemaDiffType,
 });
 
@@ -196,7 +215,7 @@ export const componentDiff = v.object({
       v.literal("remount"),
     ),
   }),
-  indexDiff: v.optional(indexDiff),
+  indexDiff: v.optional(v.union(indexDiff, v.null())),
   udfConfigDiff: serverVersion,
   moduleDiff: moduleDiff,
   cronDiff: cronDiffType,
@@ -213,7 +232,7 @@ export const pushConfigWithComponents = auditLogEventValidator(
         component_diff: componentDiff,
       }),
     ),
-    message: v.optional(v.string()),
+    message: v.optional(v.union(v.string(), v.null())),
     node_version_diff: v.optional(nodeVersionDiff),
   },
 );
@@ -283,7 +302,13 @@ const componentMetadata = {
 
 const deleteScheduledJobsTable = auditLogEventValidator(
   "delete_scheduled_jobs_table",
-  componentMetadata,
+  {
+    ...componentMetadata,
+
+    // Unlike the other actions using `componentMetadata`, this one predates
+    // `component_id`, so events written before April 2026 lack it.
+    component_id: v.optional(v.union(v.null(), v.string())),
+  },
 );
 
 const deleteTables = auditLogEventValidator("delete_tables", {

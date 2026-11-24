@@ -149,6 +149,7 @@ message FunctionCaller {
     google.protobuf.Empty cron = 5;
     SchedulerFunctionCaller scheduler = 6;
     ActionFunctionCaller action = 7;
+    google.protobuf.Empty push = 8;
   }
 }
 

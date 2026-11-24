@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.51.0
+
+- Node actions can now run with 2048 MiB of memory. Set `node.defaultMemoryMb`
+  to `2048` in `convex.json` to give every Node action in the deployment more
+  memory. The default stays at 512 MiB. Node actions bill action compute at the
+  memory size you set. See
+  [Configuring Node.js action memory](https://docs.convex.dev/config/convex.json#configuring-nodejs-action-memory).
+- `npx convex ai-files install` and `npx convex ai-files update` now remove
+  Convex agent skills that were deleted upstream.
+- `npx convex deployment create --help` now documents the `--class` option.
+
 ## 1.50.0
 
 - The CLI can now quickly switch between multiple Convex accounts with aliases

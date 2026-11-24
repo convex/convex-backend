@@ -501,6 +501,10 @@ impl Persistence for PostgresPersistence {
         self.newly_created.load(SeqCst)
     }
 
+    fn lease_ts(&self) -> Option<i64> {
+        Some(self.lease.lease_ts)
+    }
+
     fn reader(&self) -> Arc<dyn PersistenceReader> {
         Arc::new(PostgresReader {
             read_pool: self.read_pool.clone(),

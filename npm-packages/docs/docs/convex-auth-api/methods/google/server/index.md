@@ -47,6 +47,7 @@ const vGoogleProfile: VObject<
   {
     email?: string;
     emailVerified: boolean;
+    hostedDomain?: string;
     id: string;
     name?: string;
     picture?: string;
@@ -54,12 +55,13 @@ const vGoogleProfile: VObject<
   {
     email: VString<string | undefined, "optional">;
     emailVerified: VBoolean<boolean, "required">;
+    hostedDomain: VString<string | undefined, "optional">;
     id: VString<string, "required">;
     name: VString<string | undefined, "optional">;
     picture: VString<string | undefined, "optional">;
   },
   "required",
-  "id" | "email" | "name" | "emailVerified" | "picture"
+  "id" | "email" | "name" | "emailVerified" | "hostedDomain" | "picture"
 >;
 ```
 
@@ -98,6 +100,12 @@ optional email?: string;
 
 ```ts
 emailVerified: boolean;
+```
+
+##### hostedDomain?
+
+```ts
+optional hostedDomain?: string;
 ```
 
 ##### id
@@ -179,9 +187,9 @@ declared) and get the functions of this method to export.
 
 ###### Parameters
 
-| Parameter   | Type                                                                                                                                                        |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `callbacks` | `UserCallbacks`\<`"google"`, \{ `email?`: `string`; `emailVerified`: `boolean`; `id`: `string`; `name?`: `string`; `picture?`: `string`; \}, `UsersTable`\> |
+| Parameter   | Type                                                                                                                                                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `callbacks` | `UserCallbacks`\<`"google"`, \{ `email?`: `string`; `emailVerified`: `boolean`; `hostedDomain?`: `string`; `id`: `string`; `name?`: `string`; `picture?`: `string`; \}, `UsersTable`\> |
 
 ###### Returns
 

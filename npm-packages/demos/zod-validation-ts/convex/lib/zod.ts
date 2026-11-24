@@ -3,7 +3,7 @@ import {
   zCustomAction,
   zCustomMutation,
   zCustomQuery,
-} from "convex-helpers/server/zod3";
+} from "convex-helpers/server/zod4";
 // You can futher customize the query builder, see convex-helpers/server/customFunctions.
 import { NoOp } from "convex-helpers/server/customFunctions";
 

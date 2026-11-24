@@ -72,7 +72,9 @@ export type DeploymentOp =
   | "ViewUsage"
   | "ViewUsageLimits"
   | "WriteUsageLimits"
-  | "UseAiGateway";
+  | "UseAiGateway"
+  | "ConfigurePeriodicBackups"
+  | "DisablePeriodicBackups";
 
 export function requireOperation(
   operation: DeploymentOp | NoPermissionRequired,

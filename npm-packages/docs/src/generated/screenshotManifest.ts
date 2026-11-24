@@ -319,12 +319,12 @@ export const screenshots = [
     "light": {
       "filename": "pages_projects_team_switcher_light.webp",
       "width": 1344,
-      "height": 1027
+      "height": 1037
     },
     "dark": {
       "filename": "pages_projects_team_switcher_dark.webp",
       "width": 1344,
-      "height": 1027
+      "height": 1037
     }
   },
   {
@@ -332,12 +332,12 @@ export const screenshots = [
     "light": {
       "filename": "pages_projects_team_switcher_with_invitation_light.webp",
       "width": 1344,
-      "height": 1027
+      "height": 1093
     },
     "dark": {
       "filename": "pages_projects_team_switcher_with_invitation_dark.webp",
       "width": 1344,
-      "height": 1027
+      "height": 1093
     }
   },
   {
@@ -852,12 +852,12 @@ export const screenshots = [
     "light": {
       "filename": "pages_project_deployment_data_multiple_dev_deployments_selector_light.webp",
       "width": 1344,
-      "height": 924
+      "height": 944
     },
     "dark": {
       "filename": "pages_project_deployment_data_multiple_dev_deployments_selector_dark.webp",
       "width": 1344,
-      "height": 924
+      "height": 944
     }
   },
   {
@@ -865,12 +865,12 @@ export const screenshots = [
     "light": {
       "filename": "pages_project_deployment_data_deployment_switcher_light.webp",
       "width": 1344,
-      "height": 1024
+      "height": 848
     },
     "dark": {
       "filename": "pages_project_deployment_data_deployment_switcher_dark.webp",
       "width": 1344,
-      "height": 1024
+      "height": 848
     }
   },
   {
@@ -878,12 +878,12 @@ export const screenshots = [
     "light": {
       "filename": "pages_project_deployment_data_preview_deployment_switcher_light.webp",
       "width": 1344,
-      "height": 1024
+      "height": 944
     },
     "dark": {
       "filename": "pages_project_deployment_data_preview_deployment_switcher_dark.webp",
       "width": 1344,
-      "height": 1024
+      "height": 944
     }
   },
   {
@@ -891,12 +891,12 @@ export const screenshots = [
     "light": {
       "filename": "pages_project_deployment_data_project_switcher_light.webp",
       "width": 1344,
-      "height": 1027
+      "height": 901
     },
     "dark": {
       "filename": "pages_project_deployment_data_project_switcher_dark.webp",
       "width": 1344,
-      "height": 1027
+      "height": 901
     }
   },
   {

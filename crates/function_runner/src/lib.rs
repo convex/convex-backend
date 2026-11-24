@@ -18,7 +18,10 @@ use common::{
     },
     document::PendingDocumentUpdate,
     errors::JsError,
-    execution_context::ExecutionContext,
+    execution_context::{
+        ExecutionContext,
+        ExecutionId,
+    },
     log_lines::LogLine,
     runtime::{
         Runtime,
@@ -102,12 +105,13 @@ pub trait FunctionRunner<RT: Runtime>: Send + Sync + 'static {
         FunctionUsageStats,
     )>;
 
+    /// Each init runs with its own `ExecutionId` in `context`'s request.
     async fn run_component_inits(
         &self,
         identity: Identity,
         ts: RepeatableTimestamp,
         existing_writes: FunctionWrites,
-        path_and_args: Vec<ValidatedPathAndArgs>,
+        inits: Vec<(ValidatedPathAndArgs, ExecutionId)>,
         default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         in_memory_index_last_modified: BTreeMap<IndexId, Timestamp>,
         context: ExecutionContext,

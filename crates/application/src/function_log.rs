@@ -181,8 +181,9 @@ pub struct FunctionExecution {
     pub occ_info: Option<OccInfo>,
 
     /// Whether this function will be retried (e.g. a mutation that OCCs or hits
-    /// write throughput limits)
-    pub will_retry: bool,
+    /// write throughput limits). `None` when that isn't known yet when the
+    /// execution is logged.
+    pub will_retry: Option<bool>,
 
     // Whether this was a fresh call or a rerun. Only applicable for queries.
     pub query_invocation: Option<QueryInvocation>,
@@ -752,7 +753,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: None,
             occ_info: None,
-            will_retry: false,
+            will_retry: Some(false),
             query_invocation: Some(query_invocation),
         };
         self.log_execution(execution, true, true);
@@ -782,6 +783,51 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             false,
         )
         .await
+    }
+
+    pub fn log_component_init(
+        &self,
+        outcome: ValidatedUdfOutcome,
+        execution_time: Duration,
+        context: ExecutionContext,
+    ) {
+        if outcome.path.udf_path.is_system() {
+            return;
+        }
+        let args_bytes = Some(outcome.arguments.heap_size() as u64);
+        let return_bytes = outcome.result.as_ref().ok().map(|v| v.heap_size() as u64);
+        let execution = FunctionExecution {
+            params: UdfParams::Function {
+                error: outcome.result.err(),
+                identifier: outcome.path,
+            },
+            unix_timestamp: self.rt.unix_timestamp(),
+            execution_timestamp: outcome.unix_timestamp,
+            udf_type: UdfType::Init,
+            log_lines: outcome.log_lines,
+            // TODO(renee): populate tables_touched
+            tables_touched: BTreeMap::new().into(),
+            cached_result: false,
+            execution_time: execution_time.as_secs_f64(),
+            user_execution_time: outcome.user_execution_time,
+            caller: FunctionCaller::Push,
+            environment: ModuleEnvironment::Isolate,
+            syscall_trace: outcome.syscall_trace,
+            // TODO(API-106): log usage for init functions
+            usage_stats: AggregatedFunctionUsageStats::default(),
+            memory_used_mb: outcome.memory_in_mb,
+            args_bytes,
+            return_bytes,
+            udf_server_version: outcome.udf_server_version,
+            identity: outcome.identity,
+            context,
+            mutation_queue_length: None,
+            mutation_retry_count: None,
+            occ_info: None,
+            will_retry: None,
+            query_invocation: None,
+        };
+        self.log_execution(execution, true, true);
     }
 
     pub async fn log_mutation_system_error(
@@ -957,7 +1003,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: Some(mutation_retry_count),
             occ_info,
-            will_retry,
+            will_retry: Some(will_retry),
             query_invocation: None,
         };
         self.log_execution(execution, true, true);
@@ -1057,7 +1103,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context: completion.context,
             mutation_retry_count: None,
             occ_info: None,
-            will_retry: false,
+            will_retry: Some(false),
             query_invocation: None,
         };
         self.log_execution(execution, /* send_console_events */ false, true)
@@ -1220,7 +1266,7 @@ impl<RT: Runtime> FunctionExecutionLog<RT> {
             context,
             mutation_retry_count: None,
             occ_info: None,
-            will_retry: false,
+            will_retry: Some(false),
             query_invocation: None,
         };
         self.log_execution(

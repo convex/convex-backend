@@ -48,12 +48,12 @@ export function* walkDir(
 // Convex specific module environment.
 type ModuleEnvironment = "node" | "isolate";
 
-export interface Bundle {
+export type Bundle = {
   path: string;
   source: string;
   sourceMap?: string | undefined;
   environment: ModuleEnvironment;
-}
+};
 
 export interface BundleHash {
   path: string;

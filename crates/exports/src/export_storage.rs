@@ -47,7 +47,6 @@ use serde::{
 };
 use serde_json::json;
 use storage::StorageExt;
-use thousands::Separable;
 use tokio_util::io::StreamReader;
 use usage_tracking::{
     FunctionUsageTracker,
@@ -61,6 +60,7 @@ use value::{
 
 use crate::{
     ensure_file_storage_export_size,
+    progress_count,
     zip_uploader::ZipSnapshotUpload,
     ExportComponents,
 };
@@ -78,7 +78,7 @@ pub(crate) async fn write_storage_table<'a, 'b: 'a, F, Fut, RT: Runtime>(
     requestor: ExportRequestor,
     update_progress: &F,
     in_component_str: &str,
-    storage_total_entries: u64,
+    storage_total_entries: Option<u64>,
     file_storage_size: &mut u64,
 ) -> anyhow::Result<()>
 where
@@ -129,9 +129,8 @@ where
                      so far",
                 );
                 update_progress(format!(
-                    "Backing up _storage{in_component_str}: {} / {} entries (metadata)",
-                    num_storage_entries.separate_with_commas(),
-                    storage_total_entries.separate_with_commas(),
+                    "Backing up _storage{in_component_str}: {} entries (metadata)",
+                    progress_count(num_storage_entries, storage_total_entries),
                 ))
                 .await?;
                 last_log_time = Instant::now();
@@ -228,9 +227,8 @@ where
                 "Export _storage files in progress: {num_files} files downloaded so far",
             );
             update_progress(format!(
-                "Backing up _storage{in_component_str}: {} / {} files (downloading)",
-                num_files.separate_with_commas(),
-                storage_total_entries.separate_with_commas(),
+                "Backing up _storage{in_component_str}: {} files (downloading)",
+                progress_count(num_files, storage_total_entries),
             ))
             .await?;
             last_log_time = Instant::now();

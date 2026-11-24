@@ -134,4 +134,11 @@ impl<'a, RT: Runtime> BackendInfoModel<'a, RT> {
         );
         Ok(())
     }
+
+    pub async fn is_periodic_backups_enabled(&mut self) -> anyhow::Result<bool> {
+        let backend_info = self.get().await?;
+        Ok(backend_info
+            .and_then(|bi| bi.periodic_backups_enabled)
+            .unwrap_or(false))
+    }
 }

@@ -14,13 +14,14 @@ export const flagDefaults: {
   showFivetranSyncProgress: boolean;
   supportTicketForAllPlans: boolean;
   healthDeployProgress: boolean;
-  componentSwitcherTreeEnabled: boolean;
+  virtualizedFunctionsSidebar: boolean;
   preAuthorizeStarterPlan: boolean;
   preAuthorizePaymentMethodChange: boolean;
   tagEditUi: boolean;
   estimateUsageLimitsCost: boolean;
   dailyUsageSummaries: boolean;
   showLegacyKeyUsage: boolean;
+  teamIntegrationsPage: boolean;
 } = {
   allowDefaultEnvRollout: false,
   commandPaletteDeleteProjects: false,
@@ -34,13 +35,14 @@ export const flagDefaults: {
   showFivetranSyncProgress: false,
   supportTicketForAllPlans: false,
   healthDeployProgress: false,
-  componentSwitcherTreeEnabled: false,
+  virtualizedFunctionsSidebar: false,
   preAuthorizeStarterPlan: false,
   preAuthorizePaymentMethodChange: false,
   tagEditUi: false,
   estimateUsageLimitsCost: false,
   dailyUsageSummaries: false,
   showLegacyKeyUsage: false,
+  teamIntegrationsPage: false,
 };
 
 export const flagDefaultsKebabCase = Object.entries(flagDefaults).reduce(

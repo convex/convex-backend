@@ -2,7 +2,7 @@ import type { TSESTree } from "@typescript-eslint/types";
 import { AST_NODE_TYPES } from "@typescript-eslint/types";
 import { createRule } from "../util.js";
 import { isDbQueryChainFallback } from "./query-ast.js";
-import { findOrderedQuerySymbol, isOrderedQuery } from "./query-types.js";
+import { findOrderedQuerySymbols, isOrderedQuery } from "./query-types.js";
 
 type Options = [];
 type MessageIds =
@@ -67,9 +67,9 @@ export const noCollectInQuery = createRule<Options, MessageIds>({
 
     // Resolve the `OrderedQuery` type from the convex package once (only
     // possible when type info is available).
-    const orderedQuerySymbol =
+    const orderedQuerySymbols =
       hasTypeInfo && services?.program
-        ? findOrderedQuerySymbol(services.program, checker)
+        ? findOrderedQuerySymbols(services.program, checker)
         : null;
 
     return {
@@ -85,7 +85,7 @@ export const noCollectInQuery = createRule<Options, MessageIds>({
         if (hasTypeInfo) {
           // If we couldn't resolve `OrderedQuery`, skip to avoid false
           // positives (the file likely doesn't use Convex at all).
-          if (!orderedQuerySymbol) {
+          if (!orderedQuerySymbols) {
             return;
           }
 
@@ -96,7 +96,7 @@ export const noCollectInQuery = createRule<Options, MessageIds>({
             return;
           }
 
-          if (!isOrderedQuery(objectType, orderedQuerySymbol, checker)) {
+          if (!isOrderedQuery(objectType, orderedQuerySymbols, checker)) {
             return;
           }
 

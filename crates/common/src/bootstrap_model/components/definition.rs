@@ -10,12 +10,16 @@ use serde::{
     Serialize,
 };
 use serde_json::Value as JsonValue;
-use sync_types::path::PathComponent;
+use sync_types::{
+    path::PathComponent,
+    CanonicalizedUdfPath,
+};
 use value::{
     codegen_convex_serialization,
     heap_size::HeapSize,
     identifier::Identifier,
     ConvexValue,
+    FieldName,
     TableMapping,
     TableNamespace,
 };
@@ -48,6 +52,9 @@ pub struct ComponentDefinitionMetadata {
     pub exports: BTreeMap<PathComponent, ComponentExport>,
 
     pub env_vars: BTreeMap<Identifier, EnvVarValidator>,
+
+    /// The path to the component's init function
+    pub init: Option<CanonicalizedUdfPath>,
 }
 
 impl ComponentDefinitionMetadata {
@@ -60,6 +67,7 @@ impl ComponentDefinitionMetadata {
             http_prefix: None,
             exports: BTreeMap::new(),
             env_vars: BTreeMap::new(),
+            init: None,
         }
     }
 
@@ -123,6 +131,7 @@ pub struct ComponentInstantiation {
     pub name: ComponentName,
     pub path: ComponentDefinitionPath,
     pub env: BTreeMap<Identifier, EnvBinding>,
+    pub args: BTreeMap<Identifier, ComponentArgument>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +167,47 @@ impl EnvVarValidator {
     }
 }
 
+/// An argument a parent component passes to its child component's init
+/// function. References resolve in the parent component.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ComponentArgument {
+    Value(ConvexValue),
+    /// A reference to a function in the parent component
+    Function(CanonicalizedUdfPath),
+    /// A reference to a child of the parent component. Equivalent to
+    /// `Reference::ChildComponent`.
+    ChildComponent {
+        component: ComponentName,
+        attributes: Vec<PathComponent>,
+    },
+    /// One of the parent's own arguments, forwarded to the child
+    ParentArgument(Identifier),
+    /// An object whose fields may hold references or parent arguments
+    Object(BTreeMap<FieldName, ComponentArgument>),
+    /// An array whose elements may hold references or parent arguments
+    Array(Vec<ComponentArgument>),
+}
+
+impl TryFrom<Reference> for ComponentArgument {
+    type Error = anyhow::Error;
+
+    fn try_from(reference: Reference) -> anyhow::Result<Self> {
+        match reference {
+            Reference::Function(path) => Ok(Self::Function(path)),
+            Reference::ChildComponent {
+                component,
+                attributes,
+            } => Ok(Self::ChildComponent {
+                component,
+                attributes,
+            }),
+            Reference::CurrentSystemUdfInComponent { .. } => {
+                anyhow::bail!("Invalid component argument reference: {reference:?}")
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum EnvBinding {
     Value(
@@ -177,6 +227,8 @@ pub struct SerializedComponentDefinitionMetadata {
     exports: SerializedComponentExport,
     #[serde(default)]
     env_vars: Option<Vec<(String, SerializedEnvVarValidator)>>,
+    #[serde(default)]
+    init: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -203,6 +255,26 @@ pub enum SerializedEnvVarValidator {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
+pub enum SerializedComponentArgument {
+    Value {
+        value: String,
+    },
+    Reference {
+        reference: String,
+    },
+    ParentArgument {
+        name: String,
+    },
+    Object {
+        fields: Vec<(String, SerializedComponentArgument)>,
+    },
+    Array {
+        elements: Vec<SerializedComponentArgument>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum SerializedEnvBinding {
     Value { value: String },
     EnvVar { name: String },
@@ -213,12 +285,10 @@ pub enum SerializedEnvBinding {
 struct SerializedComponentInstantiation {
     name: String,
     path: String,
-    /// Always serialized as `null`: CLIs up to 1.38 validate this field as
-    /// `z.nullable(...)` in the push analysis response and reject it when the
-    /// key is absent.
+    /// CLIs up to 1.38 validate this field as `z.nullable(...)` in the push
+    /// analysis response and reject it when the key is absent.
     #[serde(default)]
-    #[deprecated]
-    args: Option<Vec<(String, JsonValue)>>,
+    args: Option<Vec<(String, SerializedComponentArgument)>>,
     #[serde(default)]
     env: Vec<(String, SerializedEnvBinding)>,
 }
@@ -265,6 +335,7 @@ impl TryFrom<ComponentDefinitionMetadata> for SerializedComponentDefinitionMetad
             http_prefix: m.http_prefix.map(String::from),
             exports: ComponentExport::Branch(m.exports).try_into()?,
             env_vars,
+            init: m.init.map(String::from),
         })
     }
 }
@@ -299,6 +370,7 @@ impl TryFrom<SerializedComponentDefinitionMetadata> for ComponentDefinitionMetad
             http_prefix: m.http_prefix.map(|s| s.parse()).transpose()?,
             exports,
             env_vars,
+            init: m.init.map(|s| s.parse()).transpose()?,
         })
     }
 }
@@ -333,6 +405,18 @@ impl TryFrom<SerializedComponentDefinitionType> for ComponentDefinitionType {
     }
 }
 
+impl ComponentInstantiation {
+    /// The bytes `args` occupies in the stored definition document.
+    pub fn serialized_args_size(&self) -> anyhow::Result<usize> {
+        let args: Vec<(String, SerializedComponentArgument)> = self
+            .args
+            .iter()
+            .map(|(k, v)| anyhow::Ok((String::from(k.clone()), v.clone().try_into()?)))
+            .try_collect()?;
+        Ok(serde_json::to_vec(&args)?.len())
+    }
+}
+
 impl TryFrom<ComponentInstantiation> for SerializedComponentInstantiation {
     type Error = anyhow::Error;
 
@@ -340,13 +424,17 @@ impl TryFrom<ComponentInstantiation> for SerializedComponentInstantiation {
         Ok(Self {
             name: String::from(i.name),
             path: String::from(i.path),
-            #[allow(deprecated)]
-            args: None,
             env: i
                 .env
                 .into_iter()
                 .map(|(k, v)| anyhow::Ok((String::from(k), v.try_into()?)))
                 .try_collect()?,
+            args: Some(
+                i.args
+                    .into_iter()
+                    .map(|(k, v)| anyhow::Ok((String::from(k), v.try_into()?)))
+                    .try_collect()?,
+            ),
         })
     }
 }
@@ -360,6 +448,12 @@ impl TryFrom<SerializedComponentInstantiation> for ComponentInstantiation {
             path: i.path.parse()?,
             env: i
                 .env
+                .into_iter()
+                .map(|(k, v)| anyhow::Ok((k.parse()?, v.try_into()?)))
+                .try_collect()?,
+            args: i
+                .args
+                .unwrap_or_default()
                 .into_iter()
                 .map(|(k, v)| anyhow::Ok((k.parse()?, v.try_into()?)))
                 .try_collect()?,
@@ -386,6 +480,71 @@ impl TryFrom<SerializedEnvVarValidator> for EnvVarValidator {
         Ok(Self {
             validator: Validator::json_deserialize(&value)?,
             optional: optional.unwrap_or(false),
+        })
+    }
+}
+
+impl TryFrom<ComponentArgument> for SerializedComponentArgument {
+    type Error = anyhow::Error;
+
+    fn try_from(a: ComponentArgument) -> anyhow::Result<Self> {
+        Ok(match a {
+            ComponentArgument::Value(v) => SerializedComponentArgument::Value {
+                value: v.json_serialize()?,
+            },
+            ComponentArgument::Function(path) => SerializedComponentArgument::Reference {
+                reference: String::from(Reference::Function(path)),
+            },
+            ComponentArgument::ChildComponent {
+                component,
+                attributes,
+            } => SerializedComponentArgument::Reference {
+                reference: String::from(Reference::ChildComponent {
+                    component,
+                    attributes,
+                }),
+            },
+            ComponentArgument::ParentArgument(name) => {
+                SerializedComponentArgument::ParentArgument {
+                    name: String::from(name),
+                }
+            },
+            ComponentArgument::Object(fields) => SerializedComponentArgument::Object {
+                fields: fields
+                    .into_iter()
+                    .map(|(k, v)| anyhow::Ok((k.to_string(), v.try_into()?)))
+                    .try_collect()?,
+            },
+            ComponentArgument::Array(elements) => SerializedComponentArgument::Array {
+                elements: elements.into_iter().map(TryInto::try_into).try_collect()?,
+            },
+        })
+    }
+}
+
+impl TryFrom<SerializedComponentArgument> for ComponentArgument {
+    type Error = anyhow::Error;
+
+    fn try_from(a: SerializedComponentArgument) -> anyhow::Result<Self> {
+        Ok(match a {
+            SerializedComponentArgument::Value { value } => ComponentArgument::Value(
+                ConvexValue::try_from(serde_json::from_str::<JsonValue>(&value)?)?,
+            ),
+            SerializedComponentArgument::Reference { reference } => {
+                reference.parse::<Reference>()?.try_into()?
+            },
+            SerializedComponentArgument::ParentArgument { name } => {
+                ComponentArgument::ParentArgument(name.parse()?)
+            },
+            SerializedComponentArgument::Object { fields } => ComponentArgument::Object(
+                fields
+                    .into_iter()
+                    .map(|(k, v)| anyhow::Ok((k.parse()?, v.try_into()?)))
+                    .try_collect()?,
+            ),
+            SerializedComponentArgument::Array { elements } => {
+                ComponentArgument::Array(elements.into_iter().map(TryInto::try_into).try_collect()?)
+            },
         })
     }
 }

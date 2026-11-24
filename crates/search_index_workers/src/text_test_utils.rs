@@ -110,6 +110,15 @@ impl TextFixtures {
         rt: TestRuntime,
         config: CompactionConfig,
     ) -> anyhow::Result<Self> {
+        Self::new_with_args(rt, config, DbFixturesArgs::default()).await
+    }
+
+    /// `args.searcher` is replaced with an in-process searcher.
+    pub async fn new_with_args(
+        rt: TestRuntime,
+        config: CompactionConfig,
+        args: DbFixturesArgs,
+    ) -> anyhow::Result<Self> {
         let in_process_searcher = InProcessSearcher::new(rt.clone())?;
         let DbFixtures {
             tp,
@@ -123,7 +132,7 @@ impl TextFixtures {
             &rt,
             DbFixturesArgs {
                 searcher: Some(Arc::new(in_process_searcher.clone())),
-                ..Default::default()
+                ..args
             },
         )
         .await?;

@@ -10,7 +10,7 @@ import {
   userEvent,
   within,
 } from "storybook/test";
-import { useEffect, type ContextType } from "react";
+import { useEffect, useRef, type ContextType } from "react";
 import type { FunctionReturnType } from "convex/server";
 import type { Value } from "convex/values";
 import udfs from "@common/udfs";
@@ -264,10 +264,15 @@ export const NavigatingRowsAreLinks: Story = {
   },
   play: async () => {
     const user = userEvent.setup();
+    const dialog = await screen.findByRole("dialog", {
+      name: "Convex Command Palette",
+    });
 
     // Rows that navigate are real links, so the browser's own ⌘-click /
     // open-in-new-tab affordances work on them.
-    const schema = await screen.findByRole("option", { name: /^Schema/ });
+    const schema = await within(dialog).findByRole("option", {
+      name: /^Schema/,
+    });
     const schemaLink = within(schema).getByRole("link");
     await expect(schemaLink).toHaveAttribute(
       "href",
@@ -515,9 +520,16 @@ function DeploymentSwitcherMenu() {
   const [, setOpen] = useCommandPaletteOpen();
   const [, setAnchor] = useCommandPaletteAnchor();
   const [, setInitialPages] = useCommandPaletteInitialPages();
+  const triggerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (!triggerRef.current) {
+      return;
+    }
     setInitialPages([{ type: "deployments", project: mockProject }]);
-    setAnchor({ left: 16, top: 56, source: "deployment-switcher" });
+    setAnchor({
+      reference: triggerRef.current,
+      source: "deployment-switcher",
+    });
     setOpen(true);
     return () => {
       setOpen(false);
@@ -527,7 +539,10 @@ function DeploymentSwitcherMenu() {
   return (
     <div className="h-screen bg-background-primary">
       <div className="flex h-14 items-center border-b bg-background-secondary px-4">
-        <div className="flex h-9 items-center gap-2 rounded-full border bg-background-primary px-4 text-sm font-medium text-content-primary">
+        <div
+          ref={triggerRef}
+          className="flex h-9 items-center gap-2 rounded-full border bg-background-primary px-4 text-sm font-medium text-content-primary"
+        >
           <span className="font-mono font-normal">dev/nicolas</span>
         </div>
       </div>

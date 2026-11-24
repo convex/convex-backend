@@ -2,6 +2,7 @@ import classNames from "classnames";
 import { Loading } from "@ui/Loading";
 import { PageContent } from "@common/elements/PageContent";
 import { useCurrentTeam, useTeamEntitlements } from "api/teams";
+import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import startCase from "lodash/startCase";
 import Head from "next/head";
 import React from "react";
@@ -34,6 +35,7 @@ export function TeamSettingsLayout({
 
   const entitlements = useTeamEntitlements(selectedTeam?.id);
   const auditLogsEnabled = entitlements?.auditLogRetentionDays !== 0;
+  const { teamIntegrationsPage } = useLaunchDarkly();
 
   const pages: TeamSettingsPage[] = [
     "general",
@@ -44,6 +46,7 @@ export function TeamSettingsLayout({
     "referrals",
     "access-tokens",
     "applications",
+    ...(teamIntegrationsPage ? (["integrations"] as const) : []),
   ];
 
   return (

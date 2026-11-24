@@ -13,6 +13,7 @@ import {
   DocumentTextIcon,
   KeyIcon,
   LockClosedIcon,
+  Squares2X2Icon,
 } from "@heroicons/react/24/outline";
 
 export type TeamSettingsPage =
@@ -25,6 +26,7 @@ export type TeamSettingsPage =
   | "referrals"
   | "access-tokens"
   | "applications"
+  | "integrations"
   | "custom-roles"
   | "team-authentication";
 
@@ -44,6 +46,7 @@ export const TEAM_SETTINGS_PAGE_ICONS: Record<
   referrals: PaperPlaneIcon,
   "access-tokens": KeyIcon,
   applications: Link2Icon,
+  integrations: Squares2X2Icon,
   "custom-roles": IdCardIcon,
   "team-authentication": LockClosedIcon,
 };

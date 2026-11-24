@@ -43,7 +43,7 @@ export function useDeploymentIsDisconnected(): boolean {
   return value.isDisconnected;
 }
 
-const shapes2ResponseSchema = z.record(shapeSchema);
+const shapes2ResponseSchema = z.record(z.string(), shapeSchema);
 
 export function useTableShapes(): {
   tables: Map<string, Shape> | undefined;

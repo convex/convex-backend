@@ -22,6 +22,7 @@ pub mod codel_queue;
 pub mod comparators;
 pub mod components;
 pub mod coverage;
+pub mod cron;
 pub mod deleted_bitset;
 pub mod document;
 pub mod document_index_keys;

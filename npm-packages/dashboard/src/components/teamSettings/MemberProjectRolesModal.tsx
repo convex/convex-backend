@@ -1,4 +1,4 @@
-import { Button } from "@ui/Button";
+import { cn } from "@ui/cn";
 import { Tooltip } from "@ui/Tooltip";
 import { Checkbox } from "@ui/Checkbox";
 import { Modal } from "@ui/Modal";
@@ -18,17 +18,22 @@ import { useHasProjectAdminPermissions } from "api/roles";
 import { usePaginatedProjects } from "api/projects";
 import sortBy from "lodash/sortBy";
 import { TeamMemberLink } from "elements/TeamMemberLink";
-import { PaginationControls } from "elements/PaginationControls";
-import { useDebounce } from "react-use";
 import {
-  useProjectsPageSize,
-  PROJECT_PAGE_SIZES,
-} from "hooks/useProjectsPageSize";
+  listMinHeight,
+  PendingRoleChangeBadge,
+  RoleChangesFooter,
+} from "elements/ProjectAdminRoleChanges";
+import { PaginationControls } from "elements/PaginationControls";
+import { ListTable, ListTableHeaderDetail } from "elements/ListTable";
+import { useDebounce } from "react-use";
+import { useProjectsPageSize } from "hooks/useProjectsPageSize";
 import {
   useCursorPagination,
   useSnapBackOnEmptyPage,
 } from "hooks/useCursorPagination";
-import { ProjectLink } from "./AuditLogItem";
+
+// The pagination bar at the foot of the list: py-2 around an sm button.
+const PAGINATION_FOOTER_REM = 3;
 
 export function MemberProjectRolesModal({
   team,
@@ -50,6 +55,19 @@ export function MemberProjectRolesModal({
 
   const addedProjects = difference(newProjectRoles, originalProjectRoles);
   const removedProjects = difference(originalProjectRoles, newProjectRoles);
+  // Projects can be toggled on any page, so remember their names for the
+  // unsaved changes summary rather than looking them up in the current page.
+  const [projectNames, setProjectNames] = useState<Record<number, string>>({});
+  const projectDisplayName = (projectId: number) =>
+    projectNames[projectId] ?? `Project ${projectId}`;
+  const toggleProject = (project: ProjectDetails) => {
+    setProjectNames((prev) => ({ ...prev, [project.id]: project.name }));
+    setNewProjectRoles((prev) =>
+      prev.includes(project.id)
+        ? prev.filter((id) => id !== project.id)
+        : [...prev, project.id],
+    );
+  };
 
   const [isSaving, setIsSaving] = useState(false);
 
@@ -64,7 +82,7 @@ export function MemberProjectRolesModal({
     onPreviousPage,
     resetPagination,
   } = useCursorPagination();
-  const { pageSize, setPageSize } = useProjectsPageSize();
+  const { pageSize } = useProjectsPageSize();
 
   // Debounce search query (300ms delay)
   useDebounce(
@@ -89,6 +107,12 @@ export function MemberProjectRolesModal({
   const hasMore = paginatedData?.pagination.hasMore ?? false;
   const nextCursor = paginatedData?.pagination.nextCursor;
   const isLoading = paginatedData === undefined;
+  // Search runs on the server and pages can be short, so size the list to
+  // the largest page shown so far rather than the current one.
+  const [largestPageSize, setLargestPageSize] = useState(0);
+  useEffect(() => {
+    setLargestPageSize((prev) => Math.max(prev, projects.length));
+  }, [projects.length]);
 
   useSnapBackOnEmptyPage(
     { canGoPrevious, onPreviousPage },
@@ -98,27 +122,24 @@ export function MemberProjectRolesModal({
     },
   );
 
-  const handlePageSizeChange = (newPageSize: number) => {
-    setPageSize(newPageSize);
-    // Reset to first page when page size changes
-    resetPagination();
-  };
-
   // Reset cursor when debounced search query changes
   useEffect(() => {
     resetPagination();
   }, [debouncedQuery, resetPagination]);
 
-  const closeWithConfirmation = () => {
-    if (addedProjects.length > 0 || removedProjects.length > 0) {
-      const shouldClose = window.confirm(
-        "Closing the popup will clear your unsaved changes. Are you sure you want to continue?",
-      );
-      if (!shouldClose) {
-        return;
-      }
+  // Runs as the Modal's onBeforeClose so declining keeps the modal open;
+  // the Modal's onClose only fires after it has animated shut.
+  const confirmClose = () => {
+    if (isSaving) {
+      return false;
     }
-    onClose();
+    const hasChanges = addedProjects.length > 0 || removedProjects.length > 0;
+    return (
+      !hasChanges ||
+      window.confirm(
+        "Closing the popup will clear your unsaved changes. Are you sure you want to continue?",
+      )
+    );
   };
   return (
     <Modal
@@ -140,10 +161,11 @@ export function MemberProjectRolesModal({
           </p>
         </div>
       }
-      onClose={closeWithConfirmation}
+      onBeforeClose={confirmClose}
+      onClose={onClose}
     >
       <form
-        className="flex w-full flex-col gap-2"
+        className="flex w-full flex-col gap-4 pt-2"
         onSubmit={async (e) => {
           e.preventDefault();
           setIsSaving(true);
@@ -167,71 +189,88 @@ export function MemberProjectRolesModal({
           }
         }}
       >
-        {/* Search input */}
         <TextInput
           placeholder="Search projects"
           value={projectQuery}
           onChange={(e) => setProjectQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter would otherwise implicitly submit the form and save.
+            if (e.key === "Enter") {
+              e.preventDefault();
+            }
+          }}
           type="search"
           id="Search projects in modal"
           isSearchLoading={isLoading && debouncedQuery === projectQuery}
         />
 
-        {/* Loading state */}
-        {projects.length === 0 && isLoading && (
-          <div className="my-12 flex flex-col items-center gap-2">
-            <LoadingLogo />
+        <ListTable
+          className="max-h-[50vh]"
+          style={{
+            minHeight: listMinHeight(
+              largestPageSize,
+              largestPageSize > 0 ? PAGINATION_FOOTER_REM : 0,
+            ),
+          }}
+          header={
+            <>
+              {/* Aligns the label with the project names below the checkboxes. */}
+              <span className="size-3.5 shrink-0" aria-hidden="true" />
+              Project
+              <ListTableHeaderDetail>
+                Admin of {newProjectRoles.length} project
+                {newProjectRoles.length === 1 ? "" : "s"}
+              </ListTableHeaderDetail>
+            </>
+          }
+        >
+          <div
+            className="scrollbar flex min-h-0 grow flex-col divide-y overflow-y-auto"
+            // Allow scrollable zone to be focused
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- https://dequeuniversity.com/rules/axe/4.11/scrollable-region-focusable?application=axeAPI
+            tabIndex={0}
+          >
+            {projects.length === 0 && isLoading ? (
+              <div className="m-auto py-8">
+                <LoadingLogo />
+              </div>
+            ) : projects.length === 0 ? (
+              <div className="m-auto py-8 text-sm text-content-secondary">
+                {debouncedQuery.trim()
+                  ? "No projects match your search."
+                  : "This team doesn't have any projects yet."}
+              </div>
+            ) : (
+              sortBy(projects, (project) =>
+                project.name.toLocaleLowerCase(),
+              ).map((project) => (
+                <ProjectRoleItem
+                  key={project.id}
+                  project={project}
+                  originalProjectRoles={originalProjectRoles}
+                  newProjectRoles={newProjectRoles}
+                  onToggle={() => toggleProject(project)}
+                />
+              ))
+            )}
           </div>
-        )}
-
-        {/* Empty search results */}
-        {projects.length === 0 && !isLoading && debouncedQuery.trim() && (
-          <div className="my-12 flex animate-fadeInFromLoading flex-col items-center gap-2 text-content-secondary">
-            No projects match your search.
-          </div>
-        )}
-
-        {/* Empty state - no projects */}
-        {projects.length === 0 && !isLoading && !debouncedQuery.trim() && (
-          <div className="my-12 flex flex-col items-center gap-2 text-content-secondary">
-            This team doesn't have any projects yet.
-          </div>
-        )}
-
-        {/* Project list */}
-        {projects.length > 0 && (
-          <div className="scrollbar max-h-[40vh] overflow-auto">
-            {sortBy(projects, (project) =>
-              project.name.toLocaleLowerCase(),
-            ).map((project) => (
-              <ProjectRoleItem
-                key={project.id}
-                project={project}
-                team={team}
-                originalProjectRoles={originalProjectRoles}
-                newProjectRoles={newProjectRoles}
-                setNewProjectRoles={setNewProjectRoles}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Bottom pagination controls with page size */}
-        {projects.length > 0 && (
-          <PaginationControls
-            showPageSize
-            isCursorBasedPagination
-            currentPage={currentPageNumber}
-            hasMore={hasMore}
-            pageSize={pageSize}
-            onPageSizeChange={handlePageSizeChange}
-            onPreviousPage={onPreviousPage}
-            onNextPage={() => onNextPage(nextCursor)}
-            canGoPrevious={canGoPrevious}
-            pageSizeOptions={PROJECT_PAGE_SIZES}
-          />
-        )}
-        <p className="mt-1 text-xs text-content-secondary">
+          {projects.length > 0 && (
+            <PaginationControls
+              className="border-t px-4 py-2"
+              isCursorBasedPagination
+              currentPage={currentPageNumber}
+              hasMore={hasMore}
+              pageSize={pageSize}
+              onPageSizeChange={() => {}}
+              // Uses the page size chosen on the team's projects list.
+              showPageSize={false}
+              onPreviousPage={onPreviousPage}
+              onNextPage={() => onNextPage(nextCursor)}
+              canGoPrevious={canGoPrevious}
+            />
+          )}
+        </ListTable>
+        <p className="text-xs text-content-secondary">
           Pro-tip! You can manage the Project Admin role for multiple members at
           the same time on the{" "}
           <Link href="https://docs.convex.dev/dashboard/projects#project-settings">
@@ -239,32 +278,17 @@ export function MemberProjectRolesModal({
           </Link>{" "}
           page.{" "}
         </p>
-        <div className="ml-auto flex items-center gap-2 text-right">
-          <div className="text-xs">
-            {addedProjects.length > 0 && (
-              <div className="text-content-success">
-                Add {addedProjects.length} role
-                {addedProjects.length > 1 ? "s" : ""}
-              </div>
-            )}
-            {removedProjects.length > 0 && (
-              <div className="text-content-error">
-                Remove {removedProjects.length} role
-                {removedProjects.length > 1 ? "s" : ""}
-              </div>
-            )}
-          </div>
-
-          <Button
-            type="submit"
-            disabled={
-              addedProjects.length === 0 && removedProjects.length === 0
+        <RoleChangesFooter
+          added={addedProjects.map(projectDisplayName)}
+          removed={removedProjects.map(projectDisplayName)}
+          noun="project"
+          isSaving={isSaving}
+          onCancel={() => {
+            if (confirmClose()) {
+              onClose();
             }
-            loading={isSaving}
-          >
-            Save
-          </Button>
-        </div>
+          }}
+        />
       </form>
     </Modal>
   );
@@ -272,54 +296,69 @@ export function MemberProjectRolesModal({
 
 function ProjectRoleItem({
   project,
-  team,
   originalProjectRoles,
   newProjectRoles,
-  setNewProjectRoles,
+  onToggle,
 }: {
   project: ProjectDetails;
-  team: TeamResponse;
   originalProjectRoles: number[];
   newProjectRoles: number[];
-  setNewProjectRoles: React.Dispatch<React.SetStateAction<number[]>>;
+  onToggle: () => void;
 }) {
   const hasAdminPermissions = useHasProjectAdminPermissions(project.id);
-  return (
-    <div className="flex h-12 items-center gap-4 border-b px-1 py-2 last:border-b-0">
-      <Tooltip
-        tip={
-          !hasAdminPermissions &&
-          `You do not have permission to manage roles for ${project.name}`
-        }
-        side="left"
+  const checkboxId = `memberProjectRole-${project.id}`;
+  const row = (
+    <div
+      className={cn(
+        "flex items-center gap-3 px-4 py-3",
+        hasAdminPermissions
+          ? "transition-colors hover:bg-background-tertiary"
+          : "cursor-not-allowed opacity-50",
+      )}
+    >
+      <Checkbox
+        id={checkboxId}
+        aria-label={project.name}
+        checked={newProjectRoles.includes(project.id)}
+        // aria-disabled rather than disabled keeps the checkbox focusable, and
+        // focusing it opens the row's tooltip explaining why it's disabled.
+        aria-disabled={!hasAdminPermissions}
+        onChange={onToggle}
+        // The row is already dimmed; don't dim the checkbox a second time.
+        className="aria-disabled:opacity-100"
+      />
+      <label
+        htmlFor={checkboxId}
+        className={cn(
+          "flex min-w-0 grow flex-col",
+          hasAdminPermissions ? "cursor-pointer" : "cursor-not-allowed",
+        )}
       >
-        <Checkbox
-          checked={newProjectRoles.includes(project.id)}
-          disabled={!hasAdminPermissions}
-          onChange={() => {
-            setNewProjectRoles((prev) =>
-              newProjectRoles.includes(project.id)
-                ? prev.filter((id) => id !== project.id)
-                : [...prev, project.id],
-            );
-          }}
-        />
-      </Tooltip>
-      <ProjectLink metadata={{}} projectId={project.id} team={team} />
-      <div className="ml-auto rounded-sm p-1 text-xs">
-        {originalProjectRoles.includes(project.id) &&
-          !newProjectRoles.includes(project.id) && (
-            <div className="rounded-sm bg-background-error p-1 text-xs text-content-error">
-              Role will be removed
-            </div>
-          )}
-        {!originalProjectRoles.includes(project.id) &&
-          newProjectRoles.includes(project.id) && (
-            <div className="rounded-sm bg-background-success p-1 text-xs text-content-success">
-              Role will be added
-            </div>
-          )}
-      </div>
+        <span className="truncate text-sm text-content-primary">
+          {project.name}
+        </span>
+        {project.slug !== project.name && (
+          <span className="truncate text-xs text-content-secondary">
+            {project.slug}
+          </span>
+        )}
+      </label>
+      <PendingRoleChangeBadge
+        isOriginalAdmin={originalProjectRoles.includes(project.id)}
+        isNewAdmin={newProjectRoles.includes(project.id)}
+      />
     </div>
+  );
+  if (hasAdminPermissions) {
+    return row;
+  }
+  return (
+    <Tooltip
+      asChild
+      side="top"
+      tip={`You do not have permission to manage roles for ${project.name}`}
+    >
+      {row}
+    </Tooltip>
   );
 }

@@ -813,6 +813,7 @@ impl<'a, RT: Runtime> ComponentConfigModel<'a, RT> {
                             http_prefix: None,
                             exports: BTreeMap::new(),
                             env_vars: BTreeMap::new(),
+                            init: None,
                         },
                     )
                     .await?;

@@ -53,10 +53,6 @@ export function generateDocs(root: CommandUnknownOpts): GeneratedDocs {
     lines.push(`description: ${description}`);
     lines.push("---");
     lines.push("");
-    lines.push(
-      "{/* @generated from the command definitions, do not edit manually (run `just regenerate-cli-docs` to regenerate) */}",
-    );
-    lines.push("");
     lines.push(renderCommand(entry, all, { headingLevel: 1 }));
 
     const descendants = all.filter(

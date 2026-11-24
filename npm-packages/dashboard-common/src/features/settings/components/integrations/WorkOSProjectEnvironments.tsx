@@ -107,6 +107,7 @@ function EnvironmentListItem({
             size="xs"
             variant="danger"
             onClick={() => setShowDeleteConfirm(!showDeleteConfirm)}
+            aria-label={`Delete ${environment.userEnvironmentName}`}
           >
             <TrashIcon className="size-4" />
           </Button>

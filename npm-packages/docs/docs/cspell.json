@@ -6,6 +6,7 @@
     "timestamptz",
     "workpools",
     "snapshotting",
+    "treemap",
     "agentic",
     "airbyte",
     "Airbyte",

@@ -66,6 +66,8 @@ pub enum FunctionRunReason {
     Action,
     /// Invoked by the custom function tester (e.g. in the dashboard).
     Tester,
+    /// Invoked by a code push.
+    Push,
 }
 
 impl FunctionRunReason {
@@ -80,6 +82,7 @@ impl FunctionRunReason {
             FunctionCaller::Cron => Self::Cron,
             FunctionCaller::Scheduler { .. } => Self::Scheduler,
             FunctionCaller::Action { .. } => Self::Action,
+            FunctionCaller::Push => Self::Push,
         };
         match query_invocation {
             None => caller_reason,
@@ -321,7 +324,9 @@ pub enum StructuredLogEvent {
         user_execution_time: Option<Duration>,
         usage_stats: AggregatedFunctionUsageStats,
         occ_info: Option<OccInfo>,
-        will_retry: bool,
+        /// `None` when whether the function will be retried isn't known yet
+        /// when the execution is logged.
+        will_retry: Option<bool>,
         scheduler_info: Option<SchedulerInfo>,
         run_reason: FunctionRunReason,
     },
@@ -1158,7 +1163,7 @@ pub enum FunctionExecutionJson {
         usage_stats: UsageStatsJson,
         return_bytes: Option<f64>,
         occ_info: Option<OccInfoJson>,
-        will_retry: bool,
+        will_retry: Option<bool>,
         execution_timestamp: f64,
         identity_type: String,
         environment: String,

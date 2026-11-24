@@ -5,9 +5,24 @@ import { v } from "convex/values";
 
 type SchemaMetadata = Doc<"_schemas">;
 
+// The `by_state` index is on the whole `state` object, not on `state.state`,
+// so `eq("state", { state })` only matches documents whose `state` object has
+// no field besides `state`. This is the set of such states, derived from the
+// schema so that adding a field to one of them removes it here and breaks the
+// callers that look it up. Indexing `state.state` instead would lift this
+// restriction.
+type BareSchemaState<T extends { state: string } = SchemaMetadata["state"]> =
+  T extends unknown
+    ? Exclude<keyof T, "state"> extends never
+      ? T["state"]
+      : never
+    : never;
+
 export const getSchemaByState = async (
   db: DatabaseReader,
-  state: SchemaMetadata["state"]["state"],
+  // At most one schema is in each of these states (`SchemaState::is_unique` in
+  // Rust), which `.unique()` relies on.
+  state: Extract<BareSchemaState, "pending" | "validated" | "active">,
 ) =>
   await db
     .query("_schemas")

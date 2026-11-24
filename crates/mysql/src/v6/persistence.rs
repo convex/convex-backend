@@ -514,6 +514,10 @@ impl<RT: Runtime> common::persistence::Persistence for Persistence<RT> {
         self.inner.fresh.load(Ordering::SeqCst)
     }
 
+    fn lease_ts(&self) -> Option<i64> {
+        Some(self.lease.lease_ts)
+    }
+
     fn reader(&self) -> Arc<dyn PersistenceReader> {
         Arc::new(Reader {
             inner: self.inner.clone(),

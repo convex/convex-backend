@@ -1,5 +1,13 @@
 import { Meta, StoryObj } from "@storybook/nextjs";
-import { mocked, fn } from "storybook/test";
+import {
+  expect,
+  fireEvent,
+  fn,
+  mocked,
+  userEvent,
+  waitFor,
+  within,
+} from "storybook/test";
 import React from "react";
 import { TeamResponse } from "generatedApi";
 import { useProfile } from "api/profile";
@@ -367,3 +375,214 @@ export const ManyProjects: Story = {
     onChange: fn(),
   },
 };
+
+// --- Menu placement ----------------------------------------------------------
+// These stories check where the anchored menu lands relative to its trigger
+// and the viewport. Rects are compared with a pixel of slack for subpixel
+// rounding.
+
+const SLACK = 1;
+
+// The geometry the menu is meant to have, stated here rather than imported so
+// a change to the palette's margins or minimum height has to update these too.
+const BOTTOM_MARGIN = 64;
+const TOP_MARGIN = 16;
+const MIN_HEIGHT = 320;
+
+// The palette's open state is global and outlives a story, and while it's open
+// the rest of the page is hidden from the accessibility tree, so each story
+// starts and ends with the palette closed. A press outside closes it in one
+// step, whichever page it's on; it's dispatched rather than clicked because
+// the open dialog makes the page `pointer-events: none`, and the palette's
+// click-away listener reacts to `mousedown`.
+async function closeMenu() {
+  if (!document.querySelector('[aria-haspopup="menu"][aria-expanded="true"]')) {
+    return;
+  }
+  await fireEvent.mouseDown(document.body);
+  await waitFor(() => {
+    if (document.querySelector("[cmdk-root]")) {
+      throw new Error("The menu is still open");
+    }
+  });
+}
+
+// Opens the menu from the trigger and resolves with its surface once Floating
+// UI has positioned it and the list's height transition has settled.
+async function openMenu(canvasElement: HTMLElement) {
+  await closeMenu();
+  await userEvent.click(
+    within(canvasElement).getByRole("button", { name: /Restore from/ }),
+  );
+  const menu = await waitFor(() => {
+    const element = document.querySelector<HTMLElement>(
+      "[cmdk-root].command-palette--anchored",
+    );
+    if (!element || getComputedStyle(element).opacity === "0") {
+      throw new Error("The menu isn't positioned yet");
+    }
+    return element;
+  });
+  await waitForSettledMenu(menu);
+  return menu;
+}
+
+async function waitForSettledMenu(element: HTMLElement) {
+  let previous = { top: NaN, height: NaN };
+  await waitFor(
+    () => {
+      const { top, height } = element.getBoundingClientRect();
+      const stable = top === previous.top && height === previous.height;
+      previous = { top, height };
+      if (!stable) {
+        throw new Error("The menu is still moving or resizing");
+      }
+    },
+    { interval: 150 },
+  );
+}
+
+function placementStory(
+  base: Story,
+  play: (canvasElement: HTMLElement) => Promise<void>,
+): Story {
+  return {
+    ...base,
+    play: async ({ canvasElement }) => {
+      try {
+        await play(canvasElement);
+      } finally {
+        await closeMenu();
+      }
+    },
+  };
+}
+
+// Steps back from the deployment list to the (long) project list and waits
+// for it to render and the menu to finish growing.
+async function showProjectList(menu: HTMLElement) {
+  await userEvent.click(
+    within(menu).getByRole("button", { name: "Select Project" }),
+  );
+  await within(menu).findByRole("option", { name: /Analytics Dashboard 1/ });
+  await waitForSettledMenu(menu);
+}
+
+function listOf(menu: HTMLElement) {
+  const list = menu.querySelector<HTMLElement>("[cmdk-list]");
+  if (!list) {
+    throw new Error("The menu has no list");
+  }
+  return list;
+}
+
+// A list longer than the viewport grows until it stops the bottom margin short
+// of the viewport edge, then scrolls.
+export const LongListFillsToBottomMargin = placementStory(
+  ManyProjects,
+  async (canvasElement) => {
+    const menu = await openMenu(canvasElement);
+    await showProjectList(menu);
+
+    // Retried: cmdk measures the list after it renders and then animates the
+    // height, so the menu can still be growing when it first looks settled.
+    await waitFor(async () => {
+      const gap = window.innerHeight - menu.getBoundingClientRect().bottom;
+      await expect(gap).toBeGreaterThanOrEqual(BOTTOM_MARGIN - SLACK);
+      await expect(gap).toBeLessThanOrEqual(BOTTOM_MARGIN + SLACK);
+    });
+    const list = listOf(menu);
+    await expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+  },
+);
+
+// A list that fits ends where its items do instead of filling the room below
+// the trigger, so it's clear there's nothing more to scroll to.
+export const ShortListFitsContent = placementStory(
+  Default,
+  async (canvasElement) => {
+    const menu = await openMenu(canvasElement);
+    // The menu is hidden until it's positioned, which mustn't keep the search
+    // input from taking focus when it opens.
+    await expect(within(menu).getByRole("combobox")).toHaveFocus();
+    const list = listOf(menu);
+    await expect(list.scrollHeight).toBeLessThanOrEqual(list.clientHeight);
+    await expect(menu.getBoundingClientRect().bottom).toBeLessThan(
+      window.innerHeight - BOTTOM_MARGIN - 100,
+    );
+  },
+);
+
+// With little room under the trigger, the menu opens above it, stays inside
+// the viewport, and keeps its footer whole.
+export const OpensAboveTriggerNearBottom = placementStory(
+  {
+    ...ManyProjects,
+    render: (args) => (
+      <div className="flex h-screen flex-col justify-end pb-8">
+        <BackupDeploymentSelectorHarness {...args} />
+      </div>
+    ),
+  },
+  async (canvasElement) => {
+    const menu = await openMenu(canvasElement);
+    await showProjectList(menu);
+
+    // `hidden`: the open palette hides the rest of the page from role queries.
+    // Measured now rather than before opening, since the page can still be
+    // settling when the story first renders.
+    const trigger = within(canvasElement)
+      .getByRole("button", { name: /Restore from/, hidden: true })
+      .getBoundingClientRect();
+    const rect = menu.getBoundingClientRect();
+    await expect(rect.bottom).toBeLessThanOrEqual(trigger.top + SLACK);
+    await expect(rect.top).toBeGreaterThanOrEqual(TOP_MARGIN - SLACK);
+
+    const footer = menu.lastElementChild!.getBoundingClientRect();
+    await expect(footer.height).toBeGreaterThan(0);
+    await expect(footer.bottom).toBeLessThanOrEqual(rect.bottom + SLACK);
+  },
+);
+
+// In a window too short for the menu on either side of the trigger, it opens
+// centered like the ⌘K palette, keeps its minimum height, and only its list
+// shrinks: the input and footer stay whole and inside the window.
+export const CenteredInShortWindow = placementStory(
+  {
+    ...ManyProjects,
+    parameters: {
+      ...ManyProjects.parameters,
+      viewport: {
+        options: {
+          shortWindow: {
+            name: "Short window",
+            styles: { width: "800px", height: "340px" },
+          },
+        },
+      },
+    },
+    globals: { viewport: { value: "shortWindow" } },
+  },
+  async (canvasElement) => {
+    const menu = await openMenu(canvasElement);
+    await showProjectList(menu);
+
+    const rect = menu.getBoundingClientRect();
+    await expect(rect.top).toBeGreaterThanOrEqual(0);
+    await expect(rect.bottom).toBeLessThanOrEqual(window.innerHeight + SLACK);
+    await expect(
+      Math.abs((rect.left + rect.right) / 2 - window.innerWidth / 2),
+    ).toBeLessThanOrEqual(SLACK);
+    await expect(rect.height).toBeGreaterThanOrEqual(
+      Math.min(MIN_HEIGHT, window.innerHeight - 32) - SLACK,
+    );
+
+    const input = within(menu).getByRole("combobox").getBoundingClientRect();
+    await expect(input.top).toBeGreaterThanOrEqual(rect.top - SLACK);
+    const footer = menu.lastElementChild!.getBoundingClientRect();
+    await expect(footer.height).toBeGreaterThan(0);
+    await expect(footer.bottom).toBeLessThanOrEqual(rect.bottom + SLACK);
+    const list = listOf(menu);
+    await expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+  },
+);

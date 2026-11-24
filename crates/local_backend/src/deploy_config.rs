@@ -24,6 +24,7 @@ use common::{
         ExtractRequestMetadata,
         HttpResponseError,
     },
+    types::ModuleEnvironment,
     version::Version,
 };
 use errors::{
@@ -248,7 +249,7 @@ pub async fn get_config_hashes(
     let config: JsonValue = config.to_internal_json();
 
     let latest_source_package = SourcePackageModel::new(&mut tx, TableNamespace::Global)
-        .get_latest()
+        .get_latest(ModuleEnvironment::Node)
         .await?;
     let node_version = latest_source_package
         .as_ref()

@@ -173,6 +173,15 @@ impl<'a> TypecheckContext<'a> {
                 &resolved_env,
                 Some(&evaluated.definition.env_vars),
             )?;
+            if !instantiation.args.is_empty() && child_evaluated.definition.init.is_none() {
+                anyhow::bail!(ErrorMetadata::bad_request(
+                    "InvalidComponentArgs",
+                    format!(
+                        "Component '{child_component_path}' was passed arguments but doesn't \
+                         declare an init in `defineComponent`."
+                    ),
+                ));
+            }
 
             // Chain-resolve EnvVar bindings through the component hierarchy.
             let resolved_env: BTreeMap<Identifier, EnvBinding> = resolved_env
@@ -248,7 +257,7 @@ pub fn validate_component_env(
         let child_validator = env_validators.get(env_name).ok_or_else(|| {
             ErrorMetadata::bad_request(
                 "TypecheckError",
-                format!("Component {component_path:?} has no env var named {env_name:?}"),
+                format!("Component {component_path} has no env var named \"{env_name}\""),
             )
         })?;
         match binding {
@@ -257,8 +266,8 @@ pub fn validate_component_env(
                     ErrorMetadata::bad_request(
                         "TypecheckError",
                         format!(
-                            "Component {component_path:?} has an invalid value for env var \
-                             {env_name:?}: expected {}",
+                            "Component {component_path} has an invalid value for env var \
+                             \"{env_name}\": expected {}",
                             child_validator.validator
                         ),
                     )
@@ -272,7 +281,7 @@ pub fn validate_component_env(
                     ErrorMetadata::bad_request(
                         "TypecheckError",
                         format!(
-                            "Component {component_path:?} env var {env_name:?} references invalid \
+                            "Component {component_path} env var \"{env_name}\" references invalid \
                              parent env var name {parent_name}: {e}"
                         ),
                     )
@@ -281,7 +290,7 @@ pub fn validate_component_env(
                     ErrorMetadata::bad_request(
                         "TypecheckError",
                         format!(
-                            "Component {component_path:?} env var {env_name:?} references \
+                            "Component {component_path} env var \"{env_name}\" references \
                              undeclared parent env var {parent_name}"
                         ),
                     )
@@ -290,7 +299,7 @@ pub fn validate_component_env(
                     anyhow::bail!(ErrorMetadata::bad_request(
                         "TypecheckError",
                         format!(
-                            "Component {component_path:?} env var {env_name:?} is required, but \
+                            "Component {component_path} env var \"{env_name}\" is required, but \
                              parent env var {parent_name} is optional"
                         ),
                     ));
@@ -302,7 +311,7 @@ pub fn validate_component_env(
                     anyhow::bail!(ErrorMetadata::bad_request(
                         "TypecheckError",
                         format!(
-                            "Component {component_path:?} env var {env_name:?} validator is not \
+                            "Component {component_path} env var \"{env_name}\" validator is not \
                              satisfied by parent env var {parent_name} validator"
                         ),
                     ));
@@ -346,7 +355,7 @@ impl<'a> CheckedComponentBuilder<'a> {
             if !env_validators.contains_key(env_name) {
                 anyhow::bail!(ErrorMetadata::bad_request(
                     "TypecheckError",
-                    format!("Component {component_path:?} has no env var named {env_name:?}"),
+                    format!("Component {component_path} has no env var named \"{env_name}\""),
                 ));
             }
         }
@@ -356,7 +365,7 @@ impl<'a> CheckedComponentBuilder<'a> {
                     anyhow::bail!(ErrorMetadata::bad_request(
                         "TypecheckError",
                         format!(
-                            "Component {component_path:?} is missing required env var {env_name:?}"
+                            "Component {component_path} is missing required env var \"{env_name}\""
                         ),
                     ));
                 }
@@ -382,8 +391,8 @@ impl<'a> CheckedComponentBuilder<'a> {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "TypecheckError",
                 format!(
-                    "Component {:?} has multiple child components with the same name: {name:?}",
-                    self.definition_path
+                    "Component {} has multiple child components with the same name: {}",
+                    self.definition_path, *name
                 ),
             ));
         }
@@ -418,8 +427,8 @@ impl<'a> CheckedComponentBuilder<'a> {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "TypecheckError",
                 format!(
-                    "HTTP mount {mount_path:?} is invalid: Child component {component:?} not \
-                     found."
+                    "HTTP mount {mount_path:?} is invalid: Child component {} not found.",
+                    **component
                 ),
             ));
         };
@@ -436,8 +445,9 @@ impl<'a> CheckedComponentBuilder<'a> {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "TypecheckError",
                 format!(
-                    "HTTP mount {mount_path:?} is invalid: Child component {component:?} doesn't \
-                     have any HTTP routes."
+                    "HTTP mount {mount_path:?} is invalid: Child component {} doesn't have any \
+                     HTTP routes.",
+                    **component
                 ),
             ));
         }

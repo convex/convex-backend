@@ -1,5 +1,6 @@
 use std::{
     collections::{
+        btree_map,
         BTreeMap,
         BTreeSet,
     },
@@ -208,19 +209,30 @@ impl<'a, RT: Runtime> ModuleModel<'a, RT> {
             return Ok(BTreeMap::new());
         }
 
-        // Every active module is present in the latest source package, so one
-        // download serves all of them.
-        let source_package = SourcePackageModel::new(self.tx, component.into())
-            .get_latest()
-            .await?
-            .context("No source package for existing modules")?;
-        let mut package = download_package(modules_storage.clone(), &source_package).await?;
+        // Every active module is present in the latest source package for its
+        // environment, so one download per package serves all of them.
+        let environments: BTreeSet<_> = metadata.iter().map(|m| m.environment).collect();
+        let mut packages = BTreeMap::new();
+        for environment in environments {
+            let source_package = SourcePackageModel::new(self.tx, component.into())
+                .get_latest(environment)
+                .await?
+                .context("No source package for existing modules")?;
+            packages.insert(environment, source_package);
+        }
+        let mut downloaded = BTreeMap::new();
+        for source_package in packages.values() {
+            if let btree_map::Entry::Vacant(entry) = downloaded.entry(source_package.id()) {
+                entry.insert(download_package(modules_storage.clone(), source_package).await?);
+            }
+        }
 
         let mut modules = BTreeMap::new();
         for metadata in metadata {
             let path = metadata.path.clone();
-            let source = package
-                .remove(&path)
+            let source = downloaded
+                .get_mut(&packages[&metadata.environment].id())
+                .and_then(|package| package.remove(&path))
                 .context("Module source does not exist")?;
             let module_config = ModuleConfig {
                 path: path.clone().into(),

@@ -32,3 +32,18 @@ export const greeting = query({
     return process.env.GREETING ?? "hello";
   },
 });
+
+const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000;
+
+export const recent = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("messages")
+      .withIndex("by_sentAt", (q) =>
+        // oxlint-disable-next-line @convex-dev/no-time-or-random-in-queries
+        q.gt("sentAt", minutesAgo(5)),
+      )
+      .take(50);
+  },
+});

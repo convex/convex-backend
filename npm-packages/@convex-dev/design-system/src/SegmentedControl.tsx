@@ -7,8 +7,11 @@ export type SegmentedControlOption<T extends string> = {
   label: ReactNode;
   value: T;
   disabled?: boolean;
-  /** Shown in a tooltip when the option is disabled. */
-  disabledTooltip?: ReactNode;
+  /**
+   * Shown when hovering the option, whether or not it is disabled. Use it to
+   * name an icon-only label or to explain why the option is disabled.
+   */
+  tip?: ReactNode;
 };
 
 export function SegmentedControl<T extends string>({
@@ -19,7 +22,8 @@ export function SegmentedControl<T extends string>({
   size = "md",
 }: {
   options: SegmentedControlOption<T>[];
-  value: T;
+  /** `null` selects no option, for a choice that hasn't been made yet. */
+  value: T | null;
   onChange: (value: T) => void;
   className?: string;
   size?: "sm" | "md";
@@ -31,10 +35,14 @@ export function SegmentedControl<T extends string>({
     width: number;
   } | null>(null);
   const [animate, setAnimate] = useState(true);
+  // Whether the highlight is appearing because a first option was selected,
+  // as opposed to moving between options or rendering already selected.
+  const [entering, setEntering] = useState(false);
+  const previousValue = useRef(value);
 
   const measureHighlight = useCallback(() => {
     const container = containerRef.current;
-    const button = buttonRefs.current.get(value);
+    const button = value === null ? undefined : buttonRefs.current.get(value);
     if (container && button) {
       const containerRect = container.getBoundingClientRect();
       const buttonRect = button.getBoundingClientRect();
@@ -56,8 +64,10 @@ export function SegmentedControl<T extends string>({
   // Animate when value or options change
   useEffect(() => {
     setAnimate(true);
+    setEntering(previousValue.current === null && value !== null);
+    previousValue.current = value;
     setHighlightStyle(measureHighlight());
-  }, [measureHighlight, options]);
+  }, [measureHighlight, options, value]);
 
   // Instantly reposition on resize (no animation)
   // This is done to avoid having a frame where the
@@ -87,8 +97,9 @@ export function SegmentedControl<T extends string>({
       return;
     }
 
-    // Skip over disabled options.
-    let nextIndex = currentIndex;
+    // Skip over disabled options. With no option selected, the arrows enter
+    // the group from the matching end.
+    let nextIndex = currentIndex === -1 && step === -1 ? 0 : currentIndex;
     for (let i = 0; i < options.length; i++) {
       nextIndex = (nextIndex + step + options.length) % options.length;
       if (!options[nextIndex].disabled) {
@@ -96,13 +107,16 @@ export function SegmentedControl<T extends string>({
       }
     }
 
-    if (nextIndex !== currentIndex) {
+    // The loop ends on a disabled option when every option is disabled.
+    const nextOption = options[nextIndex];
+    if (nextIndex !== currentIndex && !nextOption.disabled) {
       e.preventDefault();
-      const nextOption = options[nextIndex];
       onChange(nextOption.value);
       buttonRefs.current.get(nextOption.value)?.focus();
     }
   };
+
+  const firstEnabledValue = options.find((option) => !option.disabled)?.value;
 
   return (
     <div
@@ -119,7 +133,11 @@ export function SegmentedControl<T extends string>({
           className={cn(
             "absolute rounded-full bg-background-secondary shadow-sm",
             size === "sm" ? "inset-y-0.5" : "inset-y-1",
-            animate && "transition-all duration-200 ease-in-out",
+            entering
+              ? // The highlight has nowhere to slide from, so it fades and
+                // grows into place. Reduced motion keeps only the fade.
+                "motion-safe:animate-scaleIn motion-reduce:animate-[fadeIn_0.2s_ease-out]"
+              : animate && "transition-all duration-200 ease-in-out",
           )}
           style={{
             left: highlightStyle.left,
@@ -128,6 +146,12 @@ export function SegmentedControl<T extends string>({
         />
       )}
       {options.map((option) => {
+        // The tab stop is the selected option, or the first enabled option
+        // while nothing is selected.
+        const isTabStop =
+          value === null
+            ? option.value === firstEnabledValue
+            : value === option.value;
         const button = (
           // eslint-disable-next-line react/forbid-elements -- We need a native button here to implement custom radiogroup semantics and keyboard focus management.
           <button
@@ -145,7 +169,7 @@ export function SegmentedControl<T extends string>({
             // Use aria-disabled (not the native disabled attribute) so the
             // option still receives hover events for its tooltip.
             aria-disabled={option.disabled || undefined}
-            tabIndex={!option.disabled && value === option.value ? 0 : -1}
+            tabIndex={!option.disabled && isTabStop ? 0 : -1}
             className={cn(
               "relative z-10 rounded-full font-medium transition-colors duration-200 outline-none focus-visible:ring-2 focus-visible:ring-border-selected focus-visible:ring-inset",
               size === "sm" ? "px-2.5 py-1 text-xs" : "px-4 py-1.5 text-sm",
@@ -159,8 +183,8 @@ export function SegmentedControl<T extends string>({
             {option.label}
           </button>
         );
-        return option.disabled && option.disabledTooltip ? (
-          <Tooltip key={option.value} tip={option.disabledTooltip} asChild>
+        return option.tip ? (
+          <Tooltip key={option.value} tip={option.tip} asChild>
             {button}
           </Tooltip>
         ) : (

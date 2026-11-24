@@ -56,6 +56,10 @@ export const checkRateLimit = query({
     value: v.optional(v.number()),
   }),
   handler: async (ctx, args) => {
+    // FIXME: a rate-limit check in a query is a footgun: it reads the clock, so
+    // its cached result can be stale. The published rate-limiter component has
+    // the same issue in `lib.checkRateLimit`; remove or document it there too.
+    // eslint-disable-next-line @convex-dev/no-time-or-random-in-queries -- See FIXME.
     return await checkRateLimitInternal(ctx.db, args);
   },
 });

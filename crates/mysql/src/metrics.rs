@@ -593,6 +593,18 @@ pub fn log_connection_create_failed(cluster_name: &str) {
 }
 
 register_convex_counter!(
+    MYSQL_POOL_CONNECT_BACKOFF_REJECTED_TOTAL,
+    "Number of connection requests failed without a connect attempt because the pool is backing \
+     off after failed connects past the request's deadline.",
+    &["cluster_name"],
+);
+pub fn log_connect_backoff_rejected(cluster_name: &str) {
+    MYSQL_POOL_CONNECT_BACKOFF_REJECTED_TOTAL
+        .with_label_values(&[cluster_name])
+        .inc();
+}
+
+register_convex_counter!(
     MYSQL_POOL_CONNECTION_RETURNED_TO_POOL_TOTAL,
     "Number of connections returned to the pool for reuse.",
     &["cluster_name"],

@@ -150,14 +150,14 @@ const runFunctionArgs = z.object({
   name: z.optional(z.string()),
   reference: z.optional(z.string()),
   functionHandle: z.optional(z.string()),
-  args: z.any(),
+  args: z.any().optional(),
   version: z.string(),
 });
 
 const runFunctionReturn = z.union([
   z.object({
     status: z.literal("success"),
-    value: z.any(),
+    value: z.any().optional(),
   }),
   z.object({
     status: z.literal("error"),
@@ -171,7 +171,7 @@ const scheduleSchema = z.object({
   reference: z.optional(z.string()),
   functionHandle: z.optional(z.string()),
   ts: z.number(),
-  args: z.any(),
+  args: z.any().optional(),
   version: z.string(),
 });
 
@@ -871,7 +871,7 @@ export class SyscallsImpl {
 
   async syscallVectorSearch(rawArgs: string): Promise<JSONValue> {
     const vectorSearchSchema = z.object({
-      query: z.any(),
+      query: z.any().optional(),
       version: z.string(),
     });
     const vectorSearchReturn = z.object({

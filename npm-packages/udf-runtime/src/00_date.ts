@@ -8,17 +8,18 @@ export function setupDate(global: any) {
   const originalDate = global.Date;
   delete global.Date;
 
-  function Date(this: any, ...args) {
+  function Date(...args) {
     // `Date()` was called directly, not as a constructor.
-    if (!(this instanceof Date)) {
-      const date = new (Date as any)();
-      return date.toString();
+    if (new.target === undefined) {
+      return new originalDate(Date.now()).toString();
     }
-    if (args.length === 0) {
-      const unixTsMs = Date.now();
-      return new originalDate(unixTsMs);
-    }
-    return new originalDate(...args);
+    // Construct with `new.target` so subclasses (`class D extends Date`) get
+    // their own prototype.
+    return Reflect.construct(
+      originalDate,
+      args.length === 0 ? [Date.now()] : args,
+      new.target,
+    );
   }
   Date.now = function () {
     return performOp("now");

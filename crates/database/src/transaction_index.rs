@@ -127,6 +127,22 @@ impl TransactionIndex {
         &self.index_registry
     }
 
+    /// System-provided indexes on missing tables return empty ranges.
+    fn range_index(
+        &self,
+        index_name: &TabletIndexName,
+        printable_index_name: &IndexName,
+    ) -> anyhow::Result<Option<Index>> {
+        match self
+            .index_registry
+            .require_enabled(index_name, printable_index_name)
+        {
+            Ok(index) => Ok(Some(index)),
+            Err(_) if index_name.is_by_id_or_creation_time() => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     pub(crate) fn pending_iter_for_interval<'a>(
         &'a self,
         index_name: &'a TabletIndexName,
@@ -136,19 +152,13 @@ impl TransactionIndex {
         impl DoubleEndedIterator<Item = (IndexKeyBytes, Option<PackedDocument>)> + 'a,
         anyhow::Error,
     > {
-        let iter = match self
-            .index_registry
-            .require_enabled(index_name, printable_index_name)
-        {
-            Ok(index) => self.database_index_updates.get(&index.id()),
-            // Range queries on missing tables are allowed for system provided indexes.
-            Err(_) if index_name.is_by_id_or_creation_time() => None,
-            Err(e) => return Err(e),
-        }
-        .map(|pending| pending.range(interval))
-        .into_iter()
-        .flatten();
-        Ok(iter)
+        let pending = self
+            .range_index(index_name, printable_index_name)?
+            .and_then(|index| self.database_index_updates.get(&index.id()));
+        Ok(pending
+            .map(|pending| pending.range(interval))
+            .into_iter()
+            .flatten())
     }
 
     pub(crate) fn pending_writes_for_by_id_index(
@@ -161,8 +171,8 @@ impl TransactionIndex {
         self.database_index_updates.get(&index.id())
     }
 
-    /// Range over a index including pending updates.
-    /// `max_size` provides an estimate of the number of rows to be
+    /// Range over an index including pending updates.
+    /// `max_size` provides an estimate of the number of documents to be
     /// streamed from the database.
     /// The returned vecs may be larger or smaller than `max_size` depending on
     /// pending writes.
@@ -177,65 +187,72 @@ impl TransactionIndex {
     > {
         let batch_size = ranges.len();
 
-        // Resolve singleton ranges that have pending writes without
-        // hitting persistence.
+        // Pending writes can satisfy singleton ranges without scanning persistence.
+        let mut indexes = Vec::with_capacity(batch_size);
         let mut pre_resolved = Vec::with_capacity(batch_size);
-        let mut persistence_ranges: Vec<&RangeRequest> = Vec::new();
-
         for &range_request in ranges {
-            if range_request.interval.is_singleton().is_some() {
-                let pending_result = self.pending_iter_for_interval(
-                    &range_request.index_name,
-                    &range_request.printable_index_name,
-                    &range_request.interval,
-                );
-                match pending_result {
-                    Ok(mut pending_it) => {
-                        if let Some((key, maybe_doc)) = pending_it.next() {
-                            if pending_it.next().is_some() {
-                                pre_resolved.push(Some(Err(anyhow::anyhow!(
-                                    "Expected singleton range to have at most one result"
-                                ))));
-                                continue;
-                            }
-                            let mut range_results = Vec::new();
-                            if let Some(doc) = maybe_doc {
-                                range_results.push((key, doc.into(), WriteTimestamp::Pending));
-                            }
-                            pre_resolved.push(Some(Ok((range_results, CursorPosition::End))));
-                            continue;
-                        }
-                    },
-                    Err(e) => {
-                        pre_resolved.push(Some(Err(e)));
-                        continue;
-                    },
-                }
-            }
-
-            pre_resolved.push(None);
-            persistence_ranges.push(range_request);
+            let index = match self.range_index(
+                &range_request.index_name,
+                &range_request.printable_index_name,
+            ) {
+                Ok(index) => index,
+                Err(e) => {
+                    indexes.push(None);
+                    pre_resolved.push(Some(Err(e)));
+                    continue;
+                },
+            };
+            let pending = index
+                .as_ref()
+                .and_then(|index| self.database_index_updates.get(&index.id()));
+            let resolved = match pending {
+                Some(pending) if range_request.interval.is_singleton().is_some() => {
+                    let mut pending_it = pending.range(&range_request.interval);
+                    pending_it.next().map(|(key, maybe_doc)| {
+                        anyhow::ensure!(
+                            pending_it.next().is_none(),
+                            "Expected singleton range to have at most one result"
+                        );
+                        let range_results = maybe_doc
+                            .map(|doc| (key, doc.into(), WriteTimestamp::Pending))
+                            .into_iter()
+                            .collect();
+                        Ok((range_results, CursorPosition::End))
+                    })
+                },
+                _ => None,
+            };
+            indexes.push(index);
+            pre_resolved.push(resolved);
         }
 
-        // Fetch only the ranges that weren't resolved from pending writes.
+        let snapshot_ranges: Vec<_> = ranges
+            .iter()
+            .zip(&indexes)
+            .zip(&pre_resolved)
+            .filter(|(_, resolved)| resolved.is_none())
+            .filter_map(|((&range_request, index), _)| Some((index.as_ref()?, range_request)))
+            .collect();
         let snapshot_results = self
             .database_index_snapshot
-            .range_batch(&persistence_ranges)
+            .range_batch(&snapshot_ranges)
             .await;
 
         let mut persistence_iter = snapshot_results.into_iter();
 
         let mut results = Vec::with_capacity(batch_size);
-        for (&range_request, resolved) in ranges.iter().zip(pre_resolved) {
-            // We need to preserve the order of the ranges.
+        for ((&range_request, index), resolved) in ranges.iter().zip(&indexes).zip(pre_resolved) {
             if let Some(resolved) = resolved {
                 results.push(resolved);
                 continue;
             }
 
-            let snapshot_result = persistence_iter
-                .next()
-                .unwrap_or_else(|| Err(anyhow::anyhow!("fewer persistence results than expected")));
+            let snapshot_result = match index {
+                Some(_) => persistence_iter.next().unwrap_or_else(|| {
+                    Err(anyhow::anyhow!("fewer persistence results than expected"))
+                }),
+                None => Ok((vec![], CursorPosition::End)),
+            };
 
             let result = try_anyhow!({
                 let (snapshot_result_vec, cursor) = snapshot_result?;
@@ -244,11 +261,12 @@ impl TransactionIndex {
                 let (snapshot_interval, _) = range_request
                     .interval
                     .split(cursor.clone(), range_request.order);
-                let pending_it = self.pending_iter_for_interval(
-                    &range_request.index_name,
-                    &range_request.printable_index_name,
-                    &snapshot_interval,
-                )?;
+                let pending_it = index
+                    .as_ref()
+                    .and_then(|index| self.database_index_updates.get(&index.id()))
+                    .map(|pending| pending.range(&snapshot_interval))
+                    .into_iter()
+                    .flatten();
                 let mut pending_it = range_request.order.apply(pending_it);
 
                 let mut snapshot_next = snapshot_it.next();
@@ -634,6 +652,24 @@ impl TransactionIndex {
             .index_registry
             .require_enabled(index_name, printable_index_name)?;
         self.record_interval(reads, Some(&result));
+        // If the index was created or enabled in this transaction, we must take a read
+        // dependency on the entire table (using the by_id index). This is because we
+        // are unable to check for conflicts in a range interval using this index:
+        // commits in the write log since this transaction began do not have the correct
+        // index keys for the index. Thus, we have to treat any write to the table as a
+        // conflict instead.
+        if self
+            .database_index_snapshot
+            .index_registry()
+            .enabled_index_by_index_id(&result.id())
+            .is_none()
+        {
+            reads.record_indexed_derived(
+                TabletIndexName::by_id(*index_name.table()),
+                IndexedFields::by_id(),
+                Interval::all(),
+            );
+        }
         Ok(result)
     }
 
@@ -663,10 +699,6 @@ impl TransactionIndex {
     /// updates.
     pub fn base_snapshot(&self) -> &DatabaseIndexSnapshot {
         &self.database_index_snapshot
-    }
-
-    pub fn base_snapshot_mut(&mut self) -> &mut DatabaseIndexSnapshot {
-        &mut self.database_index_snapshot
     }
 
     pub fn clone_for_snapshot_query(&self) -> Self {

@@ -59,6 +59,11 @@ export const snapshotImportsTable = defineTable({
   ),
   format: snapshotImportFormat,
   mode: snapshotImportMode,
+  // Null for the app. Missing on documents written before components.
+  component_path: v.optional(v.union(v.string(), v.null())),
+  // Exactly one of these is set: older imports have `object_key`.
+  object_key: v.optional(v.string()),
+  fq_object_key: v.optional(v.string()),
   member_id: v.optional(v.union(v.int64(), v.null())),
   checkpoints: v.optional(
     v.union(

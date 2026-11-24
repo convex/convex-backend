@@ -112,7 +112,7 @@ const impersonatedUserSchema = z
     phoneNumberVerified: z.boolean().optional(),
     address: z.string().optional(),
     updatedAt: z.string().optional(),
-    customClaims: z.record(customClaimSchema).optional(),
+    customClaims: z.record(z.string(), customClaimSchema).optional(),
   })
   .catchall(customClaimSchema);
 
@@ -231,6 +231,7 @@ export function GlobalFunctionTester({
 
   return (
     <aside
+      aria-label="Function runner"
       key={isVertical.toString() + isExpanded.toString()}
       className={classNames(
         "bg-background-secondary shadow-sm",

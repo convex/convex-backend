@@ -47,6 +47,7 @@ use common::{
     },
     value::ConvexValue,
     version::Version,
+    virtual_system_mapping::VirtualSystemMapping,
 };
 use database::{
     query::{
@@ -1097,26 +1098,41 @@ async fn count<RT: Runtime>(
     struct CountArgs {
         table: String,
     }
-    let table = with_argument_error("db.count", || {
+    let table: TableName = with_argument_error("db.count", || {
         let args: CountArgs = serde_json::from_value(args)?;
         args.table.parse().context(ArgName("table"))
     })?;
+    let table_filter = provider.table_filter();
     let component = provider.phase.component()?;
     let tx = provider.phase.tx()?;
-    let result = tx.count(component.into(), &table).await?;
-    let Some(result) = result else {
-        return Err(table_summary_bootstrapping_error(Some(
-            "Table count unavailable while bootstrapping",
-        )));
+    let result = if counts_as_missing(table_filter, &table, tx.virtual_system_mapping()) {
+        0
+    } else {
+        let Some(result) = tx.count(component.into(), &table).await? else {
+            return Err(table_summary_bootstrapping_error(Some(
+                "Table count unavailable while bootstrapping",
+            )));
+        };
+        // Trim to u32 and check for overflow.
+        u32::try_from(result)?
     };
-
-    // Trim to u32 and check for overflow.
-    let result = u32::try_from(result)?;
     // Return as f64, which converts to number type in JavaScript.
     let result = f64::from(result);
     Ok(serde_json::value::to_raw_value(
         &ConvexValue::from(result).to_internal_json_serializable(),
     )?)
+}
+
+/// A private system table counts as missing (0) outside system functions, as
+/// queries treat it (`StableIndexName::Missing`).
+fn counts_as_missing(
+    table_filter: TableFilter,
+    table: &TableName,
+    virtual_system_mapping: &VirtualSystemMapping,
+) -> bool {
+    matches!(table_filter, TableFilter::ExcludePrivateSystemTables)
+        && table.is_system()
+        && !virtual_system_mapping.is_virtual_table(table)
 }
 
 #[convex_macro::instrument_future]

@@ -159,7 +159,7 @@ export function DeploymentInfoProvider({
     s3ExportIntegration,
     showFivetranSyncProgress,
     healthDeployProgress,
-    componentSwitcherTreeEnabled,
+    virtualizedFunctionsSidebar,
     estimateUsageLimitsCost,
   } = useLaunchDarkly();
   const [, openFeedbackForm] = useFeedbackFormOpen();
@@ -346,7 +346,7 @@ export function DeploymentInfoProvider({
         s3ExportIntegrationEnabled: s3ExportIntegration,
         connectionStateCheckIntervalMs,
         showFivetranSyncProgress,
-        componentSwitcherTreeEnabled,
+        virtualizedFunctionsSidebarEnabled: virtualizedFunctionsSidebar,
         estimateUsageLimitsCost,
       });
     };
@@ -369,7 +369,7 @@ export function DeploymentInfoProvider({
     authRefreshKey,
     healthDeployProgress,
     s3ExportIntegration,
-    componentSwitcherTreeEnabled,
+    virtualizedFunctionsSidebar,
     estimateUsageLimitsCost,
   ]);
 

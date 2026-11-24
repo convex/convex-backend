@@ -51,6 +51,20 @@ function getModule(importPath: string): { name: string; dirName: string } {
   }
 }
 
+/**
+ * Resolve symlinks so that two paths to the same installed package compare
+ * equal. Package managers like pnpm link each workspace package's
+ * `node_modules/<pkg>` to a shared store directory, so the same package can be
+ * reached through several different paths.
+ */
+function realPathOrSelf(ctx: Context, p: string): string {
+  try {
+    return ctx.fs.realpath(p);
+  } catch {
+    return p;
+  }
+}
+
 export type ExternalPackage = {
   path: string;
 };
@@ -85,7 +99,11 @@ export function createExternalPlugin(
               module.dirName,
               args.resolveDir,
             );
-            if (resolved && externalPackage.path === resolved) {
+            if (
+              resolved &&
+              realPathOrSelf(ctx, externalPackage.path) ===
+                realPathOrSelf(ctx, resolved)
+            ) {
               // Mark as external.
               externalModuleNames.add(module.name);
               return { path: args.path, external: true };

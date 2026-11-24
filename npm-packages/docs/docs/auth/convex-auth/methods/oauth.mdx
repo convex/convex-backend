@@ -4,8 +4,8 @@
 # re-import with `just import-convex-auth-docs <tag>`. If you need to make
 # changes here, make sure to upstream them to the source repo too or
 # they'll be overwritten on the next import.
-sidebar_position: 4
-title: OAuth (Apple, Google, and GitHub)
+sidebar_position: 5
+title: OAuth (Apple, Google, GitHub, and Discord)
 description: Allow users to sign-in with an account on a supported provider.
 ---
 
@@ -13,12 +13,13 @@ import Tabs from "@theme/Tabs";
 import TabItem from "@theme/TabItem";
 
 The OAuth components and their sign-in methods (set up with `setupApple`,
-`setupGoogle`, and `setupGithub`) allow your users to login via their existing
-Apple, Google, or GitHub accounts.
+`setupGoogle`, `setupGithub`, and `setupDiscord`) allow your users to login via
+their existing Apple, Google, GitHub, or Discord accounts.
 
-The steps below will guide you through configuring Apple, Google, and/or GitHub
-login. In the end, your Convex deployment will host HTTP routes for handling the
-OAuth callbacks and redirect back to your application for handling the result.
+The steps below will guide you through configuring Apple, Google, GitHub, and/or
+Discord login. In the end, your Convex deployment will host HTTP routes for
+handling the OAuth callbacks and redirect back to your application for handling
+the result.
 
 :::info
 
@@ -174,6 +175,7 @@ npx convex env set AUTH_APPLE_CLIENT_ID YOUR_SERVICES_ID
 npx convex env set AUTH_APPLE_TEAM_ID YOUR_TEAM_ID
 npx convex env set AUTH_APPLE_KEY_ID YOUR_KEY_ID
 npx convex env set AUTH_APPLE_PRIVATE_KEY < AuthKey_XXXXXXXXXX.p8
+npx convex env set SITE_URL https://my-app.example # Replace this with the origin of your frontend, which the sign-in flow returns to. Without it, only http://localhost:5173 is allowed
 ```
 
 </Step>
@@ -200,6 +202,9 @@ const app = defineApp({
     AUTH_APPLE_KEY_ID: v.string(),
     AUTH_APPLE_PRIVATE_KEY: v.string(),
     // highlight-end
+    // Defaults in auth.ts.
+    // highlight-next-line
+    SITE_URL: v.optional(v.string()),
   },
 });
 
@@ -334,9 +339,15 @@ callbacks, in `convex/auth.ts`:
 
 ```ts title="convex/auth.ts"
 import { components, internal } from "./_generated/api";
+import { env } from "./_generated/server";
 import { setupConvexAuth } from "@convex-dev/auth/server";
 // highlight-next-line
 import { setupApple } from "@convex-dev/auth/methods/apple/server";
+
+// The origin of the frontend, which the sign-in flow returns to. Set SITE_URL
+// on the deployment when the frontend does not run on the Vite default.
+// highlight-next-line
+const SITE_URL = env.SITE_URL ?? "http://localhost:5173";
 
 const auth = setupConvexAuth({ component: components.auth });
 export const { signOut, refreshSession, isAuthenticated } = auth;
@@ -346,7 +357,7 @@ export const { startSignInWithApple, completeSignInWithApple } = setupApple(
   auth,
   {
     component: components.authApple,
-    allowedRedirectOrigins: ["http://localhost:5173"],
+    allowedRedirectOrigins: [SITE_URL],
   },
 ).attachUserCallbacks({
   createUser: internal.users.createUser,
@@ -521,6 +532,7 @@ actual client ID and client secret values):
 ```sh
 npx convex env set AUTH_GOOGLE_CLIENT_ID YOUR_GOOGLE_OAUTH_CLIENT_ID
 npx convex env set AUTH_GOOGLE_CLIENT_SECRET YOUR_GOOGLE_OAUTH_CLIENT_SECRET
+npx convex env set SITE_URL https://my-app.example # Replace this with the origin of your frontend, which the sign-in flow returns to. Without it, only http://localhost:5173 is allowed
 ```
 
 </Step>
@@ -545,6 +557,9 @@ const app = defineApp({
     AUTH_GOOGLE_CLIENT_ID: v.string(),
     // highlight-next-line
     AUTH_GOOGLE_CLIENT_SECRET: v.string(),
+    // Defaults in auth.ts.
+    // highlight-next-line
+    SITE_URL: v.optional(v.string()),
   },
 });
 
@@ -632,9 +647,15 @@ time. This example doesn't use it, but it's available if you need it.
 
 ```ts title="convex/auth.ts"
 import { components, internal } from "./_generated/api";
+import { env } from "./_generated/server";
 import { setupConvexAuth } from "@convex-dev/auth/server";
 // highlight-next-line
 import { setupGoogle } from "@convex-dev/auth/methods/google/server";
+
+// The origin of the frontend, which the sign-in flow returns to. Set SITE_URL
+// on the deployment when the frontend does not run on the Vite default.
+// highlight-next-line
+const SITE_URL = env.SITE_URL ?? "http://localhost:5173";
 
 const auth = setupConvexAuth({ component: components.auth });
 export const { signOut, refreshSession, isAuthenticated } = auth;
@@ -644,7 +665,7 @@ export const { startSignInWithGoogle, completeSignInWithGoogle } = setupGoogle(
   auth,
   {
     component: components.authGoogle,
-    allowedRedirectOrigins: ["http://localhost:5173"],
+    allowedRedirectOrigins: [SITE_URL],
   },
 ).attachUserCallbacks({ createUser: internal.users.createUser });
 // highlight-end
@@ -815,6 +836,7 @@ actual client ID and client secret values):
 ```sh
 npx convex env set AUTH_GITHUB_CLIENT_ID YOUR_GITHUB_OAUTH_CLIENT_ID
 npx convex env set AUTH_GITHUB_CLIENT_SECRET YOUR_GITHUB_OAUTH_CLIENT_SECRET
+npx convex env set SITE_URL https://my-app.example # Replace this with the origin of your frontend, which the sign-in flow returns to. Without it, only http://localhost:5173 is allowed
 ```
 
 </Step>
@@ -839,6 +861,9 @@ const app = defineApp({
     AUTH_GITHUB_CLIENT_ID: v.string(),
     // highlight-next-line
     AUTH_GITHUB_CLIENT_SECRET: v.string(),
+    // Defaults in auth.ts.
+    // highlight-next-line
+    SITE_URL: v.optional(v.string()),
   },
 });
 
@@ -926,9 +951,15 @@ time. This example doesn't use it, but it's available if you need it.
 
 ```ts title="convex/auth.ts"
 import { components, internal } from "./_generated/api";
+import { env } from "./_generated/server";
 import { setupConvexAuth } from "@convex-dev/auth/server";
 // highlight-next-line
 import { setupGithub } from "@convex-dev/auth/methods/github/server";
+
+// The origin of the frontend, which the sign-in flow returns to. Set SITE_URL
+// on the deployment when the frontend does not run on the Vite default.
+// highlight-next-line
+const SITE_URL = env.SITE_URL ?? "http://localhost:5173";
 
 const auth = setupConvexAuth({ component: components.auth });
 export const { signOut, refreshSession, isAuthenticated } = auth;
@@ -938,7 +969,7 @@ export const { startSignInWithGithub, completeSignInWithGithub } = setupGithub(
   auth,
   {
     component: components.authGithub,
-    allowedRedirectOrigins: ["http://localhost:5173"],
+    allowedRedirectOrigins: [SITE_URL],
   },
 ).attachUserCallbacks({ createUser: internal.users.createUser });
 // highlight-end
@@ -1030,6 +1061,316 @@ function SignedOut(): ReactNode {
         }}
       >
         Continue with GitHub
+      </button>
+    </>
+  );
+}
+
+function SignedIn(): ReactNode {
+  const { signOut } = useAuthActions();
+  const user = useQuery(api.users.getCurrentUser);
+  return (
+    <>
+      <h1>Signed in</h1>
+      <p>{user?.id ?? "…"}</p>
+      <button type="button" onClick={() => void signOut()}>
+        Sign out
+      </button>
+    </>
+  );
+}
+
+export default function App(): ReactNode {
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  return (
+    <main>
+      {isLoading && <p>Signing you in…</p>}
+      {!isLoading && isAuthenticated && <SignedIn />}
+      {!isLoading && !isAuthenticated && <SignedOut />}
+    </main>
+  );
+}
+```
+
+</Step>
+
+</StepByStep>
+
+</TabItem>
+
+<TabItem value="Discord" label="Discord">
+
+<StepByStep>
+
+<Step title="Register the OAuth app">
+
+To allow users to login to your app via Discord, you'll need to register an
+application with Discord. The method asks Discord for the `identify` and
+`email` scopes.
+
+:::info
+
+Create an application in the [Discord Developer
+Portal](https://discord.com/developers/applications) before proceeding.
+
+On the application's OAuth2 page, add a redirect URI under Redirects.
+
+:::
+
+The redirect URI will be based on your `CONVEX_SITE_URL`; something like
+`https://happy-animal-123.convex.site/oauth/discord/callback`. You can get your actual `CONVEX_SITE_URL` with this command:
+
+```sh
+npx convex env get CONVEX_SITE_URL
+```
+
+</Step>
+
+<Step title="Set the environment variables">
+
+The same OAuth2 page shows your application's client ID. Discord does not
+show an existing client secret: click "Reset Secret" to generate one, and copy
+it then. You will store those values as [environment
+variables](https://docs.convex.dev/production/environment-variables#declaring)
+on your Convex deployment.
+
+Here are the Convex CLI commands to do that (you'll need to substitute your
+actual client ID and client secret values):
+
+```sh
+npx convex env set AUTH_DISCORD_CLIENT_ID YOUR_DISCORD_OAUTH_CLIENT_ID
+npx convex env set AUTH_DISCORD_CLIENT_SECRET YOUR_DISCORD_OAUTH_CLIENT_SECRET
+npx convex env set SITE_URL https://my-app.example # Replace this with the origin of your frontend, which the sign-in flow returns to. Without it, only http://localhost:5173 is allowed
+```
+
+</Step>
+
+<Step title="Install the component">
+
+Register the Discord oauth component alongside the core in
+`convex/convex.config.ts`. You will declare the environment variables that you
+created above as part of your application's `env` and then pass those values to
+the component.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+import auth from "@convex-dev/auth/convex.config.js";
+// highlight-next-line
+import authDiscord from "@convex-dev/auth/components/discord/convex.config.js";
+
+const app = defineApp({
+  env: {
+    // highlight-next-line
+    AUTH_DISCORD_CLIENT_ID: v.string(),
+    // highlight-next-line
+    AUTH_DISCORD_CLIENT_SECRET: v.string(),
+    // Defaults in auth.ts.
+    // highlight-next-line
+    SITE_URL: v.optional(v.string()),
+  },
+});
+
+app.use(auth);
+
+// The `httpPrefix` below controls where the component's `callback` route is
+// mounted. That gets combined with the `CONVEX_SITE_URL` to form the full
+// redirect URI that needs to be set on the remote identity provider config.
+//
+// The full redirect URI will be something like:
+//
+// https://happy-animal-123.convex.site/oauth/discord/callback
+// highlight-start
+app.use(authDiscord, {
+  httpPrefix: "/oauth/discord",
+  env: {
+    CLIENT_ID: app.env.AUTH_DISCORD_CLIENT_ID,
+    CLIENT_SECRET: app.env.AUTH_DISCORD_CLIENT_SECRET,
+  },
+});
+// highlight-end
+
+export default app;
+```
+
+</Step>
+
+<Step title="Set up user creation">
+
+Write a `createUser` mutation that creates a row in your `users` table and
+returns its id. The method calls it the first time it sees an account.
+
+Discord lets an account keep an email address it has not verified. In that
+case `profile.emailVerified` is `false`, and you should not use that email to
+link the Discord account to an existing user.
+
+```ts title="convex/users.ts"
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { v } from "convex/values";
+import { internalMutation, query } from "./_generated/server";
+import { vDiscordProfile } from "@convex-dev/auth/methods/discord/server";
+
+/**
+ * Create the user row for a new Discord account and return its id. This example
+ * keeps no data in the row, but your app can put a profile here.
+ */
+export const createUser = internalMutation({
+  args: {
+    method: v.object({
+      name: v.literal("discord"),
+      profile: vDiscordProfile,
+    }),
+  },
+  returns: v.id("users"),
+  handler: async (ctx) => {
+    return await ctx.db.insert("users", {});
+  },
+});
+
+export const getCurrentUser = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (userId === null) {
+      return null;
+    }
+    const user = await ctx.db.get("users", userId);
+    if (user === null) {
+      return null;
+    }
+    return { id: user._id };
+  },
+});
+```
+
+</Step>
+
+<Step title="Set up the public backend functions">
+
+Set up the `discord` method with `setupDiscord` and export the mutations for
+starting and completing OAuth login that it hands back once you attach the
+callback that creates your user rows, in `convex/auth.ts`.
+
+Just like `createUser` is attached below, you can also attach an optional
+`onSignIn` mutation, called with the resolved `userId` on every sign-in, the
+first one included. Anything you want to happen each time someone signs in
+belongs there, so `createUser` only has to handle what is true at creation
+time. This example doesn't use it, but it's available if you need it.
+
+```ts title="convex/auth.ts"
+import { components, internal } from "./_generated/api";
+import { env } from "./_generated/server";
+import { setupConvexAuth } from "@convex-dev/auth/server";
+// highlight-next-line
+import { setupDiscord } from "@convex-dev/auth/methods/discord/server";
+
+// The origin of the frontend, which the sign-in flow returns to. Set SITE_URL
+// on the deployment when the frontend does not run on the Vite default.
+// highlight-next-line
+const SITE_URL = env.SITE_URL ?? "http://localhost:5173";
+
+const auth = setupConvexAuth({ component: components.auth });
+export const { signOut, refreshSession, isAuthenticated } = auth;
+
+// highlight-start
+export const { startSignInWithDiscord, completeSignInWithDiscord } =
+  setupDiscord(auth, {
+    component: components.authDiscord,
+    allowedRedirectOrigins: [SITE_URL],
+  }).attachUserCallbacks({ createUser: internal.users.createUser });
+// highlight-end
+```
+
+</Step>
+
+<Step title="Set up the authentication UI">
+
+In your front-end, install hooks and attach listeners for initiating OAuth login.
+
+Include an `App.tsx` like the following in your application:
+
+```tsx title="src/App.tsx"
+import { type ReactNode, useState } from "react";
+import { useConvexAuth, useQuery } from "convex/react";
+import { useAuthActions } from "@convex-dev/auth/react";
+import {
+  useOauth,
+  useSignInWithDiscord,
+} from "@convex-dev/auth/methods/discord/react";
+import { api } from "../convex/_generated/api";
+
+/**
+ * A failure to start comes back from the sign-in call, and a failure after the
+ * redirect back shows up in `useOauth`'s `flowError`. Each is handled with an
+ * exhaustive switch on its code.
+ */
+function SignedOut(): ReactNode {
+  const { signIn } = useSignInWithDiscord(api.auth);
+  const { flowError } = useOauth();
+  const [startError, setStartError] = useState<string | null>(null);
+  return (
+    <>
+      <h1>Sign in</h1>
+      <p>Continue with your Discord account</p>
+      {flowError !== null && (
+        <p role="alert">
+          <strong>
+            {(() => {
+              switch (flowError.error) {
+                case "ACCESS_DENIED":
+                  return "Sign-in was cancelled.";
+                case "EXPIRED":
+                  return "That sign-in took too long. Please try again.";
+                case "INVALID_FLOW":
+                  return "This sign-in can't be completed here. Please try again.";
+                case "OTHER_ERROR":
+                  // The details are on `cause` if you want to log them.
+                  return "Something went wrong during sign-in. Please try again.";
+                default:
+                  flowError satisfies never;
+                  return `Unknown error: ${JSON.stringify(flowError)}`;
+              }
+            })()}
+          </strong>
+        </p>
+      )}
+      {startError !== null && (
+        <p role="alert">
+          <strong>{startError}</strong>
+        </p>
+      )}
+      <button
+        type="button"
+        onClick={async () => {
+          setStartError(null);
+          const result = await signIn();
+          if (result.status === "redirect") return;
+          switch (result.userError.error) {
+            case "OTHER_ERROR":
+              // The flow couldn't start, e.g. the deployment was
+              // unreachable. The original error is on `cause` if you want
+              // to log or inspect it.
+              console.error(
+                "Discord sign-in failed to start:",
+                result.userError.cause,
+              );
+              setStartError(
+                "Couldn't start Discord sign-in. Please try again.",
+              );
+              return;
+            default:
+              result.userError.error satisfies never;
+              console.error(
+                "Discord sign-in failed to start:",
+                result.userError,
+              );
+              setStartError(
+                "Couldn't start Discord sign-in. Please try again.",
+              );
+          }
+        }}
+      >
+        Continue with Discord
       </button>
     </>
   );

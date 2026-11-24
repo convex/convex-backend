@@ -382,3 +382,20 @@ export const integrationName = (kind: IntegrationType) => {
       return kind.charAt(0).toUpperCase() + kind.slice(1);
   }
 };
+
+export function integrationCategory(kind: IntegrationType): string {
+  switch (kind) {
+    case "sentry":
+    case "postHogErrorTracking":
+      return "Exception Reporting";
+    case "s3Export":
+    case "fivetran":
+      return "Streaming Export";
+    case "airbyte":
+      return "Streaming Import";
+    case "workos":
+      return "Authentication";
+    default:
+      return "Log Stream";
+  }
+}

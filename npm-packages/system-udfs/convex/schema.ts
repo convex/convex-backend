@@ -20,15 +20,22 @@ export const udfType = v.union(
 );
 
 const schemaState = v.union(
-  v.literal("pending"),
-  v.literal("validated"),
-  v.literal("active"),
-  v.literal("failed"),
-  v.literal("overwritten"),
+  v.object({ state: v.literal("pending") }),
+  v.object({ state: v.literal("validated") }),
+  v.object({ state: v.literal("active") }),
+  v.object({
+    state: v.literal("failed"),
+    error: v.string(),
+
+    // The table that failed validation. Missing on schemas that failed before
+    // it was recorded.
+    table_name: v.optional(v.union(v.string(), v.null())),
+  }),
+  v.object({ state: v.literal("overwritten") }),
 );
 
 const schemaMetadata = v.object({
-  state: v.object({ state: schemaState, error: v.optional(v.string()) }),
+  state: schemaState,
   // This is a string because the rust code serializes the DatabaseSchema structure to a string.
   schema: v.optional(v.string()),
 });
@@ -46,13 +53,20 @@ const analyzedSourcePosition = v.object({
 
 const analyzedFunction = v.object({
   name: v.string(),
-  // Exactly one of these two will be defined
+
+  // Older modules have `lineno` and newer ones `pos`, which is null when the
+  // analyzer can't find the function's source position.
   lineno: v.optional(v.int64()),
-  pos: v.optional(analyzedSourcePosition),
+  pos: v.optional(v.union(analyzedSourcePosition, v.null())),
+
   udfType,
   visibility: v.optional(v.union(v.null(), udfVisibility)),
-  args: v.optional(v.string()),
-  returns: v.union(v.string(), v.null()),
+
+  // Serialized validators. Missing on modules analyzed before validators
+  // existed, and null once such a module is rewritten without being
+  // re-analyzed. Rust reads both as unvalidated.
+  args: v.optional(v.union(v.string(), v.null())),
+  returns: v.optional(v.union(v.string(), v.null())),
 });
 
 const analyzedHttpRoute = v.object({
@@ -60,10 +74,16 @@ const analyzedHttpRoute = v.object({
     path: v.string(),
     method: v.string(),
   }),
-  // Exactly one of the two will be defined
+
+  // Older modules have `lineno` and newer ones `pos`, which is null when the
+  // analyzer can't find the route's source position.
   lineno: v.optional(v.int64()),
-  pos: v.optional(analyzedSourcePosition),
+  pos: v.optional(v.union(analyzedSourcePosition, v.null())),
 });
+
+// Null when the developer leaves the minute to the backend, which picks one
+// per job to spread load.
+const minuteUTC = v.optional(v.union(v.int64(), v.null()));
 
 const CronSchedule = v.union(
   v.object({
@@ -72,23 +92,23 @@ const CronSchedule = v.union(
   }),
   v.object({
     type: v.literal("hourly"),
-    minuteUTC: v.optional(v.int64()),
+    minuteUTC,
   }),
   v.object({
     type: v.literal("daily"),
-    minuteUTC: v.optional(v.int64()),
+    minuteUTC,
     hourUTC: v.int64(),
   }),
   v.object({
     type: v.literal("weekly"),
     dayOfWeek: v.int64(),
     hourUTC: v.int64(),
-    minuteUTC: v.optional(v.int64()),
+    minuteUTC,
   }),
   v.object({
     type: v.literal("monthly"),
     day: v.int64(),
-    minuteUTC: v.optional(v.int64()),
+    minuteUTC,
     hourUTC: v.int64(),
   }),
   v.object({
@@ -135,6 +155,8 @@ const analyzedModule = v.object({
     ),
   ),
   sourceMapped: v.union(mappedModule, v.null()),
+  // Written only when true.
+  reuseContext: v.optional(v.boolean()),
 });
 
 const exportRequestor = v.union(
@@ -142,20 +164,31 @@ const exportRequestor = v.union(
   v.literal("cloudBackup"),
 );
 
+const exportFormat = v.object({
+  format: v.literal("zip"),
+  include_storage: v.boolean(),
+});
+
+// Null for the app.
+const exportComponent = v.union(v.string(), v.null());
+
 export const completedExport = v.object({
   state: v.literal("completed"),
   complete_ts: v.int64(),
   expiration_ts: v.int64(),
   start_ts: v.int64(),
+
+  // Legacy field that Rust ignores.
   tables: v.optional(v.array(v.array(v.string()))),
-  zip_object_key: v.optional(v.string()),
-  format: v.optional(
-    v.object({
-      format: v.literal("zip"),
-      include_storage: v.boolean(),
-    }),
-  ),
+
+  zip_object_key: v.string(),
+  format: exportFormat,
+  component: exportComponent,
   requestor: exportRequestor,
+
+  // Size of the zip in bytes. Missing on exports completed before it was
+  // recorded.
+  size: v.optional(v.int64()),
 });
 
 const cronJobStatus = v.union(
@@ -187,6 +220,10 @@ export const integrationState = v.union(
   v.object({
     type: v.literal("deleting"),
   }),
+  // Set on active integrations while the backend restarts them.
+  v.object({
+    type: v.literal("restarting"),
+  }),
 );
 
 // The subscribable log stream topics.
@@ -209,6 +246,9 @@ export const logTopic = v.union(
 // topics, including ones added in the future.
 const subscribedTopics = v.optional(v.array(logTopic));
 
+// Rust writes unset optional config fields as null.
+const optionalNullableString = v.optional(v.union(v.string(), v.null()));
+
 export const datadogConfig = v.object({
   type: v.literal("datadog"),
   siteLocation: v.union(
@@ -221,7 +261,7 @@ export const datadogConfig = v.object({
   ),
   ddApiKey: v.string(),
   ddTags: v.array(v.string()),
-  service: v.optional(v.string()),
+  service: optionalNullableString,
   version: v.optional(v.union(v.literal("1"), v.literal("2"))),
   topics: subscribedTopics,
 });
@@ -245,29 +285,29 @@ export const axiomConfig = v.object({
     }),
   ),
   version: v.optional(v.union(v.literal("1"), v.literal("2"))),
-  ingestUrl: v.optional(v.string()),
+  ingestUrl: optionalNullableString,
   topics: subscribedTopics,
 });
 
 export const sentryConfig = v.object({
   type: v.literal("sentry"),
   dsn: v.string(),
-  tags: v.optional(v.record(v.string(), v.string())),
+  tags: v.optional(v.union(v.record(v.string(), v.string()), v.null())),
   version: v.optional(v.union(v.literal("1"), v.literal("2"))),
 });
 
 export const postHogLogsConfig = v.object({
   type: v.literal("postHogLogs"),
   apiKey: v.string(),
-  host: v.optional(v.string()),
-  serviceName: v.optional(v.string()),
+  host: optionalNullableString,
+  serviceName: optionalNullableString,
   topics: subscribedTopics,
 });
 
 export const postHogErrorTrackingConfig = v.object({
   type: v.literal("postHogErrorTracking"),
   apiKey: v.string(),
-  host: v.optional(v.string()),
+  host: optionalNullableString,
 });
 
 const s3ExportProgress = v.union(
@@ -290,13 +330,21 @@ export const s3ExportConfig = v.object({
   type: v.literal("s3Export"),
   bucket: v.string(),
   region: v.string(),
-  prefix: v.optional(v.string()),
+  prefix: optionalNullableString,
   accessKeyId: v.optional(v.string()),
   secretAccessKey: v.optional(v.string()),
   // Empty until the admin pastes the ARN from their CloudFormation stack.
   roleArn: v.optional(v.string()),
   roleExternalId: v.optional(v.string()),
   selection: syncSelection,
+
+  // Left on configs written before the sync period was removed and the
+  // export progress moved to `_s3_export_state`. Rust ignores them.
+  period: v.optional(
+    v.union(v.literal("continuous"), v.literal("hourly"), v.literal("daily")),
+  ),
+  cursor: v.optional(v.union(v.string(), v.null())),
+  progress: v.optional(v.union(s3ExportProgress, v.null())),
 });
 
 export const integrationConfig = v.union(
@@ -328,7 +376,128 @@ const backendStateTable = defineTable(backendState);
 
 export const cronJobState = v.union(
   v.object({ type: v.literal("pending") }),
-  v.object({ type: v.literal("inProgress") }),
+  v.object({
+    type: v.literal("inProgress"),
+    request_id: v.string(),
+    execution_id: v.string(),
+  }),
+);
+
+// Fields with `v.optional` below are missing on index documents last written
+// before they were added.
+
+// Rust serializes these cursors as arrays of byte values.
+const tableScanCursor = v.array(v.int64());
+
+const textIndexSegment = v.object({
+  segment_key: v.string(),
+  id_tracker_key: v.string(),
+  deleted_terms_table_key: v.string(),
+  alive_bitset_key: v.string(),
+  num_indexed_documents: v.int64(),
+  num_deleted_documents: v.int64(),
+  size_bytes_total: v.int64(),
+  id: v.string(),
+});
+
+// Rust keeps snapshot data in a format it doesn't recognize (for example, one
+// written by a newer backend) as an opaque object and writes it back unchanged.
+const unknownIndexSnapshotData = v.record(v.string(), v.any());
+
+const textIndexSnapshot = {
+  data: v.union(
+    v.object({
+      data_type: v.literal("MultiSegment"),
+      segments: v.array(textIndexSegment),
+    }),
+    unknownIndexSnapshotData,
+  ),
+  ts: v.int64(),
+  version: v.int64(),
+};
+
+const textIndexOnDiskState = v.union(
+  v.object({
+    state: v.literal("backfilling"),
+    staged: v.optional(v.union(v.boolean(), v.null())),
+  }),
+  v.object({
+    state: v.literal("backfilling2"),
+    segments: v.optional(v.union(v.array(textIndexSegment), v.null())),
+    // Rust sets both cursor fields or neither (`cursor` is null), and fails to
+    // read anything else.
+    cursor: v.optional(
+      v.union(
+        v.object({
+          table_scan_cursor: tableScanCursor,
+          last_segment_ts: v.int64(),
+        }),
+        v.null(),
+      ),
+    ),
+    staged: v.optional(v.union(v.boolean(), v.null())),
+  }),
+  v.object({
+    state: v.literal("backfilled2"),
+    snapshot: v.object(textIndexSnapshot),
+    staged: v.boolean(),
+  }),
+  v.object({
+    // "backfilled" is the legacy name of "snapshotted".
+    state: v.union(v.literal("backfilled"), v.literal("snapshotted")),
+    ...textIndexSnapshot,
+  }),
+);
+
+const vectorIndexSegment = v.object({
+  segment_key: v.string(),
+  id_tracker_key: v.string(),
+  deleted_bitset_key: v.string(),
+  num_vectors: v.int64(),
+  num_deleted: v.int64(),
+  id: v.string(),
+});
+
+const vectorIndexSnapshot = {
+  data: v.union(
+    v.object({
+      data_type: v.literal("MultiSegment"),
+      segments: v.array(vectorIndexSegment),
+    }),
+    unknownIndexSnapshotData,
+  ),
+  ts: v.int64(),
+};
+
+const vectorIndexBackfilling = {
+  state: v.literal("backfilling"),
+  segments: v.optional(v.union(v.array(vectorIndexSegment), v.null())),
+  staged: v.optional(v.union(v.boolean(), v.null())),
+};
+
+const vectorIndexOnDiskState = v.union(
+  // Rust sets both cursor fields or neither, and fails to read anything else.
+  v.object({
+    ...vectorIndexBackfilling,
+    table_scan_cursor: tableScanCursor,
+    last_segment_ts: v.int64(),
+  }),
+  v.object({
+    ...vectorIndexBackfilling,
+    table_scan_cursor: v.optional(v.null()),
+    last_segment_ts: v.optional(v.null()),
+  }),
+
+  v.object({
+    state: v.literal("backfilled2"),
+    snapshot: v.object(vectorIndexSnapshot),
+    staged: v.boolean(),
+  }),
+  v.object({
+    // "backfilled" is the legacy name of "snapshotted".
+    state: v.union(v.literal("backfilled"), v.literal("snapshotted")),
+    ...vectorIndexSnapshot,
+  }),
 );
 
 export default defineSchema({
@@ -381,37 +550,14 @@ export default defineSchema({
         type: v.literal("search"),
         searchField: v.string(),
         filterFields: v.array(v.string()),
-        onDiskState: v.union(
-          v.object({
-            state: v.union(
-              v.literal("backfilling"),
-              v.literal("backfilling2"),
-              v.literal("backfilled2"),
-            ),
-            // skip some fields here
-            staged: v.optional(v.boolean()),
-          }),
-          v.object({
-            state: v.union(v.literal("backfilled"), v.literal("snapshotted")),
-          }),
-        ),
+        onDiskState: textIndexOnDiskState,
       }),
       v.object({
         type: v.literal("vector"),
         vectorField: v.string(),
         dimensions: v.int64(),
         filterFields: v.array(v.string()),
-        onDiskState: v.union(
-          v.object({
-            state: v.union(
-              v.literal("backfilling"),
-              v.literal("backfilled"),
-              v.literal("backfilled2"),
-            ),
-            staged: v.optional(v.boolean()),
-          }),
-          v.object({ state: v.literal("snapshotted") }),
-        ),
+        onDiskState: vectorIndexOnDiskState,
       }),
     ),
   }),
@@ -429,11 +575,33 @@ export default defineSchema({
     // Absolute path this component's HTTP routes are served under: the app's
     // `httpPrefix` for the root, the mount path in the parent for children.
     httpPrefix: v.optional(v.union(v.string(), v.null())),
+    // `[name, binding]` pairs for a child component and null for the app.
+    // Missing on documents written before component env vars existed.
+    env: v.optional(
+      v.union(
+        v.array(
+          v.array(
+            v.union(
+              v.string(),
+              v.object({ type: v.literal("value"), value: v.string() }),
+              v.object({ type: v.literal("envVar"), name: v.string() }),
+            ),
+          ),
+        ),
+        v.null(),
+      ),
+    ),
   }),
   _modules: defineTable({
     path: v.string(),
-    latestVersion: v.int64(),
-    deleted: v.boolean(),
+
+    // Only on modules last written before mid-2024. Rust ignores them.
+    latestVersion: v.optional(v.int64()),
+    deleted: v.optional(v.boolean()),
+
+    // Base64 SHA-256 of the module's source and source map.
+    sha256: v.string(),
+
     analyzeResult: v.union(analyzedModule, v.null()),
     sourcePackageId: v.string(),
     environment: v.union(
@@ -476,37 +644,72 @@ export default defineSchema({
         state: v.literal("failed"),
         start_ts: v.int64(),
         failed_ts: v.int64(),
+        format: exportFormat,
+        component: exportComponent,
         requestor: exportRequestor,
       }),
       v.object({
         state: v.literal("in_progress"),
         start_ts: v.int64(),
+        expiration_ts: v.int64(),
+        format: exportFormat,
+        component: exportComponent,
         requestor: exportRequestor,
         progress_message: v.optional(v.union(v.null(), v.string())),
+
+        // Opaque state for resuming the export after a restart.
+        resumption_token: v.optional(v.record(v.string(), v.any())),
       }),
       v.object({
         state: v.literal("requested"),
+        expiration_ts: v.int64(),
+        format: exportFormat,
+        component: exportComponent,
         requestor: exportRequestor,
       }),
       v.object({
         state: v.literal("canceled"),
         start_ts: v.optional(v.union(v.null(), v.int64())),
         canceled_ts: v.int64(),
+        format: exportFormat,
+        component: exportComponent,
         requestor: exportRequestor,
       }),
     ),
   ).index("by_requestor", ["requestor"]),
   _deployment_audit_log: deploymentAuditLogTable,
+  // A job stays pending until its scheduled time, so documents written by
+  // older backends can lack any field with `v.optional`.
   _scheduled_jobs: defineTable({
-    nextTs: v.union(v.int64(), v.null()),
+    nextTs: v.optional(v.union(v.int64(), v.null())),
+    completedTs: v.optional(v.union(v.int64(), v.null())),
+    originalScheduledTs: v.optional(v.union(v.int64(), v.null())),
     udfPath: v.string(),
     state: v.union(
       v.object({ type: v.literal("pending") }),
-      v.object({ type: v.literal("inProgress") }),
+
+      // Only actions go through this state.
+      v.object({
+        type: v.literal("inProgress"),
+        request_id: v.string(),
+        execution_id: v.string(),
+      }),
+
+      v.object({ type: v.literal("success") }),
+      v.object({ type: v.literal("failed"), error: v.string() }),
+      v.object({ type: v.literal("canceled") }),
     ),
     udfArgs: v.nullable(v.bytes()),
-    argsId: v.nullable(v.id("_scheduled_job_args")),
-    component: v.optional(v.string()),
+    argsId: v.optional(v.nullable(v.id("_scheduled_job_args"))),
+    component: v.optional(v.nullable(v.string())),
+    attempts: v.optional(
+      v.nullable(
+        v.object({
+          systemErrors: v.int64(),
+          occErrors: v.int64(),
+        }),
+      ),
+    ),
   })
     .index("by_udf_path_and_next_event_ts", ["udfPath", "nextTs"])
     .index("by_next_ts", ["nextTs"]),
@@ -537,7 +740,12 @@ export default defineSchema({
     }),
     executionTime: v.number(),
   }).index("by_name_and_ts", ["name", "ts"]),
-  _udf_config: defineTable({ serverVersion: v.string() }),
+  _udf_config: defineTable({
+    serverVersion: v.string(),
+    importPhaseRngSeed: v.bytes(),
+    // Nanoseconds since the Unix epoch.
+    importPhaseUnixTimestamp: v.int64(),
+  }),
   _schemas: defineTable(schemaMetadata).index("by_state", ["state"]),
   _schema_validations: defineTable({
     schemaId: v.id("_schemas"),
@@ -564,7 +772,32 @@ export default defineSchema({
   _backend_state: backendStateTable,
   _snapshot_imports: snapshotImportsTable,
   _aws_lambda_versions: awsLambdaVersionsTable,
+  // Fields with `v.optional` are missing on documents written before they
+  // were added.
   _backend_info: defineTable({
-    auditLogRetentionDays: v.union(v.int64(), v.null()),
+    org: v.int64(),
+    project: v.int64(),
+    instance: v.int64(),
+    deploymentType: v.union(
+      v.literal("dev"),
+      v.literal("prod"),
+      v.literal("preview"),
+      v.literal("custom"),
+    ),
+    deploymentRef: v.optional(v.union(v.string(), v.null())),
+    streamingExportEnabled: v.optional(v.boolean()),
+    provisionConcurrency: v.optional(v.union(v.int64(), v.null())),
+    logStreamingEnabled: v.optional(v.boolean()),
+    projectName: v.optional(v.union(v.string(), v.null())),
+    projectSlug: v.optional(v.union(v.string(), v.null())),
+    auditLogRetentionDays: v.optional(v.union(v.int64(), v.null())),
+    sendLogsToClient: v.optional(v.union(v.boolean(), v.null())),
+    customAuditLogsInLogStreamsConfigEnabled: v.optional(
+      v.union(v.boolean(), v.null()),
+    ),
+    aiGatewayDisabled: v.optional(v.union(v.boolean(), v.null())),
+    periodicBackupsEnabled: v.optional(v.union(v.boolean(), v.null())),
+    maxCloudBackups: v.optional(v.union(v.int64(), v.null())),
+    defaultUdfRuntime: v.optional(v.union(v.literal("v8"), v.literal("wasm"))),
   }),
 });

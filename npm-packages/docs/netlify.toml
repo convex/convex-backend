@@ -1,26 +1,35 @@
 [build]
   ignore = "bash npm-packages/docs/scripts/should-build.sh"
-  # Runs from the repo root. `npm-packages/convex`'s build script runs under uv, which
-  # the build image doesn't ship, so install the version mise.toml pins (self-updating
-  # mise first, see MISE_IGNORED_CONFIG_PATHS below) and put mise's shims on PATH.
+  # Runs from the repo root. The docs build reads other workspace packages only as checked-in
+  # source: `convex/src` (TypeDoc) and `@convex-dev/platform/*-openapi.json`.
   command = """
-    mise self-update \
-    && MISE_IGNORED_CONFIG_PATHS= mise install uv \
-    && eval "$(mise activate bash --shims)" \
-    && cd scripts \
+    cd scripts \
     && npm ci \
     && cd ../npm-packages/docs \
     && export PATH="$PWD/../../scripts/node_modules/.bin:$PATH" \
     && pnpm --filter 'docs...' install --frozen-lockfile \
-    && turbo run build --filter=docs^... \
     && npm run build
   """
 
 [build.environment]
-  # Netlify's build image has a version of mise older than the min_version specified in
-  # our mise.toml, so mise can't read that config until the build command self-updates
-  # it; the command unsets this where it needs the pinned tool versions.
+  # Netlify's init phase runs the image's preinstalled mise from the repo root. The docs
+  # build needs none of mise.toml's tools, and ignoring it keeps init from failing when
+  # mise.toml's min_version is newer than the image's mise.
   MISE_IGNORED_CONFIG_PATHS = "/opt/build/repo/mise.toml"
+  # Skips pnpm's slow re-check of every lockfile entry against registry metadata
+  # (minimumReleaseAge, trustPolicy, tarball URLs); CI's `pnpm install --frozen-lockfile`
+  # checks the same lockfile before merge. Lockfile integrity hashes are still enforced.
+  PNPM_CONFIG_TRUST_LOCKFILE = "true"
+  # Hosts that ran an earlier build mount its filesystem as a read-only overlayfs layer,
+  # where hard-linking a store file left there copies it up (~1 GB in total). A store on
+  # tmpfs is never carried into the next build.
+  PNPM_CONFIG_STORE_DIR = "/tmp/pnpm-store"
+
+# Production (the `docs-prod` branch) generates the reference pages from the
+# release of the `convex` package version instead of the branch. See
+# npm-packages/docs/scripts/reference-source.js.
+[context.production.environment]
+  CONVEX_DOCS_REFERENCE_SOURCE = "release"
 
 [[headers]]
   for = "/fonts/*"

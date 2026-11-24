@@ -37,6 +37,7 @@ biscuit = { workspace = true }
 bitvec = { workspace = true }
 byteorder = { workspace = true }
 bytes = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true }
 cmd_util = { workspace = true }
 compact_str = { workspace = true }
@@ -84,6 +85,7 @@ regex = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
 rustls-platform-verifier = { workspace = true }
+saffron = { workspace = true }
 semver = { workspace = true }
 sentry = { workspace = true }
 serde = { workspace = true }

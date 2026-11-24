@@ -21,7 +21,7 @@
     "react-dom": "^19.2.4",
     "react-use": "~17.6.0",
     "system-udfs": "workspace:*",
-    "zod": "^3.24.0",
+    "zod": "^4.6.6",
     "@monaco-editor/react": "4.7.0",
     "monaco-editor": "0.40.0"
   },

@@ -85,7 +85,7 @@ export function GroupBySelector<T extends string>({
           ? {
               ...option,
               disabled: true,
-              disabledTooltip: disabledOptions[option.value],
+              tip: disabledOptions[option.value],
             }
           : option,
       )

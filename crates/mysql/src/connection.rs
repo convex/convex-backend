@@ -30,6 +30,7 @@ use common::{
     fastrace_helpers::FutureExt as _,
     knobs::{
         DATABASE_USE_PREPARED_STATEMENTS,
+        MYSQL_CONNECT_TIMEOUT,
         MYSQL_INACTIVE_CONNECTION_LIFETIME,
         MYSQL_MAX_CONNECTIONS,
         MYSQL_MAX_CONNECTION_LIFETIME,
@@ -99,22 +100,25 @@ use tokio::{
 };
 use url::Url;
 
-use crate::metrics::{
-    begin_transaction_timer,
-    connection_lifetime_timer,
-    get_connection_timer,
-    log_connection_create_failed,
-    log_connection_returned_to_pool,
-    log_discarded_connection,
-    log_execute,
-    log_large_statement,
-    log_query,
-    log_query_result,
-    log_transaction,
-    new_connection_pool_stats,
-    query_progress_counter,
-    DiscardReason,
-    LARGE_STATEMENT_THRESHOLD,
+use crate::{
+    connection_rate_limiter::ConnectionRateLimiter,
+    metrics::{
+        begin_transaction_timer,
+        connection_lifetime_timer,
+        get_connection_timer,
+        log_connection_create_failed,
+        log_connection_returned_to_pool,
+        log_discarded_connection,
+        log_execute,
+        log_large_statement,
+        log_query,
+        log_query_result,
+        log_transaction,
+        new_connection_pool_stats,
+        query_progress_counter,
+        DiscardReason,
+        LARGE_STATEMENT_THRESHOLD,
+    },
 };
 
 fn classify_mysql_error(e: mysql_async::Error) -> anyhow::Error {
@@ -129,6 +133,7 @@ fn classify_mysql_error(e: mysql_async::Error) -> anyhow::Error {
             | 2013 // CRServerLost
             | 1053 // ERServerShutdown
             | 1040 // ERConCount "Too many connections"
+            | 1045 // ERAccessDeniedError, also returned for RDS IAM auth proxy faults
             , ..
         }) => {
             database_operational_error(e.into())
@@ -187,6 +192,10 @@ pub(crate) async fn with_timeout<R, Fut: Future<Output = Result<R, mysql_async::
     f: Fut,
 ) -> anyhow::Result<R> {
     with_anyhow_timeout(f.map_err(classify_mysql_error)).await
+}
+
+fn default_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(*MYSQL_TIMEOUT)
 }
 
 async fn with_anyhow_timeout<R>(f: impl Future<Output = anyhow::Result<R>>) -> anyhow::Result<R> {
@@ -399,9 +408,9 @@ impl<RT: Runtime> MySqlConnection<'_, RT> {
             Some(conn) if !conn.conn.is_disconnected() => conn,
             Some(_) => {
                 log_discarded_connection(&pool.cluster_name, DiscardReason::Error);
-                pool.create_connection().await?
+                pool.create_connection(default_deadline()).await?
             },
-            None => pool.create_connection().await?,
+            None => pool.create_connection(default_deadline()).await?,
         };
         Ok(&mut slot.insert(conn).conn)
     }
@@ -845,6 +854,7 @@ pub struct ConvexMySqlPool<RT: Runtime> {
     established: Arc<AtomicUsize>,
     /// Number of `acquire` calls currently waiting on `semaphore`.
     waiters: AtomicUsize,
+    connection_rate_limiter: ConnectionRateLimiter,
     /// Shared with the idle worker, which closes connections idle for longer
     /// than [`MYSQL_INACTIVE_CONNECTION_LIFETIME`].
     connections: Arc<Mutex<IdleConnections>>,
@@ -971,6 +981,7 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
             semaphore: Semaphore::new(*MYSQL_MAX_CONNECTIONS),
             established: Arc::new(AtomicUsize::new(0)),
             waiters: AtomicUsize::new(0),
+            connection_rate_limiter: ConnectionRateLimiter::new(),
             connections,
             idle_worker_wakeup,
             stats: new_connection_pool_stats(cluster_name.as_str()),
@@ -1006,7 +1017,7 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
     }
 
     /// Assumes that we already have a semaphore permit
-    async fn get_connection_internal(&self) -> anyhow::Result<PooledConnection> {
+    async fn get_connection_internal(&self, deadline: Instant) -> anyhow::Result<PooledConnection> {
         {
             let mut idle = self.connections.lock();
             // Always reuse the newest connection
@@ -1019,25 +1030,33 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
             }
         }
         // box this since it is less common
-        Box::pin(self.create_connection()).await
+        Box::pin(self.create_connection(deadline)).await
     }
 
     #[fastrace::trace]
-    async fn create_connection(&self) -> anyhow::Result<PooledConnection> {
-        // A guard also counts attempts abandoned by a caller's timeout, such
-        // as `acquire`'s, which expires before this one after waiting for a
-        // permit.
-        let failed = scopeguard::guard((), |()| log_connection_create_failed(&self.cluster_name));
-        let mut opts = self.opts.clone();
-        if let Some(rds_iam_auth) = &self.rds_iam_auth {
-            opts = rds_iam_auth
-                .authed_opts(&self.opts)
-                .await
-                .map_err(database_operational_error)?;
-        }
-        let conn = with_timeout(Conn::new(opts)).await?;
-        ScopeGuard::into_inner(failed);
-        Ok(PooledConnection::new(conn, &self.established))
+    async fn create_connection(&self, deadline: Instant) -> anyhow::Result<PooledConnection> {
+        self.connection_rate_limiter
+            .run(&self.cluster_name, deadline, || async {
+                // A guard also counts attempts abandoned by a caller's timeout,
+                // such as `acquire`'s, which expires before this one after
+                // waiting for a permit.
+                let failed =
+                    scopeguard::guard((), |()| log_connection_create_failed(&self.cluster_name));
+                let mut opts = self.opts.clone();
+                if let Some(rds_iam_auth) = &self.rds_iam_auth {
+                    opts = rds_iam_auth
+                        .authed_opts(&self.opts)
+                        .await
+                        .map_err(database_operational_error)?;
+                }
+                let conn = tokio::time::timeout(*MYSQL_CONNECT_TIMEOUT, Conn::new(opts))
+                    .await
+                    .map_err(|_| database_timeout_error("MySQL"))?
+                    .map_err(classify_mysql_error)?;
+                ScopeGuard::into_inner(failed);
+                Ok(PooledConnection::new(conn, &self.established))
+            })
+            .await
     }
 
     pub(crate) async fn acquire<'a>(
@@ -1046,6 +1065,7 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
         db_name: &'a str,
     ) -> anyhow::Result<MySqlConnection<'a, RT>> {
         let pool_get_timer = get_connection_timer(&self.cluster_name);
+        let deadline = default_deadline();
         let conn = with_anyhow_timeout(async {
             let permit = {
                 struct WaiterGuard<'a>(&'a AtomicUsize);
@@ -1063,7 +1083,7 @@ impl<RT: Runtime> ConvexMySqlPool<RT> {
                     .context("ConvexMySqlPool has been shut down")
                     .map_err(database_operational_error)?
             };
-            let conn = self.get_connection_internal().await?;
+            let conn = self.get_connection_internal(deadline).await?;
             anyhow::Ok((permit, conn))
         })
         .trace_if_pending(func_path!()) // only trace if slow

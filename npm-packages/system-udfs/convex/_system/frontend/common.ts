@@ -134,7 +134,13 @@ export type Export = Doc<"_exports">;
 
 export type CompletedExport = Export & { state: "completed" };
 
-export type EnvironmentVariable = Doc<"_environment_variables">;
+export type EnvironmentVariable = Omit<
+  Doc<"_environment_variables">,
+  "value"
+> & {
+  /** `null` for a secret: its value is never sent to the dashboard. */
+  value: string | null;
+};
 
 export type ScheduledJob = Doc<"_scheduled_jobs">;
 

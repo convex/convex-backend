@@ -1,7 +1,10 @@
 import { Tooltip } from "@ui/Tooltip";
 import { ReactNode } from "react";
 import { IntegrationType } from "system-udfs/convex/_system/frontend/common";
-import { integrationName } from "@common/lib/integrationHelpers";
+import {
+  integrationCategory,
+  integrationName,
+} from "@common/lib/integrationHelpers";
 
 export function IntegrationTitle({
   logo,
@@ -26,21 +29,4 @@ export function IntegrationTitle({
       </Tooltip>
     </div>
   );
-}
-
-function integrationCategory(kind: IntegrationType): string {
-  switch (kind) {
-    case "sentry":
-    case "postHogErrorTracking":
-      return "Exception Reporting";
-    case "s3Export":
-    case "fivetran":
-      return "Streaming Export";
-    case "airbyte":
-      return "Streaming Import";
-    case "workos":
-      return "Authentication";
-    default:
-      return "Log Stream";
-  }
 }

@@ -69,8 +69,11 @@ function MembersContent({
   const hasSyncedDirectory = useTeamDirectorySynced(team.id);
 
   const isLoading = !(members && invites && entitlements !== undefined);
-  const canAddMembers =
-    !isLoading && members.length < entitlements.maxTeamMembers!;
+  // Pending invitations hold seats too.
+  const pendingInviteCount =
+    invites?.filter((invite) => !invite.expired).length ?? 0;
+  const seatsUsed = (members?.length ?? 0) + pendingInviteCount;
+  const canAddMembers = !isLoading && seatsUsed < entitlements.maxTeamMembers!;
 
   let inviteMembers = null;
   if (isLoading) {
@@ -100,17 +103,23 @@ function MembersContent({
   } else if (canAddMembers) {
     // Show invite form if you can add members.
     inviteMembers = (
-      <InviteMemberForm team={team} members={members} canInvite={canInvite} />
+      <InviteMemberForm
+        team={team}
+        members={members}
+        invites={invites}
+        canInvite={canInvite}
+      />
     );
-  } else if (members.length >= entitlements.maxTeamMembers!) {
+  } else if (seatsUsed >= entitlements.maxTeamMembers!) {
     // Show an action item to upgrade if you have reached your member limit.
     inviteMembers = (
       <Callout>
         <div className="flex flex-col gap-2 p-2">
           <div>
-            You've reached the member limit for this team.{" "}
+            You've reached the member limit for this team
+            {pendingInviteCount > 0 && ", counting pending invitations"}.{" "}
             <Link
-              href={`/${team.slug}/settings/billing`}
+              href={`/t/${team.slug}/settings/billing`}
               className="items-center"
             >
               Upgrade

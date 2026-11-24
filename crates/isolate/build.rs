@@ -59,15 +59,21 @@ const COMPONENT_TESTS_PROJECTS: &[&str] = &[
     "http_legacy_routes",
     "http_no_prefix_mounting",
     "env_vars",
+    "init",
+    "init_wrong_arg_type",
 ];
 /// Components in `component-tests` directory that are used in projects.
 const COMPONENTS: &[&str] = &[
+    "childComponentWithInit",
     "component",
     "componentWithEnv",
+    "componentWithInit",
     "envVars",
     "errors",
+    "grandchildComponentWithInit",
     "httpComponent",
     "httpGrandchild",
+    "libComponent",
 ];
 
 const ADMIN_KEY: &str = include_str!("../keybroker/dev/admin_key.txt");

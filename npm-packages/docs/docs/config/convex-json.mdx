@@ -102,8 +102,8 @@ the `_generated/api.js` file via the `generateCommonJSApi` field.
 ## Configuring the Node.js version
 
 You can specify which Node.js version is used by Node actions via the
-`node.nodeVersion` field. The currently supported values are `"22"` and `"24"`.
-[Read more](/functions/runtimes.mdx#nodejs-version-configuration).
+`node.nodeVersion` field. The currently supported values are `"22"`, `"24"`, and
+`"26"`. [Read more](/functions/runtimes.mdx#nodejs-version-configuration).
 
 <Admonition type="info" title="Convex version requirement">
 
@@ -128,6 +128,36 @@ instead.
 
 When pushing a new Node.js version to the server, the new code for your
 functions may be executed in the old Node.js version for up a few minutes.
+
+## Configuring Node.js action memory (beta) \{#configuring-nodejs-action-memory}
+
+<BetaAdmonition feature="Configurable Node.js action memory" verb="is" />
+
+Node actions run with 512 MiB of memory by default. To give them more, set
+`node.defaultMemoryMb` to `2048`. The setting applies to every Node action in
+the deployment, and they bill [action compute](/production/state/limits.mdx) at
+that size. Convex runtime actions keep their own limits.
+
+<Admonition type="info" title="Convex version requirement">
+
+To set the memory size, you must use the `convex` NPM package version 1.51.0 or
+later.
+
+</Admonition>
+
+```json title="convex.json"
+{
+  "$schema": "./node_modules/convex/schemas/convex.schema.json",
+  "node": {
+    "defaultMemoryMb": 2048
+  }
+}
+```
+
+Note: The self-hosted Convex backend only supports `512`.
+
+For a few minutes after you push a new memory size, Node actions may run with
+more memory than you set.
 
 ## Using static code generation (beta)
 

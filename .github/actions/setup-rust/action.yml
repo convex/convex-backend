@@ -43,10 +43,7 @@ runs:
       run:
         sudo apt-get install pkg-config libsodium-dev libssl-dev libsnappy-dev
 
-    # The runner AMI ships a prebuilt librocksdb but no pkg-config .pc, so mise's
-    # ROCKSDB_COMPILE check fails and librocksdb-sys rebuilds it from source every
-    # run. Write a .pc for the prebuilt so it links instead (no-op if one exists).
-    # TODO: ship the .pc from the AMI (`make install`) and drop this.
+    # A pkg-config entry lets librocksdb-sys link the runner AMI's prebuilt library.
     - name: Make prebuilt rocksdb discoverable via pkg-config
       shell: bash
       if: runner.os == 'Linux'
@@ -81,6 +78,12 @@ runs:
         echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
         echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
         if [ "$RUNNER_OS" == "Linux" ]; then
+          # mise can select a source build before Rust setup registers the prebuilt library.
+          if [ "${ROCKSDB_COMPILE:-}" = 1 ] &&
+             pkg-config --atleast-version=8 rocksdb &&
+             ! pkg-config --atleast-version=9 rocksdb; then
+            echo "ROCKSDB_COMPILE=" >> "$GITHUB_ENV"
+          fi
           echo "SNAPPY_LIB_DIR=/usr/lib/$(uname -m)-linux-gnu" >> $GITHUB_ENV
           echo "SODIUM_USE_PKG_CONFIG=1" >> $GITHUB_ENV
           echo "ROCKSDB_LIB_DIR=/usr/lib" >> $GITHUB_ENV

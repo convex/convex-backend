@@ -131,6 +131,8 @@ export const DEPLOYMENT_OP_TO_ACTION: Record<
   ViewIntegrations: "deployment:integrations:view",
   WriteIntegrations: "deployment:integrations:write",
   UseAiGateway: "deployment:aiGateway:use",
+  ConfigurePeriodicBackups: "deployment:backups:configurePeriodic",
+  DisablePeriodicBackups: "deployment:backups:disablePeriodic",
 };
 
 const READ_ONLY_ACTIONS: RoleStatementAction[] = [
@@ -630,6 +632,10 @@ export const DIRECTORY_SYNC_RESOURCE: ConcreteResource = {
 
 export const OAUTH_APPLICATION_RESOURCE: ConcreteResource = {
   segments: [{ kind: "oauthApplication" }],
+};
+
+export const INTEGRATION_RESOURCE: ConcreteResource = {
+  segments: [{ kind: "integration" }],
 };
 
 // Team-scoped tokens carry a creator selector so a role like

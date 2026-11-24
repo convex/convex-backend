@@ -3559,6 +3559,7 @@
           "receiveProject",
           "updateProject",
           "deleteProject",
+          "undeleteProject",
           "createProjectEnvironmentVariable",
           "updateProjectEnvironmentVariable",
           "deleteProjectEnvironmentVariable",

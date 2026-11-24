@@ -472,7 +472,8 @@
               "cron",
               "scheduler",
               "action",
-              "tester"
+              "tester",
+              "push"
             ]
           },
           "usage": {

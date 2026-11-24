@@ -28,13 +28,15 @@ export const startPushRequest = looseObject({
 export type StartPushRequest = z.infer<typeof startPushRequest>;
 
 export const schemaChange = looseObject({
-  allocatedComponentIds: z.any(),
-  schemaIds: z.any(),
+  allocatedComponentIds: z.any().optional(),
+  schemaIds: z.any().optional(),
   indexDiffs: z.record(componentPath, indexDiff).optional(),
 });
 export type SchemaChange = z.infer<typeof schemaChange>;
 
 export const startPushResponse = looseObject({
+  // Opaque strings (not the variables' values) to send back unchanged to
+  // `finish_push`, which uses them to detect changes during the push.
   environmentVariables: z.record(z.string(), z.string()),
 
   externalDepsId: z.nullable(z.string()),

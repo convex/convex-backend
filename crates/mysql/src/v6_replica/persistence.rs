@@ -195,6 +195,10 @@ impl<RT: Runtime> PersistenceTrait for ReplicatedV5Persistence<RT> {
         self.v5.is_fresh()
     }
 
+    fn lease_ts(&self) -> Option<i64> {
+        self.v5.lease_ts()
+    }
+
     fn reader(&self) -> Arc<dyn PersistenceReader> {
         let reader = self.v5.reader();
         match &self.replica {

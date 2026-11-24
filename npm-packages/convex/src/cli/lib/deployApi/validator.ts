@@ -10,7 +10,7 @@ const baseConvexValidator = z.discriminatedUnion("type", [
   looseObject({ type: z.literal("string") }),
   looseObject({ type: z.literal("bytes") }),
   looseObject({ type: z.literal("any") }),
-  looseObject({ type: z.literal("literal"), value: z.any() }),
+  looseObject({ type: z.literal("literal"), value: z.any().optional() }),
   looseObject({ type: z.literal("id"), tableName: z.string() }),
 ]);
 export type ConvexValidator =
@@ -59,6 +59,7 @@ export const convexValidator: z.ZodType<ConvexValidator> = z.lazy(() =>
     looseObject({
       type: z.literal("object"),
       value: z.record(
+        z.string(),
         looseObject({
           fieldType: convexValidator,
           optional: z.boolean(),

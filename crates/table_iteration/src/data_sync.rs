@@ -146,6 +146,7 @@ use errors::{
     ErrorMetadata,
     ErrorMetadataAnyhowExt,
 };
+use fastrace::local::LocalSpan;
 use futures::{
     pin_mut,
     TryStreamExt,
@@ -519,6 +520,7 @@ impl<RT: Runtime> DataSyncIterator<RT> {
 
     /// Advance the `by_id` dimension: read a page of `current_table`'s `by_id`
     /// index at `synced_ts` and emit each document. `synced_ts` is unchanged.
+    #[fastrace::trace]
     async fn by_id_page(
         &self,
         cursor: &mut DataSyncCursor,
@@ -617,6 +619,20 @@ impl<RT: Runtime> DataSyncIterator<RT> {
             cover!(coverage::BY_ID_BYTES_LIMITED);
         }
         let reached_end = !count_limited && !bytes_limited;
+        LocalSpan::add_properties(|| {
+            let stopped_by = if count_limited {
+                "page_size_limit"
+            } else if bytes_limited {
+                "page_bytes_limit"
+            } else {
+                "end_of_table"
+            };
+            [
+                ("documents", entries.len().to_string()),
+                ("bytes", page_bytes.to_string()),
+                ("stopped_by", stopped_by.to_owned()),
+            ]
+        });
         if reached_end {
             cover!(coverage::BY_ID_REACHED_END);
             cursor.synced_tables.insert(current_table);
@@ -639,6 +655,7 @@ impl<RT: Runtime> DataSyncIterator<RT> {
     /// Advance the `ts` dimension: walk the document log forward from
     /// `synced_ts`, emit captured documents at their new revision, and advance
     /// `synced_ts` to the last fully-consumed timestamp.
+    #[fastrace::trace]
     async fn ts_page(
         &self,
         cursor: &mut DataSyncCursor,
@@ -773,6 +790,12 @@ impl<RT: Runtime> DataSyncIterator<RT> {
             cover!(coverage::TS_NOOP);
         }
 
+        LocalSpan::add_properties(|| {
+            [
+                ("documents", entries.len().to_string()),
+                ("caught_up", (new_synced_ts == *latest).to_string()),
+            ]
+        });
         cursor.synced_ts = new_synced_ts;
         cursor.num_docs_synced = cursor.num_docs_synced.saturating_add(entries.len() as u64);
         // Every re-emitted document is captured, so its predecessor was already

@@ -1,7 +1,10 @@
 use std::fmt::Formatter;
 
 use headers::Authorization;
-use serde::Serialize;
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use sync_types::headers::ConvexAdminAuthorization;
 use utoipa::ToSchema;
 
@@ -23,7 +26,7 @@ impl std::fmt::Debug for SystemKey {
 }
 
 /// Encrypted admin key
-#[derive(Serialize, Clone, ToSchema)]
+#[derive(Serialize, Deserialize, Clone, ToSchema)]
 pub struct AdminKey(String);
 
 impl std::fmt::Debug for AdminKey {

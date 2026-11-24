@@ -31,9 +31,9 @@ export type NodeDependency = z.infer<typeof nodeDependency>;
 export const udfConfig = looseObject({
   serverVersion: z.string(),
   // RNG seed encoded as Convex bytes in JSON.
-  importPhaseRngSeed: z.any(),
+  importPhaseRngSeed: z.any().optional(),
   // Timestamp encoded as a Convex Int64 in JSON.
-  importPhaseUnixTimestamp: z.any(),
+  importPhaseUnixTimestamp: z.any().optional(),
 });
 export type UdfConfig = z.infer<typeof udfConfig>;
 
@@ -48,7 +48,7 @@ export type Visibility = z.infer<typeof visibility>;
 
 export const analyzedFunction = looseObject({
   name: z.string(),
-  pos: z.any(),
+  pos: z.any().optional(),
   udfType: z.union([
     z.literal("Query"),
     z.literal("Mutation"),
@@ -62,8 +62,8 @@ export type AnalyzedFunction = z.infer<typeof analyzedFunction>;
 
 export const analyzedModule = looseObject({
   functions: z.array(analyzedFunction),
-  httpRoutes: z.any(),
-  cronSpecs: z.any(),
-  sourceMapped: z.any(),
+  httpRoutes: z.any().optional(),
+  cronSpecs: z.any().optional(),
+  sourceMapped: z.any().optional(),
 });
 export type AnalyzedModule = z.infer<typeof analyzedModule>;

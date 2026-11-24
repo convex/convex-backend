@@ -1,11 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use chrono::{
-    TimeZone,
-    Utc,
+use common::{
+    cron::next_occurrence_after,
+    knobs::CRON_SPLAY_SECONDS,
 };
-use common::knobs::CRON_SPLAY_SECONDS;
 use metrics::{
     log_counter,
     log_distribution,
@@ -200,15 +199,4 @@ fn skipped_an_occurrence(
     scheduled: Timestamp,
 ) -> anyhow::Result<bool> {
     Ok(next_occurrence_after(cron, previous_occurrence)? < scheduled)
-}
-
-/// The next time this schedule runs after `ts`.
-fn next_occurrence_after(cron: &Cron, ts: Timestamp) -> anyhow::Result<Timestamp> {
-    let occurrence_utc = cron
-        .next_after(Utc.timestamp_nanos(ts.into()))
-        .context("Could not compute next timestamp for cron")?;
-    occurrence_utc
-        .timestamp_nanos_opt()
-        .context("Unable to get nanos from UTC")?
-        .try_into()
 }

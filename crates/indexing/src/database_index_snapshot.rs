@@ -79,7 +79,10 @@ use crate::{
         IndexReader,
         RangeRequest,
     },
-    index_registry::IndexRegistry,
+    index_registry::{
+        Index,
+        IndexRegistry,
+    },
     metrics::{
         log_index_cache_cleared,
         log_transaction_cache_query,
@@ -342,33 +345,16 @@ impl DatabaseIndexSnapshot {
         self.cache
     }
 
+    /// The indexes at the snapshot, before any of the transaction's writes.
+    pub fn index_registry(&self) -> &IndexRegistry {
+        &self.index_registry
+    }
+
     async fn start_range_fetch(
         &self,
+        index: &Index,
         range_request: &RangeRequest,
     ) -> anyhow::Result<RangeFetchResult> {
-        let index = match self.index_registry.require_enabled(
-            &range_request.index_name,
-            &range_request.printable_index_name,
-        ) {
-            Ok(index) => index,
-            Err(e) => {
-                // We verify that indexes are enabled at the transaction index layer,
-                // so if an index is missing in our `index_registry` (which is from the
-                // beginning of the transaction), then it must have been
-                // inserted in this transaction. Return an empty result in this
-                // condition for all indexes on all tables except the `_index` table, which must
-                // always exist.
-                if range_request.index_name.table() != &self.index_registry.index_table() {
-                    return Ok(RangeFetchResult::MemoryCached {
-                        documents: vec![],
-                        next_cursor: CursorPosition::End,
-                    });
-                }
-                anyhow::bail!(e);
-            },
-        };
-
-        // Check that the index is indeed a database index.
         let IndexConfig::Database { on_disk_state, .. } = &index.metadata.config else {
             let err = index_not_a_database_index_error(
                 &range_request
@@ -380,15 +366,34 @@ impl DatabaseIndexSnapshot {
         };
         anyhow::ensure!(
             *on_disk_state == DatabaseIndexState::Enabled,
-            "Index returned from `require_enabled` but not enabled?"
+            "Can't read {} at the snapshot because it isn't enabled",
+            range_request.printable_index_name
         );
+        if !self.index_registry.contains_index_id(&index.id()) {
+            let by_id = TabletIndexName::by_id(*range_request.index_name.table());
+            anyhow::ensure!(
+                self.index_registry.get_enabled(&by_id).is_none(),
+                "{} was created and enabled in this transaction on a pre-existing table, so it \
+                 has no entries for that table's documents",
+                range_request.printable_index_name
+            );
+            // The index and the table were both created in this transaction, so there are
+            // no documents in the snapshot for this table. The index also has no
+            // persistence index ID until the transaction commits, so it can't be read from
+            // persistence.
+            return Ok(RangeFetchResult::MemoryCached {
+                documents: vec![],
+                next_cursor: CursorPosition::End,
+            });
+        }
+        let index = IndexRef::try_from(index)?;
 
         // Now that we know it's a database index, serve it from the pinned
         // in-memory index if it's there.
         if let Some(range) = self
             .in_memory_indexes
             .range(
-                IndexRef::try_from(&index)?,
+                index,
                 &range_request.interval,
                 range_request.order,
                 *range_request.index_name.table(),
@@ -407,18 +412,21 @@ impl DatabaseIndexSnapshot {
             self.cache
                 .get(index.id(), &range_request.interval, range_request.order);
         Ok(RangeFetchResult::NonCached {
-            index: IndexRef::try_from(&index)?,
+            index,
             cache_results,
         })
     }
 
     /// Query the given indexes at the snapshot.
     ///
+    /// The caller resolves each index using the transaction's registry, so
+    /// indexes enabled during the transaction can read their committed entries.
+    ///
     /// Returns a separate result for each range request in the batch, in the
     /// same order as the input.
     pub async fn range_batch(
         &mut self,
-        range_requests: &[&RangeRequest],
+        range_requests: &[(&Index, &RangeRequest)],
     ) -> Vec<
         anyhow::Result<(
             Vec<(IndexKeyBytes, Timestamp, LazyDocument)>,
@@ -437,9 +445,9 @@ impl DatabaseIndexSnapshot {
         // Concurrently run each range request, filling in its corresponding
         // slot in `results`.
         let stream = stream::iter(range_requests.iter().zip(&mut results[..]))
-            .map(|(range_request, out)| async {
+            .map(|(&(index, range_request), out)| async {
                 let populate_cache;
-                (*out, populate_cache) = match self.range_fetch(range_request).await {
+                (*out, populate_cache) = match self.range_fetch(index, range_request).await {
                     Ok((range_result, populate_cache)) => (Ok(range_result), populate_cache),
                     Err(e) => (Err(e), None),
                 };
@@ -448,11 +456,11 @@ impl DatabaseIndexSnapshot {
             .buffer_unordered(20)
             .flatten()
             .collect();
-        let populate_cache_results: Vec<(IndexId, Vec<(Timestamp, PackedDocument)>, Interval)> =
+        let populate_cache_results: Vec<(&Index, Vec<(Timestamp, PackedDocument)>, Interval)> =
             assert_send(stream).await; // works around https://github.com/rust-lang/rust/issues/102211
 
-        for (index_id, cache_miss_results, interval_read) in populate_cache_results {
-            self.populate_cache_misses(index_id, cache_miss_results, interval_read);
+        for (index, cache_miss_results, interval_read) in populate_cache_results {
+            self.populate_cache_misses(index, cache_miss_results, interval_read);
         }
 
         results
@@ -460,17 +468,18 @@ impl DatabaseIndexSnapshot {
 
     /// The concurrent part of `range_batch`; the result should be fed into
     /// `populate_cache_misses` afterward
-    async fn range_fetch(
+    async fn range_fetch<'a>(
         &self,
+        index: &'a Index,
         range_request: &RangeRequest,
     ) -> anyhow::Result<(
         (
             Vec<(IndexKeyBytes, Timestamp, LazyDocument)>,
             CursorPosition,
         ),
-        Option<(IndexId, Vec<(Timestamp, PackedDocument)>, Interval)>,
+        Option<(&'a Index, Vec<(Timestamp, PackedDocument)>, Interval)>,
     )> {
-        match self.start_range_fetch(range_request).await? {
+        match self.start_range_fetch(index, range_request).await? {
             RangeFetchResult::MemoryCached {
                 documents,
                 next_cursor,
@@ -486,7 +495,7 @@ impl DatabaseIndexSnapshot {
                 None,
             )),
             RangeFetchResult::NonCached {
-                index,
+                index: index_ref,
                 cache_results,
             } => {
                 let any_misses = cache_results
@@ -494,7 +503,7 @@ impl DatabaseIndexSnapshot {
                     .any(|result| matches!(result, DatabaseIndexSnapshotCacheResult::CacheMiss(_)));
                 let fut = Self::fetch_cache_misses(
                     self.reader.clone(),
-                    index,
+                    index_ref,
                     range_request.clone(),
                     cache_results,
                 );
@@ -514,27 +523,30 @@ impl DatabaseIndexSnapshot {
                     .split(cursor.clone(), range_request.order);
                 Ok((
                     (fetch_result_vec, cursor),
-                    Some((index.id(), cache_miss_results, interval_read)),
+                    Some((index, cache_miss_results, interval_read)),
                 ))
             },
         }
     }
 
     /// `cache_miss_results` contains all the documents in the range
-    /// `interval_read` in `index_id` that are *not* already cached
+    /// `interval_read` in `read_index` that are *not* already cached
     fn populate_cache_misses(
         &mut self,
-        index_id: IndexId,
+        read_index: &Index,
         cache_miss_results: Vec<(Timestamp, PackedDocument)>,
         interval_read: Interval,
     ) {
         let mut buffer = IndexKeyBuffer::new();
         for (ts, doc) in cache_miss_results {
-            // Populate all index point lookups that can result in the given
-            // document.
+            // Include `read_index` explicitly because it may have been enabled
+            // during the transaction. Use the snapshot's enabled indexes for
+            // other point lookups to keep their cached entries complete.
             for index in self
                 .index_registry
                 .enabled_indexes_for_table(doc.id().tablet_id)
+                .filter(|index| index.id() != read_index.id())
+                .chain([read_index])
             {
                 let IndexConfig::Database {
                     spec: DatabaseIndexSpec { fields },
@@ -557,7 +569,7 @@ impl DatabaseIndexSnapshot {
         // added to the cache with `populate_cache`, record the entire interval as
         // being populated.
         self.cache
-            .record_interval_populated(index_id, interval_read);
+            .record_interval_populated(read_index.id(), interval_read);
     }
 
     async fn fetch_cache_misses(

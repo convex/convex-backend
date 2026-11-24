@@ -125,18 +125,12 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
         let mut presence = SearchIndexPresence::Absent;
         let mut tx = self.database.begin(Identity::system()).await?;
 
-        let non_empty_search_indexes = IndexModel::new(&mut tx)
-            .get_all_non_empty_search_indexes()
-            .await?;
-
-        // Skip compaction on empty tables.
-        for index_doc in non_empty_search_indexes {
-            let (index_id, index_metadata) = index_doc.into_id_and_value();
-            let Some(config) = T::get_config(&index_metadata.config) else {
+        for index_doc in IndexModel::new(&mut tx).get_all_indexes()? {
+            let Some(config) = T::get_config(&index_doc.config) else {
                 continue;
             };
             presence = SearchIndexPresence::Present;
-            let name = index_metadata.name;
+            let name = &index_doc.name;
 
             let maybe_segments_to_compact = match &config.on_disk_state {
                 SearchOnDiskState::Backfilling(backfill_state) => {
@@ -171,25 +165,16 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
                     continue;
                 },
             };
-            if let Some((mut segments_to_compact, compaction_reason)) = maybe_segments_to_compact {
+            if let Some((segments_to_compact, compaction_reason)) = maybe_segments_to_compact {
                 tracing::info!(
                     "Queueing {:?} index for compaction: {name:?} for reason: \
                      {compaction_reason:?}",
                     Self::search_type()
                 );
-                // Choose segments to compact at random.
-                segments_to_compact.shuffle(&mut rand::rng());
-                tracing::info!(
-                    "Compacting {} segments out of {} that need compaction for reason: {:?}",
-                    *MAX_COMPACTION_SEGMENTS,
-                    segments_to_compact.len(),
-                    compaction_reason,
-                );
-                segments_to_compact.truncate(*MAX_COMPACTION_SEGMENTS);
                 let job = CompactionJob {
-                    index_id,
+                    index_id: index_doc.id(),
                     index_name: name.clone(),
-                    spec: config.spec.clone(),
+                    spec: config.spec,
                     on_disk_state: config.on_disk_state,
                     segments_to_compact,
                     compaction_reason,
@@ -338,13 +323,52 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
         spec: &'a T::Spec,
         compaction_config: &CompactionConfig,
     ) -> anyhow::Result<Option<(Vec<T::Segment>, CompactionReason)>> {
+        let mut empty_segments = vec![];
+        let mut merge_candidates = vec![];
+        for segment in segments {
+            if segment.statistics()?.num_non_deleted_documents() == 0 {
+                empty_segments.push(segment.clone());
+            } else {
+                merge_candidates.push(segment);
+            }
+        }
+
+        let merge = Self::find_segments_to_merge(merge_candidates, spec, compaction_config)?;
+        let (mut segments_to_compact, compaction_reason) = match merge {
+            Some((mut segments_to_merge, merge_reason)) => {
+                // Choose segments to compact at random.
+                segments_to_merge.shuffle(&mut rand::rng());
+                tracing::info!(
+                    "Compacting {} segments out of {} that need compaction for reason: {:?}",
+                    *MAX_COMPACTION_SEGMENTS,
+                    segments_to_merge.len(),
+                    merge_reason,
+                );
+                segments_to_merge.truncate(*MAX_COMPACTION_SEGMENTS);
+                (segments_to_merge, merge_reason)
+            },
+            None if empty_segments.is_empty() => return Ok(None),
+            None => (vec![], CompactionReason::EmptySegments),
+        };
+        // Removing an empty segment is an index metadata write that reads no
+        // segment, so every one of them goes into the job. The merge thresholds
+        // and the limit on merge inputs apply only to the segments being merged.
+        segments_to_compact.extend(empty_segments);
+        Ok(Some((segments_to_compact, compaction_reason)))
+    }
+
+    fn find_segments_to_merge(
+        segments: Vec<&T::Segment>,
+        spec: &T::Spec,
+        compaction_config: &CompactionConfig,
+    ) -> anyhow::Result<Option<(Vec<T::Segment>, CompactionReason)>> {
         fn to_owned<R: Clone>(borrowed: Vec<&R>) -> Vec<R> {
             borrowed.into_iter().cloned().collect_vec()
         }
 
         let segments_and_sizes = segments
             .iter()
-            .map(|segment| Ok((segment, segment.total_size_bytes(spec)?)))
+            .map(|&segment| Ok((segment, segment.total_size_bytes(spec)?)))
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         let (small_segments, large_segments): (Vec<_>, Vec<_>) = segments_and_sizes
@@ -396,7 +420,9 @@ impl<RT: Runtime, T: SearchIndex> SearchIndexCompactor<RT, T> {
                         > compaction_config.max_deleted_percentage
                         // Below a certain size, don't bother to recompact on deletes because the
                         // whole segment will be compacted as a small segment in the future anyway.
-                        && *segment_size_bytes > compaction_config.small_segment_threshold_bytes,
+                        && *segment_size_bytes > compaction_config.small_segment_threshold_bytes
+                        // `compact` rejects inputs over the maximum size.
+                        && *segment_size_bytes <= compaction_config.max_segment_size_bytes,
                 );
                 result
             })?

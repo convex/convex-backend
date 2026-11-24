@@ -18,6 +18,7 @@ function statusToColors(
         darkTextColor: "dark:text-green-200",
       };
     case "pending":
+    case "restarting":
       return {
         lightTextColor: "text-yellow-700",
         darkTextColor: "dark:text-yellow-200",

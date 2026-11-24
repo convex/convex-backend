@@ -58,6 +58,8 @@ lockfile = true
 # 24.04, 6.x on 22.04) with the headers + unversioned .so linking needs. 22.04's 6.x is
 # ABI-incompatible, so ROCKSDB_COMPILE forces the bundled build there.
 "apt:librocksdb-dev" = "latest"
+# setup_env.py requires a GNU gold or LLVM lld linker during bootstrap.
+"apt:lld" = "latest"
 "apt:libsnappy-dev" = "latest"
 # os = "macos": mise pours bottles itself, so unfiltered brew entries install on Linux too.
 "brew:pkgconf" = { version = "latest", os = "macos" }
