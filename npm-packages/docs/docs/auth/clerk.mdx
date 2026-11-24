@@ -63,19 +63,38 @@ follow the [Convex React Quickstart](/quickstart/react.mdx) first. Then:
 
   </Step>
   <Step title="Configure Convex with the Clerk issuer domain">
-    In your app's `convex` folder, create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
+    Set your Clerk Frontend API URL as the `CLERK_JWT_ISSUER_DOMAIN` environment variable on your Convex deployment:
+
+    ```sh
+    npx convex env set CLERK_JWT_ISSUER_DOMAIN https://verb-noun-00.clerk.accounts.dev
+    ```
+
+    In your app's `convex` folder, declare the variable in `convex.config.ts`, creating the file if it doesn't exist yet. Declaring it gives you a typed `env.CLERK_JWT_ISSUER_DOMAIN` and makes deploys fail early if the variable isn't set.
+
+    ```ts title="convex/convex.config.ts"
+    import { defineApp } from "convex/server";
+    import { v } from "convex/values";
+
+    const app = defineApp({
+      env: {
+        CLERK_JWT_ISSUER_DOMAIN: v.string(),
+      },
+    });
+
+    export default app;
+    ```
+
+    Then create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
 
     ```ts title="convex/auth.config.ts"
     import { AuthConfig } from "convex/server";
+    import { env } from "./_generated/server";
 
     export default {
       providers: [
         {
-          // Replace with your Clerk Frontend API URL
-          // or with `process.env.CLERK_JWT_ISSUER_DOMAIN`
-          // and configure CLERK_JWT_ISSUER_DOMAIN on the Convex Dashboard
           // See https://docs.convex.dev/auth/clerk#configuring-dev-and-prod-instances
-          domain: process.env.CLERK_JWT_ISSUER_DOMAIN!,
+          domain: env.CLERK_JWT_ISSUER_DOMAIN,
           applicationID: "convex",
         },
       ]
@@ -233,19 +252,38 @@ follow the [Convex Next.js Quickstart](/quickstart/nextjs.mdx) first. Then:
 
   </Step>
   <Step title="Configure Convex with the Clerk issuer domain">
-    In your app's `convex` folder, create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
+    Set your Clerk Frontend API URL as the `CLERK_JWT_ISSUER_DOMAIN` environment variable on your Convex deployment:
+
+    ```sh
+    npx convex env set CLERK_JWT_ISSUER_DOMAIN https://verb-noun-00.clerk.accounts.dev
+    ```
+
+    In your app's `convex` folder, declare the variable in `convex.config.ts`, creating the file if it doesn't exist yet. Declaring it gives you a typed `env.CLERK_JWT_ISSUER_DOMAIN` and makes deploys fail early if the variable isn't set.
+
+    ```ts title="convex/convex.config.ts"
+    import { defineApp } from "convex/server";
+    import { v } from "convex/values";
+
+    const app = defineApp({
+      env: {
+        CLERK_JWT_ISSUER_DOMAIN: v.string(),
+      },
+    });
+
+    export default app;
+    ```
+
+    Then create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
 
     ```ts title="convex/auth.config.ts"
     import { AuthConfig } from "convex/server";
+    import { env } from "./_generated/server";
 
     export default {
       providers: [
         {
-          // Replace with your Clerk Frontend API URL
-          // or with `process.env.CLERK_JWT_ISSUER_DOMAIN`
-          // and configure CLERK_JWT_ISSUER_DOMAIN on the Convex Dashboard
           // See https://docs.convex.dev/auth/clerk#configuring-dev-and-prod-instances
-          domain: process.env.CLERK_JWT_ISSUER_DOMAIN!,
+          domain: env.CLERK_JWT_ISSUER_DOMAIN,
           applicationID: "convex",
         },
       ]
@@ -509,15 +547,30 @@ Paste your Clerk Frontend API URL into your `.env` file, set it as the
 CLERK_JWT_ISSUER_DOMAIN=https://verb-noun-00.clerk.accounts.dev
 ```
 
-Then, update your `auth.config.ts` file to use the environment variable.
+Then, declare the environment variable in `convex.config.ts` and update your
+`auth.config.ts` file to use it.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+
+const app = defineApp({
+  env: {
+    CLERK_JWT_ISSUER_DOMAIN: v.string(),
+  },
+});
+
+export default app;
+```
 
 ```ts title="convex/auth.config.ts"
 import { AuthConfig } from "convex/server";
+import { env } from "./_generated/server";
 
 export default {
   providers: [
     {
-      domain: process.env.CLERK_JWT_ISSUER_DOMAIN!,
+      domain: env.CLERK_JWT_ISSUER_DOMAIN,
       applicationID: "convex",
     },
   ],

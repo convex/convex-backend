@@ -171,7 +171,8 @@ should follow the **Standard WorkOS team** instructions.
         </Tabs>
     </Step>
     <Step title="Create or update auth.config.ts">
-      In your app's `convex/` folder, create or update the `auth.config.ts`
+      In your app's `convex/` folder, declare the `WORKOS_CLIENT_ID` environment
+      variable in `convex.config.ts`, and create or update the `auth.config.ts`
       file with the following code. This is the server-side configuration for validating access tokens.
 
       <AuthConfigTs/>
@@ -211,7 +212,7 @@ should follow the **Standard WorkOS team** instructions.
 
     </Step>
       <Step title="Configure auth with the WorkOS Client ID">
-      In your app's `convex/` folder, create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
+      In your app's `convex/` folder, declare the `WORKOS_CLIENT_ID` environment variable in `convex.config.ts` (create the file if it doesn't exist yet), and create a new file `auth.config.ts` with the following code. This is the server-side configuration for validating access tokens.
 
       <AuthConfigTs/>
     </Step>

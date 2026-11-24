@@ -1,7 +1,23 @@
-```ts title="convex/auth.config.ts"
-const clientId = process.env.WORKOS_CLIENT_ID;
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
 
-const authConfig = {
+const app = defineApp({
+  env: {
+    WORKOS_CLIENT_ID: v.string(),
+  },
+});
+
+export default app;
+```
+
+```ts title="convex/auth.config.ts"
+import { AuthConfig } from "convex/server";
+import { env } from "./_generated/server";
+
+const clientId = env.WORKOS_CLIENT_ID;
+
+export default {
   providers: [
     {
       type: "customJwt",
@@ -17,7 +33,5 @@ const authConfig = {
       jwks: `https://api.workos.com/sso/jwks/${clientId}`,
     },
   ],
-};
-
-export default authConfig;
+} satisfies AuthConfig;
 ```

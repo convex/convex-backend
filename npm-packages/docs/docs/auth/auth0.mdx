@@ -202,16 +202,35 @@ configured on the Convex dashboard.
 
 ### Configuring the backend
 
-First, change your `auth.config.ts` file to use environment variables:
+First, declare the environment variables in `convex.config.ts`, creating the
+file if it doesn't exist yet. Declaring them gives you a typed `env` object and
+makes deploys fail early if a variable isn't set.
+
+```ts title="convex/convex.config.ts"
+import { defineApp } from "convex/server";
+import { v } from "convex/values";
+
+const app = defineApp({
+  env: {
+    AUTH0_DOMAIN: v.string(),
+    AUTH0_CLIENT_ID: v.string(),
+  },
+});
+
+export default app;
+```
+
+Then change your `auth.config.ts` file to use them:
 
 ```ts title="convex/auth.config.ts"
 import { AuthConfig } from "convex/server";
+import { env } from "./_generated/server";
 
 export default {
   providers: [
     {
-      domain: process.env.AUTH0_DOMAIN!,
-      applicationID: process.env.AUTH0_CLIENT_ID!,
+      domain: env.AUTH0_DOMAIN,
+      applicationID: env.AUTH0_CLIENT_ID,
     },
   ],
 } satisfies AuthConfig;
