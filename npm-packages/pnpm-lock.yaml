@@ -4518,39 +4518,6 @@ importers:
         specifier: ^5.9.2
         version: 5.9.3
 
-  private-demos/quickstarts/nextjs-app-dir-js:
-    dependencies:
-      '@eslint/eslintrc':
-        specifier: ^3
-        version: 3.3.1(supports-color@10.2.2)
-      '@tailwindcss/postcss':
-        specifier: ^4.3.3
-        version: 4.3.3
-      convex:
-        specifier: workspace:*
-        version: link:../../../convex
-      eslint:
-        specifier: ^9.37.0
-        version: 9.39.1(jiti@2.7.0)(supports-color@10.2.2)
-      eslint-config-next:
-        specifier: ^15.5.4
-        version: 15.5.6(eslint-plugin-import-x@4.16.1(@typescript-eslint/utils@8.58.2(eslint@9.39.1(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@5.9.3))(eslint-import-resolver-node@0.3.9(supports-color@10.2.2))(eslint@9.39.1(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2))(eslint@9.39.1(jiti@2.7.0)(supports-color@10.2.2))(supports-color@10.2.2)(typescript@5.9.3)
-      next:
-        specifier: ^15.5.28
-        version: 15.5.28(@babel/core@7.29.7(supports-color@10.2.2))(@opentelemetry/api@1.9.1)(@playwright/test@1.59.1)(@types/node@22.19.1)(@types/react-dom@19.2.3(@types/react@19.2.8))(@types/react@19.2.8)(babel-plugin-react-compiler@1.0.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(sass@1.94.0)
-      postcss:
-        specifier: ^8.5.18
-        version: 8.5.23
-      react:
-        specifier: ^18.0.0
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.0.0
-        version: 18.3.1(react@18.3.1)
-      tailwindcss:
-        specifier: ^4.3.3
-        version: 4.3.3
-
   private-demos/quickstarts/nodejs:
     dependencies:
       convex:

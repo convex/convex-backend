@@ -100,7 +100,6 @@ packages:
   - "private-demos/quickstarts/nextjs"
   - "private-demos/quickstarts/nextjs-app-dir"
   - "private-demos/quickstarts/nextjs-app-dir-14"
-  - "private-demos/quickstarts/nextjs-app-dir-js"
   - "private-demos/quickstarts/nodejs"
   - "private-demos/quickstarts/nuxt"
   - "private-demos/quickstarts/react-vite"
