@@ -25,7 +25,6 @@ use errors::ErrorMetadata;
 use futures::{
     future::{
         self,
-        AbortHandle,
         Aborted,
         BoxFuture,
     },
@@ -49,7 +48,10 @@ use sync_types::{
     StateVersion,
 };
 
+use self::queries::SyncedQueries;
 use crate::metrics;
+
+mod queries;
 
 type ValueDigest = Sha256Digest;
 type ErrorDigest = Sha256Digest;
@@ -59,33 +61,6 @@ type ErrorDigest = Sha256Digest;
 pub struct QueryToFetch {
     pub query: Query,
     pub has_run_before: bool,
-}
-
-pub struct SyncedQuery {
-    query: Query,
-
-    /// What is the active subscription for the given query?
-    ///
-    /// - Starts `None`: Query is newly inserted.
-    /// - `None -> Some(subscription)`: `SyncState::complete_fetch`.
-    /// - `Some(..) -> None`: `SyncState::prune_invalidated_queries`.
-    subscription: Option<Arc<dyn SubscriptionTrait>>,
-
-    /// What was the hash of the last successful return value? This allows us to
-    /// deduplicate transitions for queries whose results haven't actually
-    /// changed.
-    ///
-    /// - Starts `None`: Query is newly inserted.
-    /// - `None -> Some(r)`: `SyncState::complete_fetch`, the first time the
-    ///   query is executed.
-    /// - `Some(..) -> Some(..)`: `SyncState::complete_fetch`, after the first
-    ///   time.
-    result_hash: Option<Result<ValueDigest, ErrorDigest>>,
-
-    /// Handle to the query's current invalidation future. This future completes
-    /// when `self.subscription` is no longer valid and the query should be
-    /// rerun.
-    invalidation_future: Option<AbortHandle>,
 }
 
 /// The client issues modifications to sync state predicated on a client
@@ -130,7 +105,7 @@ pub struct NeedsAuthRevalidation(pub AuthenticationToken);
 /// We fix up queries that don't have a subscription by first finding them with
 /// `SyncState::need_fetch`, running their UDF, and then initializing the
 /// subscription with `SyncState::complete_fetch`. We fix up queries that don't
-/// have an invalidation future with `SyncState::fill_subscriptions`.
+/// have an invalidation future with `SyncState::fill_invalidation_futures`.
 ///
 /// The general idea here is that the state "self describes" what work needs to
 /// be done next.
@@ -141,7 +116,7 @@ pub struct SyncState {
     current_version: StateVersion,
     invalidation_futures:
         FuturesUnordered<BoxFuture<'static, Result<anyhow::Result<QueryId>, Aborted>>>,
-    queries: BTreeMap<QueryId, SyncedQuery>,
+    queries: SyncedQueries,
     /// Queries being computed for the next transition.
     in_progress_queries: BTreeMap<QueryId, Query>,
 
@@ -169,7 +144,7 @@ impl SyncState {
             session_id: None,
             current_version: StateVersion::initial(),
             invalidation_futures: FuturesUnordered::new(),
-            queries: BTreeMap::new(),
+            queries: SyncedQueries::default(),
             in_progress_queries: BTreeMap::new(),
             identity: Identity::Unknown(None),
             auth_token: AuthenticationToken::None,
@@ -214,7 +189,7 @@ impl SyncState {
     pub fn validate(&self) -> anyhow::Result<()> {
         for query in self.queries.values() {
             anyhow::ensure!(query.result_hash.is_some());
-            anyhow::ensure!(self.refill_needed || query.subscription.is_some());
+            anyhow::ensure!(self.refill_needed || query.subscription().is_some());
             anyhow::ensure!(self.refill_needed || query.invalidation_future.is_some());
         }
         Ok(())
@@ -320,8 +295,8 @@ impl SyncState {
                     let query_id = query_id?;
                     if let Some(query) = self.queries.get_mut(&query_id) {
                         // Leave the query's subscription intact since we'll look at it in
-                        // `prune_invalidated_queries` below. Take the abort handle so we'll
-                        // resubscribe in case this was a spurious wakeup.
+                        // the next transition. Take the abort handle so we'll resubscribe in
+                        // case this was a spurious wakeup.
                         query.invalidation_future.take();
                     }
                     self.refill_needed = true;
@@ -334,8 +309,8 @@ impl SyncState {
 
     /// Insert a new in-progress query. The query won't have a subscription
     /// or token, so you'll need to subsequently call
-    /// `SyncState::complete_fetch` and `SyncState::fill_subscriptions` to
-    /// fill out these fields.
+    /// `SyncState::complete_fetch` and `SyncState::fill_invalidation_futures`
+    /// to fill out these fields.
     pub fn insert(&mut self, query: Query) -> anyhow::Result<()> {
         let query_id = query.query_id;
         if self.in_progress_queries.insert(query_id, query).is_some() {
@@ -360,26 +335,17 @@ impl SyncState {
     }
 
     pub fn take_subscriptions(&mut self) -> BTreeMap<QueryId, Arc<dyn SubscriptionTrait>> {
-        let mut newly_invalidated = BTreeMap::new();
-
-        for (query_id, query) in self.queries.iter_mut() {
-            let subscription = query.subscription.take();
-            if let Some(subscription) = subscription {
-                newly_invalidated.insert(*query_id, subscription);
-            }
+        if !self.queries.is_empty() {
             self.refill_needed = true;
-            if let Some(handle) = query.invalidation_future.take() {
-                handle.abort();
-            }
         }
-        newly_invalidated
+        self.queries.take_subscriptions()
     }
 
     /// Which queries do not have a token?
     pub fn need_fetch(&self) -> impl Iterator<Item = QueryToFetch> + '_ {
         self.queries
             .values()
-            .filter(|sq| sq.subscription.is_none())
+            .filter(|sq| sq.subscription().is_none())
             .map(|sq| QueryToFetch {
                 query: sq.query.clone(),
                 has_run_before: sq.result_hash.is_some(),
@@ -406,7 +372,7 @@ impl SyncState {
             query.result_hash.is_some(),
             "Refilling subscription for query with no result"
         );
-        query.subscription = Some(subscription);
+        query.set_subscription(subscription);
         Ok(())
     }
 
@@ -420,21 +386,13 @@ impl SyncState {
         subscription: Arc<dyn SubscriptionTrait>,
     ) -> anyhow::Result<Option<StateModification<JsonPackedValue>>> {
         if let Some(query) = self.in_progress_queries.remove(&query_id) {
-            let sq = SyncedQuery {
-                query,
-                subscription: None,
-                result_hash: None,
-                invalidation_future: None,
-            };
-            if self.queries.insert(query_id, sq).is_some() {
-                anyhow::bail!("Duplicate query ID: {}", query_id);
-            }
+            self.queries.insert(query)?;
         }
         let query = self
             .queries
             .get_mut(&query_id)
             .ok_or_else(|| anyhow::anyhow!("Nonexistent query ID: {}", query_id))?;
-        if query.subscription.is_some() {
+        if query.subscription().is_some() {
             anyhow::bail!(
                 "Completing future for query that was already up-to-date: {}",
                 query_id
@@ -446,7 +404,7 @@ impl SyncState {
         query.query.journal = Some(journal.clone());
 
         // Cancel the query's (now out-of-date) subscription so we resubscribe in the
-        // next call to `fill_subscriptions`.
+        // next call to `fill_invalidation_futures`.
         if let Some(handle) = query.invalidation_future.take() {
             handle.abort();
         }
@@ -456,7 +414,7 @@ impl SyncState {
         metrics::log_query_result_dedup(self.partition_id, same_result);
 
         query.result_hash = Some(new_hash);
-        query.subscription = Some(subscription);
+        query.set_subscription(subscription);
 
         let result = if same_result {
             None
@@ -488,13 +446,12 @@ impl SyncState {
     pub fn fill_invalidation_futures(&mut self) -> anyhow::Result<()> {
         let mut created = 0;
 
-        for (&query_id, sq) in &mut self.queries {
+        for (query_id, sq) in self.queries.iter_mut() {
             if sq.invalidation_future.is_some() {
                 continue;
             }
             let future = sq
-                .subscription
-                .as_ref()
+                .subscription()
                 .ok_or_else(|| anyhow::anyhow!("Missing subscription for {}", query_id))?
                 .wait_for_invalidation()
                 .map(move |r| r.map(move |_| query_id));
