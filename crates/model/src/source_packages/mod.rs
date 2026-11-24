@@ -8,6 +8,7 @@ use common::{
     components::ComponentId,
     document::ParsedDocument,
     runtime::Runtime,
+    types::ModuleEnvironment,
 };
 use database::{
     SystemMetadataModel,
@@ -79,6 +80,7 @@ impl<'a, RT: Runtime> SourcePackageModel<'a, RT> {
 
     pub async fn get_latest(
         &mut self,
+        environment: ModuleEnvironment,
     ) -> anyhow::Result<Option<Arc<ParsedDocument<SourcePackage>>>> {
         let mut latest_source_pkg: Option<Arc<ParsedDocument<SourcePackage>>> = None;
 
@@ -98,6 +100,9 @@ impl<'a, RT: Runtime> SourcePackageModel<'a, RT> {
                 continue;
             }
             let src_package = self.get(module.source_package_id).await?;
+            if !src_package.environment.contains(environment) {
+                continue;
+            }
             if let Some(latest) = &latest_source_pkg {
                 if src_package.creation_time() > latest.creation_time() {
                     latest_source_pkg = Some(src_package);

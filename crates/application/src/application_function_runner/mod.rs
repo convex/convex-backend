@@ -1715,7 +1715,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             },
             ModuleEnvironment::Node => {
                 let source_package = SourcePackageModel::new(&mut tx, path.component.into())
-                    .get_latest()
+                    .get_latest(ModuleEnvironment::Node)
                     .await?
                     .context("no source package?")?;
                 let memory_mb: u32 = match source_package.node_default_memory_mb {

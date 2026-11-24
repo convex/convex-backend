@@ -153,6 +153,7 @@ use model::{
             NodeVersion,
             NodeVersionDiff,
             SourcePackage,
+            SourcePackageEnvironment,
         },
         upload_download::download_package,
         SourcePackageModel,
@@ -959,7 +960,7 @@ impl<RT: Runtime> Application<RT> {
                             .await?;
 
                         let prev_node_version = SourcePackageModel::new(tx, TableNamespace::Global)
-                            .get_latest()
+                            .get_latest(ModuleEnvironment::Node)
                             .await?
                             .and_then(|p| p.node_version);
 
@@ -984,7 +985,7 @@ impl<RT: Runtime> Application<RT> {
                             .await?;
 
                         let next_node_version = SourcePackageModel::new(tx, TableNamespace::Global)
-                            .get_latest()
+                            .get_latest(ModuleEnvironment::Node)
                             .await?
                             .and_then(|p| p.node_version);
 
@@ -1196,7 +1197,13 @@ impl<RT: Runtime> Application<RT> {
             .unwrap_or_default();
 
         let source_package = self
-            .upload_package(&modules, external_deps_id_and_pkg, node_version, None)
+            .upload_package(
+                &modules,
+                external_deps_id_and_pkg,
+                node_version,
+                None,
+                SourcePackageEnvironment::Combined,
+            )
             .await?;
         let end_upload_source_package = Instant::now();
         // Verify that we have not exceeded the max unzipped file size

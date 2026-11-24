@@ -199,7 +199,7 @@ impl<RT: Runtime> UdfPhase<RT> {
                         // record a read dependency on all the modules and their source
                         // packages.
                         SourcePackageModel::new(&mut snapshot_tx, component.into())
-                            .get_latest()
+                            .get_latest(ModuleEnvironment::Isolate)
                             .await?
                     };
 
