@@ -184,6 +184,18 @@ fn create_base_snapshot() -> v8::StartupData {
 
         run_setup_module(context_scope).expect("failed to run setup module");
 
+        // `DOMException::to_v8` constructs these, so stash them in privates
+        // before any deployment code can reassign the globals.
+        for name in [&strings::DOMException, &strings::QuotaExceededError] {
+            let key = name.create(context_scope).unwrap();
+            let class = global
+                .get(context_scope, key.into())
+                .and_then(|class| class.try_cast::<v8::Function>().ok())
+                .expect("setup.js installs the DOMException classes");
+            let private = v8::Private::for_api(context_scope, Some(key));
+            global.set_private(context_scope, private, class.into());
+        }
+
         // Mark the context we created as the "default context", so that every
         // new context created from the snapshot will include this
         // runtime.

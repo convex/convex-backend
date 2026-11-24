@@ -125,34 +125,39 @@ impl DOMException {
     }
 }
 
+/// The class `create_base_snapshot` stashed in a private on the global, which
+/// deployment code cannot reassign the way it can the global itself.
+fn stashed_class<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    name: &'static strings::StaticString,
+) -> anyhow::Result<v8::Local<'s, v8::Function>> {
+    let key = name.create(scope)?;
+    let private = v8::Private::for_api(scope, Some(key));
+    scope
+        .get_current_context()
+        .global(scope)
+        .get_private(scope, private)
+        .with_context(|| format!("missing {} private", name.rust_str()))?
+        .try_cast::<v8::Function>()
+        .with_context(|| format!("{} isn't v8::Function", name.rust_str()))
+}
+
 impl ToV8 for DOMException {
     fn to_v8<'s>(
         self,
         scope: &mut v8::PinScope<'s, '_>,
     ) -> anyhow::Result<v8::Local<'s, v8::Value>> {
-        // TODO: do not read off of the global object, which is mutable by JS
-        let global = scope.get_current_context().global(scope);
         let message = v8::String::new(scope, &self.message).context("failed to create string")?;
         // WebIDL replaced the "QuotaExceededError" name with an interface of
         // that name, whose constructor takes the message and options.
         if let DOMExceptionName::QuotaExceededError = self.name {
-            let class_str = strings::QuotaExceededError.create(scope)?;
-            let class = global
-                .get(scope, class_str.into())
-                .context("missing QuotaExceededError")?
-                .try_cast::<v8::Function>()
-                .context("QuotaExceededError isn't v8::Function")?;
+            let class = stashed_class(scope, &strings::QuotaExceededError)?;
             return Ok(class
                 .new_instance(scope, &[message.into()])
                 .context("failed to create QuotaExceededError")?
                 .into());
         }
-        let dom_exception_str = strings::DOMException.create(scope)?;
-        let dom_exception_class = global
-            .get(scope, dom_exception_str.into())
-            .context("missing DOMException")?
-            .try_cast::<v8::Function>()
-            .context("DOMException isn't v8::Function")?;
+        let dom_exception_class = stashed_class(scope, &strings::DOMException)?;
         let name = v8::String::new_from_utf8(
             scope,
             <&str>::from(self.name).as_bytes(),
