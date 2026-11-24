@@ -417,9 +417,16 @@ export function saveGlobalDashboardConfig(
  * project/.convex/local/default/dashboard.json
  * (or legacyDeploymentStateDir/dashboard.json)
  */
-export type ProjectDashboardConfig = {
-  port: number;
-};
+// The port is interpolated into the URL that `npx convex dashboard` opens.
+// Unknown keys are kept so that saving a config written by a newer CLI version
+// preserves them.
+const projectDashboardConfigSchema = z.looseObject({
+  port: portSchema,
+});
+
+export type ProjectDashboardConfig = z.infer<
+  typeof projectDashboardConfigSchema
+>;
 
 function dashboardConfigPath(ctx: Context, deploymentName: string) {
   return path.join(
@@ -437,12 +444,23 @@ export function loadProjectDashboardConfig(
     return null;
   }
   const content = ctx.fs.readUtf8File(configFile);
+  let json: unknown;
   try {
-    return JSON.parse(content);
+    json = JSON.parse(content);
   } catch (e) {
     logVerbose(`Failed to parse project dashboard config: ${e as any}`);
     return null;
   }
+  // An invalid file is treated as missing; `handleDashboard` overwrites it the
+  // next time it starts the dashboard.
+  const result = projectDashboardConfigSchema.safeParse(json);
+  if (!result.success) {
+    logVerbose(
+      `Invalid project dashboard config in ${configFile}: ${result.error.message}`,
+    );
+    return null;
+  }
+  return result.data;
 }
 
 export function saveProjectDashboardConfig(
