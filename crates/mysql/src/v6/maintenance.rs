@@ -54,6 +54,12 @@ pub(crate) const LEASE_TTL: Duration = Duration::from_secs(5 * 60);
 
 const CONNECTION_NAME: &str = "indexes_log_maintenance";
 
+/// In wasteland, bucket DDL took 15-70 ms with the table's cached handles in
+/// memory, and a DROP took 13-15 s with them swapped out, stalling unrelated
+/// queries for as long. DDL slower than this is logged so it can be lined up
+/// with swap and stall metrics.
+const SLOW_BUCKET_DDL: Duration = Duration::from_secs(1);
+
 const STATE_TABLE_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS @db_name.indexes_maintenance_state (
     id TINYINT UNSIGNED NOT NULL,
@@ -351,7 +357,12 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
         // Counted here rather than off the returned round: the DDL is done and
         // committed even if this round later loses the publish fence.
         for bucket in missing {
+            let timer = metrics::indexes_log_bucket_ddl_timer(
+                self.pool.cluster_name(),
+                metrics::BucketDdl::Create,
+            );
             conn.execute_many(&log_ddl(bucket)).await?;
+            self.warn_if_slow(metrics::BucketDdl::Create, bucket, timer.finish());
             metrics::log_indexes_log_bucket_created(self.pool.cluster_name());
             existing.insert(bucket);
         }
@@ -361,7 +372,12 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
         // older floor can only be pointed at buckets that are still here.
         if let Some(bucket) = to_drop {
             cover!(super::coverage::BUCKET_DROPPED);
+            let timer = metrics::indexes_log_bucket_ddl_timer(
+                self.pool.cluster_name(),
+                metrics::BucketDdl::Drop,
+            );
             conn.execute_many(&drop_log_ddl(bucket)).await?;
+            self.warn_if_slow(metrics::BucketDdl::Drop, bucket, timer.finish());
             metrics::log_indexes_log_bucket_dropped(self.pool.cluster_name());
             existing.remove(&bucket);
         }
@@ -392,6 +408,16 @@ impl<RT: Runtime> IndexesLogMaintenance<RT> {
             oldest_kept_ts,
             bucket_count: existing.len(),
         })
+    }
+
+    fn warn_if_slow(&self, statement: metrics::BucketDdl, bucket: LogBucket, elapsed: Duration) {
+        if elapsed > SLOW_BUCKET_DDL {
+            tracing::warn!(
+                "{statement:?} of {} on {} took {elapsed:?}",
+                bucket.table_name(),
+                self.pool.cluster_name(),
+            );
+        }
     }
 }
 

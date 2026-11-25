@@ -672,6 +672,27 @@ register_convex_counter!(
      transitions; see the created counter.",
     &["cluster_name"]
 );
+register_convex_histogram!(
+    INDEXES_LOG_BUCKET_DDL_SECONDS,
+    "Duration of V6 index log bucket CREATE and DROP statements. A DROP that frees cached table \
+     handles Aurora has swapped out pages them back in, so a slow DROP measures swapped handles.",
+    &[STATUS_LABEL[0], "cluster_name", "statement"]
+);
+#[derive(Clone, Copy, Debug, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum BucketDdl {
+    Create,
+    Drop,
+}
+pub fn indexes_log_bucket_ddl_timer(cluster_name: &str, statement: BucketDdl) -> StatusTimer {
+    let mut timer = StatusTimer::new(&INDEXES_LOG_BUCKET_DDL_SECONDS);
+    timer.add_label(cluster_name_label(cluster_name));
+    timer.add_label(StaticMetricLabel::new(
+        "statement",
+        <&'static str>::from(statement),
+    ));
+    timer
+}
 
 register_convex_counter!(
     INDEXES_LOG_MAINTENANCE_ROUNDS_TOTAL,
