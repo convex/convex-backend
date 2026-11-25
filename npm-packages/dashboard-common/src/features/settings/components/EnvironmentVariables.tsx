@@ -974,10 +974,9 @@ function NewEnvVars<T extends BaseEnvironmentVariable>({
               isValid: formState.isValid,
               submitForm: formState.submitForm,
             }) ?? (
-              <Button
-                type="submit"
-                disabled={formState.isSubmitting || !formState.isValid}
-              >
+              // Clickable while invalid: submitting touches every field, which
+              // reveals the errors of fields the user hasn't left yet.
+              <Button type="submit" disabled={formState.isSubmitting}>
                 {formState.values.editedVars.length +
                   formState.values.newVars.length +
                   formState.values.deletedVars.length >=
