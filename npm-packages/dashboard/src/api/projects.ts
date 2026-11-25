@@ -258,12 +258,46 @@ export function useUpdateProject(projectId: number) {
   });
 }
 
+const DELETED_PROJECTS_PATH = "/teams/{team_id}/list_deleted_projects";
+
+export function useDeletedProjects(
+  teamId: number,
+  cursor: string | undefined,
+  limit: number,
+) {
+  const { data, isLoading, error } = useManagementApiQuery({
+    path: DELETED_PROJECTS_PATH,
+    pathParams: { team_id: teamId },
+    queryParams: { cursor, limit },
+    swrOptions: { keepPreviousData: false },
+  });
+  return { data, isLoading, hasError: Boolean(error) };
+}
+
+export function useRecoverProject(teamId: number, projectId: number) {
+  const recover = useManagementApiMutation({
+    path: "/teams/{team_id}/projects/{project_id}/recover",
+    pathParams: { team_id: teamId, project_id: projectId },
+    mutateKey: DELETED_PROJECTS_PATH,
+    mutatePathParams: { team_id: teamId },
+    successToast: "Project recovered.",
+  });
+  const mutateManagement = useMutateManagementApi();
+  return useCallback(async () => {
+    await recover();
+    await mutateManagement([
+      "/teams/{team_id}/projects",
+      { params: { path: { team_id: teamId } } },
+    ]);
+  }, [recover, mutateManagement, teamId]);
+}
+
 export function useDeleteProject(
   teamId?: number,
   projectId?: number,
   projectName?: string,
 ) {
-  return useManagementApiMutation({
+  const deleteProject = useManagementApiMutation({
     path: "/projects/{project_id}/delete",
     pathParams: {
       project_id: projectId ?? 0,
@@ -275,6 +309,15 @@ export function useDeleteProject(
     successToast: projectName ? `Deleted project: ${projectName}.` : undefined,
     redirectTo: "/",
   });
+  const mutateManagement = useMutateManagementApi();
+  return useCallback(async () => {
+    const result = await deleteProject();
+    await mutateManagement([
+      DELETED_PROJECTS_PATH,
+      { params: { path: { team_id: teamId ?? 0 } } },
+    ]);
+    return result;
+  }, [deleteProject, mutateManagement, teamId]);
 }
 
 export function useDeleteProjects(teamId: number | undefined) {
@@ -288,10 +331,11 @@ export function useDeleteProjects(teamId: number | undefined) {
   return useCallback(
     async (body: { projectIds: number[] }) => {
       const result = await deleteProjects(body);
-      await mutateManagement([
-        "/teams/{team_id}/projects",
-        { params: { path: { team_id: teamIdNum } } },
-      ] as any);
+      const params = { path: { team_id: teamIdNum } };
+      await Promise.all([
+        mutateManagement(["/teams/{team_id}/projects", { params }]),
+        mutateManagement([DELETED_PROJECTS_PATH, { params }]),
+      ]);
       return result;
     },
     [deleteProjects, mutateManagement, teamIdNum],

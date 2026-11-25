@@ -24,6 +24,7 @@ import { TeamSlugForm } from "./TeamSlugForm";
 import { TeamIdSheet } from "./TeamIdSheet";
 import { DefaultRegionForm } from "./DefaultRegionForm";
 import { LegacyAdminKeys } from "./LegacyAdminKeys";
+import { RecentlyDeletedProjects } from "./RecentlyDeletedProjects";
 import { TEAM_SETTINGS_SECTIONS } from "lib/sectionAnchors";
 
 export function TeamSettings({ team }: { team: TeamResponse }) {
@@ -81,6 +82,7 @@ export function TeamSettings({ team }: { team: TeamResponse }) {
         canUpdate={canUpdate}
       />
       <LegacyAdminKeys team={team} />
+      <RecentlyDeletedProjects team={team} />
       <Sheet id={TEAM_SETTINGS_SECTIONS.deleteTeam.id}>
         <h3 className="mb-4">Delete Team</h3>
         <p className="mb-4">
