@@ -1,5 +1,7 @@
 import { Doc } from "../../_generated/dataModel";
+import { PaginationResult, paginationOptsValidator } from "convex/server";
 import { UdfType, Visibility } from "../frontend/common";
+import { maximumBytesRead, maximumRowsRead } from "../paginationLimits";
 import { queryPrivateSystem } from "../secretSystemTables";
 import { v, Value, jsonToConvex } from "convex/values";
 
@@ -72,3 +74,58 @@ export const apiSpec = queryPrivateSystem("ViewData")({
     return result;
   },
 });
+
+// Validators stay as the JSON stored on the module. Returning them unparsed
+// keeps the per-function cost low enough to fit large pages under the query
+// time limit.
+type PaginatedApiSpecResult = PaginationResult<ApiSpecEntry<string>> & {
+  // Opaque token that identifies the deployed functions. Every push changes
+  // it, so a client that sees it change between pages knows its earlier pages
+  // are stale and must start over. `null` if no functions were ever pushed.
+  version: string | null;
+};
+
+/**
+ * Paginated version of `apiSpec`, paging over modules.
+ *
+ * Each page reads its own snapshot, so callers combining pages must restart
+ * when `version` changes.
+ */
+export const paginatedApiSpec = queryPrivateSystem("ViewData")({
+  args: {
+    componentId: v.optional(v.union(v.string(), v.null())),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (
+    { db },
+    { paginationOpts },
+  ): Promise<PaginatedApiSpecResult> => {
+    // `_source_packages` is not in the system UDF schema.
+    const latestSourcePackage = await (db as any)
+      .query("_source_packages")
+      .order("desc")
+      .first();
+    const { page: modules, ...rest } = await db
+      .query("_modules")
+      .paginate({ ...paginationOpts, maximumRowsRead, maximumBytesRead });
+
+    return {
+      ...rest,
+      page: modules.flatMap((module) => moduleApiSpec(module, (json) => json)),
+      version: latestSourcePackage
+        ? await sha256Hex(latestSourcePackage._id)
+        : null,
+    };
+  },
+});
+
+// Hashes the source package id so that `version` stays opaque to clients.
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
