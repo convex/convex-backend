@@ -1,7 +1,8 @@
 // TypeDoc plugin for the API reference generated from the `convex` package.
 //
 // - Builds the "Defined in" links from `sourceLinkTemplate`, with `{path}`
-//   relative to `sourceLinkRoot` and `{gitRevision}` from `gitRevision`.
+//   relative to `sourceLinkRoot` and `{gitRevision}` from `gitRevision`, for
+//   every source outside `node_modules`.
 //   TypeDoc's own `{path}` is relative to the package, and release builds
 //   document a separate checkout of a release (see reference-source.js).
 // - Adds `pageBanner` (Markdown) to the top of every page, after the front
@@ -36,6 +37,12 @@ exports.load = function (app) {
           .relative(root, source.fullFileName)
           .split(path.sep)
           .join("/");
+        // Declarations inherited from dependencies, such as `@types/react`,
+        // live in the gitignored `node_modules`, which GitHub doesn't have.
+        if (relativePath.split("/").includes("node_modules")) {
+          source.url = undefined;
+          continue;
+        }
         source.url = template
           .replaceAll("{path}", relativePath)
           .replaceAll("{line}", String(source.line));
