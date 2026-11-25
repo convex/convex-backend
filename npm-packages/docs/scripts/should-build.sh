@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Netlify ignore command: exit 0 to skip build, exit 1 to proceed.
+# Netlify ignore command and Vercel ignored build step: exit 0 to skip build,
+# exit 1 to proceed.
 # https://docs.netlify.com/build/configure-builds/ignore-builds/
+# https://vercel.com/docs/project-configuration/git-settings#ignored-build-step
 #
 # Watched paths are derived from docs build inputs in docusaurus.config.ts:
 # - npm-packages/docs/ (the docs site itself)
@@ -31,6 +33,24 @@ WATCHED_PATHS=(
   npm-packages/@convex-dev/platform/public-deployment-openapi.json
   npm-packages/@convex-dev/platform/deployment-openapi.json
 )
+
+# The watched paths are relative to the repo root, where Netlify runs this.
+# Vercel runs it from the project's root directory, npm-packages/docs.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Maps Vercel's variables onto the Netlify ones used below. Vercel deploys
+# every non-production branch as a preview, so `main` is singled out as the
+# long-lived branch deploy it is on Netlify.
+if [ -n "$VERCEL" ]; then
+  COMMIT_REF="$VERCEL_GIT_COMMIT_SHA"
+  if [ "$VERCEL_ENV" = "production" ] || [ "$VERCEL_GIT_COMMIT_REF" = "main" ]; then
+    CONTEXT="branch-deploy"
+    # The commit of this branch's last successful deployment.
+    CACHED_COMMIT_REF="$VERCEL_GIT_PREVIOUS_SHA"
+  else
+    CONTEXT="deploy-preview"
+  fi
+fi
 
 echo ""
 echo "========================================"

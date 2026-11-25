@@ -219,6 +219,8 @@ const PERMANENT_REDIRECTS: [string, string][] = [
 
 const config: VercelConfig = {
   framework: "docusaurus-2",
+  // Skips the build when no docs input changed.
+  ignoreCommand: "bash scripts/should-build.sh",
   // Runs from this directory. Uses the repo's pinned pnpm (`scripts/package.json`)
   // like the Netlify build, not the version Vercel infers from the lockfile.
   // PNPM_CONFIG_TRUST_LOCKFILE skips pnpm's slow re-check of every lockfile entry
