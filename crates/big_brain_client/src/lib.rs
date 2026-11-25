@@ -89,7 +89,7 @@ impl BigBrainClient {
     pub async fn delete_project(&self, project_id: ProjectId) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
         let host = &self.provision_host;
-        let url = format!("{host}/api/dashboard/delete_project/{project_id}");
+        let url = format!("{host}/v1/projects/{project_id}/delete");
         let resp = client
             .post(url)
             .bearer_auth(&self.access_token)
