@@ -228,7 +228,8 @@ const config: VercelConfig = {
   // same lockfile before merge.
   installCommand:
     "npm ci --prefix ../../scripts && PNPM_CONFIG_TRUST_LOCKFILE=true ../../scripts/node_modules/.bin/pnpm --filter 'docs...' install --frozen-lockfile",
-  buildCommand: "npm run build",
+  // Release builds fetch the release from `origin`, which Vercel's clone lacks.
+  buildCommand: "bash scripts/vercel-git-origin.sh && npm run build",
   outputDirectory: "build",
   // Serves `foo.html` at `/foo`, like Netlify's pretty URLs.
   cleanUrls: true,

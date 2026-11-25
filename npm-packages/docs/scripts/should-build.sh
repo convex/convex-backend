@@ -42,6 +42,9 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 # every non-production branch as a preview, so `main` is singled out as the
 # long-lived branch deploy it is on Netlify.
 if [ -n "$VERCEL" ]; then
+  # Without a token, the fetches below fail and the build proceeds, where the
+  # build command fails on the same check.
+  bash npm-packages/docs/scripts/vercel-git-origin.sh
   COMMIT_REF="$VERCEL_GIT_COMMIT_SHA"
   if [ "$VERCEL_ENV" = "production" ] || [ "$VERCEL_GIT_COMMIT_REF" = "main" ]; then
     CONTEXT="branch-deploy"
