@@ -76,7 +76,7 @@ use crate::{
 pub mod async_syscall;
 
 mod astral_future;
-mod phase;
+pub(crate) mod phase;
 pub mod syscall;
 use std::{
     cmp::Ordering,
@@ -1612,7 +1612,7 @@ impl<RT: Runtime> ValidateContext for DatabaseUdfSyscallProvider<RT> {
 }
 
 #[fastrace::trace]
-async fn capture_context_read_set<RT: Runtime>(
+pub(crate) async fn capture_context_read_set<RT: Runtime>(
     read_set: TransactionReadSet,
     tx: &mut Transaction<RT>,
 ) -> anyhow::Result<Option<ContextReadSet>> {

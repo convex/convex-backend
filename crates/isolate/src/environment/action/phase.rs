@@ -67,12 +67,17 @@ use udf::environment::{
 use value::identifier::Identifier;
 
 use crate::{
+    context_cache::ContextReadSet,
     environment::{
         action::task::TaskRequestEnum,
         helpers::{
             performance_unsupported,
             PerformanceApi,
             Phase,
+        },
+        udf::{
+            capture_context_read_set,
+            phase::MaybeSnooped,
         },
         ModuleCodeCacheResult,
     },
@@ -155,13 +160,20 @@ impl<RT: Runtime> ActionPhase<RT> {
         }
     }
 
+    /// Loads what the action needs from its transaction. If
+    /// `capture_read_set` is true, also returns the read set of those reads,
+    /// or `None` if the read set could not be hashed.
     #[fastrace::trace]
-    pub async fn initialize(&mut self, timeout: &mut Timeout<RT>) -> anyhow::Result<()> {
+    pub async fn initialize(
+        &mut self,
+        timeout: &mut Timeout<RT>,
+        capture_read_set: bool,
+    ) -> anyhow::Result<Option<ContextReadSet>> {
         anyhow::ensure!(self.phase == Phase::Importing);
 
         let preloaded = mem::replace(&mut self.preloaded, ActionPreloaded::Preloading);
         let ActionPreloaded::Created {
-            mut tx,
+            tx,
             module_loader,
             default_system_env_vars,
             resources,
@@ -172,8 +184,13 @@ impl<RT: Runtime> ActionPhase<RT> {
         };
 
         let component_id = self.component;
-        self.preloaded = timeout
+        let (preloaded, read_set) = timeout
             .with_release_permit(PauseReason::UdfInitialize, async {
+                let mut tx = if capture_read_set {
+                    MaybeSnooped::SnoopedTx(tx.snoop_reads())
+                } else {
+                    MaybeSnooped::Tx(tx)
+                };
                 let udf_config = UdfConfigModel::new(&mut tx, component_id.into())
                     .get()
                     .await?;
@@ -269,19 +286,30 @@ impl<RT: Runtime> ActionPhase<RT> {
                     })
                 };
 
-                Ok(ActionPreloaded::Ready {
-                    module_loader,
-                    modules,
-                    env_vars,
-                    component_env,
-                    rng,
-                    import_time_unix_timestamp,
-                    performance_api: import_time_unix_timestamp.map(PerformanceApi::new),
-                })
+                let read_set = match tx {
+                    MaybeSnooped::SnoopedTx(tx) => {
+                        let (mut tx, reads) = tx.finish_snoop();
+                        capture_context_read_set(reads, &mut tx).await?
+                    },
+                    MaybeSnooped::Tx(_) => None,
+                };
+                Ok((
+                    ActionPreloaded::Ready {
+                        module_loader,
+                        modules,
+                        env_vars,
+                        component_env,
+                        rng,
+                        import_time_unix_timestamp,
+                        performance_api: import_time_unix_timestamp.map(PerformanceApi::new),
+                    },
+                    read_set,
+                ))
             })
             .await?;
+        self.preloaded = preloaded;
 
-        Ok(())
+        Ok(read_set)
     }
 
     pub fn component(&self) -> ComponentId {

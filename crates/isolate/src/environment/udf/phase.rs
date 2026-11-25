@@ -110,7 +110,7 @@ enum UdfPreloaded {
     },
 }
 
-enum MaybeSnooped<RT: Runtime> {
+pub(crate) enum MaybeSnooped<RT: Runtime> {
     Tx(Transaction<RT>),
     SnoopedTx(SnoopedTransaction<RT>),
 }

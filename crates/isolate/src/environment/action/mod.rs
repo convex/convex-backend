@@ -157,7 +157,10 @@ use crate::{
         ActionRequestParams,
         EnvironmentData,
     },
-    context_cache::ContextCache,
+    context_cache::{
+        ContextCache,
+        ContextReadSet,
+    },
     environment::{
         helpers::{
             log_overflow_log_line,
@@ -278,6 +281,20 @@ pub trait ActionInnerProvider<RT: Runtime>: SyscallProvider<RT> + HeapSize + 'st
     fn syscall_trace(&self) -> SyscallTrace;
 
     async fn initialize(&mut self, timeout: &mut Timeout<RT>) -> anyhow::Result<()>;
+    /// Does the same as `initialize`, and also returns the read set of the
+    /// database reads that initialization made. Returns `None` if this
+    /// provider cannot produce a read set.
+    ///
+    /// The read set tells a caller whether an already evaluated module tree
+    /// can be reused: two initializations with equal `range_hashes` read
+    /// the same data, so the modules would evaluate the same way.
+    async fn initialize_with_read_set(
+        &mut self,
+        timeout: &mut Timeout<RT>,
+    ) -> anyhow::Result<Option<ContextReadSet>> {
+        self.initialize(timeout).await?;
+        Ok(None)
+    }
     fn begin_execution(&mut self) -> anyhow::Result<()>;
 
     /// Hands `request` to the task executor, returning the ID that its
@@ -1395,7 +1412,15 @@ impl<RT: Runtime> ActionInnerProvider<RT> for ActionSyscallProvider<RT> {
     }
 
     async fn initialize(&mut self, timeout: &mut Timeout<RT>) -> anyhow::Result<()> {
-        self.phase.initialize(timeout).await
+        self.phase.initialize(timeout, false).await?;
+        Ok(())
+    }
+
+    async fn initialize_with_read_set(
+        &mut self,
+        timeout: &mut Timeout<RT>,
+    ) -> anyhow::Result<Option<ContextReadSet>> {
+        self.phase.initialize(timeout, true).await
     }
 
     fn begin_execution(&mut self) -> anyhow::Result<()> {
