@@ -1,3 +1,4 @@
+// ⚠️ KEEP IN SYNC WITH `middleware.ts`, which does the same on Vercel ⚠️
 import type { Config, Context } from "@netlify/edge-functions";
 import Negotiator from "https://esm.sh/negotiator@1.0.0";
 

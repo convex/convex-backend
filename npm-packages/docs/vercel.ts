@@ -264,6 +264,12 @@ const config: VercelConfig = {
     },
   ],
   headers: [
+    // `middleware.ts` serves Markdown instead of HTML at these paths when the
+    // request asks for it.
+    {
+      source: "/((?!assets/|img/|fonts/|screenshots/|video/).*)",
+      headers: [{ key: "Vary", value: "Accept" }],
+    },
     {
       source: "/fonts/(.*)",
       headers: [
