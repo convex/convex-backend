@@ -63,6 +63,7 @@
     "typescript": "~5.0.3",
     "webpack": "^5.104.1",
     "@docusaurus/types": "~3.10.1",
+    "@vercel/config": "0.14.1",
     "cspell": "^6.30.2",
     "detect-port": "^2.1.0",
     "@types/node": "^22.0.0",

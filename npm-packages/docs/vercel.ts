@@ -1,0 +1,282 @@
+// ⚠️ KEEP IN SYNC WITH `_redirects` AND `netlify.toml` ⚠️
+//
+// The docs are served from Netlify, configured by `netlify.toml` and
+// `_redirects`. This file configures a Vercel deployment of the same site while
+// we evaluate moving to Vercel. Until one of them is removed, every change to
+// the redirects or headers must be made in both places.
+import type { VercelConfig } from "@vercel/config/v1";
+
+// Netlify matches a `_redirects` source with and without a trailing slash,
+// while Vercel matches a source exactly.
+function withOptionalTrailingSlash(source: string): string {
+  return `${source}{/}?`;
+}
+
+// [source, destination] pairs in `_redirects` order, served as 301s like
+// Netlify's default. Vercel applies the first redirect that matches.
+const PERMANENT_REDIRECTS: [string, string][] = [
+  ["/ai", "/ai/overview"],
+  [
+    "/api/interfaces/server.DatabaseWriter",
+    "/api/interfaces/server.GenericDatabaseWriter",
+  ],
+  [
+    "/api/interfaces/server.DatabaseReader",
+    "/api/interfaces/server.GenericDatabaseReader",
+  ],
+  [
+    "/api/interfaces/browser.ClientOptions",
+    "/api/modules/browser#convexclientoptions",
+  ],
+  ["/api/interfaces/server.ActionCtx", "/generated-api/server#actionctx"],
+  ["/api/classes/values.GenericId", "/api/modules/values#genericid"],
+  ["/dashboard/teams", "/dashboard/teams/teams"],
+  ["/dashboard/teams/sso", "/team-management/sso"],
+  ["/database/import-export/airbyte", "/database/import-export/streaming"],
+  ["/database/indexes", "/database/reading-data/indexes"],
+  [
+    "/database/indexes/indexes-and-query-perf",
+    "/database/reading-data/indexes/indexes-and-query-perf",
+  ],
+  ["/database/document-storage", "/database/"],
+  ["/client/react/project-setup", "/client/react/deployment-urls"],
+  ["/contact", "/production/contact"],
+  ["/errors", "/error"],
+  ["/eslint", "/linting/overview"],
+  ["/functions/http-endpoints", "/functions/http-actions"],
+  ["/functions/testing", "/testing/overview"],
+  ["/get-started", "/tutorial/overview"],
+  ["/getting-started", "/"],
+  ["/how-it-works", "/tutorial/overview"],
+  ["/introduction", "/"],
+  ["/netlify", "/production/hosting/netlify"],
+  ["/hosting", "/production/hosting"],
+  ["/quick-start", "/tutorial/overview"],
+  ["/quickstart", "/quickstart/overview"],
+  ["/quickstart/remix", "/quickstart/react"],
+  ["/text_search", "/text-search"],
+  ["/text-search", "/search/text-search"],
+  ["/tutorial/1_reactor", "/tutorial/overview"],
+  ["/tutorial/2_client", "/tutorial/overview"],
+  ["/tutorial/3_actions", "/tutorial/actions"],
+  ["/tutorial/4_next", "/tutorial/overview"],
+  ["/tutorial/client", "/tutorial/overview"],
+  ["/tutorial/how-it-works", "/tutorial/overview#how-convex-works"],
+  ["/tutorial/reactor", "/tutorial/overview"],
+  ["/tutorial/next", "/tutorial/overview"],
+  ["/tutorial/welcome-to-convex", "/tutorial/overview"],
+  ["/typescript", "/understanding/best-practices/typescript"],
+  ["/understanding", "/understanding/overview"],
+  ["/understanding/convex-fundamentals", "/"],
+  [
+    "/understanding/convex-fundamentals/client-libraries",
+    "/client/react/react",
+  ],
+  [
+    "/understanding/convex-fundamentals/functions",
+    "/functions/query-functions",
+  ],
+  ["/understanding/convex-fundamentals/storage", "/database/overview"],
+  [
+    "/understanding/convex-vs-firebase",
+    "https://stack.convex.dev/convex-vs-firebase",
+  ],
+  [
+    "/understanding/convex-vs-relational-databases",
+    "https://stack.convex.dev/convex-vs-relational-databases",
+  ],
+  ["/understanding/deep-dive/occ", "/database/advanced/occ"],
+  [
+    "/understanding/deep-dive/schema-philosophy",
+    "/database/advanced/schema-philosophy",
+  ],
+  [
+    "/understanding/indexes-and-query-perf",
+    "/database/indexes/indexes-and-query-perf",
+  ],
+  ["/understanding/state", "/production/state"],
+  ["/using", "/functions/query-functions"],
+  ["/using/actions", "/functions/actions"],
+  ["/using/airbyte", "/database/import-export/streaming"],
+  ["/using/auth", "/auth/overview"],
+  ["/using/best-practices", "/production/best-practices"],
+  ["/using/cli", "/cli/overview"],
+  ["/using/dashboard", "/dashboard/overview"],
+  ["/testing/functions", "/testing/convex-test"],
+  ["/tools/cli", "/cli/overview"],
+  ["/tools/dashboard", "/dashboard/overview"],
+  ["/using/data-modeling", "/database/document-ids"],
+  ["/using/database-queries", "/database/reading-data"],
+  ["/using/document-ids", "/database/document-ids"],
+  [
+    "/production/best-practices/typescript",
+    "/understanding/best-practices/typescript",
+  ],
+  ["/production/best-practices", "/understanding/best-practices"],
+  ["/using/environment-variables", "/production/environment-variables"],
+  [
+    "/production/hosting/environment-variables",
+    "/production/environment-variables",
+  ],
+  [
+    "/production/hosting/preview-deployments",
+    "/production/multiple-deployments#preview",
+  ],
+  ["/production/log-streams", "/production/integrations/log-streams/"],
+  ["/search/using-cursor", "/ai/using-cursor"],
+  ["/streaming-export-api", "/production/integrations/streaming-import-export"],
+  ["/streaming-import-api", "/production/integrations/streaming-import-export"],
+  ["/using/error-handling", "/functions/error-handling"],
+  ["/using/export", "/database/import-export/export"],
+  ["/using/external-functions", "/functions/http-actions"],
+  ["/using/file-storage", "/file-storage/overview"],
+  ["/using/hosting/netlify", "/production/hosting/netlify"],
+  ["/using/hosting/vercel", "/production/hosting/vercel"],
+  ["/using/http-endpoints", "/functions/http-actions"],
+  ["/using/indexes", "/database/indexes"],
+  ["/using/integrations/airbyte", "/database/import-export/streaming"],
+  ["/using/integrations/external-functions", "/functions/http-actions"],
+  ["/using/integrations/nextjs", "/client/nextjs"],
+  ["/using/integrations/react-native", "/client/react-native"],
+  ["/using/integrations/s3-photo-upload", "/file-storage/overview"],
+  ["/using/nextjs", "/client/nextjs"],
+  ["/using/optimistic-updates", "/client/react/optimistic-updates"],
+  ["/using/pagination", "/database/pagination"],
+  ["/using/project-setup", "/client/react/deployment-urls"],
+  ["/using/query-and-mutation-functions", "/functions/query-functions"],
+  ["/using/relational-data-modeling", "/database/document-ids"],
+  ["/using/relational-data-modeling/document-ids", "/database/document-ids"],
+  ["/using/relational-data-modeling/index", "/database/document-ids"],
+  ["/using/s3-photo-upload", "/file-storage/overview"],
+  ["/using/scheduling", "/scheduling/scheduled-functions"],
+  ["/using/schemas", "/database/schemas"],
+  ["/using/search", "/text-search"],
+  ["/using/types", "/database/types"],
+  ["/using/typescript", "/typescript"],
+  ["/using/users-and-auth", "/auth/overview"],
+  ["/using/writing-convex-functions", "/functions/overview"],
+  ["/vector_search", "/vector-search"],
+  ["/vector-search", "/search/vector-search"],
+  ["/client/react/nextjs/pages", "/client/nextjs/pages-router"],
+  [
+    "/client/react/nextjs/pages-quickstart",
+    "/client/nextjs/pages-router/quickstart",
+  ],
+  ["/client/react/quickstart-create-react-app", "/quickstart/react"],
+  ["/client/react/nextjs", "/client/nextjs/app-router/"],
+  [
+    "/client/react/nextjs/server-rendering",
+    "/client/nextjs/app-router/server-rendering",
+  ],
+  ["/client/react/tanstack-start", "/client/tanstack/tanstack-start/"],
+  [
+    "/client/react/tanstack-start/tanstack-start-with-clerk",
+    "/client/tanstack/tanstack-start/clerk",
+  ],
+  ["/client/nextjs", "/client/nextjs/app-router/"],
+  ["/client/tanstack", "/client/tanstack/tanstack-query"],
+  ["/client/tanstack-query", "/client/tanstack/tanstack-query"],
+  ["/deployments", "/dashboard/deployments"],
+  [
+    "/database/import-export/streaming",
+    "/production/integrations/streaming-import-export",
+  ],
+  ["/auth/custom-auth", "/auth/advanced/custom-auth"],
+  ["/functions/args-validation", "/functions/validation"],
+  ["/zen", "/understanding/zen"],
+  ["/open-source", "/self-hosting"],
+  ["/components/using-components", "/components/using"],
+  ["/chef", "/chef/migration-guide"],
+  ["/production/project-configuration", "/config/convex.json"],
+
+  ["/tutorial", "/tutorial/overview"],
+  ["/quickstarts", "/quickstart/overview"],
+  ["/functions", "/functions/overview"],
+  ["/database", "/database/overview"],
+  ["/auth", "/auth/overview"],
+  ["/scheduling", "/scheduling/overview"],
+  ["/file-storage", "/file-storage/overview"],
+  ["/search", "/search/overview"],
+  ["/components", "/components/overview"],
+  ["/agents", "/agents/overview"],
+  ["/ai-gateway", "/ai-gateway/overview"],
+  ["/testing", "/testing/overview"],
+  ["/linting", "/linting/overview"],
+  ["/production", "/production/overview"],
+  ["/platform-apis", "/platform-apis/overview"],
+  ["/client/react", "/client/react/overview"],
+  ["/client/javascript", "/client/javascript/overview"],
+  ["/client/vue", "/client/vue/overview"],
+  ["/client/svelte", "/client/svelte/overview"],
+  ["/client/swift", "/client/swift/overview"],
+  ["/client/android", "/client/android/overview"],
+  ["/dashboard", "/dashboard/overview"],
+  ["/cli", "/cli/overview"],
+  ["/team-management", "/team-management/overview"],
+  ["/deployment-api", "/deployment-api/overview"],
+  ["/management-api", "/management-api/overview"],
+];
+
+const config: VercelConfig = {
+  framework: "docusaurus-2",
+  // Runs from this directory. Uses the repo's pinned pnpm (`scripts/package.json`)
+  // like the Netlify build, not the version Vercel infers from the lockfile.
+  // PNPM_CONFIG_TRUST_LOCKFILE skips pnpm's slow re-check of every lockfile entry
+  // against registry metadata; CI's `pnpm install --frozen-lockfile` checks the
+  // same lockfile before merge.
+  installCommand:
+    "npm ci --prefix ../../scripts && PNPM_CONFIG_TRUST_LOCKFILE=true ../../scripts/node_modules/.bin/pnpm --filter 'docs...' install --frozen-lockfile",
+  buildCommand: "npm run build",
+  outputDirectory: "build",
+  // Serves `foo.html` at `/foo`, like Netlify's pretty URLs.
+  cleanUrls: true,
+  redirects: [
+    // The security policy lives on the marketing site; 302 so the canonical
+    // location can move without browsers caching a stale target.
+    {
+      source: "/security.txt{/}?",
+      destination: "https://www.convex.dev/.well-known/security.txt",
+      statusCode: 302,
+    },
+    {
+      source: "/.well-known/security.txt{/}?",
+      destination: "https://www.convex.dev/.well-known/security.txt",
+      statusCode: 302,
+    },
+    ...PERMANENT_REDIRECTS.map(([source, destination]) => ({
+      source: withOptionalTrailingSlash(source),
+      destination,
+      statusCode: 301,
+    })),
+    {
+      source: "/getting-started/:path(.+)",
+      destination: "/tutorial/overview",
+      statusCode: 301,
+    },
+    // Netlify skips a redirect when a page exists at the requested path, but
+    // Vercel redirects before serving files, so this excludes the pages under
+    // `docs/understanding/`. A new page there must be added to the lookahead.
+    {
+      source:
+        "/understanding/:path((?!(?:overview|zen|workflow|best-practices)(?:/|$)).+)",
+      destination: "/",
+      statusCode: 301,
+    },
+  ],
+  headers: [
+    {
+      source: "/fonts/(.*)",
+      headers: [
+        {
+          key: "Cache-Control",
+          value: "public, max-age=31536000, stale-while-revalidate=86400",
+        },
+        { key: "Access-Control-Allow-Origin", value: "*" },
+        { key: "Access-Control-Allow-Methods", value: "GET, OPTIONS" },
+        { key: "Access-Control-Allow-Headers", value: "*" },
+      ],
+    },
+  ],
+};
+
+export default config;

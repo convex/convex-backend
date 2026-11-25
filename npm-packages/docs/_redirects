@@ -1,3 +1,8 @@
+# ⚠️ KEEP IN SYNC WITH `vercel.ts` ⚠️
+# `vercel.ts` repeats these redirects for the Vercel deployment of the docs.
+# Until the docs are served from only one of Netlify and Vercel, make every
+# change in both files.
+#
 # Redirects from what the browser requests to what we serve
 # THIS LIST IS NOT ALPHABETICAL! It mostly is, but order matters for wildcards.
 # The security policy lives on the marketing site; 302 so the canonical
