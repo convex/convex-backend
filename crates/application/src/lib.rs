@@ -96,6 +96,7 @@ use common::{
     interval::Interval,
     knobs::{
         APPLICATION_MAX_CONCURRENT_UPLOADS,
+        CLOUD_BACKUP_DEFAULT_EXPIRATION,
         ENABLE_INDEX_BACKFILL,
         ENV_VAR_LIMIT,
         ENV_VAR_TOTAL_SIZE_LIMIT,
@@ -627,6 +628,12 @@ pub struct ApplicationStorage {
     search_storage: Arc<dyn Storage>,
     pub exports_storage: Arc<dyn Storage>,
     snapshot_imports_storage: Arc<dyn Storage>,
+}
+
+pub enum ExportRequest {
+    SnapshotExport,
+    CloudBackup,
+    SystemCloudBackup { expiration_ts_ns: Option<u64> },
 }
 
 #[derive(Clone)]
@@ -1690,8 +1697,7 @@ impl<RT: Runtime> Application<RT> {
         request_metadata: RequestMetadata,
         format: ExportFormat,
         component: ComponentId,
-        requestor: ExportRequestor,
-        expiration_ts_ns: Option<u64>,
+        request: ExportRequest,
     ) -> anyhow::Result<DeveloperDocumentId> {
         identity.require_operation(DeploymentOp::CreateBackups)?;
         ensure_export_file_storage_within_limit(
@@ -1700,7 +1706,10 @@ impl<RT: Runtime> Application<RT> {
                 .usage_gauges_tracking_worker
                 .latest_file_storage_size(),
         )?;
-        if let Some(expiration_ts_ns) = expiration_ts_ns {
+        if let ExportRequest::SystemCloudBackup {
+            expiration_ts_ns: Some(expiration_ts_ns),
+        } = request
+        {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .context("Time went backward")?;
@@ -1728,10 +1737,40 @@ impl<RT: Runtime> Application<RT> {
         let mut exports_model = ExportsModel::new(&mut tx);
         let export_requested = exports_model.latest_requested().await?;
         let export_in_progress = exports_model.latest_in_progress().await?;
+        let (requestor, expiration_ts_ns) = match request {
+            ExportRequest::SnapshotExport => (ExportRequestor::SnapshotExport, None),
+            ExportRequest::SystemCloudBackup { expiration_ts_ns } => {
+                (ExportRequestor::CloudBackup, expiration_ts_ns)
+            },
+            ExportRequest::CloudBackup => {
+                let completed = exports_model.list_unexpired_cloud_backups().await?.len();
+                let active = export_requested
+                    .iter()
+                    .chain(&export_in_progress)
+                    .filter(|export| export.requestor() == ExportRequestor::CloudBackup)
+                    .count();
+                let max_backups = BackendInfoModel::new(&mut tx).max_cloud_backups().await?;
+                anyhow::ensure!(
+                    ((completed + active) as u64) < max_backups,
+                    ErrorMetadata::bad_request(
+                        "MaxCloudBackupsReached",
+                        format!(
+                            "You have reached the maximum number of cloud backups ({max_backups}) \
+                             allowed for your deployment, please delete some old backups first."
+                        ),
+                    ),
+                );
+                let expiration_ts_ns = self.runtime.unix_timestamp().as_nanos()
+                    + CLOUD_BACKUP_DEFAULT_EXPIRATION.as_nanos();
+                let expiration_ts_ns = i64::try_from(expiration_ts_ns)
+                    .context("Cloud backup expiration exceeds the timestamp range")?;
+                (ExportRequestor::CloudBackup, Some(expiration_ts_ns as u64))
+            },
+        };
 
         let snapshot_id = match (export_requested, export_in_progress) {
             (None, None) => {
-                exports_model
+                ExportsModel::new(&mut tx)
                     .insert_requested(format, component, requestor, expiration_ts_ns)
                     .await
             },

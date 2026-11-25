@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use application::ExportRequest;
 use axum::{
     body::Body,
     response::IntoResponse,
@@ -32,10 +33,7 @@ use http::StatusCode;
 use model::{
     deployment_audit_log::types::DeploymentAuditLogEvent,
     exports::{
-        types::{
-            ExportFormat,
-            ExportRequestor,
-        },
+        types::ExportFormat,
         ExportsModel,
     },
 };
@@ -86,8 +84,7 @@ pub async fn request_zip_export(
             request_metadata,
             ExportFormat::Zip { include_storage },
             component,
-            ExportRequestor::SnapshotExport,
-            None,
+            ExportRequest::SnapshotExport,
         )
         .await?;
     Ok(StatusCode::OK)

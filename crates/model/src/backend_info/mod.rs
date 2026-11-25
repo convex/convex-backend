@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use cmd_util::env::env_config;
 use common::{
     document::ParsedDocument,
@@ -72,6 +73,16 @@ impl<'a, RT: Runtime> BackendInfoModel<'a, RT> {
             },
         };
         Ok(())
+    }
+
+    pub async fn max_cloud_backups(&mut self) -> anyhow::Result<u64> {
+        self.get()
+            .await?
+            .and_then(|bi| bi.max_cloud_backups)
+            .context(ErrorMetadata::forbidden(
+                "CloudBackupEntitlementUnavailable",
+                "Cloud backup entitlement is unavailable for this deployment.",
+            ))
     }
 
     pub async fn ensure_streaming_export_enabled(&mut self) -> anyhow::Result<()> {

@@ -984,6 +984,14 @@ pub static MAX_SESSION_CLEANUP_DURATION: LazyLock<Option<Duration>> = LazyLock::
 pub static SESSION_CLEANUP_DELETE_CONCURRENCY: LazyLock<usize> =
     LazyLock::new(|| env_config("SESSION_CLEANUP_DELETE_CONCURRENCY", 2));
 
+/// Default cloud backup retention in days.
+pub static CLOUD_BACKUP_DEFAULT_EXPIRATION: LazyLock<Duration> = LazyLock::new(|| {
+    Duration::from_days(u64::from(env_config(
+        "CLOUD_BACKUP_DEFAULT_EXPIRATION_DAYS",
+        7u32,
+    )))
+});
+
 /// Snapshots that expired more than this number of days ago are purged
 /// from storage.
 pub static MAX_EXPIRED_SNAPSHOT_AGE: LazyLock<Duration> = LazyLock::new(|| {
