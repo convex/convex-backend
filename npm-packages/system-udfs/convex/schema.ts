@@ -368,7 +368,11 @@ const usageLimitStopState = v.union(v.literal("none"), v.literal("disabled"));
 
 export const backendState = v.object({
   system: systemStopState,
-  usage_limit: usageLimitStopState,
+
+  // Not set on older documents. `SerializedBackendState` defaults it to
+  // "none", but reads from JS don't get this default value.
+  usage_limit: v.optional(usageLimitStopState),
+
   user: userStopState,
 });
 
