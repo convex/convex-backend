@@ -1,8 +1,8 @@
+# Pull-request gate for the fork; "Build Convex Backend" is a required check on
+# `main`. Pushes to `main` only run publish_fork_backend.yml.
 name: Build Convex Backend
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -12,7 +12,7 @@ concurrency:
 
 env:
   RUST_BACKTRACE: 1
-  CARGO_BUILD_JOBS: 2
+  CARGO_BUILD_JOBS: 4
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: 0
 
@@ -25,6 +25,9 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check that only the fork's workflows are present
+        run: .github/fork_workflows.sh
 
       - name: Setup Rust
         uses: ./.github/actions/setup-rust

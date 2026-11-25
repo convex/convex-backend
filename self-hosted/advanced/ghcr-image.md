@@ -6,14 +6,19 @@ The fork publishes its self-hosted backend to GitHub Container Registry:
 ghcr.io/bl4ckbl1zz/convex-backend
 ```
 
-The `Publish Fork Backend Image` GitHub Actions workflow builds the image from
-every commit merged into `main`. It publishes native Linux amd64 and arm64
-images behind one multi-platform manifest, so Docker automatically selects the
-correct image for each Dokploy host.
+The `Publish Fork Backend Image` GitHub Actions workflow builds the image for
+every merge into `main`, except merges that only change fork documentation, the
+Dokploy profiles under `self-hosted/docker/` or the pull-request workflows;
+those keep the previous image. It publishes native Linux amd64 and arm64 images
+behind one multi-platform manifest, so Docker automatically selects the correct
+image for each Dokploy host: production (Proxmox) is amd64, and RestoreCord's
+MicroApi Convex host is arm64. A run takes about 35 minutes; see
+[`.github/UPSTREAM_SYNC.md`](../../.github/UPSTREAM_SYNC.md#3-ci-and-image-publishing).
 
 ## Tags
 
-- `latest` and `main` point to the newest successful build from `main`.
+- `latest` and `main` point to the newest successful build from `main`. A manual
+  run on another branch publishes only the `sha-` tags.
 - `sha-<full-git-sha>` is immutable and identifies the exact source revision.
 - `sha-<full-git-sha>-amd64` and `sha-<full-git-sha>-arm64` identify the
   platform-specific images used to construct the multi-platform manifest.

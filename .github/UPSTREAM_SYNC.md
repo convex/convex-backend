@@ -25,6 +25,7 @@ git remote add upstream https://github.com/convex/convex-backend.git  # once
 git fetch upstream main
 git switch -c upstream-sync/$(date +%F) origin/main
 git merge upstream/main
+.github/fork_workflows.sh --prune  # drop upstream workflows; see invariant 3
 ```
 
 **Merging to `main` redeploys production, but not its backend.** Dokploy
@@ -33,7 +34,10 @@ changes go live on merge. The backend image is pinned by `CONVEX_BACKEND_IMAGE`
 in the Dokploy environment, so a merge alone keeps the old backend. To roll out
 a new backend:
 
-1. Wait for "Publish Fork Backend Image" to finish for the merge commit.
+1. Wait for "Publish Fork Backend Image" to finish for the merge commit. It runs
+   on every push to `main` except merges that touch only the fork-owned paths in
+   its `paths-ignore` list (sync merges always publish). Without an image for
+   the merge commit, start the workflow by hand on `main`.
 2. Resolve its digest:
    `docker buildx imagetools inspect ghcr.io/bl4ckbl1zz/convex-backend:sha-<merge-sha>`.
 3. Deploy it to ModularBots Dev first (its raw compose pins the image), then set
@@ -86,24 +90,52 @@ Guarded by `cargo test -p node_executor --lib`.
 `HTTP_SERVER_MAX_CONCURRENT_REQUESTS` knob to the HTTP server instead of the
 hardcoded `MAX_CONCURRENT_REQUESTS` (128); production sets 1024.
 
-### 3. CI and image publishing on GitHub-hosted runners
+### 3. CI and image publishing
 
-`.github/workflows/build_local_backend.yml`,
 `.github/workflows/publish_fork_backend.yml`,
-`.github/actions/setup-rust/action.yml`,
+`.github/workflows/build_local_backend.yml`, `.github/workflows/prettier.yml`,
+`.github/fork_workflows.sh`, `.github/actions/setup-rust/action.yml`,
 `self-hosted/docker-build/Dockerfile.backend`
 
-Upstream targets Convex's private `[self-hosted, aws, ...]` runners, which do
-not exist here: a job with those labels queues forever.
+CI exists to produce the image Dokploy deploys. Three workflows remain; every
+other upstream workflow is deleted. Those either target Convex's private
+`[self-hosted, aws, ...]` runners, which do not exist here, or release Convex's
+own artifacts.
 
-- Every workflow that must run here uses `ubuntu-24.04` / `ubuntu-latest`.
+| Workflow                                        | Runs on                                     | Cost                         |
+| ----------------------------------------------- | ------------------------------------------- | ---------------------------- |
+| Publish Fork Backend Image (fork-only)          | push to `main` (see `paths-ignore`), manual | one amd64 + one arm64 runner |
+| Build Convex Backend (required check on `main`) | pull requests, manual                       | one runner, about 20 minutes |
+| Prettier (required check on `main`)             | pull requests, manual                       | under a minute               |
+
+- **Publish** builds `Dockerfile.backend` natively on `ubuntu-24.04` and
+  `ubuntu-24.04-arm` in parallel, pushes `sha-<sha>-amd64` and
+  `sha-<sha>-arm64`, then joins them into `sha-<sha>` (plus `latest` and `main`
+  on `main` only). Both architectures are needed: production is amd64,
+  RestoreCord's MicroApi Convex host is arm64. Keep the image name and the
+  `sha-<commit>` scheme: `CONVEX_BACKEND_IMAGE` pins depend on them. It uses no
+  layer cache on purpose: cargo writes to BuildKit cache mounts, which a layer
+  cache does not save, and exporting it cost 5-22 minutes per run without making
+  cargo faster. `CARGO_BUILD_JOBS=4` matches the runners' 4 vCPUs (the
+  Dockerfile's default is also 4).
+- **Build Convex Backend** is the pre-merge check for syncs: `cargo check`, a
+  clippy pass over the fork's crates and the Node executor pool tests. Its first
+  step runs `.github/fork_workflows.sh`.
 - `setup-rust` falls back to local-disk sccache when Convex's R2 credentials are
   absent. Keep that fallback.
-- `publish_fork_backend.yml` is fork-only (multi-arch GHCR publishing).
-- The Dockerfile caps `CARGO_BUILD_JOBS` at 4 so release builds fit the runners'
-  memory.
-- Other upstream workflows (release, precompile, CLA, metrics) are disabled in
-  the repository settings. Take upstream's version of them wholesale.
+
+**Keeping upstream workflows out.** Upstream still ships its workflows, and a
+merge brings them back: an upstream change to a deleted workflow is a
+modify/delete conflict, and a new upstream workflow arrives silently and would
+run. After every `git merge upstream/main`, run
+`.github/fork_workflows.sh --prune`; it `git rm`s every workflow outside its
+allowlist, which also resolves those conflicts. Build Convex Backend runs the
+same script without `--prune` and fails while a stray workflow is present. To
+add a workflow to the fork, add it to the script's allowlist.
+
+For `build_local_backend.yml` and `prettier.yml`, take upstream's changes but
+keep the fork's triggers (pull requests and manual runs only), the allowlist
+check step and the `ubuntu-24.04` / `ubuntu-latest` runners.
 
 ## Lockfiles
 

@@ -1,9 +1,22 @@
+# Fork-only. Builds the backend image that Dokploy deploys and publishes it to
+# GHCR. This is the only workflow that runs on pushes to `main`; see
+# .github/UPSTREAM_SYNC.md ("CI and image publishing").
 name: Publish Fork Backend Image
 
 on:
   push:
     branches:
       - main
+    # Merges that change nothing the image is built from. Keep this list to
+    # fork-owned paths: everything else, including any new upstream build
+    # input, still publishes.
+    paths-ignore:
+      - ".github/UPSTREAM_SYNC.md"
+      - ".github/fork_workflows.sh"
+      - ".github/workflows/build_local_backend.yml"
+      - ".github/workflows/prettier.yml"
+      - "self-hosted/advanced/**"
+      - "self-hosted/docker/**"
   workflow_dispatch:
 
 permissions:
@@ -24,32 +37,33 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Production (Proxmox) is amd64.
           - platform: linux/amd64
             arch: amd64
             runner: ubuntu-24.04
-            cache_scope: convex-backend-amd64
+          # RestoreCord's MicroApi Convex stack runs this image on an arm64 host.
           - platform: linux/arm64
             arch: arm64
             runner: ubuntu-24.04-arm
-            cache_scope: convex-backend-arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 360
+    timeout-minutes: 120
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Reclaim hosted-runner build space
+      - name: Show runner resources
         shell: bash
         run: |
-          sudo rm -rf \
-            /usr/local/lib/android \
-            /usr/share/dotnet \
-            /opt/ghc \
-            /usr/local/.ghcup
+          nproc
+          free -g
           df -h /
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          # The runner is discarded after the job; removing the builder only
+          # adds minutes.
+          cleanup: false
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
@@ -64,6 +78,10 @@ jobs:
         run:
           echo "timestamp=$(git show -s --format=%cI HEAD)" >> "$GITHUB_OUTPUT"
 
+      # No layer cache: cargo writes its output to a BuildKit cache mount,
+      # which a layer cache does not save, so a cache hit only skipped
+      # `cargo chef cook` and left the final build to compile every
+      # dependency. Exporting the cache cost 5-22 minutes per run.
       - name: Build and publish backend
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         env:
@@ -79,13 +97,11 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.commit.outputs.timestamp }}
             org.opencontainers.image.description=High-throughput self-hosted Convex backend
+          # Hosted runners have 4 vCPUs and 16 GB of memory.
           build-args: |
-            CARGO_BUILD_JOBS=2
+            CARGO_BUILD_JOBS=4
             VERGEN_GIT_SHA=${{ github.sha }}
             VERGEN_GIT_COMMIT_TIMESTAMP=${{ steps.commit.outputs.timestamp }}
-          cache-from: type=gha,scope=${{ matrix.cache_scope }}
-          cache-to:
-            "type=gha,mode=max,scope=${{ matrix.cache_scope }},ignore-error=true"
           provenance: false
 
   publish:
@@ -96,6 +112,8 @@ jobs:
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          cleanup: false
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
@@ -108,10 +126,13 @@ jobs:
         id: manifest
         shell: bash
         run: |
+          tags=(--tag "${IMAGE_NAME}:sha-${GITHUB_SHA}")
+          # A manual run on another branch must not move the floating tags.
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            tags+=(--tag "${IMAGE_NAME}:latest" --tag "${IMAGE_NAME}:main")
+          fi
           docker buildx imagetools create \
-            --tag "${IMAGE_NAME}:latest" \
-            --tag "${IMAGE_NAME}:main" \
-            --tag "${IMAGE_NAME}:sha-${GITHUB_SHA}" \
+            "${tags[@]}" \
             "${IMAGE_NAME}:sha-${GITHUB_SHA}-amd64" \
             "${IMAGE_NAME}:sha-${GITHUB_SHA}-arm64"
 
@@ -129,11 +150,11 @@ jobs:
           {
             echo "### Published backend image"
             echo
-            echo "\`${IMAGE_NAME}:latest\`"
+            echo "\`${IMAGE_NAME}:sha-${GITHUB_SHA}@${{ steps.manifest.outputs.digest }}\`"
             echo
-            echo "\`${IMAGE_NAME}:sha-${GITHUB_SHA}\`"
-            echo
+            if [ "$GITHUB_REF" = refs/heads/main ]; then
+              echo "Also tagged \`latest\` and \`main\`."
+              echo
+            fi
             echo "Platforms: \`linux/amd64\`, \`linux/arm64\`"
-            echo
-            echo "Digest: \`${{ steps.manifest.outputs.digest }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
