@@ -565,6 +565,19 @@ export default defineSchema({
     indexId: v.id("_index"),
     numDocsIndexed: v.int64(),
     totalDocs: v.union(v.int64(), v.null()),
+    // Null for search and vector indexes, which keep their backfill state in
+    // `_index`. Missing on backfills that started before checkpointing.
+    cursor: v.optional(
+      v.union(
+        v.object({
+          snapshotTs: v.int64(),
+          // ID of the last document indexed in the table being backfilled,
+          // null before the first checkpoint.
+          cursor: v.union(v.string(), v.null()),
+        }),
+        v.null(),
+      ),
+    ),
   }).index("by_index_id", ["indexId"]),
   _components: defineTable({
     definitionId: v.id("_component_definitions"),
