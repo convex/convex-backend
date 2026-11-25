@@ -788,24 +788,6 @@
         }
       }
     },
-    "/delete_project/{project_id}": {
-      "post": {
-        "operationId": "dashboard_delete_project",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "description": "",
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        }
-      }
-    },
     "/delete_projects": {
       "post": {
         "operationId": "dashboard_delete_projects",
