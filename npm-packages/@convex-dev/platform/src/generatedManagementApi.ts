@@ -176,6 +176,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/teams/{team_id}/projects/{project_id}/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recover project
+         * @description Recover a recently deleted project and its eligible deployments.
+         */
+        post: operations["recover project"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/teams/{team_id}/list_deleted_projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List deleted projects
+         * @description List a team's deleted projects within the recovery window, newest first.
+         */
+        get: operations["list deleted projects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/teams/{team_id_or_slug}/projects/{project_slug}": {
         parameters: {
             query?: never;
@@ -1153,6 +1193,21 @@ export interface components {
             /** @description The token to delete. This can be its secret value or its name. */
             id: string;
         };
+        DeletedProject: {
+            id: components["schemas"]["ProjectId"];
+            name: components["schemas"]["ProjectName"];
+            slug: components["schemas"]["ProjectSlug"];
+            /**
+             * Format: int64
+             * @description Deletion time in milliseconds since epoch.
+             */
+            deletedAt: number;
+            /**
+             * Format: int64
+             * @description Recovery deadline in milliseconds since epoch.
+             */
+            recoverableUntil: number;
+        };
         /** @description An access token with a deployment or project routing prefix. */
         DeployKey: string;
         /** @enum {string} */
@@ -1219,6 +1274,10 @@ export interface components {
         };
         PaginatedDefaultEnvironmentVariablesResponse: {
             items: components["schemas"]["DefaultEnvironmentVariableResponse"][];
+            pagination: components["schemas"]["PaginationMetadata"];
+        };
+        PaginatedDeletedProjectsResponse: {
+            items: components["schemas"]["DeletedProject"][];
             pagination: components["schemas"]["PaginationMetadata"];
         };
         PaginatedDeploymentsResponse: {
@@ -1766,6 +1825,7 @@ export type DefaultEnvironmentVariableResponse = components['schemas']['DefaultE
 export type DeleteCustomRoleArgs = components['schemas']['DeleteCustomRoleArgs'];
 export type DeletePersonalAccessTokenArgs = components['schemas']['DeletePersonalAccessTokenArgs'];
 export type DeleteTeamAccessTokenArgs = components['schemas']['DeleteTeamAccessTokenArgs'];
+export type DeletedProject = components['schemas']['DeletedProject'];
 export type DeployKey = components['schemas']['DeployKey'];
 export type DeploymentClass = components['schemas']['DeploymentClass'];
 export type DeploymentClassMetadata = components['schemas']['DeploymentClassMetadata'];
@@ -1787,6 +1847,7 @@ export type MemberId = components['schemas']['MemberId'];
 export type MintLocalAiGatewayJwtArgs = components['schemas']['MintLocalAiGatewayJwtArgs'];
 export type MintLocalAiGatewayJwtResponse = components['schemas']['MintLocalAiGatewayJwtResponse'];
 export type PaginatedDefaultEnvironmentVariablesResponse = components['schemas']['PaginatedDefaultEnvironmentVariablesResponse'];
+export type PaginatedDeletedProjectsResponse = components['schemas']['PaginatedDeletedProjectsResponse'];
 export type PaginatedDeploymentsResponse = components['schemas']['PaginatedDeploymentsResponse'];
 export type PaginatedPersonalAccessTokensResponse = components['schemas']['PaginatedPersonalAccessTokensResponse'];
 export type PaginationMetadata = components['schemas']['PaginationMetadata'];
@@ -2084,6 +2145,55 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    "recover project": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+                /** @description Project ID */
+                project_id: components["schemas"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "list deleted projects": {
+        parameters: {
+            query?: {
+                /** @description Cursor from the previous page. */
+                cursor?: string | null;
+                /** @description Maximum number of projects to return (1–100, defaults to 100). */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description Team ID */
+                team_id: components["schemas"]["TeamId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaginatedDeletedProjectsResponse"];
+                };
             };
         };
     };

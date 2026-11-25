@@ -620,6 +620,121 @@
         ]
       }
     },
+    "/teams/{team_id}/projects/{project_id}/recover": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Recover project",
+        "description": "Recover a recently deleted project and its eligible deployments.",
+        "operationId": "recover project",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ProjectId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
+    "/teams/{team_id}/list_deleted_projects": {
+      "get": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "List deleted projects",
+        "description": "List a team's deleted projects within the recovery window, newest first.",
+        "operationId": "list deleted projects",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "description": "Team ID",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TeamId"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Cursor from the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of projects to return (1–100, defaults to 100).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedDeletedProjectsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "PAT": []
+          },
+          {
+            "OAuth Team Token": []
+          },
+          {
+            "Team Token": []
+          }
+        ]
+      }
+    },
     "/teams/{team_id_or_slug}/projects/{project_slug}": {
       "get": {
         "tags": [
@@ -3295,6 +3410,37 @@
         },
         "additionalProperties": false
       },
+      "DeletedProject": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "deletedAt",
+          "recoverableUntil"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ProjectId"
+          },
+          "name": {
+            "$ref": "#/components/schemas/ProjectName"
+          },
+          "slug": {
+            "$ref": "#/components/schemas/ProjectSlug"
+          },
+          "deletedAt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Deletion time in milliseconds since epoch."
+          },
+          "recoverableUntil": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Recovery deadline in milliseconds since epoch."
+          }
+        }
+      },
       "DeployKey": {
         "type": "string",
         "description": "An access token with a deployment or project routing prefix."
@@ -3554,6 +3700,24 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/DefaultEnvironmentVariableResponse"
+            }
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationMetadata"
+          }
+        }
+      },
+      "PaginatedDeletedProjectsResponse": {
+        "type": "object",
+        "required": [
+          "items",
+          "pagination"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DeletedProject"
             }
           },
           "pagination": {
