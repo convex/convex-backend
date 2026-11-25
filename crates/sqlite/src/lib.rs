@@ -61,10 +61,7 @@ use common::{
         TabletId,
     },
 };
-use futures::{
-    stream,
-    StreamExt,
-};
+use futures::StreamExt;
 use futures_async_stream::try_stream;
 use parking_lot::Mutex;
 use rusqlite::{
@@ -105,44 +102,51 @@ impl SqlitePersistence {
         })
     }
 
-    #[allow(clippy::needless_lifetimes)]
-    #[try_stream(ok = T, error = anyhow::Error)]
-    async fn validate_snapshot<T: 'static>(
-        &self,
-        ts: Timestamp,
-        retention_validator: Arc<dyn RetentionValidator>,
-    ) {
-        retention_validator.validate_snapshot(ts).await?;
-    }
-
-    fn _index_scan_inner(
+    /// Reads at most `batch_size` keys of an index scan, resuming strictly
+    /// after `cursor`. Tombstoned keys are returned as `(key, None)` so they
+    /// advance the cursor without being yielded.
+    fn _index_scan_page(
         &self,
         index_id: IndexId,
         tablet_id: TabletId,
         read_timestamp: Timestamp,
         interval: &Interval,
         order: Order,
-    ) -> anyhow::Result<Vec<anyhow::Result<(IndexKeyBytes, LatestDocument)>>> {
+        batch_size: usize,
+        cursor: Option<&IndexKeyBytes>,
+    ) -> anyhow::Result<Vec<(IndexKeyBytes, Option<LatestDocument>)>> {
         let interval = interval.clone();
         let index_id = &index_id.0[..];
         let read_timestamp: i64 = read_timestamp.into();
 
+        // Placeholders are numbered (`?N`) because `?2` is referenced after
+        // the key bounds, and SQLite numbers `$name` placeholders by first
+        // appearance.
         let mut params = params![index_id, read_timestamp].to_vec();
 
+        // The cursor replaces the interval's bound on its side: with both,
+        // SQLite may seek by the interval's bound and re-read every earlier
+        // page.
+        let cursor_bytes = cursor.map(|key| &key.0[..]);
+
         let StartIncluded(ref start) = interval.start;
-        let start_bytes = &start[..];
-
-        params.push(&start_bytes);
-        let lower = format!(" AND key >= ${}", params.len());
-
-        let end_bytes = match interval.end {
-            End::Excluded(ref t) => Some(&t[..]),
-            End::Unbounded => None,
+        let (lower_bytes, lower_op) = match (order, cursor_bytes) {
+            (Order::Asc, Some(cursor_bytes)) => (cursor_bytes, ">"),
+            _ => (&start[..], ">="),
         };
-        let upper = match end_bytes {
+
+        params.push(&lower_bytes);
+        let lower = format!(" AND B.key {lower_op} ?{}", params.len());
+
+        let upper_bytes = match (order, cursor_bytes, &interval.end) {
+            (Order::Desc, Some(cursor_bytes), _) => Some(cursor_bytes),
+            (_, _, End::Excluded(t)) => Some(&t[..]),
+            (_, _, End::Unbounded) => None,
+        };
+        let upper = match upper_bytes {
             Some(ref t) => {
                 params.push(t);
-                format!(" AND key < ${}", params.len())
+                format!(" AND B.key < ?{}", params.len())
             },
             None => "".to_owned(),
         };
@@ -151,25 +155,27 @@ impl SqlitePersistence {
             Order::Asc => "ASC",
             Order::Desc => "DESC",
         };
+        // Walks the `(index_id, key, ts)` primary key in scan order, keeping
+        // each key's newest version at or before the read timestamp, so
+        // `LIMIT` stops the walk without a sort. Tombstones are selected, not
+        // filtered, so they count toward `LIMIT` and a short page means the
+        // interval is exhausted.
         let query = format!(
             r#"
-SELECT B.key, B.ts, B.document_id, C.table_id, C.json_value, C.prev_ts
-FROM (
-    SELECT index_id, key, MAX(ts) as max_ts
-    FROM indexes
-    WHERE index_id = $1 AND ts <= $2{lower}{upper}
-    GROUP BY index_id, key
-) A
-JOIN indexes B
-ON B.deleted is FALSE
-AND A.index_id = B.index_id
-AND A.key = B.key
-AND A.max_ts = B.ts
+SELECT B.key, B.ts, B.document_id, C.table_id, C.json_value, C.prev_ts, B.deleted
+FROM indexes B
 LEFT JOIN documents C
 ON B.ts = C.ts
-AND B.table_id = c.table_id
+AND B.table_id = C.table_id
 AND B.document_id = C.id
+WHERE B.index_id = ?1{lower}{upper}
+AND B.ts = (
+    SELECT MAX(X.ts)
+    FROM indexes X
+    WHERE X.index_id = B.index_id AND X.key = B.key AND X.ts <= ?2
+)
 ORDER BY B.key {order}
+LIMIT {batch_size}
 "#,
         );
 
@@ -178,22 +184,30 @@ ORDER BY B.key {order}
         let row_iter = stmt.query_map(&params[..], |row| {
             let key = IndexKeyBytes(row.get::<_, Vec<u8>>(0)?);
             let ts = Timestamp::try_from(row.get::<_, i64>(1)?).expect("timestamp out of bounds");
-            let document_id = row.get::<_, Vec<u8>>(2)?;
+            let document_id: Option<Vec<u8>> = row.get(2)?;
             let table: Option<Vec<u8>> = row.get(3)?;
             let json_value: Option<String> = row.get(4)?;
             let prev_ts: Option<Timestamp> = row
                 .get::<_, Option<i64>>(5)?
                 .map(|ts| Timestamp::try_from(ts).expect("prev_ts out of bounds"));
+            let deleted = row.get::<_, u32>(6)? != 0;
 
-            Ok((key, ts, document_id, table, json_value, prev_ts))
+            Ok((key, ts, document_id, table, json_value, prev_ts, deleted))
         })?;
-        let mut triples = vec![];
+        let mut page = vec![];
         for row in row_iter {
-            let (key, ts, document_id, table, json_value, prev_ts) = row?;
+            let (key, ts, document_id, table, json_value, prev_ts, deleted) = row?;
+            if deleted {
+                page.push((key, None));
+                continue;
+            }
             let table = table.ok_or_else(|| {
                 anyhow::anyhow!("Dangling index reference for {:?} {:?}", key, ts)
             })?;
             let table = TabletId(table.try_into()?);
+            let document_id = document_id.ok_or_else(|| {
+                anyhow::anyhow!("Dangling index reference for {:?} {:?}", key, ts)
+            })?;
             let _document_id = InternalDocumentId::new(table, InternalId::try_from(document_id)?);
             let json_value = json_value.ok_or_else(|| {
                 anyhow::anyhow!("Index reference to deleted document {:?} {:?}", key, ts)
@@ -201,16 +215,59 @@ ORDER BY B.key {order}
             let json_value: serde_json::Value = serde_json::from_str(&json_value)?;
             let value: ConvexValue = json_value.try_into()?;
             let document = ResolvedDocument::from_database(tablet_id, value)?;
-            triples.push(Ok((
+            page.push((
                 key,
-                LatestDocument {
+                Some(LatestDocument {
                     ts,
                     value: document,
                     prev_ts,
-                },
-            )));
+                }),
+            ));
         }
-        Ok(triples)
+        Ok(page)
+    }
+
+    /// Streams an index scan one page at a time, validating retention after
+    /// each page is read and before any of its rows are yielded, as the
+    /// Postgres reader does.
+    #[try_stream(ok = (IndexKeyBytes, LatestDocument), error = anyhow::Error)]
+    async fn _index_scan_paginated(
+        &self,
+        index_id: IndexId,
+        tablet_id: TabletId,
+        read_timestamp: Timestamp,
+        interval: Interval,
+        order: Order,
+        batch_size: usize,
+        retention_validator: Arc<dyn RetentionValidator>,
+    ) {
+        let mut cursor: Option<IndexKeyBytes> = None;
+        loop {
+            let page = self._index_scan_page(
+                index_id,
+                tablet_id,
+                read_timestamp,
+                &interval,
+                order,
+                batch_size,
+                cursor.as_ref(),
+            )?;
+            let page_len = page.len();
+            retention_validator
+                .validate_snapshot(read_timestamp)
+                .await?;
+            // The next page resumes after the last key read, even a tombstone
+            // that yields nothing.
+            cursor = page.last().map(|(key, _)| key.clone());
+            for (key, doc) in page {
+                if let Some(doc) = doc {
+                    yield (key, doc);
+                }
+            }
+            if page_len < batch_size {
+                break;
+            }
+        }
     }
 
     fn _get_persistence_global(
@@ -641,17 +698,20 @@ impl PersistenceReader for SqlitePersistence {
         read_timestamp: Timestamp,
         interval: &Interval,
         order: Order,
-        _size_hint: usize,
+        size_hint: usize,
         retention_validator: Arc<dyn RetentionValidator>,
     ) -> IndexStream<'_> {
-        let triples =
-            self._index_scan_inner(index.id(), tablet_id, read_timestamp, interval, order);
-        // index_scan isn't async so we have to validate snapshot as part of the stream.
-        let validate = self.validate_snapshot(read_timestamp, retention_validator);
-        match triples {
-            Ok(s) => (validate.chain(stream::iter(s))).boxed(),
-            Err(e) => stream::once(async { Err(e) }).boxed(),
-        }
+        let batch_size = size_hint.clamp(1, 5000);
+        self._index_scan_paginated(
+            index.id(),
+            tablet_id,
+            read_timestamp,
+            interval.clone(),
+            order,
+            batch_size,
+            retention_validator,
+        )
+        .boxed()
     }
 
     async fn get_persistence_global(
