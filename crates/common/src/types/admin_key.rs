@@ -25,17 +25,46 @@ impl std::fmt::Debug for SystemKey {
     }
 }
 
-/// Encrypted admin key
-#[derive(Serialize, Deserialize, Clone, ToSchema)]
-pub struct AdminKey(String);
+/// Raw credential supplied for deployment authorization.
+///
+/// This can be a legacy admin key, an internal system key, a WorkOS session
+/// token, or a Convex access token such as a deploy key or a personal, team,
+/// or project token.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RawDeploymentCredential(String);
 
-impl std::fmt::Debug for AdminKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        f.write_str("AdminKey(*****)")
+impl RawDeploymentCredential {
+    pub fn new(credential: String) -> Self {
+        Self(credential)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
-impl AdminKey {
+impl std::fmt::Debug for RawDeploymentCredential {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RawDeploymentCredential(*****)")
+    }
+}
+
+/// A credential classified for deployment authorization. Each variant still
+/// requires the corresponding authorization check.
+#[derive(Debug)]
+pub enum DeploymentCredential {
+    LegacyAdminKey(LegacyAdminKey),
+    SystemKey(SystemKey),
+    AccessToken(DeploymentAccessToken),
+    DeployKey(DeployKey),
+}
+
+/// An encrypted key for a deployment admin identity.
+#[derive(Clone, Serialize, ToSchema)]
+#[schema(deprecated)]
+pub struct LegacyAdminKey(String);
+
+impl LegacyAdminKey {
     pub fn new(key: String) -> Self {
         Self(key)
     }
@@ -46,43 +75,61 @@ impl AdminKey {
         )?))
     }
 
-    // For a key like
-    // "prod:some-depl-name123|sa67asd6a5da6d5:sd6f5sdf76dsf4ds6f4s68fd"
-    // strips the initial "prod:" prefix.
-    //
-    // For a key like
-    // "preview:team-slug:project-slug|sa67asd6a5da6d5:sd6f5sdf76dsf4ds6f4s68fd"
-    // strips the entire prefix, returning just the key part
-    // "sa67asd6a5da6d5:sd6f5sdf76dsf4ds6f4s68fd"
-    pub fn remove_type_prefix(admin_key: &str) -> String {
-        // check if key has an instance prefix
-        let Some((instance_prefix, key_part)) = admin_key.split_once('|') else {
-            return admin_key.to_string();
-        };
-
-        // check if instance prefix has a type prefix
-        let Some((instance_type, instance_info)) = instance_prefix.split_once(':') else {
-            return admin_key.to_string();
-        };
-
-        // if instance type is "preview" or "project" - return just the key part
-        if instance_type.eq_ignore_ascii_case("preview")
-            || instance_type.eq_ignore_ascii_case("project")
-        {
-            return key_part.to_string();
-        }
-
-        // return instance info and key part
-        format!("{instance_info}|{key_part}")
-    }
-
-    // We're not using `Display` to avoid accidentally printing the key.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     pub fn as_string(&self) -> String {
-        self.0.to_string()
+        self.0.clone()
+    }
+}
+
+impl std::fmt::Debug for LegacyAdminKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str("LegacyAdminKey(*****)")
+    }
+}
+
+/// An access token with a deployment or project routing prefix.
+#[derive(Serialize, ToSchema)]
+pub struct DeployKey(String);
+
+impl DeployKey {
+    pub fn new(key: String) -> Self {
+        Self(key)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn as_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
+impl std::fmt::Debug for DeployKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str("DeployKey(*****)")
+    }
+}
+
+/// An unprefixed token presented for deployment authorization.
+pub struct DeploymentAccessToken(String);
+
+impl DeploymentAccessToken {
+    pub fn new(token: String) -> Self {
+        Self(token)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for DeploymentAccessToken {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.write_str("DeploymentAccessToken(*****)")
     }
 }
 
@@ -98,9 +145,9 @@ impl SystemKey {
     }
 }
 
-impl From<AdminKey> for AdminKeyParts {
-    fn from(value: AdminKey) -> Self {
-        split_admin_key(&value.0)
+impl From<&str> for AdminKeyParts {
+    fn from(value: &str) -> Self {
+        split_admin_key(value)
             .map(|(deployment_name, encrypted_part)| {
                 let (deployment_type_prefix, deployment_name) = deployment_name
                     .split_once(':')
@@ -115,12 +162,12 @@ impl From<AdminKey> for AdminKeyParts {
             .unwrap_or(AdminKeyParts {
                 deployment_type_prefix: None,
                 deployment_name: None,
-                encrypted_part: value.0.to_string(),
+                encrypted_part: value.to_string(),
             })
     }
 }
 
-impl TryFrom<AdminKeyParts> for AdminKey {
+impl TryFrom<AdminKeyParts> for RawDeploymentCredential {
     type Error = anyhow::Error;
 
     fn try_from(value: AdminKeyParts) -> Result<Self, Self::Error> {
@@ -133,7 +180,7 @@ impl TryFrom<AdminKeyParts> for AdminKey {
                 format!("{deployment_type_prefix}:{instance_identifier}|{encrypted_part}")
             },
         };
-        Ok(AdminKey::new(key))
+        Ok(RawDeploymentCredential::new(key))
     }
 }
 
@@ -145,8 +192,6 @@ pub struct AdminKeyParts {
     pub encrypted_part: String,
 }
 
-// TODO - encompass these floating methods into the `AdminKey` type
-
 pub fn split_admin_key(admin_key: &str) -> Option<(&str, &str)> {
     admin_key.split_once('|')
 }
@@ -156,7 +201,25 @@ pub fn format_admin_key(deployment_name: &str, encrypted_part: &str) -> String {
 }
 
 pub fn remove_type_prefix_from_admin_key(admin_key: &str) -> String {
-    AdminKey::remove_type_prefix(admin_key)
+    // check if key has an instance prefix
+    let Some((instance_prefix, key_part)) = admin_key.split_once('|') else {
+        return admin_key.to_string();
+    };
+
+    // check if instance prefix has a type prefix
+    let Some((instance_type, instance_info)) = instance_prefix.split_once(':') else {
+        return admin_key.to_string();
+    };
+
+    // if instance type is "preview" or "project" - return just the key part
+    if instance_type.eq_ignore_ascii_case("preview")
+        || instance_type.eq_ignore_ascii_case("project")
+    {
+        return key_part.to_string();
+    }
+
+    // return instance info and key part
+    format!("{instance_info}|{key_part}")
 }
 
 // Dashboard adds a superficial prod: or dev: prefix

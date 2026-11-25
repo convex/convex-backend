@@ -2,7 +2,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use common::{
     runtime::Runtime,
-    types::AdminKey,
+    types::DeploymentCredential,
 };
 use errors::ErrorMetadata;
 use keybroker::{
@@ -44,72 +44,68 @@ impl<RT: Runtime> ApplicationAuth<RT> {
         }
     }
 
-    pub async fn check_key(&self, admin_key_or_access_token: String) -> anyhow::Result<Identity> {
-        let admin_key_or_access_token = AdminKey::new(admin_key_or_access_token);
+    pub async fn check_key(&self, credential: String) -> anyhow::Result<Identity> {
+        let credential = self.key_broker.classify_deployment_credential(credential);
         let now = self.rt.system_time();
         tracing::debug!("Checking admin_key/access token at {now:?}");
 
-        if self
+        let (key, legacy_admin_key) = match &credential {
+            DeploymentCredential::LegacyAdminKey(key) => (key.as_str(), Some(key)),
+            DeploymentCredential::SystemKey(key) => (key.as_str(), None),
+            DeploymentCredential::AccessToken(_) | DeploymentCredential::DeployKey(_) => {
+                log_deploy_key_use(DeployKeyType::AccessToken);
+                return self.access_token_auth.is_authorized(&credential).await;
+            },
+        };
+        let result = self
             .key_broker
-            .is_encrypted_admin_key(admin_key_or_access_token.as_str())
-        {
-            // assume this is a legacy Deploy Key
-            let result = self
-                .key_broker
-                .check_admin_key(admin_key_or_access_token.as_str(), self.rt.system_time())
-                .context(ErrorMetadata::unauthenticated(
-                    "BadAdminKey",
-                    "The provided admin key was invalid for this instance",
-                ));
-            match &result {
-                Ok(Identity::DeploymentAdmin(_)) => {
-                    log_deploy_key_use(DeployKeyType::Legacy);
-                },
-                Ok(Identity::System(_)) => {
-                    log_deploy_key_use(DeployKeyType::System);
-                },
-                _ => {
-                    log_deploy_key_use(DeployKeyType::Unknown);
-                },
-            }
-            if let Ok(Identity::DeploymentAdmin(identity)) = &result
-                && let AdminIdentityPrincipal::Member(member_id) = identity.principal()
-                && *member_id != UNATTRIBUTED_ADMIN_KEY_MEMBER_ID
-            {
-                // Big brain enforces team opt-outs of legacy admin keys and
-                // records their use, so its answer takes precedence.
-                return match self
-                    .access_token_auth
-                    .check_legacy_admin_key(&admin_key_or_access_token)
-                    .await?
-                {
-                    LegacyAdminKeyVerdict::Accepted(identity) => {
-                        log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::Accepted);
-                        Ok(identity)
-                    },
-                    LegacyAdminKeyVerdict::DisabledForTeam => {
-                        log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::DisabledForTeam);
-                        Err(anyhow::anyhow!(legacy_admin_key_disabled_error()))
-                    },
-                    LegacyAdminKeyVerdict::Obsolete => {
-                        log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::Obsolete);
-                        Err(anyhow::anyhow!(legacy_admin_key_obsolete_error()))
-                    },
-                    LegacyAdminKeyVerdict::CheckLocally => {
-                        log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::CheckedLocally);
-                        result
-                    },
-                };
-            }
-            result
-        } else {
-            // assume this is an Access Token
-            // Access Tokens are base64 encoded strings
-            log_deploy_key_use(DeployKeyType::AccessToken);
-            self.access_token_auth
-                .is_authorized(&admin_key_or_access_token)
-                .await
+            .check_admin_key(key, self.rt.system_time())
+            .context(ErrorMetadata::unauthenticated(
+                "BadAdminKey",
+                "The provided admin key was invalid for this instance",
+            ));
+        match &result {
+            Ok(Identity::DeploymentAdmin(_)) => {
+                log_deploy_key_use(DeployKeyType::Legacy);
+            },
+            Ok(Identity::System(_)) => {
+                log_deploy_key_use(DeployKeyType::System);
+            },
+            _ => {
+                log_deploy_key_use(DeployKeyType::Unknown);
+            },
         }
+        if let Some(legacy_admin_key) = legacy_admin_key
+            && let Ok(Identity::DeploymentAdmin(identity)) = &result
+            && let AdminIdentityPrincipal::Member(member_id) = identity.principal()
+            && *member_id != UNATTRIBUTED_ADMIN_KEY_MEMBER_ID
+        {
+            // Big brain enforces team opt-outs of legacy admin keys and
+            // records their use, so its answer takes precedence.
+            return match self
+                .access_token_auth
+                .check_legacy_admin_key(legacy_admin_key)
+                .await?
+            {
+                LegacyAdminKeyVerdict::Accepted(identity) => {
+                    log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::Accepted);
+                    Ok(identity)
+                },
+                LegacyAdminKeyVerdict::DisabledForTeam => {
+                    log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::DisabledForTeam);
+                    Err(anyhow::anyhow!(legacy_admin_key_disabled_error()))
+                },
+                LegacyAdminKeyVerdict::Obsolete => {
+                    log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::Obsolete);
+                    Err(anyhow::anyhow!(legacy_admin_key_obsolete_error()))
+                },
+                LegacyAdminKeyVerdict::CheckLocally => {
+                    log_legacy_admin_key_check(LegacyAdminKeyCheckOutcome::CheckedLocally);
+                    result
+                },
+            };
+        }
+        result
     }
 
 }

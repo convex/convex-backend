@@ -3495,7 +3495,7 @@
       },
       "AdminKey": {
         "type": "string",
-        "description": "Encrypted admin key"
+        "deprecated": true
       },
       "AppAccessTokenResponse": {
         "type": "object",
@@ -5314,6 +5314,11 @@
           }
         }
       },
+      "LegacyAdminKey": {
+        "type": "string",
+        "description": "An encrypted key for a deployment admin identity.",
+        "deprecated": true
+      },
       "LegacyAdminKeyDeploymentUsage": {
         "type": "object",
         "required": [
@@ -5408,7 +5413,7 @@
         ],
         "properties": {
           "adminKey": {
-            "$ref": "#/components/schemas/AdminKey"
+            "$ref": "#/components/schemas/LegacyAdminKey"
           },
           "deploymentUrl": {
             "type": "string"

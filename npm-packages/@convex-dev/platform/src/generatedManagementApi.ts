@@ -1004,7 +1004,7 @@ export interface components {
     schemas: {
         /** Format: int64 */
         AccessTokenId: number;
-        /** @description Encrypted admin key */
+        /** @deprecated */
         AdminKey: string;
         /** @description The wire format of the claims sent to the gateway.
          *
@@ -1153,6 +1153,8 @@ export interface components {
             /** @description The token to delete. This can be its secret value or its name. */
             id: string;
         };
+        /** @description An access token with a deployment or project routing prefix. */
+        DeployKey: string;
         /** @enum {string} */
         DeploymentClass: "s16" | "s256" | "d1024" | "d2048" | "p256";
         DeploymentClassMetadata: {
@@ -1257,7 +1259,7 @@ export interface components {
         };
         PlatformCreateDeployKeyResponse: {
             /** @description The generated deploy key. */
-            deployKey: components["schemas"]["AdminKey"];
+            deployKey: components["schemas"]["DeployKey"];
         };
         PlatformCreateDeploymentArgs: {
             type: components["schemas"]["CreateDeploymentType"];
@@ -1307,7 +1309,7 @@ export interface components {
         };
         PlatformCreatePreviewDeployKeyResponse: {
             /** @description The generated preview deploy key. */
-            previewDeployKey: components["schemas"]["AdminKey"];
+            previewDeployKey: components["schemas"]["DeployKey"];
         };
         PlatformCreateProjectArgs: {
             /** @description The full name of the project as it will appear in the dashboard. Spaces
@@ -1764,6 +1766,7 @@ export type DefaultEnvironmentVariableResponse = components['schemas']['DefaultE
 export type DeleteCustomRoleArgs = components['schemas']['DeleteCustomRoleArgs'];
 export type DeletePersonalAccessTokenArgs = components['schemas']['DeletePersonalAccessTokenArgs'];
 export type DeleteTeamAccessTokenArgs = components['schemas']['DeleteTeamAccessTokenArgs'];
+export type DeployKey = components['schemas']['DeployKey'];
 export type DeploymentClass = components['schemas']['DeploymentClass'];
 export type DeploymentClassMetadata = components['schemas']['DeploymentClassMetadata'];
 export type DeploymentId = components['schemas']['DeploymentId'];

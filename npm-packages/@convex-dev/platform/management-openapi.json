@@ -2757,7 +2757,7 @@
       },
       "AdminKey": {
         "type": "string",
-        "description": "Encrypted admin key"
+        "deprecated": true
       },
       "AttributionClaims": {
         "type": "object",
@@ -3295,6 +3295,10 @@
         },
         "additionalProperties": false
       },
+      "DeployKey": {
+        "type": "string",
+        "description": "An access token with a deployment or project routing prefix."
+      },
       "DeploymentClass": {
         "type": "string",
         "enum": [
@@ -3719,7 +3723,7 @@
         ],
         "properties": {
           "deployKey": {
-            "$ref": "#/components/schemas/AdminKey",
+            "$ref": "#/components/schemas/DeployKey",
             "description": "The generated deploy key."
           }
         }
@@ -3803,7 +3807,7 @@
         ],
         "properties": {
           "previewDeployKey": {
-            "$ref": "#/components/schemas/AdminKey",
+            "$ref": "#/components/schemas/DeployKey",
             "description": "The generated preview deploy key."
           }
         }

@@ -5,12 +5,12 @@ use std::{
 
 use common::types::{
     AccessTokenId,
-    AdminKey,
     DeploymentClass,
     DeploymentId,
     DeploymentType,
     FullyQualifiedObjectKey,
     ProjectId,
+    RawDeploymentCredential,
     TeamId,
 };
 use keybroker::{
@@ -117,7 +117,7 @@ pub struct DeploymentAuthResponse {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessTokenDeploymentAuthArgs {
-    pub access_token: AdminKey,
+    pub access_token: RawDeploymentCredential,
     pub deployment_name: String,
     #[serde(default)]
     pub deployment_type: Option<DeploymentType>,
@@ -147,7 +147,7 @@ pub struct AccessTokenDeploymentAuthResponse {
 pub struct AuthorizeBackupRestoreArgs {
     /// The access token presented to the destination deployment, in either the
     /// `deployment|token` or the bare token form.
-    pub access_token: AdminKey,
+    pub access_token: RawDeploymentCredential,
     pub source_deployment_name: String,
     pub destination_deployment_name: String,
     /// Id of the backup's `_exports` document in the source deployment.

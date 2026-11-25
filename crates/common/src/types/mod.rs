@@ -46,8 +46,12 @@ pub use admin_key::{
     remove_type_prefix_from_admin_key,
     remove_type_prefix_from_deployment_name,
     split_admin_key,
-    AdminKey,
     AdminKeyParts,
+    DeployKey,
+    DeploymentAccessToken,
+    DeploymentCredential,
+    LegacyAdminKey,
+    RawDeploymentCredential,
     SystemKey,
 };
 pub use ai_gateway::AI_GATEWAY_URL;

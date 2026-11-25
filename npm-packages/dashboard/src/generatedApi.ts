@@ -1953,7 +1953,7 @@ export interface components {
             postal_code?: string | null;
             country?: string | null;
         };
-        /** @description Encrypted admin key */
+        /** @deprecated */
         AdminKey: string;
         AppAccessTokenResponse: {
             /** @description Stable identifier for this access token. */
@@ -2438,6 +2438,11 @@ export interface components {
             teamId: components["schemas"]["TeamId"];
             teamSlug: string;
         };
+        /**
+         * @deprecated
+         * @description An encrypted key for a deployment admin identity.
+         */
+        LegacyAdminKey: string;
         LegacyAdminKeyDeploymentUsage: {
             deploymentName: string;
             /**
@@ -2465,7 +2470,7 @@ export interface components {
             domains: components["schemas"]["SSOOrganizationDomain"][];
         };
         LocalDeploymentAuthResponse: {
-            adminKey: components["schemas"]["AdminKey"];
+            adminKey: components["schemas"]["LegacyAdminKey"];
             deploymentUrl: string;
         };
         ManagedBy: "vercel" | {
@@ -3220,6 +3225,7 @@ export type InvoicesResponse = components['schemas']['InvoicesResponse'];
 export type IsDefaultDeployment = components['schemas']['IsDefaultDeployment'];
 export type JoinDirectorySyncedTeamRequest = components['schemas']['JoinDirectorySyncedTeamRequest'];
 export type JoinDirectorySyncedTeamResponse = components['schemas']['JoinDirectorySyncedTeamResponse'];
+export type LegacyAdminKey = components['schemas']['LegacyAdminKey'];
 export type LegacyAdminKeyDeploymentUsage = components['schemas']['LegacyAdminKeyDeploymentUsage'];
 export type ListDirectorySyncGroupsResponse = components['schemas']['ListDirectorySyncGroupsResponse'];
 export type ListMyCustomRolesResponse = components['schemas']['ListMyCustomRolesResponse'];

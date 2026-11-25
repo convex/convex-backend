@@ -43,7 +43,10 @@ use common::{
         split_admin_key,
         AccessTokenId,
         ActionCallbackToken,
-        AdminKey,
+        DeployKey,
+        DeploymentAccessToken,
+        DeploymentCredential,
+        LegacyAdminKey,
         MemberId,
         PersistenceVersion,
         TeamId,
@@ -998,12 +1001,12 @@ impl KeyBroker {
         }
     }
 
-    pub fn issue_admin_key(&self, member_id: MemberId) -> AdminKey {
-        AdminKey::new(self.issue_key(Some(member_id), false))
+    pub fn issue_admin_key(&self, member_id: MemberId) -> LegacyAdminKey {
+        LegacyAdminKey::new(self.issue_key(Some(member_id), false))
     }
 
-    pub fn issue_read_only_admin_key(&self, member_id: MemberId) -> AdminKey {
-        AdminKey::new(self.issue_key(Some(member_id), true))
+    pub fn issue_read_only_admin_key(&self, member_id: MemberId) -> LegacyAdminKey {
+        LegacyAdminKey::new(self.issue_key(Some(member_id), true))
     }
 
     pub fn issue_system_key(&self) -> SystemKey {
@@ -1049,15 +1052,32 @@ impl KeyBroker {
 
     pub fn is_encrypted_admin_key(&self, key: &str) -> bool {
         let encrypted_part = split_admin_key(key).map(|(_, key)| key).unwrap_or(key);
-        let admin_key: Result<AdminKeyProto, _> = self
-            .admin_key_encryptor
+        self.decode_admin_key(encrypted_part).is_ok()
+    }
+
+    pub fn classify_deployment_credential(&self, credential: String) -> DeploymentCredential {
+        let parts = split_admin_key(&credential);
+        let payload = parts.map_or(credential.as_str(), |(_, payload)| payload);
+        match self.decode_admin_key(payload) {
+            Ok(key) if key.identity == Some(AdminIdentityProto::System(())) => {
+                DeploymentCredential::SystemKey(SystemKey::new(credential))
+            },
+            Ok(_) => DeploymentCredential::LegacyAdminKey(LegacyAdminKey::new(credential)),
+            Err(_) if parts.is_some() => {
+                DeploymentCredential::DeployKey(DeployKey::new(credential))
+            },
+            Err(_) => DeploymentCredential::AccessToken(DeploymentAccessToken::new(credential)),
+        }
+    }
+
+    fn decode_admin_key(&self, encrypted_part: &str) -> anyhow::Result<AdminKeyProto> {
+        self.admin_key_encryptor
             .decrypt_proto(ADMIN_KEY_VERSION, encrypted_part)
             .or_else(|_| {
                 self.encryptor
                     .decode_proto(ADMIN_KEY_VERSION, encrypted_part)
                     .inspect(|_| log_legacy_admin_key())
-            });
-        admin_key.is_ok()
+            })
     }
 
     pub fn check_admin_key(&self, key: &str, now: SystemTime) -> anyhow::Result<Identity> {
@@ -1069,21 +1089,13 @@ impl KeyBroker {
             issued_s,
             identity,
             is_read_only,
-        } = self
-            .admin_key_encryptor
-            .decrypt_proto(ADMIN_KEY_VERSION, encrypted_part)
-            .or_else(|_| {
-                self.encryptor
-                    .decode_proto(ADMIN_KEY_VERSION, encrypted_part)
-                    .inspect(|_| log_legacy_admin_key())
-            })
-            .with_context(|| {
-                format!(
-                    "Couldn't decode the AdminKeyProto for deployment {instance_name:?} (key \
-                     length {})",
-                    key.len()
-                )
-            })?;
+        } = self.decode_admin_key(encrypted_part).with_context(|| {
+            format!(
+                "Couldn't decode the AdminKeyProto for deployment {instance_name:?} (key length \
+                 {})",
+                key.len()
+            )
+        })?;
         let instance_name = instance_name
             .or(instance_name_from_encrypted_part.as_deref())
             .context("Invalid admin key format")?;
