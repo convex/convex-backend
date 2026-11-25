@@ -13,6 +13,9 @@ async function buildDocs() {
   console.log("🔨 Building Docusaurus site...");
   execSync("docusaurus build", { stdio: "inherit" });
 
+  console.log("📝 Generating HTTP API Markdown from the OpenAPI specs...");
+  execSync("node scripts/openapi-markdown.js", { stdio: "inherit" });
+
   console.log("📋 Copying redirects file...");
   execSync("npx copyfiles _redirects build/", { stdio: "inherit" });
 }
