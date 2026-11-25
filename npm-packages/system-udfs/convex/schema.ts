@@ -732,6 +732,18 @@ export default defineSchema({
   _cron_jobs: defineTable({
     name: v.string(),
     cronSpec: analyzedCronSpec,
+
+    // Legacy fields that Rust ignores. Crons last written before April 2025
+    // kept their next run here, before it moved to `_cron_next_run`.
+    state: v.optional(
+      v.union(
+        v.object({ type: v.literal("pending") }),
+        v.object({ type: v.literal("inProgress") }),
+        v.null(),
+      ),
+    ),
+    prevTs: v.optional(v.union(v.int64(), v.null())),
+    nextTs: v.optional(v.union(v.int64(), v.null())),
   }).index("by_name", ["name"]),
   _cron_next_run: defineTable({
     cronJobId: v.id("_cron_jobs"),
