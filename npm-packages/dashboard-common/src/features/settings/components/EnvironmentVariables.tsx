@@ -25,6 +25,7 @@ import { Callout } from "@ui/Callout";
 import { Button } from "@ui/Button";
 import { copyTextToClipboard, toast } from "@common/lib/utils";
 import { TextInput } from "@ui/TextInput";
+import { Tooltip } from "@ui/Tooltip";
 import { cn } from "@ui/cn";
 import cloneDeep from "lodash/cloneDeep";
 import { formatEnvValueForDotfile } from "./formatEnvValueForDotfile";
@@ -42,9 +43,30 @@ export type BaseEnvironmentVariable = {
   name: string;
   // Empty for a saved secret: the dashboard never receives its value.
   value: string;
-  // true for a secret, whose value can't be read.
+  // true for a secret, whose value can be replaced but not read.
   secret?: boolean;
 };
+
+const ERROR_SECRET_NEEDS_NEW_VALUE = "Enter a new value for this secret.";
+
+// Formik keeps touched state by index, so removing edits must remove their
+// touched entries too, or the next edits inherit them.
+// https://github.com/jaredpalmer/formik/issues/2059#issuecomment-612733378
+function keepTouchedEdits<T extends BaseEnvironmentVariable>(
+  touched: FormikTouched<FormState<T>>,
+  keep: (index: number) => boolean,
+): FormikTouched<FormState<T>> {
+  const touchedEdits = Array.isArray(touched.editedVars)
+    ? touched.editedVars
+    : [];
+  return {
+    ...touched,
+    editedVars: touchedEdits.filter((_, index) => keep(index)),
+  };
+}
+
+const SECRET_NAME_FIXED_TIP =
+  "A secret can’t be renamed. To rename it, add it again under the new name and delete this one.";
 
 type FormState<T extends BaseEnvironmentVariable> = {
   editedVars: {
@@ -235,6 +257,16 @@ export function EnvironmentVariables<T extends BaseEnvironmentVariable>({
           }
         });
 
+        // An existing secret set to "" most likely means the new value was
+        // forgotten. Setting a secret to "" on purpose is still possible
+        // from the CLI.
+        values.editedVars.forEach(({ oldEnvVar, newEnvVar }, index) => {
+          if (oldEnvVar.secret && newEnvVar.value === "") {
+            errors[`editedVars[${index}].newEnvVar.value`] =
+              ERROR_SECRET_NEEDS_NEW_VALUE;
+          }
+        });
+
         return errors;
       }}
     >
@@ -305,11 +337,18 @@ function EnvironmentVariablesForm<T extends BaseEnvironmentVariable>({
       environmentVariables.map(({ name }) => name),
     );
 
-    const newEditedVars = oldEditedVars.filter((v) =>
+    const keptEdits = oldEditedVars.map((v) =>
       existingEnvironmentVariables.has(v.oldEnvVar.name),
     );
+    const newEditedVars = oldEditedVars.filter((_, index) => keptEdits[index]);
     if (newEditedVars.length !== oldEditedVars.length) {
       void formState.setFieldValue("editedVars", newEditedVars);
+      const { touched } = formState;
+      setTimeout(() =>
+        formState.setTouched(
+          keepTouchedEdits(touched, (index) => keptEdits[index]),
+        ),
+      );
     }
 
     const newDeletedVars = oldDeletedVars.filter((v) =>
@@ -518,22 +557,19 @@ function DisplayEnvVar<T extends BaseEnvironmentVariable>({
         </div>
       )}
       <div className="flex h-(--env-var-contents-height) justify-between gap-2">
-        {/* TODO(nicolas): let this button replace the value of a secret. */}
         <Button
           tip={
             !canEdit
               ? (disabledTipForEdit ??
                 "You do not have permission to edit environment variables.")
-              : isSecret
-                ? "A secret can't be edited."
-                : "Edit"
+              : "Edit"
           }
           aria-label="Edit"
           type="button"
           onClick={() => onEdit()}
           variant="neutral"
           icon={<Pencil2Icon />}
-          disabled={formState.isSubmitting || !canEdit || isSecret}
+          disabled={formState.isSubmitting || !canEdit}
         />
         <Button
           tip={
@@ -671,12 +707,15 @@ function EditEnvVarForm<T extends BaseEnvironmentVariable>({
   renderEditExtra?: (props: { formKey: string; envVar: T }) => React.ReactNode;
 }) {
   const nameId = useId();
+  const nameTipId = useId();
   const valueId = useId();
 
   const formState = useFormikContext<FormState<T>>();
-  const envVar = formState.values.editedVars[editIndex].newEnvVar;
+  const { oldEnvVar, newEnvVar: envVar } =
+    formState.values.editedVars[editIndex];
   const { value } = envVar;
   const formKey = `editedVars[${editIndex}].newEnvVar`;
+  const wasSecret = oldEnvVar.secret === true;
 
   return (
     <div className="animate-fadeInFromLoading">
@@ -685,10 +724,36 @@ function EditEnvVarForm<T extends BaseEnvironmentVariable>({
           htmlFor={nameId}
           className={`flex flex-col gap-1 ${ENVIRONMENT_VARIABLE_NAME_COLUMN}`}
         >
-          <EnvVarNameInput formKey={`${formKey}.name`} id={nameId} />
+          {wasSecret ? (
+            // Renaming means setting the value under a new name, and the form
+            // doesn't have a saved secret's value. Renaming a secret without
+            // its value may come later, but needs an API change.
+            // Read-only rather than disabled, so that keyboard and screen
+            // reader users can reach the name and its explanation.
+            <Tooltip tip={SECRET_NAME_FIXED_TIP} asChild>
+              <div>
+                <EnvVarNameInput
+                  formKey={`${formKey}.name`}
+                  id={nameId}
+                  readOnly
+                  aria-describedby={nameTipId}
+                />
+                <span id={nameTipId} className="sr-only">
+                  {SECRET_NAME_FIXED_TIP}
+                </span>
+              </div>
+            </Tooltip>
+          ) : (
+            <EnvVarNameInput formKey={`${formKey}.name`} id={nameId} />
+          )}
         </label>
         <label htmlFor={valueId} className="flex grow flex-col flex-wrap gap-1">
-          <EnvVarValueInput formKey={`${formKey}.value`} id={valueId} />
+          <EnvVarValueInput
+            formKey={`${formKey}.value`}
+            id={valueId}
+            placeholder={wasSecret ? "Enter a new value" : undefined}
+            autoFocus={wasSecret}
+          />
         </label>
         <Button
           type="button"
@@ -752,13 +817,11 @@ function EnvironmentVariableListItem<T extends BaseEnvironmentVariable>({
           ];
           void formState.setFieldValue("editedVars", newEditedVars);
 
-          // https://github.com/jaredpalmer/formik/issues/2059#issuecomment-612733378
+          const { touched } = formState;
           setTimeout(() =>
-            formState.setTouched({
-              editedVars: newEditedVars.map(() => ({
-                newEnvVar: { name: true, value: true },
-              })),
-            } as any),
+            formState.setTouched(
+              keepTouchedEdits(touched, (index) => index !== editIndex),
+            ),
           );
         }}
         renderEditExtra={renderEditExtra}
@@ -798,7 +861,9 @@ function EnvironmentVariableListItem<T extends BaseEnvironmentVariable>({
           ...formState.values.editedVars,
           {
             oldEnvVar: environmentVariable,
-            newEnvVar: cloneDeep(environmentVariable),
+            newEnvVar: environmentVariable.secret
+              ? { ...cloneDeep(environmentVariable), value: "" }
+              : cloneDeep(environmentVariable),
           },
         ]);
       }}
@@ -1074,11 +1139,15 @@ function EnvVarNameInput({
   id,
   onPaste,
   autoFocus = false,
+  readOnly = false,
+  "aria-describedby": ariaDescribedBy,
 }: {
   formKey: string;
   id: string;
   onPaste?: ClipboardEventHandler;
   autoFocus?: boolean;
+  readOnly?: boolean;
+  "aria-describedby"?: string;
 }) {
   const formState = useFormikContext();
   const error = (formState.errors as Record<string, string>)[formKey];
@@ -1087,10 +1156,16 @@ function EnvVarNameInput({
   return (
     <TextInput
       id={id}
-      className="font-mono"
+      className={cn(
+        "font-mono",
+        readOnly &&
+          "cursor-not-allowed bg-background-tertiary text-content-secondary",
+      )}
       label="Name"
       labelHidden
       disabled={formState.isSubmitting}
+      readOnly={readOnly}
+      aria-describedby={ariaDescribedBy}
       {...formState.getFieldProps(formKey)}
       onPaste={onPaste}
       error={
@@ -1107,10 +1182,12 @@ function EnvVarValueInput({
   formKey,
   id,
   autoFocus = false,
+  placeholder,
 }: {
   formKey: string;
   id: string;
   autoFocus?: boolean;
+  placeholder?: string;
 }) {
   const formState = useFormikContext();
   const error = (formState.errors as Record<string, string>)[formKey];
@@ -1221,6 +1298,7 @@ function EnvVarValueInput({
           autoComplete="off"
           spellCheck={false}
           autoFocus={autoFocus}
+          placeholder={placeholder}
           rows={1}
         />
         {hasAnyWhitespace && (

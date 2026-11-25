@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/nextjs";
 import { Sheet } from "@ui/Sheet";
-import { fn } from "storybook/test";
+import { fn, userEvent, within } from "storybook/test";
 import {
   EnvironmentVariables,
   BaseEnvironmentVariable,
@@ -102,6 +102,38 @@ export const WithSecrets: Story = {
       { name: "OPENAI_API_KEY", value: "", secret: true },
       { name: "STRIPE_SECRET_KEY", value: "", secret: true },
     ],
+  },
+};
+
+// The edit form for each kind of variable: a new one, an existing config, and
+// an existing secret.
+export const Editing: Story = {
+  args: {
+    environmentVariables: [
+      { name: "CLIENT_ORIGIN", value: "https://app.example.com" },
+      { name: "OPENAI_API_KEY", value: "", secret: true },
+    ],
+    initialFormValues: [{ name: "NEW_VAR", value: "new_value" }],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // CLIENT_ORIGIN's button first, then the only one left: the secret's.
+    await userEvent.click(canvas.getAllByRole("button", { name: "Edit" })[0]);
+    await userEvent.click(canvas.getByRole("button", { name: "Edit" }));
+  },
+};
+
+const secretOnly: BaseEnvironmentVariable[] = [
+  { name: "OPENAI_API_KEY", value: "", secret: true },
+];
+
+// Saving a secret's edit form without a new value.
+export const EditingSecretWithoutValue: Story = {
+  args: { environmentVariables: secretOnly },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Edit" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
   },
 };
 
