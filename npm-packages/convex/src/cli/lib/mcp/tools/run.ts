@@ -50,6 +50,7 @@ export const RunTool: ConvexTool<typeof inputSchema, typeof outputSchema> = {
     process.chdir(projectDir);
     const metadata = await getMcpDeploymentSelection(ctx, deployment);
     const credentials = await loadSelectedDeploymentCredentials(ctx, metadata);
+    await ctx.checkResolvedDeployment(credentials);
     const parsedArgs = await parseArgs(ctx, args.args);
     const { projectConfig } = await readProjectConfig(ctx);
     const parsedFunctionName = await parseFunctionName(
