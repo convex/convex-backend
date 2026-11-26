@@ -10,3 +10,6 @@ tmpPackage*
 
 # used while building dist
 tmpDist*
+
+# reqwest shim for "use rust", copied from crates/convex_reqwest at pack time
+/rust/

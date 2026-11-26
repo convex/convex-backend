@@ -1,0 +1,43 @@
+warning: patch `reqwest v0.12.99 (/Users/tomasdomingos/convex-rs/crates/convex_reqwest)` was not used in the crate graph
+help: Check that the patched package version and available features are compatible
+      with the dependency requirements. If the patch has a different version from
+      what is locked in the Cargo.lock file, run `cargo update` to use the new
+      version. This may also occur with an optional dependency that is not enabled.
+   Compiling futures-channel v0.3.34
+   Compiling wasm-bindgen-shared v0.2.129
+   Compiling form_urlencoded v1.2.2
+   Compiling tower-layer v0.3.3
+   Compiling futures-util v0.3.34
+   Compiling unicode-ident v1.0.27
+   Compiling getrandom v0.4.3
+   Compiling hyper v1.12.0
+   Compiling wasm-bindgen v0.2.129
+   Compiling url v2.5.8
+   Compiling wasm-bindgen-macro v0.2.129
+   Compiling socket2 v0.6.5
+error[E0583]: file not found for module `sys`
+   --> /Users/tomasdomingos/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.5/src/lib.rs:184:1
+    |
+184 | mod sys;
+    | ^^^^^^^^
+    |
+    = help: to create the module `sys`, create file "/Users/tomasdomingos/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.5/src/sys.rs" or "/Users/tomasdomingos/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0
+    = note: if there is a `mod sys` elsewhere in the crate already, import it with `use crate::...` instead
+
+error: Socket2 doesn't support the compile target
+   --> /Users/tomasdomingos/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.5/src/lib.rs:187:1
+    |
+187 | compile_error!("Socket2 doesn't support the compile target");
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> /Users/tomasdomingos/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.5/src/sockaddr.rs:297:33
+    |
+error[E0308]: mismatched types
+    --> /Users/tomasdomingos/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.5/src/socket.rs:2479:15
+     |
+2479 | from!(Socket, net::UdpSocket);
+     |               ^^^^^^^^^^^^^^ expected `UdpSocket`, found `()`
+     |
+    ::: /Users/tomasdomingos/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/socket2-0.6.5/src/lib.rs:111:16
+     |

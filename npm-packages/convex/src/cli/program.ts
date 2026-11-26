@@ -11,6 +11,7 @@ import { deploy } from "./deploy.js";
 import { deployment } from "./deployment.js";
 import { deployments } from "./deployments.js";
 import { dev } from "./dev.js";
+import { rust } from "./rust.js";
 import { docs } from "./docs.js";
 import { env } from "./env.js";
 import { functionSpec } from "./functionSpec.js";
@@ -56,6 +57,7 @@ export function buildProgram() {
       .addCommand(deployment)
       .addCommand(project)
       .addCommand(codegen)
+      .addCommand(rust)
       .addCommand(update)
       .addCommand(logout)
       .addCommand(account)

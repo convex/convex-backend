@@ -1,0 +1,7 @@
+warning: aws-lc-sys@0.46.0: ToolExecError: command did not execute successfully (status code exit status: 1): "clang" "-O3" "-ffunction-sections" "-fdata-sections" "--target=wasm32-wasip1" "-std=c99" "-I" "/Users/tomasdomingos/.cargo/regist
+error: failed to run custom build command for `aws-lc-sys v0.46.0`
+
+Caused by:
+  process didn't exit successfully: `/Users/tomasdomingos/convex-rs/target-e2e/release/build/aws-lc-sys-e03830e091b0a568/build-script-main` (exit status: 1)
+  --- stdout
+  error occurred in cc-rs: command did not execute successfully (status code exit status: 1): "clang" "-O3" "-ffunction-sections" "-fdata-sections" "--target=wasm32-wasip1" "-std=c99" "-I" "/Users/tomasdomingos/.cargo/registry/src/index.cra

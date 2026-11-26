@@ -1924,6 +1924,16 @@ impl TryFrom<ComponentDefinitionConfigJson> for ComponentDefinitionConfig {
                         )
                     ));
                 },
+                ModuleEnvironment::Rust => {
+                    anyhow::bail!(ErrorMetadata::bad_request(
+                        "RustActionsNotSupported",
+                        format!(
+                            "Rust actions are not supported in components. Remove \"use rust\" \
+                             module {}",
+                            module.path.as_str()
+                        )
+                    ));
+                },
                 ModuleEnvironment::Invalid | ModuleEnvironment::Isolate => {},
             }
         }

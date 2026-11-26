@@ -72,6 +72,7 @@ http = { workspace = true }
 http-body-util = { workspace = true }
 http_client = { workspace = true }
 hyper-util = { workspace = true }
+isolate = { workspace = true }
 indexing = { workspace = true }
 keybroker = { workspace = true }
 maplit = { workspace = true }
