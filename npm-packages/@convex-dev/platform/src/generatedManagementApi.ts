@@ -188,6 +188,8 @@ export interface paths {
         /**
          * Recover project
          * @description Recover a recently deleted project and its eligible deployments.
+         *
+         *     Deleted projects are recoverable for 7 days before they are purged.
          */
         post: operations["recover project"];
         delete?: never;
@@ -206,6 +208,8 @@ export interface paths {
         /**
          * List deleted projects
          * @description List a team's deleted projects within the recovery window, newest first.
+         *
+         *     Deleted projects are recoverable for 7 days before they are purged.
          */
         get: operations["list deleted projects"];
         put?: never;

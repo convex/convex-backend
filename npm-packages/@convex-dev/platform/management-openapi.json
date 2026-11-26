@@ -626,7 +626,7 @@
           "Projects"
         ],
         "summary": "Recover project",
-        "description": "Recover a recently deleted project and its eligible deployments.",
+        "description": "Recover a recently deleted project and its eligible deployments.\n\nDeleted projects are recoverable for 7 days before they are purged.",
         "operationId": "recover project",
         "parameters": [
           {
@@ -672,7 +672,7 @@
           "Projects"
         ],
         "summary": "List deleted projects",
-        "description": "List a team's deleted projects within the recovery window, newest first.",
+        "description": "List a team's deleted projects within the recovery window, newest first.\n\nDeleted projects are recoverable for 7 days before they are purged.",
         "operationId": "list deleted projects",
         "parameters": [
           {
