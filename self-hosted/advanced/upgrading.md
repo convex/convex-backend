@@ -9,6 +9,12 @@ If you want to avoid downtime, you can upgrade in-place. It is highly
 recommended that you run an `npx convex export` before you upgrade so that you
 can restore in case something goes wrong.
 
+You will need to upgrade through each intermediate binary revision specified via
+`git log crates/model/src/migrations.rs`.
+
+The underlying database will be upgraded in-place while your app still functions.
+You need to allow the backend to run at each intermediate revision until it is ready.
+
 Look for loglines like this - and follow those instructions to complete the
 in-place upgrade. Each migration will let you know which logline to wait for to
 determine that the in-place upgrade is complete.
