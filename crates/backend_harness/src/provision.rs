@@ -42,14 +42,7 @@ use tokio::process::{
 
 use crate::metrics;
 
-static REPO_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-});
+static REPO_ROOT: LazyLock<PathBuf> = LazyLock::new(common::utils::checkout_root);
 
 static SELF_HOSTED_DOCKER_COMPOSE: LazyLock<PathBuf> =
     LazyLock::new(|| REPO_ROOT.join("self-hosted/docker/docker-compose.yml"));
@@ -79,7 +72,18 @@ fn usher_metrics_port() -> u16 {
 // rebuilds. CI builds all binaries together up front; like CONVEX_PREBUILT_JS,
 // presence opts into using those artifacts.
 fn skip_build() -> bool {
-    env::var_os("BACKEND_HARNESS_SKIP_BUILD").is_some()
+    env::var_os("BACKEND_HARNESS_SKIP_BUILD").is_some() || common::utils::convex_bin_dir().is_some()
+}
+
+fn backend_binary(name: &str, release: bool) -> PathBuf {
+    let dir = common::utils::convex_bin_dir().unwrap_or_else(|| {
+        REPO_ROOT.join(if release {
+            "target/release"
+        } else {
+            "target/debug"
+        })
+    });
+    dir.join(name)
 }
 
 fn usher_instance_url() -> String {
@@ -358,11 +362,7 @@ struct Provision {
 }
 
 fn start_local_usher(logs: &LogInterleaver, release: bool) -> anyhow::Result<Child> {
-    let usher_binary = if release {
-        REPO_ROOT.join("target/release/usher")
-    } else {
-        REPO_ROOT.join("target/debug/usher")
-    };
+    let usher_binary = backend_binary("usher", release);
     logs.spawn_with_prefixed_logs(
         "usher".into(),
         Command::new(usher_binary)
@@ -384,11 +384,7 @@ fn start_local_usher(logs: &LogInterleaver, release: bool) -> anyhow::Result<Chi
 }
 
 fn start_local_funrun(logs: &LogInterleaver, release: bool) -> anyhow::Result<Child> {
-    let funrun_binary = if release {
-        REPO_ROOT.join("target/release/funrun")
-    } else {
-        REPO_ROOT.join("target/debug/funrun")
-    };
+    let funrun_binary = backend_binary("funrun", release);
     logs.spawn_with_prefixed_logs(
         "funrun".into(),
         Command::new(funrun_binary)
@@ -453,7 +449,11 @@ async fn provision(
             let udf_use_funrun = env_config("UDF_USE_FUNRUN", true);
             if !skip_build() {
                 let mut build_cmd = Command::new("cargo");
-                build_cmd.arg("build").arg("--bin").arg("conductor");
+                build_cmd
+                    .current_dir(&*REPO_ROOT)
+                    .arg("build")
+                    .arg("--bin")
+                    .arg("conductor");
                 if udf_use_funrun {
                     build_cmd.arg("--bin").arg("funrun");
                 }
@@ -465,11 +465,7 @@ async fn provision(
                     .map(|result| anyhow::Ok(result?.exit_ok()?))
                     .await?;
             }
-            let conductor_binary = if release {
-                REPO_ROOT.join("target/release/conductor")
-            } else {
-                REPO_ROOT.join("target/debug/conductor")
-            };
+            let conductor_binary = backend_binary("conductor", release);
             let usher_port = usher_port();
             let instance_url = usher_instance_url();
             let tempdir_handle = tempfile::tempdir()?;
@@ -538,7 +534,10 @@ async fn provision(
             let release = matches!(backend_provisioner, BackendProvisioner::OpenSourceRelease);
             if !skip_build() {
                 let mut cmd = Command::new("cargo");
-                cmd.arg("build").arg("--bin").arg("convex-local-backend");
+                cmd.current_dir(&*REPO_ROOT)
+                    .arg("build")
+                    .arg("--bin")
+                    .arg("convex-local-backend");
                 if release {
                     cmd.arg("--release");
                 }
@@ -549,11 +548,7 @@ async fn provision(
                     .exit_ok()?;
             }
 
-            let backend_binary = if release {
-                REPO_ROOT.join("target/release/convex-local-backend")
-            } else {
-                REPO_ROOT.join("target/debug/convex-local-backend")
-            };
+            let backend_binary = backend_binary("convex-local-backend", release);
 
             let tempdir_handle = tempfile::tempdir()?;
             let db_path = tempdir_handle.path().join("convex_local_backend.sqlite3");
