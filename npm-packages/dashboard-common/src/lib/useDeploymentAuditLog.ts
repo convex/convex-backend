@@ -21,7 +21,13 @@ function getMemberName(
   auditLogEvent: Doc<"_deployment_audit_log">,
   teamMembers: { id: number; name?: string | null; email?: string }[],
 ): string {
-  if (auditLogEvent.member_id === null) {
+  // Backend migration 114 (November 2024) dropped `member_id` from every
+  // event that existed then. Those events are past every plan's retention
+  // window, so they're shown like system events.
+  if (
+    auditLogEvent.member_id === null ||
+    auditLogEvent.member_id === undefined
+  ) {
     return "Convex";
   }
 

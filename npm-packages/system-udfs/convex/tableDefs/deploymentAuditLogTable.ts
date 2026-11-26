@@ -16,7 +16,10 @@ const auditLogEventValidator = <
 ) =>
   v.object({
     action: v.literal(action),
-    member_id: v.union(v.int64(), v.null()),
+    // Missing on events that existed when backend migration 114 (#31340,
+    // November 2024) rewrote the table: it dropped `member_id`, so the
+    // actor of those events is unknown.
+    member_id: v.optional(v.union(v.int64(), v.null())),
     token_id: v.optional(v.union(v.int64(), v.null())),
     app_client_id: v.optional(v.union(v.string(), v.null())),
     client_ip: v.optional(v.union(v.string(), v.null())),
@@ -412,6 +415,11 @@ export const integrationAuditConfig = v.union(
     region: v.string(),
     prefix: auditOptionalString,
     selection: syncSelection,
+    // Only on events written before #60621 removed the configurable sync
+    // period.
+    period: v.optional(
+      v.union(v.literal("continuous"), v.literal("hourly"), v.literal("daily")),
+    ),
   }),
 );
 
