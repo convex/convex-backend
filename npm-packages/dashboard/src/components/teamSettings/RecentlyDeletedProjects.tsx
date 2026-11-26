@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { InfoCircledIcon } from "@radix-ui/react-icons";
 import { Button } from "@ui/Button";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { Sheet } from "@ui/Sheet";
+import { Tooltip } from "@ui/Tooltip";
 import { TimestampDistance } from "@common/elements/TimestampDistance";
 import { useDeletedProjects, useRecoverProject } from "api/projects";
 import { useIsCurrentMemberTeamAdmin } from "api/roles";
@@ -43,7 +45,16 @@ function DeletedProjectsSheet({ teamId }: { teamId: number }) {
   const hasMore = data?.pagination.hasMore ?? false;
   return (
     <Sheet>
-      <h3 className="mb-4">Recently deleted projects</h3>
+      <div className="mb-4 flex items-center gap-1.5">
+        <h3>Recently deleted projects</h3>
+        <Tooltip
+          aria-label="About project recovery"
+          tip="Deleted projects are recoverable for 7 days before they are purged."
+          side="right"
+        >
+          <InfoCircledIcon className="size-4 text-content-secondary" />
+        </Tooltip>
+      </div>
       <div className="flex max-w-prose flex-col gap-2">
         {items?.length ? (
           <ul className="flex flex-col divide-y rounded-md border">
@@ -53,20 +64,16 @@ function DeletedProjectsSheet({ teamId }: { teamId: number }) {
                 className="flex items-center justify-between gap-4 px-3 py-2"
               >
                 <div className="min-w-0 wrap-break-word">
-                  <div className="font-medium">{project.name}</div>
-                  <div className="mb-1 font-mono text-xs text-content-secondary">
-                    {project.slug}
+                  <div className="mb-1 flex flex-wrap items-baseline gap-x-2">
+                    <span className="min-w-0 font-medium">{project.name}</span>
+                    <span className="min-w-0 font-mono text-xs text-content-secondary">
+                      {project.slug}
+                    </span>
                   </div>
-                  <div className="flex flex-wrap gap-x-3">
-                    <TimestampDistance
-                      prefix="Deleted"
-                      date={new Date(project.deletedAt)}
-                    />
-                    <TimestampDistance
-                      prefix="Expires"
-                      date={new Date(project.recoverableUntil)}
-                    />
-                  </div>
+                  <TimestampDistance
+                    prefix="Deleted"
+                    date={new Date(project.deletedAt)}
+                  />
                 </div>
                 <Button
                   variant="neutral"
