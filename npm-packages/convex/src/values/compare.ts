@@ -30,11 +30,7 @@ function compareSameTypeValues<T>(v1: T, v2: T): number {
     }
     return compareUTF8(v1, v2);
   }
-  if (
-    typeof v1 === "bigint" ||
-    typeof v1 === "boolean" ||
-    typeof v1 === "string"
-  ) {
+  if (typeof v1 === "bigint" || typeof v1 === "boolean") {
     return v1 < v2 ? -1 : v1 === v2 ? 0 : 1;
   }
   if (!Array.isArray(v1) || !Array.isArray(v2)) {
