@@ -427,18 +427,27 @@ async function openMenu(canvasElement: HTMLElement) {
   return menu;
 }
 
+// Settled means unchanged for `SETTLE_MS` of wall-clock time, not across two
+// consecutive checks: `waitFor` also runs its callback on every DOM mutation,
+// so two checks can land in the same frame, after the menu has resized but
+// before Floating UI has moved it to match.
+const SETTLE_MS = 150;
+
 async function waitForSettledMenu(element: HTMLElement) {
   let previous = { top: NaN, height: NaN };
+  let changedAt = performance.now();
   await waitFor(
     () => {
       const { top, height } = element.getBoundingClientRect();
-      const stable = top === previous.top && height === previous.height;
-      previous = { top, height };
-      if (!stable) {
+      if (top !== previous.top || height !== previous.height) {
+        previous = { top, height };
+        changedAt = performance.now();
+      }
+      if (performance.now() - changedAt < SETTLE_MS) {
         throw new Error("The menu is still moving or resizing");
       }
     },
-    { interval: 150 },
+    { interval: 50 },
   );
 }
 
@@ -484,13 +493,9 @@ export const LongListFillsToBottomMargin = placementStory(
     const menu = await openMenu(canvasElement);
     await showProjectList(menu);
 
-    // Retried: cmdk measures the list after it renders and then animates the
-    // height, so the menu can still be growing when it first looks settled.
-    await waitFor(async () => {
-      const gap = window.innerHeight - menu.getBoundingClientRect().bottom;
-      await expect(gap).toBeGreaterThanOrEqual(BOTTOM_MARGIN - SLACK);
-      await expect(gap).toBeLessThanOrEqual(BOTTOM_MARGIN + SLACK);
-    });
+    const gap = window.innerHeight - menu.getBoundingClientRect().bottom;
+    await expect(gap).toBeGreaterThanOrEqual(BOTTOM_MARGIN - SLACK);
+    await expect(gap).toBeLessThanOrEqual(BOTTOM_MARGIN + SLACK);
     const list = listOf(menu);
     await expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
   },
