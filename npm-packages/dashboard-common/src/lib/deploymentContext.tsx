@@ -364,6 +364,8 @@ export type DeploymentInfo = (
   showFivetranSyncProgress: boolean;
   /** Renders the functions sidebar as a virtualized tree. */
   virtualizedFunctionsSidebarEnabled: boolean;
+  /** Lets environment variables be created as secrets or turned into one. */
+  environmentVariableSecretsEnabled: boolean;
   /** Shows the approximate cost of each usage limit. */
   estimateUsageLimitsCost: boolean;
   /** Opens the feedback sheet. Absent where there is nowhere to send it,

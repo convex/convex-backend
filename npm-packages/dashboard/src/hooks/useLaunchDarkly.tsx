@@ -15,6 +15,7 @@ export const flagDefaults: {
   supportTicketForAllPlans: boolean;
   healthDeployProgress: boolean;
   virtualizedFunctionsSidebar: boolean;
+  environmentVariableSecrets: boolean;
   preAuthorizeStarterPlan: boolean;
   preAuthorizePaymentMethodChange: boolean;
   tagEditUi: boolean;
@@ -37,6 +38,7 @@ export const flagDefaults: {
   supportTicketForAllPlans: false,
   healthDeployProgress: false,
   virtualizedFunctionsSidebar: false,
+  environmentVariableSecrets: false,
   preAuthorizeStarterPlan: false,
   preAuthorizePaymentMethodChange: false,
   tagEditUi: false,
