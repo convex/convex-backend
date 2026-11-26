@@ -129,7 +129,8 @@ impl InnerLocalNodeExecutor {
         let cmd = TokioCommand::new(node_path)
             .arg("--version")
             .output()
-            .await?;
+            .await
+            .context("`node` is not on PATH")?;
         let version = String::from_utf8_lossy(&cmd.stdout);
 
         if !version.starts_with("v22.")
