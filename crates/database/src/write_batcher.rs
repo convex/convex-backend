@@ -8,6 +8,7 @@ use common::{
     backoff::Backoff,
     errors::{
         is_db_deadlock_error,
+        is_duplicate_write_error,
         is_transient_db_error,
         recapture_stacktrace_noreport,
         report_error,
@@ -215,6 +216,10 @@ async fn write_batch<RT: Runtime>(runtime: RT, persistence: Arc<dyn Persistence>
         *INITIAL_PERSISTENCE_WRITES_BACKOFF,
         *MAX_PERSISTENCE_WRITES_BACKOFF,
     );
+    // Tracks whether this batch has already been sent to persistence at least
+    // once. Only set once a transient failure sends us around the loop again,
+    // see the duplicate-write case below.
+    let mut is_retry = false;
     let result = loop {
         let timer = metrics::commit_persistence_write_timer();
         match persistence
@@ -225,14 +230,27 @@ async fn write_batch<RT: Runtime>(runtime: RT, persistence: Arc<dyn Persistence>
                 timer.finish();
                 break Ok(());
             },
+            // A duplicate-write error on a retry of this exact batch proves it
+            // already landed durably during an earlier attempt whose result we
+            // lost not a real conflict. Only trust this on our own retry,
+            // never on a batch's first attempt, so a genuine ID collision
+            // elsewhere still surfaces as a real error.
+            Err(e) if is_retry && is_duplicate_write_error(&e) => {
+                timer.finish();
+                tracing::warn!(
+                    "Write already applied on an earlier attempt after a lost connection: {e:#}"
+                );
+                break Ok(());
+            },
             Err(mut e) => {
                 // MySQL rolls back the deadlock victim's entire transaction, so
                 // retrying the batch with the same timestamps is safe.
                 if !is_transient_db_error(&e) && !is_db_deadlock_error(&e) {
                     break Err(e);
                 }
+                is_retry = true;
                 let delay = backoff.fail(&mut runtime.rng());
-                tracing::error!("Failed to write to persistence, retrying");
+                tracing::error!("Failed to write to persistence: {e:#}");
                 report_error(&mut e).await;
                 runtime.wait(delay).await;
             },

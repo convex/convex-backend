@@ -24,6 +24,7 @@ use common::{
         database_deadlock_error,
         database_operational_error,
         database_timeout_error,
+        duplicate_write_error,
         DatabaseOperationalError,
         DatabaseTimeoutError,
     },
@@ -149,6 +150,16 @@ fn classify_mysql_error(e: mysql_async::Error) -> anyhow::Error {
         }) if message.contains("connection timed out") =>         {
             database_operational_error(e.into())
         },
+        mysql_async::Error::Server(mysql_async::ServerError {
+            // ERDupEntry / ERDupEntryWithKeyName -> same duplicate-key violation,
+            // just two different message formats. The committer's write-batcher
+            // retries a write it can't confirm landed; `ts` is assigned once
+            // per commit and never reused, so a duplicate on that retry proves
+            // the earlier attempt already succeeded rather than a real
+            // conflict. See `duplicate_write_error`.
+            code: 1062 | 1586,
+            ..
+        }) => duplicate_write_error(e.into()),
         mysql_async::Error::Server(mysql_async::ServerError {
             code: ER_LOCK_DEADLOCK,
             ..

@@ -206,12 +206,21 @@ pub(crate) struct PostgresConnection<'a> {
     _timer: Timer<VMHistogramVec>,
 }
 
+/// True if `e` looks like the underlying Postgres connection was lost.
+///
+/// This covers two distinct `tokio_postgres::Error` cases: `is_closed()`
+/// and a live I/O failure while a query was actually in flight.
+pub(crate) fn is_connection_closed_error(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<tokio_postgres::Error>().is_some_and(|e| {
+        e.is_closed()
+            || e.to_string().contains("unexpected message from server")
+            || std::error::Error::source(e).is_some_and(|src| src.is::<std::io::Error>())
+    })
+}
+
 fn handle_error(poisoned: &AtomicBool, e: impl Into<anyhow::Error>) -> anyhow::Error {
     let e: anyhow::Error = e.into();
-    if e.downcast_ref::<tokio_postgres::Error>()
-        .is_some_and(|e| e.is_closed() || e.to_string().contains("unexpected message from server"))
-        || e.downcast_ref::<DatabaseTimeoutError>().is_some()
-    {
+    if is_connection_closed_error(&e) || e.downcast_ref::<DatabaseTimeoutError>().is_some() {
         tracing::error!("Not reusing connection after error: {e:#}");
         poisoned.store(true, atomic::Ordering::Relaxed);
     }

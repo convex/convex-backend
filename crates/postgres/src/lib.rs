@@ -43,7 +43,11 @@ use common::{
         InternalId,
         ResolvedDocument,
     },
-    errors::lease_lost_error,
+    errors::{
+        database_operational_error,
+        duplicate_write_error,
+        lease_lost_error,
+    },
     index::{
         IndexEntry,
         IndexKeyBytes,
@@ -142,6 +146,7 @@ use tokio::sync::{
 use tokio_postgres::{
     binary_copy::BinaryCopyInWriter,
     config::TargetSessionAttrs,
+    error::SqlState,
     types::{
         to_sql_checked,
         IsNull,
@@ -542,11 +547,22 @@ impl Persistence for PostgresPersistence {
             ]
         });
 
+        // `documents` and `indexes` are keyed by `(ts, table_id, id)` and
+        // `(index_id, key_sha256, ts)` respectively. Since `ts` is assigned once
+        // per commit and never reused, a unique-key violation here can only mean
+        // that the exact same rows were already durably written by an earlier
+        // attempt. It cannot be a conflict with another commit's data.
+        fn is_unique_violation(e: &anyhow::Error) -> bool {
+            e.downcast_ref::<tokio_postgres::Error>().and_then(|e| e.code())
+                == Some(&SqlState::UNIQUE_VIOLATION)
+        }
+
         // True, the below might end up failing and not changing anything.
         self.newly_created.store(false, SeqCst);
         let multitenant = self.multitenant;
         let instance_name = self.instance_name.clone();
-        self.lease
+        match self
+            .lease
             .transact(async move |tx| {
                 let (insert_documents, insert_indexes) = try_join!(
                     match conflict_strategy {
@@ -620,6 +636,18 @@ impl Persistence for PostgresPersistence {
                 Ok(())
             })
             .await
+        {
+            Ok(()) => Ok(()),
+            // A unique violation means these rows were already written by an earlier
+            // attempt of the same commit. The write-batcher can safely treat this as
+            // success when retrying an ambiguous write. Other callers must still see
+            // the error, since they may be detecting a genuine ID collision.
+            Err(e) if is_unique_violation(&e) => Err(duplicate_write_error(e)),
+            // A lost connection before commit -> this error classifies as transient
+            // so the write-batcher retries the entire txn with backoff.
+            Err(e) if connection::is_connection_closed_error(&e) => Err(database_operational_error(e)),
+            Err(e) => Err(e),
+        }
     }
 
     async fn write_persistence_global(
