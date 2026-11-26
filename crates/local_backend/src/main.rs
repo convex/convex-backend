@@ -114,7 +114,11 @@ fn main() -> Result<(), MainError> {
         Ok(())
     };
 
-    runtime.block_on("main", server_future)
+    let result = runtime.block_on("main", server_future);
+    // The server has shut down, but isolate threads may still be running.
+    // Dropping the runtime under them can abort the process on exit.
+    ProdRuntime::leave_running(tokio);
+    result
 }
 
 fn run_subcommand(command: &Subcommand) -> Result<(), MainError> {
