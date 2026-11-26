@@ -727,6 +727,39 @@ pub fn initialize_indexes_log_maintenance_rounds(cluster_name: &str) {
     }
 }
 
+register_convex_counter!(
+    MYSQL_V6_POINT_READS_TOTAL,
+    "V6 reads of one exact index key by outcome. Every outcome but `hit` falls back to the full \
+     index query",
+    &["cluster_name", "outcome"]
+);
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::IntoStaticStr, strum::EnumIter)]
+#[strum(serialize_all = "snake_case")]
+pub enum PointReadOutcome {
+    /// The key's `indexes_latest` entry was visible at the read timestamp.
+    Hit,
+    /// The key has no `indexes_latest` entry: it was never written, or its
+    /// document was deleted before or after the read timestamp.
+    Missing,
+    /// The key's `indexes_latest` entry was written after the read timestamp.
+    Newer,
+}
+pub fn log_v6_point_read(cluster_name: &str, outcome: PointReadOutcome) {
+    MYSQL_V6_POINT_READS_TOTAL
+        .with_label_values(&[cluster_name, outcome.into()])
+        .inc();
+}
+/// Publishes zeroes so each outcome's first read has a baseline to increase
+/// from.
+pub fn initialize_v6_point_reads(cluster_name: &str) {
+    use strum::IntoEnumIterator as _;
+    for outcome in PointReadOutcome::iter() {
+        MYSQL_V6_POINT_READS_TOTAL
+            .with_label_values(&[cluster_name, outcome.into()])
+            .inc_by(0);
+    }
+}
+
 pub fn log_indexes_log_bucket_created(cluster_name: &str) {
     log_counter_with_labels(
         &INDEXES_LOG_BUCKETS_CREATED_TOTAL,

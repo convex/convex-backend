@@ -209,6 +209,7 @@ impl<RT: Runtime> Persistence<RT> {
         lease_lost_shutdown: ShutdownSignal,
     ) -> anyhow::Result<Self> {
         Self::initialize_schema(&pool, &db_name).await?;
+        metrics::initialize_v6_point_reads(pool.cluster_name());
         let mut connection = pool.acquire("v6_init_deployment", &db_name).await?;
         connection
             .exec_iter(super::INIT_LEASE, vec![deployment_id.into()])
@@ -320,6 +321,7 @@ impl<RT: Runtime> Persistence<RT> {
             options.multitenant,
             options.deployment_id,
         )?;
+        metrics::initialize_v6_point_reads(pool.cluster_name());
         Ok(Reader {
             inner: Arc::new(Inner {
                 pool,

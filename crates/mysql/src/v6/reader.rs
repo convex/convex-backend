@@ -29,6 +29,7 @@ use common::{
     runtime::Runtime,
     types::{
         IndexRef,
+        PersistenceIndexId,
         Timestamp,
     },
     value::{
@@ -65,7 +66,10 @@ use crate::{
     chunks::smart_chunks,
     connection::is_no_such_table_error,
     document_encoding,
-    metrics,
+    metrics::{
+        self,
+        PointReadOutcome,
+    },
     ConvexMySqlPool,
 };
 
@@ -134,6 +138,25 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                     index.id()
                 )
             })?;
+            // A singleton interval holds at most this key, so a visible entry is
+            // the whole result.
+            if let Some(key) = interval.is_singleton()
+                && let Some(document) = self
+                    .point_read(
+                        persistence_index_id,
+                        tablet_id,
+                        read_timestamp,
+                        key,
+                        &mut stats,
+                    )
+                    .await?
+            {
+                retention_validator
+                    .validate_snapshot(read_timestamp)
+                    .await?;
+                yield (IndexKeyBytes(key.to_vec()), document);
+                return Ok(());
+            }
             // The size hint makes the common case one query. Later pages grow to
             // correct for tombstones, long prefixes and a wrong hint.
             let mut page_size =
@@ -337,22 +360,7 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                                 documents.is_none(),
                                 "Unexpected separately fetched documents for joined index query"
                             );
-                            let encoded = column::maybe_bytes(&row, 7)?
-                                .context(DanglingIndexReference)
-                                .with_context(|| {
-                                    format!("Dangling index reference for {key:?} {ts:?}")
-                                })?;
-                            let value = document_encoding::decode(encoded, table_id)?
-                                .context(DanglingIndexReference)
-                                .with_context(|| {
-                                    format!("Index reference to deleted document {key:?} {ts:?}")
-                                })?;
-                            let prev_ts: Option<i64> = row.get_opt(8).context("row[8]")??;
-                            LatestDocument {
-                                ts,
-                                value,
-                                prev_ts: prev_ts.map(Timestamp::try_from).transpose()?,
-                            }
+                            joined_document(&row, 7, table_id, &key.0, ts)?
                         },
                     };
                     buffered.push((key, document));
@@ -386,6 +394,51 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
                 yield result;
             }
         })
+    }
+
+    /// Reads `key`'s `indexes_latest` entry, returning its document if the
+    /// entry is visible at `read_timestamp`. Otherwise the revision visible at
+    /// the snapshot, if any, is in a log bucket, which only the full index
+    /// query reads.
+    async fn point_read(
+        &self,
+        index_id: PersistenceIndexId,
+        tablet_id: TabletId,
+        read_timestamp: Timestamp,
+        key: &[u8],
+        stats: &mut metrics::QueryIndexStats<'_>,
+    ) -> anyhow::Result<Option<LatestDocument>> {
+        let (query, params) = sql::point_query(
+            self.deployment_id,
+            index_id,
+            &sql::IndexKey::from_key(key.to_vec()),
+            &self.documents,
+        );
+        let mut connection = self.pool.acquire("v6_point_read", self.db_name).await?;
+        let execute_timer = metrics::query_index_sql_execute_timer(self.pool.cluster_name());
+        stats.sql_statements += 1;
+        let row = connection.query_optional(&query, params).await?;
+        execute_timer.finish();
+        let Some(row) = row else {
+            cover!(super::coverage::POINT_READ_MISSING);
+            metrics::log_v6_point_read(self.pool.cluster_name(), PointReadOutcome::Missing);
+            return Ok(None);
+        };
+        let ts: i64 = row.get_opt(0).context("row[0]")??;
+        let ts = Timestamp::try_from(ts)?;
+        if ts > read_timestamp {
+            cover!(super::coverage::POINT_READ_NEWER);
+            metrics::log_v6_point_read(self.pool.cluster_name(), PointReadOutcome::Newer);
+            return Ok(None);
+        }
+        let table_id = TabletId(InternalId::try_from(column::bytes(&row, 1)?)?);
+        anyhow::ensure!(table_id == tablet_id);
+        let document = joined_document(&row, 2, table_id, key, ts)?;
+        stats.rows_read += 1;
+        stats.rows_returned += 1;
+        cover!(super::coverage::POINT_READ_HIT);
+        metrics::log_v6_point_read(self.pool.cluster_name(), PointReadOutcome::Hit);
+        Ok(Some(document))
     }
 
     async fn fetch_documents(
@@ -427,6 +480,32 @@ impl<'a, RT: Runtime> IndexReader<'a, RT> {
             .map(|entry| ((entry.id, entry.ts), entry))
             .collect())
     }
+}
+
+/// Decodes the document that the `documents` join attached to an index row:
+/// `json_value` at column `json_value_col`, then `prev_ts`.
+fn joined_document(
+    row: &mysql_async::Row,
+    json_value_col: usize,
+    table_id: TabletId,
+    key: &[u8],
+    ts: Timestamp,
+) -> anyhow::Result<LatestDocument> {
+    let encoded = column::maybe_bytes(row, json_value_col)?
+        .context(DanglingIndexReference)
+        .with_context(|| format!("Dangling index reference for {key:?} {ts:?}"))?;
+    let value = document_encoding::decode(encoded, table_id)?
+        .context(DanglingIndexReference)
+        .with_context(|| format!("Index reference to deleted document {key:?} {ts:?}"))?;
+    let prev_ts_col = json_value_col + 1;
+    let prev_ts: Option<i64> = row
+        .get_opt(prev_ts_col)
+        .with_context(|| format!("row[{prev_ts_col}]"))??;
+    Ok(LatestDocument {
+        ts,
+        value,
+        prev_ts: prev_ts.map(Timestamp::try_from).transpose()?,
+    })
 }
 
 /// Parallel fetching adds a database round trip, so each worker needs enough

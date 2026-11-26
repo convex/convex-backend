@@ -520,6 +520,51 @@ ON D.deployment_id = U.deployment_id
     AND D.table_id = U.table_id
     AND D.id = U.document_id"#;
 
+/// [`DOCUMENT_JOIN`] scoped to `documents`, appending its parameter, if any.
+fn scoped_document_join(documents: &DocumentScope, params: &mut Vec<Value>) -> Cow<'static, str> {
+    match documents {
+        DocumentScope::DeploymentId => Cow::Borrowed(DOCUMENT_JOIN),
+        DocumentScope::InstanceName(instance) => {
+            params.push(instance.clone().into());
+            Cow::Owned(
+                DOCUMENT_JOIN.replace("D.deployment_id = U.deployment_id", "D.instance_name = ?"),
+            )
+        },
+    }
+}
+
+/// Reads one key's `indexes_latest` entry and the document revision it refers
+/// to. Matching every primary key column makes this a constant lookup, which
+/// MySQL plans far more cheaply than [`index_query`]'s union of ranges.
+pub(crate) fn point_query(
+    deployment_id: PersistenceDeploymentId,
+    index_id: PersistenceIndexId,
+    key: &IndexKey,
+    documents: &DocumentScope,
+) -> (String, Vec<Value>) {
+    let mut params = vec![];
+    let join = scoped_document_join(documents, &mut params);
+    params.extend([
+        deployment_id.into(),
+        index_id.value().into(),
+        Value::Bytes(key.key_prefix.clone()),
+        Value::Bytes(key.key_suffix_hash.as_bytes().to_vec()),
+        key.key_suffix.clone().map_or(Value::NULL, Value::Bytes),
+    ]);
+    (
+        format!(
+            r#"
+SELECT U.ts, U.table_id, D.json_value, D.prev_ts
+FROM @db_name.{LATEST_TABLE} U
+{join}
+WHERE U.deployment_id = ? AND U.index_id = ? AND U.key_prefix = ? AND U.key_suffix_hash = ?
+    AND U.key_suffix <=> ?
+"#
+        ),
+        params,
+    )
+}
+
 /// Unions one arm per snapshot source: `indexes_latest` plus each log bucket.
 /// `arm` renders an arm from its table and the predicate it needs beyond the
 /// key bounds: none for the latest table, the successor predicate for a log
@@ -602,19 +647,10 @@ LIMIT {batch_size})"#
         },
     );
     let (document_columns, document_join) = match query_type {
-        IndexQueryType::JoinDocuments => {
-            let join = match documents {
-                DocumentScope::DeploymentId => Cow::Borrowed(DOCUMENT_JOIN),
-                DocumentScope::InstanceName(instance) => {
-                    params.push(instance.clone().into());
-                    Cow::Owned(
-                        DOCUMENT_JOIN
-                            .replace("D.deployment_id = U.deployment_id", "D.instance_name = ?"),
-                    )
-                },
-            };
-            ("D.json_value, D.prev_ts", join)
-        },
+        IndexQueryType::JoinDocuments => (
+            "D.json_value, D.prev_ts",
+            scoped_document_join(documents, &mut params),
+        ),
         // Keep the maintenance-state column positions shared by both query paths.
         IndexQueryType::IndexOnly => ("NULL AS json_value, NULL AS prev_ts", Cow::Borrowed("")),
     };
