@@ -16,7 +16,6 @@ testing = [
     "metrics/testing",
     "model/testing",
     "runtime/testing",
-    "sentry/test",
     "usage_tracking/testing",
     "convex_macro/testing",
 ]
@@ -57,7 +56,6 @@ keybroker = { workspace = true, features = ["testing"] }
 metrics = { workspace = true, features = ["testing"] }
 model = { workspace = true, features = ["testing"] }
 runtime = { workspace = true, features = ["testing"] }
-sentry = { workspace = true, features = ["test"] }
 usage_tracking = { workspace = true, features = ["testing"] }
 
 [lints]

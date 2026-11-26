@@ -130,7 +130,6 @@ proptest = { workspace = true }
 proptest-derive = { workspace = true }
 proptest-http = { workspace = true }
 rand_chacha = { workspace = true }
-sentry = { workspace = true, features = ["test"] }
 shape_inference = { workspace = true, features = ["testing"] }
 sync_types = { workspace = true, features = [
     "testing",
