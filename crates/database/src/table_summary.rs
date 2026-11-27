@@ -332,7 +332,6 @@ impl From<TableSummarySnapshot> for TableShapes {
 /// via `DatabaseSnapshot::load_table_summaries`. The live `Snapshot` holds
 /// only counts (`TableCounts`); live shape readers use the asynchronously
 /// published [`TableShapes`] instead.
-#[derive(Clone)]
 pub struct TableSummaries {
     pub tables: BTreeMap<TabletId, TableSummary>,
 }

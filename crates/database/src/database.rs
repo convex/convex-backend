@@ -372,7 +372,7 @@ pub struct DatabaseSnapshot<RT: Runtime> {
     /// Counts and shapes for offline tools (`db-info`, `db-verifier`),
     /// populated by `load_table_summaries`. The inner `snapshot` only holds
     /// counts.
-    table_summaries: Option<TableSummaries>,
+    table_summaries: Option<Arc<TableSummaries>>,
     pub persistence_snapshot: PersistenceSnapshot,
     index_cache_handle: Option<IndexCacheHandle>,
 
@@ -944,10 +944,10 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             &self.snapshot.virtual_system_mapping,
         )?;
         self.snapshot.table_counts = Some(table_counts);
-        self.table_summaries = Some(TableSummaries::new(
+        self.table_summaries = Some(Arc::new(TableSummaries::new(
             table_summary_snapshot,
             self.table_registry().table_mapping(),
-        ));
+        )));
         tracing::info!("Bootstrapped table summaries (read {summaries_num_rows} rows)");
         Ok(())
     }
@@ -997,7 +997,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
     }
 
     pub fn table_summaries(&self) -> Option<&TableSummaries> {
-        self.table_summaries.as_ref()
+        self.table_summaries.as_deref()
     }
 
     /// Create a [`Transaction`] at the snapshot's timestamp. This allows using
