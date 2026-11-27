@@ -158,7 +158,7 @@ pub trait NodeExecutor: Sync + Send {
         request: ExecutorRequest,
         log_line_sender: mpsc::UnboundedSender<LogLine>,
     ) -> anyhow::Result<InvokeResponse>;
-    fn shutdown(&self);
+    async fn shutdown(&self) -> anyhow::Result<()>;
 }
 
 pub struct InvokeResponse {
@@ -239,8 +239,8 @@ impl<RT: Runtime> NodeActions<RT> {
         self.executor.enable()
     }
 
-    pub fn shutdown(&self) {
-        self.executor.shutdown()
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
+        self.executor.shutdown().await
     }
 
     pub fn supported_memory_mb(&self) -> &'static [u32] {
