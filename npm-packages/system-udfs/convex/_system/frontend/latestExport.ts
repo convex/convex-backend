@@ -24,17 +24,43 @@ export const latestCloudExport = queryPrivateSystem("ViewBackups")({
   },
 });
 
+type CloudBackup = Pick<Export, "_id" | "_creationTime" | "state"> & {
+  format: Pick<Export["format"], "include_storage">;
+  expiration_ts?: bigint;
+  complete_ts?: bigint;
+  progress_message?: string | null;
+};
+
 export const listCloudBackups = queryPrivateSystem("ViewBackups")({
   args: { paginationOpts: paginationOptsValidator },
   handler: async function (
     { db },
     { paginationOpts },
-  ): Promise<PaginationResult<Export>> {
-    return await db
+  ): Promise<PaginationResult<CloudBackup>> {
+    const { page, isDone, continueCursor, splitCursor, pageStatus } = await db
       .query("_exports")
       .withIndex("by_requestor", (q) => q.eq("requestor", "cloudBackup"))
       .order("desc")
       .paginate({ ...paginationOpts, maximumBytesRead, maximumRowsRead });
+
+    return {
+      isDone,
+      continueCursor,
+      splitCursor,
+      pageStatus,
+      page: page.map((backup) => ({
+        _id: backup._id,
+        _creationTime: backup._creationTime,
+        state: backup.state,
+        format: { include_storage: backup.format.include_storage },
+        expiration_ts:
+          "expiration_ts" in backup ? backup.expiration_ts : undefined,
+        complete_ts:
+          backup.state === "completed" ? backup.complete_ts : undefined,
+        progress_message:
+          backup.state === "in_progress" ? backup.progress_message : undefined,
+      })),
+    };
   },
 });
 
