@@ -28,7 +28,11 @@ async function resolveNodeModule(
     if (ctx.fs.exists(maybePath)) {
       return maybePath;
     }
-    resolveDir = path.dirname(path.dirname(nodeModulesPath));
+    const installDir = path.dirname(nodeModulesPath);
+    resolveDir = path.dirname(installDir);
+    if (resolveDir === installDir) {
+      break;
+    }
   }
 
   return null;
@@ -177,13 +181,13 @@ export async function computeExternalPackages(
         continue;
       }
 
-      // Check if the package path is referenced.
-      const packagePath = path.join(
-        path.dirname(packageJsonPath),
-        "node_modules",
+      // Workspace dependencies may be hoisted to an ancestor's node_modules.
+      const packagePath = await resolveNodeModule(
+        ctx,
         getModule(packageName).dirName,
+        path.dirname(packageJsonPath),
       );
-      if (ctx.fs.exists(packagePath)) {
+      if (packagePath) {
         externalPackages.set(packageName, {
           path: packagePath,
         });
