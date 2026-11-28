@@ -23,6 +23,11 @@ export const noImportUseNode = createRule({
     const entry = isEntryPoint(filename);
     if (!entry) return {};
 
+    const importerRunsInNodeRuntime = isUseNodeModule(
+      context.sourceCode.getText(),
+    );
+    if (importerRunsInNodeRuntime) return {};
+
     const currentDir = path.dirname(filename);
     return {
       ImportDeclaration(node) {
