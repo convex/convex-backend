@@ -117,6 +117,19 @@ const ENTRY_POINT_EXTENSIONS = [
 ];
 
 /**
+ * The part of `fpath` below its innermost `convex` directory, so a space
+ * higher up (e.g. `/home/me/My Projects/app/convex/foo.ts`) is ignored like
+ * it is by the CLI, which only checks the path relative to the functions
+ * directory. Like other rules, this only recognizes the default `convex`
+ * directory; for other paths the whole path is returned.
+ */
+function pathBelowConvexDir(fpath: string) {
+  const segments = fpath.split(path.sep);
+  const index = segments.lastIndexOf("convex");
+  return index === -1 ? fpath : segments.slice(index + 1).join(path.sep);
+}
+
+/**
  * Assuming this is only called on files in the convex directory,
  * check return true if the file looks like an entry point.
  * This logic matches convex/src/bundler/index.ts.
@@ -137,7 +150,7 @@ export function isEntryPoint(fpath: string) {
     return false;
   } else if ((base.match(/\./g) || []).length > 1) {
     return false;
-  } else if (fpath.includes(" ")) {
+  } else if (pathBelowConvexDir(fpath).includes(" ")) {
     return false;
   } else {
     return true;
