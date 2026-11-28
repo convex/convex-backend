@@ -455,7 +455,7 @@ dependencies = [
  "indexing",
  "integrations",
  "isolate",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "keybroker",
  "lru 0.18.5",
  "managed_export_worker",
@@ -2587,7 +2587,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "imbl",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "json_trait",
  "jsonschema",
  "maplit",
@@ -3493,7 +3493,7 @@ dependencies = [
  "imbl",
  "indexing",
  "interval_map",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "keybroker",
  "maplit",
  "metrics",
@@ -4192,7 +4192,7 @@ dependencies = [
  "futures",
  "headers",
  "humansize",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "keybroker",
  "metrics",
  "mime2ext",
@@ -5871,7 +5871,7 @@ dependencies = [
  "imbl",
  "indexing",
  "interval_map",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "maplit",
  "metrics",
  "moka",
@@ -6083,7 +6083,7 @@ dependencies = [
  "humansize",
  "icudtl",
  "indexmap 2.14.0",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "js_build",
  "keybroker",
  "libc",
@@ -6161,6 +6161,15 @@ name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
 dependencies = [
  "either",
 ]
@@ -7338,7 +7347,7 @@ dependencies = [
  "futures",
  "futures-async-stream",
  "indexing",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "lz4_flex 0.14.0",
  "metrics",
  "mysql",
@@ -8599,7 +8608,7 @@ dependencies = [
  "fastrace",
  "futures",
  "futures-async-stream",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "lru 0.18.5",
  "metrics",
  "parking_lot",
@@ -10142,7 +10151,7 @@ dependencies = [
  "imbl",
  "imbl_slab",
  "indexing",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "maplit",
  "metrics",
  "once_cell",
@@ -10192,7 +10201,7 @@ dependencies = [
  "futures-async-stream",
  "governor",
  "indexing",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "keybroker",
  "maplit",
  "metrics",
@@ -10734,7 +10743,7 @@ dependencies = [
  "base64 0.13.1",
  "cmd_util",
  "convex_sync_types",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "json_trait",
  "maplit",
  "proptest",
@@ -12710,7 +12719,7 @@ dependencies = [
  "errors",
  "events",
  "fastrace",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "keybroker",
  "metrics",
  "model",
@@ -13223,7 +13232,7 @@ dependencies = [
  "base64 0.13.1",
  "const-oid 0.9.6",
  "indexmap 2.14.0",
- "itertools 0.14.0",
+ "itertools 0.15.0",
  "openssl 0.10.81 (git+https://github.com/convex/rust-openssl?rev=03caf5bc9775242f4b02daa978f86fafbd0e7659)",
  "pkcs8",
  "serde",

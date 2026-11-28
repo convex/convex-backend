@@ -116,7 +116,7 @@ indexmap = "2"
 integrations = { path = "crates/integrations" }
 interval_map = { path = "crates/interval_map" }
 isolate = { path = "crates/isolate" }
-itertools = "0.14"
+itertools = "0.15"
 jemalloc_pprof = "0.9"
 js_build = { path = "crates/js_build" }
 json_trait = { path = "crates/json_trait" }
